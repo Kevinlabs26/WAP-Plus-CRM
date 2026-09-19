@@ -1,6 +1,6 @@
 [package]
 name = "wap-plus-crm"
-version = "0.1.8"
+version = "0.1.9"
 description = "WAP Plus CRM — WhatsApp sales CRM desktop"
 authors = ["WAP Plus CRM"]
 edition = "2021"
@@ -35,8 +35,8 @@ tracing-subscriber = "0.3"
 rusqlite = { version = "0.32", features = ["bundled"] }
 tar = "0.4"
 bzip2 = "0.4"
-# 本地语音识别：构建期拉取预编译 sherpa-onnx 库，运行期零网络
-sherpa-rs = { version = "0.5", features = ["download-binaries"] }
+# 本地语音识别：静态链接运行库，模型仍由用户进入应用后按需下载。
+sherpa-rs = { version = "0.5", default-features = false, features = ["download-binaries", "static"] }
 
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "0.7"
