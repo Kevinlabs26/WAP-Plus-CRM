@@ -1,7 +1,7 @@
 <table>
 <tr>
 <td width="140" align="center" valign="top">
-<img src="desktop/src/assets/bridgecrm-icon.svg" alt="WAP Plus CRM 图标" width="112" />
+<img src="desktop/src/assets/wap-plus-crm.png" alt="WAP Plus CRM 图标" width="112" />
 </td>
 <td valign="top">
 <h1>WAP Plus CRM</h1>
