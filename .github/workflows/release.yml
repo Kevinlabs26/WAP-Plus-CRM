@@ -30,6 +30,10 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri -> target
+          # sherpa-rs embeds an absolute runner-local SHERPA_LIB_PATH in its
+          # build-script output; reusing target across runners leaves stale
+          # linker paths such as cargs.lib.
+          cache-targets: false
 
       - name: Install dependencies
         run: npm ci
