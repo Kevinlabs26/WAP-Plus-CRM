@@ -411,7 +411,8 @@ export const MessageBubble = memo(function MessageBubble({
             )
           : hasCaption
             ? cn(
-              "overflow-hidden rounded-2xl p-0",
+              // 让底部的表情回应浮出气泡；媒体组件自身负责图片圆角裁剪
+              "overflow-visible rounded-2xl p-0",
               m.direction === "out"
                 ? "message-bubble-out ml-auto mr-0 rounded-tr-[4px] border border-emerald-300/20 bg-emerald-950/90 text-white shadow-lg shadow-black/20"
                 : "message-bubble-in mr-auto ml-0 rounded-tl-[4px] border border-white/10 bg-zinc-900/95 text-zinc-200 shadow-lg shadow-black/20"
