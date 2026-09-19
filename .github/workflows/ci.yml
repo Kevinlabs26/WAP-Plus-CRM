@@ -28,4 +28,8 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: cargo test --manifest-path desktop/src-tauri/Cargo.toml
-      - run: android\gradlew.bat :app:testDebugUnitTest
+      # The Android module has no unit/instrumentation tests yet. Run this
+      # check automatically as soon as test sources are added.
+      - name: Run Android unit tests
+        if: ${{ hashFiles('android/app/src/test/**/*.kt', 'android/app/src/test/**/*.java', 'android/app/src/androidTest/**/*.kt', 'android/app/src/androidTest/**/*.java') != '' }}
+        run: android\gradlew.bat :app:testDebugUnitTest
