@@ -1,0 +1,14 @@
+{
+  "id": "fix-device-hello-1",
+  "type": "device.hello",
+  "ts": 1722470400000,
+  "deviceId": "android-demo",
+  "payload": {
+    "name": "Pixel Demo",
+    "model": "Pixel 7",
+    "androidVersion": "14",
+    "bridgeVersion": "0.1.0",
+    "battery": 80,
+    "accessibilityEnabled": true
+  }
+}

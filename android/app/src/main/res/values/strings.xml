@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WAP Plus Bridge</string>
+    <string name="a11y_description">WAP Plus Bridge 仅在您授权后，辅助打开 WhatsApp Business 聊天、输入与发送。不会在后台静默操作未授权内容。</string>
+    <string name="overlay_channel">客户悬浮卡</string>
+</resources>

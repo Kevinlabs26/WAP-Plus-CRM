@@ -1,0 +1,17 @@
+{
+  "name": "wap-plus-baileys",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node index.mjs",
+    "build": "node -e \"const fs=require('fs');fs.readdirSync('.').filter(f=>f.endsWith('.bun-build')).forEach(f=>fs.rmSync(f,{recursive:true,force:true}))\" && bun build --compile --outfile ../src-tauri/binaries/wap-plus-baileys-x86_64-pc-windows-msvc.exe index.mjs"
+  },
+  "dependencies": {
+    "baileys": "7.0.0-rc14",
+    "pino": "10.3.1",
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "bun": "1.3.14"
+  }
+}

@@ -1,0 +1,104 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp/
+.pnp.js
+
+# Production
+/build
+/dist
+/tmp
+out-tsc
+/bazel-out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+*.db
+*.db-wal
+*.db-shm
+**/baileys-auth/
+**/.tmp-auth-check/
+
+# Directory for instrumented libs
+coverage
+.nyc_output
+*.lcov
+
+# Misc
+*.pem
+key.pem
+cert.pem
+
+# Local env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.tauri/
+
+# Rust
+target/
+# Keep the desktop application lockfile for reproducible builds.
+Cargo.lock
+!desktop/src-tauri/Cargo.lock
+
+# Android (Gradle)
+android/.gradle/
+android/build/
+android/app/build/
+android/app/debug/
+android/local.properties
+
+# Tauri generated
+desktop/src-tauri/binaries/
+desktop/src-tauri/gen/
+desktop/src-tauri/target/
+desktop/src-tauri/target-*/
+
+# TS build artifacts
+*.tsbuildinfo
+
+# Bun build artifacts
+*.bun-build
+
+# Temp / backup
+*.tmp
+*.bak
+*.pyc
+__pycache__/
+
+# Local AI agent runtime data (not product)
+.reasonix/
+reasonix.toml
+reasonix.toml.bak*
+
+# Local scratch scripts (dev only, not product)
+desktop/_w_mm.py
+tools/_fix_phonesidebar_mojibake.py

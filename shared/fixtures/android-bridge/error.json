@@ -1,0 +1,10 @@
+{
+  "id": "error-fix-1",
+  "type": "error",
+  "ts": 1722470403000,
+  "payload": {
+    "code": "accessibility_disabled",
+    "message": "Accessibility 未开启",
+    "refId": "fix-1"
+  }
+}

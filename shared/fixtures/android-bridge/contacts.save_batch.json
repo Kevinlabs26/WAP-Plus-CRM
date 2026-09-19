@@ -1,0 +1,12 @@
+{
+  "id": "fix-contacts-save-batch-1",
+  "type": "contacts.save_batch",
+  "ts": 1722470404000,
+  "deviceId": "android-1",
+  "payload": {
+    "items": [
+      { "name": "Sample Contact A", "phoneE164": "+12025550123" },
+      { "name": "Sample Contact B", "phoneE164": "+12025550124" }
+    ]
+  }
+}

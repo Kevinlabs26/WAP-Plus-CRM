@@ -1,0 +1,10 @@
+{
+  "id": "fix-contacts-save-1",
+  "type": "contacts.save",
+  "ts": 1722470403000,
+  "deviceId": "android-1",
+  "payload": {
+    "name": "Sample Contact",
+    "phoneE164": "+12025550123"
+  }
+}

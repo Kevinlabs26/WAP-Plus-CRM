@@ -1,0 +1,10 @@
+{
+  "id": "fix-wa-open-and-send-1",
+  "type": "wa.open_and_send",
+  "ts": 1722470401000,
+  "payload": {
+    "phoneE164": "+12025550123",
+    "text": "你好，这是协议 fixture",
+    "displayName": "Alice"
+  }
+}

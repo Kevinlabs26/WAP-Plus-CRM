@@ -1,0 +1,848 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --app-bg: #090a0b;
+  --app-surface: #111216;
+  --app-surface-2: #17181d;
+  --app-border: #24262b;
+  --app-border-strong: #303239;
+  --app-text: #f1f2f4;
+  --app-muted: #989ba3;
+  --app-faint: #62656d;
+  --app-brand: #25d366;
+  --brand-rgb: 37 211 102;
+  --brand-foreground: #08301f;
+  --app-danger: #f87171;
+  --radius: 8px;
+  --row-h: 40px;
+  --control-h: 36px;
+
+  /* 深色 zinc 调色板（默认） */
+  --zinc-50: 241 242 244;
+  --zinc-100: 228 229 232;
+  --zinc-200: 207 209 214;
+  --zinc-300: 181 184 192;
+  --zinc-400: 152 155 163;
+  --zinc-500: 119 123 132;
+  --zinc-600: 98 101 109;
+  --zinc-700: 48 50 57;
+  --zinc-800: 36 38 43;
+  --zinc-900: 17 18 22;
+  --zinc-950: 12 13 15;
+
+  font-family: "Segoe UI", "Inter", system-ui, -apple-system, sans-serif;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+
+  /* 非 zinc 色阶默认值（Tailwind v3 原色，深色主题专用） */
+  --amber-50: 255 251 235;
+  --amber-100: 254 243 199;
+  --amber-200: 253 230 138;
+  --amber-300: 252 211 77;
+  --amber-400: 251 191 36;
+  --amber-500: 245 158 11;
+  --amber-600: 217 119 6;
+  --amber-700: 180 83 9;
+  --amber-800: 146 64 14;
+  --amber-900: 120 53 15;
+  --amber-950: 69 26 3;
+  --rose-50: 255 241 242;
+  --rose-100: 255 228 230;
+  --rose-200: 254 205 211;
+  --rose-300: 253 164 175;
+  --rose-400: 251 113 133;
+  --rose-500: 244 63 94;
+  --rose-600: 225 29 72;
+  --rose-700: 190 18 60;
+  --rose-800: 159 18 57;
+  --rose-900: 136 19 55;
+  --rose-950: 76 5 25;
+  --red-50: 254 242 242;
+  --red-100: 254 226 226;
+  --red-200: 254 202 202;
+  --red-300: 252 165 165;
+  --red-400: 248 113 113;
+  --red-500: 239 68 68;
+  --red-600: 220 38 38;
+  --red-700: 185 28 28;
+  --red-800: 153 27 27;
+  --red-900: 127 29 29;
+  --red-950: 69 10 10;
+  --emerald-50: 236 253 245;
+  --emerald-100: 209 250 229;
+  --emerald-200: 167 243 208;
+  --emerald-300: 110 231 183;
+  --emerald-400: 52 211 153;
+  --emerald-500: 16 185 129;
+  --emerald-600: 5 150 105;
+  --emerald-700: 4 120 87;
+  --emerald-800: 6 95 70;
+  --emerald-900: 6 78 59;
+  --emerald-950: 2 44 34;
+  --sky-50: 240 249 255;
+  --sky-100: 224 242 254;
+  --sky-200: 186 230 253;
+  --sky-300: 125 211 252;
+  --sky-400: 56 189 248;
+  --sky-500: 14 165 233;
+  --sky-600: 2 132 199;
+  --sky-700: 3 105 161;
+  --sky-800: 7 89 133;
+  --sky-900: 12 74 110;
+  --sky-950: 8 47 73;
+  --violet-50: 245 243 255;
+  --violet-100: 237 233 254;
+  --violet-200: 221 214 254;
+  --violet-300: 196 181 253;
+  --violet-400: 167 139 250;
+  --violet-500: 139 92 246;
+  --violet-600: 124 58 237;
+  --violet-700: 109 40 217;
+  --violet-800: 91 33 182;
+  --violet-900: 76 29 149;
+  --violet-950: 46 16 101;
+  --teal-50: 240 253 250;
+  --teal-100: 204 251 241;
+  --teal-200: 153 246 228;
+  --teal-300: 94 234 212;
+  --teal-400: 45 212 191;
+  --teal-500: 20 184 166;
+  --teal-600: 13 148 136;
+  --teal-700: 15 118 110;
+  --teal-800: 17 94 89;
+  --teal-900: 19 78 74;
+  --teal-950: 4 47 46;
+  --orange-50: 255 247 237;
+  --orange-100: 255 237 213;
+  --orange-200: 254 215 170;
+  --orange-300: 253 186 116;
+  --orange-400: 251 146 60;
+  --orange-500: 249 115 22;
+  --orange-600: 234 88 12;
+  --orange-700: 194 65 12;
+  --orange-800: 154 52 18;
+  --orange-900: 124 45 18;
+  --orange-950: 67 20 7;
+}
+
+/* 浅色主题：语义反转——低档 zinc 作文字（深），高档作表面/边框（浅） */
+:root[data-theme="light"] {
+  color-scheme: light;
+  /* Executive WhatsApp Light：温暖微灰托底 + 饱满温润绿气泡 + 现代 SaaS 质感 */
+  --app-brand: #008f6f;
+  --brand-rgb: 0 143 111;
+  --brand-foreground: #ffffff;
+  --app-bg: #f0f2f5;
+  --app-surface: #ffffff;
+  --app-surface-2: #f0f2f5;
+  --app-border: #e2e8f0;
+  --app-border-strong: #cbd5e1;
+  --app-text: #0f172a;
+  --app-muted: #334155;
+  --app-faint: #475569;
+  --app-danger: #ea0038;
+
+  /* 品牌绿 tint：出站气泡与活动态，从原本发白发飘的 #d9fdd3 升级为更具质感与辨识度的浅鼠尾草绿 #c8f7c5 */
+  --brand-tint: #c8f7c5;
+  --brand-tint-border: #a3e6a0;
+  --brand-tint-text: #064e3b;
+
+  /* 浅色 zinc：低档 50–500 文字，高档 600–950 边框/表面。
+     坚挺、高对比度、彻底告别发灰看不清的深黑与冷灰文字层级体系 */
+  --zinc-50: 15 23 42;      /* #0f172a 极致深黑（大标题、高强文字） */
+  --zinc-100: 17 24 39;     /* #111827 正文主字 */
+  --zinc-200: 30 41 59;     /* #1e293b 列表联系人名字、主按钮字，拒绝发灰 */
+  --zinc-300: 51 65 85;     /* #334155 卡片标题、说明，扎实饱满 */
+  --zinc-400: 71 85 105;    /* #475569 辅助正文、清晰图标 */
+  --zinc-500: 71 85 105;    /* #475569 顶栏导航、会话摘要、时间戳，对比度 > 6:1 */
+  --zinc-600: 100 116 139;  /* #64748b 辅助标签、提示文字，彻底告别隐形 */
+  --zinc-700: 203 213 225;  /* #cbd5e1 坚实边界线 */
+  --zinc-800: 226 232 240;  /* #e2e8f0 浅边框/分割线 */
+  --zinc-900: 241 245 249;  /* #f1f5f9 卡片次表面/hover 浅底 */
+  --zinc-950: 255 255 255;  /* #ffffff 纯白主面板 */
+
+  /* 浅色主题：非 zinc 色阶 100–400 级加深成文字可读色。
+     500+ 级保持不变，保证 /10–/15 底色晕染与色点在浅色表面仍成立。 */
+  --amber-100: 146 64 14;
+  --amber-200: 146 64 14;
+  --amber-300: 161 98 7;
+  --amber-400: 161 98 7;
+  --rose-100: 225 29 72;
+  --rose-200: 225 29 72;
+  --rose-300: 190 18 60;
+  --rose-400: 190 18 60;
+  --red-100: 220 38 38;
+  --red-200: 220 38 38;
+  --red-300: 185 28 28;
+  --red-400: 185 28 28;
+  --emerald-100: 4 120 87;
+  --emerald-200: 4 120 87;
+  --emerald-300: 5 150 105;
+  --emerald-400: 5 150 105;
+  --sky-100: 3 105 161;
+  --sky-200: 3 105 161;
+  --sky-300: 2 132 199;
+  --sky-400: 2 132 199;
+  --violet-100: 109 40 217;
+  --violet-200: 109 40 217;
+  --violet-300: 109 40 217;
+  --violet-400: 91 33 182;
+  --teal-100: 15 118 110;
+  --teal-200: 15 118 110;
+  --teal-300: 13 148 136;
+  --teal-400: 13 148 136;
+  --orange-100: 154 52 18;
+  --orange-200: 154 52 18;
+  --orange-300: 194 65 12;
+  --orange-400: 194 65 12;
+}
+
+/* 状态卡在浅色表面上使用深色状态文字，避免浅色文字失去对比度。 */
+:root[data-theme="light"] .health-status-green {
+  color: #047857;
+}
+:root[data-theme="light"] .health-status-yellow {
+  color: #a16207;
+}
+:root[data-theme="light"] .health-status-red {
+  color: #be123c;
+}
+
+/* 浅色表面上的警告/危险文字不能继续使用深色主题的浅色 tint。 */
+:root[data-theme="light"] [class*="text-amber-"] {
+  color: #a16207 !important;
+}
+:root[data-theme="light"] [class*="text-rose-"] {
+  color: #be123c !important;
+}
+
+/* 果冻状态标签：高透底色 + 浓郁饱和文字 + 晶莹微边框 */
+:root[data-theme="light"] .rounded-full.border-amber-500\/25,
+:root[data-theme="light"] .rounded-full[class*="border-amber-"] {
+  background-color: #fffbeb !important;
+  border-color: #fde68a !important;
+  color: #b45309 !important;
+  font-weight: 500;
+}
+:root[data-theme="light"] .rounded-full.border-violet-500\/25,
+:root[data-theme="light"] .rounded-full[class*="border-violet-"] {
+  background-color: #f5f3ff !important;
+  border-color: #ddd6fe !important;
+  color: #6d28d9 !important;
+  font-weight: 500;
+}
+:root[data-theme="light"] .rounded-full.border-brand\/25,
+:root[data-theme="light"] .rounded-full[class*="border-brand"] {
+  background-color: #ecfdf5 !important;
+  border-color: #a7f3d0 !important;
+  color: #047857 !important;
+  font-weight: 500;
+}
+:root[data-theme="light"] .rounded-full.border-rose-500\/40,
+:root[data-theme="light"] .rounded-full[class*="border-rose-"] {
+  background-color: #fef2f2 !important;
+  border-color: #fecaca !important;
+  color: #b91c1c !important;
+  font-weight: 500;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  overflow: hidden;
+  background: var(--app-bg);
+  color: var(--app-text);
+  font-size: 13px;
+  line-height: 1.45;
+  /* 减少整页重绘时的次像素抖动 */
+  text-rendering: optimizeSpeed;
+}
+
+/*
+ * 启动暖机 / 缩放窗口：关掉 transition/animation，减轻 WebView 合成压力
+ * （开发版 hydrate + 首次轮询时立刻拖窗会卡 5～8 秒）
+ */
+body.app-window-interacting,
+body.app-window-interacting *,
+body.app-booting,
+body.app-booting * {
+  transition: none !important;
+  animation-play-state: paused !important;
+  scroll-behavior: auto !important;
+}
+
+/* 窗口缩放时跳过昂贵的阴影与模糊合成，结束后由浏览器自动恢复 */
+body.app-window-interacting *,
+body.app-window-interacting *::before,
+body.app-window-interacting *::after {
+  box-shadow: none !important;
+  filter: none !important;
+  backdrop-filter: none !important;
+}
+
+/* 长列表行：离屏跳过渲染（侧边栏会话行） */
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 56px;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+/* Focus — 专业产品统一焦点环 */
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--app-brand) 55%, transparent);
+  outline-offset: 1px;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--zinc-700));
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--zinc-600));
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 左侧会话列表：更轻的滚动提示，避免灰色滑块抢视觉焦点 */
+.crm-sidebar {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--zinc-700) / 0.55) transparent;
+}
+.crm-sidebar ::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+.crm-sidebar ::-webkit-scrollbar-thumb {
+  background: rgb(var(--zinc-700) / 0.55);
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+.crm-sidebar ::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--zinc-600) / 0.8);
+  border: 0;
+}
+
+@layer components {
+  .ui-panel {
+    @apply border-r border-zinc-800/90 bg-zinc-950;
+  }
+  .ui-section-label {
+    @apply text-[11px] font-medium tracking-wide text-zinc-500;
+  }
+  .ui-row {
+    @apply flex w-full items-center gap-2 rounded-md px-2.5 text-left;
+    min-height: var(--row-h);
+  }
+  .ui-row-active {
+    @apply bg-zinc-800/90 text-zinc-50;
+    box-shadow: inset 2px 0 0 var(--app-brand);
+  }
+  .ui-row-idle {
+    @apply text-zinc-200 hover:bg-zinc-900;
+  }
+  .ui-control {
+    @apply rounded-md border border-zinc-700/80 bg-zinc-900 text-zinc-100 placeholder:text-zinc-600;
+    min-height: var(--control-h);
+  }
+  .ui-control:focus {
+    @apply border-brand/40;
+    outline: none;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--app-brand) 25%, transparent);
+  }
+  .ui-btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-45;
+    min-height: var(--control-h);
+  }
+  .ui-btn-primary {
+    @apply ui-btn bg-brand px-3 text-[var(--brand-foreground)] hover:bg-brand/90;
+  }
+  .ui-btn-secondary {
+    @apply ui-btn border border-zinc-700 bg-zinc-900 px-3 text-zinc-200 hover:bg-zinc-800;
+  }
+  .ui-btn-ghost {
+    @apply ui-btn px-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100;
+  }
+  .ui-badge {
+    @apply inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium;
+  }
+  .ui-badge-muted {
+    @apply ui-badge bg-zinc-800 text-zinc-400;
+  }
+  .ui-badge-brand {
+    @apply ui-badge bg-brand/15 text-brand font-semibold;
+  }
+  .ui-empty {
+    @apply flex flex-col items-center justify-center gap-2 px-6 py-12 text-center text-zinc-500;
+  }
+}
+
+
+/* 浅色表面：语义性覆盖（活动态、聊天区、气泡、阴影降噪） */
+/* 浅色模式下徽章（Badge）与侧栏文件夹角标优化：告别泛白发虚，字迹清晰挺拔 */
+:root[data-theme="light"] .ui-badge-brand {
+  background-color: #d1fae5 !important;
+  color: #065f46 !important;
+}
+
+:root[data-theme="light"] .ui-row-active {
+  background-color: #eaf6f0 !important;
+  color: #0b4a3c !important;
+  box-shadow: inset 3.5px 0 0 0 #00a884 !important;
+}
+
+:root[data-theme="light"] .crm-nav-active {
+  background: linear-gradient(135deg, rgba(0, 168, 132, 0.14) 0%, rgba(0, 168, 132, 0.22) 100%) !important;
+  color: #0b4a3c !important;
+  font-weight: 600 !important;
+  box-shadow: inset 0 0 0 1px rgba(0, 168, 132, 0.25), 0 1px 2px rgba(0, 168, 132, 0.08) !important;
+}
+
+/* 顶栏纯白与细微下边框 */
+:root[data-theme="light"] .crm-topbar {
+  background-color: #ffffff;
+  border-bottom: 1px solid #e9edef;
+}
+:root[data-theme="light"] .crm-topbar .ui-btn-secondary {
+  background-color: #ffffff;
+}
+:root[data-theme="light"] .crm-topbar .ui-btn-secondary kbd {
+  background-color: #f0f2f5;
+  color: #667781;
+}
+
+/* 聊天画布：采用经典的 WhatsApp 柔和温润微灰米色，彻底告别纯白雪盲感，衬托出气泡的立体实体感 */
+:root[data-theme="light"] .chat-canvas {
+  background-color: #efeae2 !important;
+  background-image: radial-gradient(#dcd5cb 0.75px, transparent 0.75px);
+  background-size: 16px 16px;
+}
+
+/* 输入区域（Chat Composer 底座）：悬浮 Dock 质感，清爽分界 */
+:root[data-theme="light"] .chat-composer {
+  background-color: #f0f2f5 !important;
+  border-top: 1px solid #e2e8f0 !important;
+}
+
+/* 输入框（Composer Editor）：纯白实体卡片，精致微阴影 */
+:root[data-theme="light"] .composer-editor {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.06), 0 1px 2px -1px rgba(0, 0, 0, 0.04) !important;
+}
+
+/* 出站气泡（我方发送）：饱满温润浅鼠尾草绿 + 0.5px 物理微阴影，告别发白发虚 */
+:root[data-theme="light"] .message-bubble-out {
+  background-color: #c8f7c5;
+  border-color: #b0eeb0;
+  color: #0b291d;
+  box-shadow: 0 1px 1px rgba(11, 20, 26, 0.16);
+}
+
+/* 入站气泡（对方发送）：纯白实体卡片 + 0.5px 物理微阴影 */
+:root[data-theme="light"] .message-bubble-in {
+  background-color: #ffffff;
+  border-color: rgba(0, 0, 0, 0.06);
+  color: #0f172a;
+  box-shadow: 0 1px 1px rgba(11, 20, 26, 0.12);
+}
+
+/* 气泡内部引用的浅色优化：避免黑透底显脏 */
+:root[data-theme="light"] .message-bubble-out [class*="border-emerald-400"] {
+  background-color: rgba(0, 168, 132, 0.12) !important;
+  border-left-color: #00a884 !important;
+  color: #111b21 !important;
+}
+:root[data-theme="light"] .message-bubble-in [class*="border-sky-400"] {
+  background-color: #f0f2f5 !important;
+  border-left-color: #0284c7 !important;
+  color: #111b21 !important;
+}
+
+/* 现代 SaaS 语音条按钮与波形（扎实饱满、对比度清晰） */
+:root[data-theme="light"] .message-bubble-out .voice-play-button {
+  background-color: #ffffff !important;
+  color: #008f6f !important;
+  box-shadow: 0 1px 2px rgba(11, 20, 26, 0.16) !important;
+}
+:root[data-theme="light"] .message-bubble-out .voice-play-button:hover {
+  background-color: #f0faf5 !important;
+}
+:root[data-theme="light"] .message-bubble-in .voice-play-button {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08) !important;
+}
+:root[data-theme="light"] .message-bubble-in .voice-play-button:hover {
+  background-color: #e2e8f0 !important;
+}
+:root[data-theme="light"] .voice-wave-out-filled {
+  background-color: #008f6f !important;
+}
+:root[data-theme="light"] .voice-wave-out-unfilled {
+  background-color: rgba(17, 27, 33, 0.28) !important;
+}
+:root[data-theme="light"] .voice-wave-in-filled {
+  background-color: #0284c7 !important;
+}
+:root[data-theme="light"] .voice-wave-in-unfilled {
+  background-color: rgba(17, 27, 33, 0.24) !important;
+}
+
+/* 语音转写/译文卡片在浅色气泡内的适配：避免深黑卡片破坏浅色气泡质感 */
+:root[data-theme="light"] .message-bubble-out .voice-transcript-card {
+  background-color: rgba(255, 255, 255, 0.75) !important;
+  border-color: rgba(0, 168, 132, 0.25) !important;
+  color: #0f172a !important;
+}
+:root[data-theme="light"] .message-bubble-in .voice-transcript-card {
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+/* 视频等待加载占位块：柔和微霜质感，告别死黑 */
+:root[data-theme="light"] .video-placeholder-box {
+  background: linear-gradient(180deg, #f8fafc 0%, #edf2f7 100%) !important;
+}
+:root[data-theme="light"] .video-placeholder-box .text-zinc-400 {
+  color: #475569 !important;
+}
+:root[data-theme="light"] .video-placeholder-box .bg-black\/50 {
+  background-color: rgba(15, 23, 42, 0.65) !important;
+}
+
+/* 联系人名片在浅色模式下的通透高雅质感 */
+:root[data-theme="light"] .contact-vcard-box {
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+:root[data-theme="light"] .contact-vcard-box .text-zinc-100 {
+  color: #0f172a !important;
+}
+:root[data-theme="light"] .contact-vcard-box .text-zinc-400 {
+  color: #64748b !important;
+}
+:root[data-theme="light"] .contact-vcard-box .border-t,
+:root[data-theme="light"] .contact-vcard-box .border-r {
+  border-color: #e2e8f0 !important;
+}
+:root[data-theme="light"] .contact-vcard-box .contact-vcard-btn:hover {
+  background-color: #edf2f7 !important;
+}
+:root[data-theme="light"] .contact-vcard-box .contact-vcard-btn.text-zinc-400 {
+  color: #475569 !important;
+}
+:root[data-theme="light"] .group-invite-card .text-zinc-100 {
+  color: #0f172a !important;
+}
+:root[data-theme="light"] .group-invite-card .text-zinc-400 {
+  color: #475569 !important;
+}
+:root[data-theme="light"] .group-invite-card .group-invite-btn-secondary {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #334155 !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04) !important;
+}
+:root[data-theme="light"] .group-invite-card .group-invite-btn-secondary:hover {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+:root[data-theme="light"] .group-invite-card .group-invite-btn-primary {
+  background-color: #00a884 !important;
+  color: #ffffff !important;
+  box-shadow: 0 1px 3px rgba(0, 168, 132, 0.25) !important;
+}
+
+/* 客户备注便签栏：温润内敛的便签质感，不再生硬切断视觉 */
+:root[data-theme="light"] .chat-internal-note-bar {
+  background-color: #fdfbf7 !important;
+  border-bottom: 1px solid #f2ece1 !important;
+}
+:root[data-theme="light"] .chat-internal-note-bar button:hover {
+  background-color: #f7f3ea !important;
+}
+
+/* 统计胶囊条：轻快灵动，释放纵向空间 */
+:root[data-theme="light"] .stats-chips-bar {
+  background-color: #f8fafc !important;
+  border-bottom: 1px solid #eef2f6 !important;
+}
+:root[data-theme="light"] .stats-pill-btn {
+  color: #0f172a !important;
+  font-weight: 600 !important;
+  background-color: #ffffff;
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+:root[data-theme="light"] .stats-pill-btn:hover {
+  background-color: #f8fafc !important;
+  color: #000000 !important;
+  border-color: #94a3b8;
+}
+:root[data-theme="light"] .stats-pill-active {
+  background: #e6f7f2 !important;
+  color: #007a5e !important;
+  border-color: #a7f3d0 !important;
+}
+
+/* 浅色模式下全局输入框（.ui-control）与搜索框：坚挺纯白、深黑字迹、中灰高可见占位符 */
+:root[data-theme="light"] .ui-control {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+:root[data-theme="light"] .ui-control::placeholder {
+  color: #64748b !important;
+  font-weight: 400 !important;
+}
+:root[data-theme="light"] .ui-control:focus {
+  border-color: #008f6f !important;
+  box-shadow: 0 0 0 1px rgba(0, 143, 111, 0.3) !important;
+}
+
+/* 浅色模式下左侧栏「我的收藏」高对比收敛（深色模式保持系统原生暗黑） */
+:root[data-theme="light"] .sidebar-saved-card {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+}
+:root[data-theme="light"] .sidebar-saved-card,
+:root[data-theme="light"] .sidebar-saved-card > span {
+  color: #0f172a !important;
+}
+:root[data-theme="light"] .sidebar-saved-card .text-zinc-500 {
+  color: #475569 !important;
+}
+
+:root[data-theme="light"] .sidebar-saved-card-active {
+  background-color: #ecfdf5 !important;
+  border-color: #a7f3d0 !important;
+}
+:root[data-theme="light"] .sidebar-saved-card-active,
+:root[data-theme="light"] .sidebar-saved-card-active > span {
+  color: #064e3b !important;
+}
+:root[data-theme="light"] .sidebar-saved-card-active .text-zinc-500 {
+  color: #047857 !important;
+}
+
+/* 深色模式下左侧栏「我的收藏」绝对禁止纯白，强制融入暗黑侧栏 */
+:root:not([data-theme="light"]) .sidebar-saved-card,
+html:not([data-theme="light"]) .sidebar-saved-card {
+  background-color: rgba(24, 24, 27, 0.5) !important;
+  border-color: rgba(63, 63, 70, 0.8) !important;
+  color: #f4f4f5 !important;
+}
+:root:not([data-theme="light"]) .sidebar-saved-card > span,
+html:not([data-theme="light"]) .sidebar-saved-card > span {
+  color: #f4f4f5 !important;
+}
+:root:not([data-theme="light"]) .sidebar-saved-card .text-zinc-500,
+html:not([data-theme="light"]) .sidebar-saved-card .text-zinc-500 {
+  color: #a1a1aa !important;
+}
+
+:root:not([data-theme="light"]) .sidebar-saved-card-active,
+html:not([data-theme="light"]) .sidebar-saved-card-active {
+  background-color: rgba(0, 168, 132, 0.18) !important;
+  border-color: rgba(0, 168, 132, 0.4) !important;
+  color: var(--app-brand) !important;
+}
+:root:not([data-theme="light"]) .sidebar-saved-card-active > span,
+html:not([data-theme="light"]) .sidebar-saved-card-active > span {
+  color: var(--app-brand) !important;
+}
+:root:not([data-theme="light"]) .sidebar-saved-card-active .text-zinc-500,
+html:not([data-theme="light"]) .sidebar-saved-card-active .text-zinc-500 {
+  color: var(--app-brand) !important;
+}
+
+/* 客户库看板（Linear / Trello 现代轻卡质感） */
+:root[data-theme="light"] .crm-kanban-col {
+  background-color: #f1f5f9 !important;
+  border-color: #e2e8f0 !important;
+}
+:root[data-theme="light"] .crm-kanban-card {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.03) !important;
+}
+:root[data-theme="light"] .crm-kanban-card:hover {
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.05) !important;
+}
+
+/* 工作台 KPI 仪表盘卡片（轻快通透） */
+:root[data-theme="light"] .today-kpi-card {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05) !important;
+}
+:root[data-theme="light"] .today-kpi-card:hover {
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08) !important;
+}
+
+/* 账号监测卡片：浅色清爽、深色深邃沉浸 */
+.monitor-card-green {
+  background: linear-gradient(145deg, rgba(16, 185, 129, 0.08) 0%, rgba(24, 24, 27, 0.7) 100%);
+}
+.monitor-card-yellow {
+  background: linear-gradient(145deg, rgba(245, 158, 11, 0.08) 0%, rgba(24, 24, 27, 0.7) 100%);
+}
+.monitor-card-red {
+  background: linear-gradient(145deg, rgba(244, 63, 94, 0.09) 0%, rgba(24, 24, 27, 0.7) 100%);
+}
+
+:root[data-theme="light"] .monitor-card-green {
+  background: #f4fbf7 !important;
+  border-color: #d1fae5 !important;
+}
+:root[data-theme="light"] .monitor-card-yellow {
+  background: #fefcf6 !important;
+  border-color: #fef3c7 !important;
+}
+:root[data-theme="light"] .monitor-card-red {
+  background: #fff8f8 !important;
+  border-color: #ffe4e6 !important;
+}
+
+/* 账号监测页（明亮清爽，拒绝死灰） */
+:root[data-theme="light"] .stat-chip-card {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04) !important;
+}
+
+/* 模态弹窗规范化（浅色微拟态与柔和阴影） */
+:root[data-theme="light"] .confirm-modal-box {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.06) !important;
+}
+:root[data-theme="light"] .confirm-modal-box h2 {
+  color: #0f172a !important;
+}
+:root[data-theme="light"] .confirm-modal-box p {
+  color: #64748b !important;
+}
+
+/* 侧边栏与 CRM 面板：柔和阴影与干净纯白 */
+:root[data-theme="light"] .crm-sidebar {
+  background-color: #ffffff;
+  border-right: 1px solid #e9edef;
+  box-shadow: 1px 0 2px rgba(16, 24, 40, 0.02), 2px 0 6px rgba(16, 24, 40, 0.03);
+}
+:root[data-theme="light"] .crm-panel {
+  background-color: #ffffff;
+  border-left: 1px solid #e9edef;
+  box-shadow: -1px 0 2px rgba(16, 24, 40, 0.02), -2px 0 6px rgba(16, 24, 40, 0.03);
+}
+
+/* 浅色模式下，重置 Tailwind 中死黑的阴影变量，统一收束为高级弥散柔光 */
+:root[data-theme="light"] [class*="shadow-black"] {
+  --tw-shadow-color: rgb(15 23 42 / 0.08) !important;
+}
+
+/* 浅色模式滚动条：细腻浅灰 */
+:root[data-theme="light"] ::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+}
+:root[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+:root[data-theme="light"] .crm-sidebar {
+  scrollbar-color: #cbd5e1 transparent;
+}
+:root[data-theme="light"] .crm-sidebar ::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+}
+:root[data-theme="light"] .crm-sidebar ::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* ==========================================================================
+   浅色模式全局高对比度文字收束：彻底解决白底上文字发灰、看不太清的问题
+   ========================================================================== */
+:root[data-theme="light"] .text-zinc-600 {
+  color: #64748b !important; /* 描述小字、辅助提示清晰可读 */
+}
+:root[data-theme="light"] .text-zinc-500 {
+  color: #475569 !important; /* 顶栏导航、会话消息摘要、时间戳饱满深邃，拒绝灰蒙蒙 */
+}
+:root[data-theme="light"] .text-zinc-400 {
+  color: #334155 !important; /* 图标与弱文本加深 */
+}
+:root[data-theme="light"] .text-zinc-300 {
+  color: #1e293b !important; /* 二级标题与说明 */
+}
+:root[data-theme="light"] .text-zinc-200 {
+  color: #0f172a !important; /* 联系人名字、主按钮文字，黑白分明 */
+}
+:root[data-theme="light"] .text-zinc-100 {
+  color: #0f172a !important; /* 重要标题 */
+}
+
+/* 顶栏所有未激活导航：深邃坚实，清晰一目了然 */
+:root[data-theme="light"] .crm-topbar nav button:not(.crm-nav-active) {
+  color: #334155 !important;
+  font-weight: 500;
+}
+:root[data-theme="light"] .crm-topbar nav button:not(.crm-nav-active):hover {
+  color: #0f172a !important;
+  background-color: #f1f5f9;
+}
+
+/* 会话列表行（未激活状态）：联系人名字黑亮挺拔，摘要和时间高可读性 */
+:root[data-theme="light"] .ui-row-idle {
+  color: #0f172a !important;
+}
+:root[data-theme="light"] .ui-row-idle:hover {
+  background-color: #f1f5f9;
+}
+:root[data-theme="light"] .ui-row-idle span.truncate {
+  color: #0f172a;
+}
+:root[data-theme="light"] .ui-row-idle .text-zinc-500 {
+  color: #475569 !important;
+}
+
+/* 统计栏（StatsBar）按钮文字与数值 */
+:root[data-theme="light"] .crm-topbar + div button {
+  color: #334155 !important;
+}
+
+/* SectionLabel 结构标签与标题 */
+:root[data-theme="light"] .ui-section-label {
+  color: #475569 !important;
+  font-weight: 600 !important;
+}
+
+/* 输入框与文本域的占位符：恰到好处的中灰，不再近乎隐形 */
+:root[data-theme="light"] input::placeholder,
+:root[data-theme="light"] textarea::placeholder {
+  color: #94a3b8 !important;
+}

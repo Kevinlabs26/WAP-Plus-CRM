@@ -1,0 +1,28 @@
+{
+  "name": "wap-plus",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "npm@10.9.8",
+  "type": "module",
+  "description": "WAP Plus CRM monorepo (desktop + baileys sidecar)",
+  "workspaces": [
+    "desktop",
+    "desktop/baileys-bridge"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w wap-plus-crm",
+    "build": "npm run build -w wap-plus-crm",
+    "test": "npm run test -w wap-plus-crm",
+    "check": "npm test && npm run build && npm run baileys:build && npm run bridge:smoke",
+    "bridge:smoke": "node tools/mock-bridge-smoke.test.mjs",
+    "tauri": "npm run tauri -w wap-plus-crm --",
+    "release:win": "npm run baileys:build && npm run tauri -- build",
+    "mock-bridge": "node tools/mock-bridge.mjs",
+    "baileys:start": "npm run start -w wap-plus-baileys",
+    "baileys:build": "npm run build -w wap-plus-baileys",
+    "install:all": "npm install"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

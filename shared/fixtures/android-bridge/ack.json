@@ -1,0 +1,10 @@
+{
+  "id": "ack-fix-wa-open-and-send-1",
+  "type": "ack",
+  "ts": 1722470402000,
+  "payload": {
+    "refId": "fix-wa-open-and-send-1",
+    "ok": true,
+    "status": "sent"
+  }
+}
