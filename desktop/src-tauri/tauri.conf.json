@@ -32,7 +32,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU5NzRENEFBMkY1OEQ1QzUKUldURjFWZ3ZxdFIwNlYva0Z3UXY0cHhXdGh1ZWNOZE81dnRmbXcrQVNyWStyQitjTlRKNlFOa3MK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENDNjVCMjlCMkZGQTg3RkQKUldUOWgvb3ZtN0psekZvNXo4bGxlVHBWYnFJTFNEcTVPdk1GNzJLaWZJSGFaaUU4RnI3ZmsyVGYK",
       "endpoints": [
         "https://github.com/Kevinlabs26/WAP-Plus-CRM/releases/latest/download/latest.json"
       ],
