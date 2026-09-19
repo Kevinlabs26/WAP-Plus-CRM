@@ -11,6 +11,7 @@ import { TopBar } from "@/components/layout/TopBar";
 import { StatsBar } from "@/components/layout/StatsBar";
 import { ConfirmHost } from "@/components/ui/ConfirmHost";
 import { UpdateWatcher } from "@/components/bridge/UpdateWatcher";
+import { UpdateCompleteModal } from "@/components/UpdateCompleteModal";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { BootSplash } from "@/components/BootSplash";
 import { useI18n } from "@/i18n";
@@ -842,6 +843,8 @@ export default function App() {
           {t("app.startupFailed")}
         </div>
       )}
+
+      <UpdateCompleteModal ready={interactive} />
     </ErrorBoundary>
   );
 }
