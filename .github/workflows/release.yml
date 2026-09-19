@@ -48,5 +48,5 @@ jobs:
           tagName: v__VERSION__
           releaseName: WAP Plus CRM v__VERSION__
           releaseBody: See the Windows installers in the assets below.
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
