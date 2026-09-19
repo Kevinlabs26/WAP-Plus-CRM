@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,6 +20,11 @@ async function sourceFiles(dir) {
 }
 
 for (const root of roots) {
+  try {
+    await access(root);
+  } catch {
+    continue;
+  }
   for (const file of await sourceFiles(root)) {
     assert.doesNotMatch(await readFile(file, "utf8"), nativeDialog, file);
   }

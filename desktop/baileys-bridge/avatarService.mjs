@@ -227,7 +227,7 @@ export function createAvatarService(deps) {
       return;
     avatarQueued.add(qKey);
     avatarQueue.push(qKey);
-    return pumpAvatars();
+    void pumpAvatars();
   }
 
   async function pumpAvatars() {

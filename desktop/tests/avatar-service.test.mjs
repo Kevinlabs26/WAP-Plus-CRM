@@ -19,7 +19,8 @@ const service = createAvatarService({
   contactPayload: (item) => item,
 });
 
-await service.enqueueAvatar(contact.jid);
+service.enqueueAvatar(contact.jid);
+await new Promise((resolve) => setTimeout(resolve, 650));
 assert.equal(pushed[0]?.type, "contacts.sync");
 assert.equal(pushed[0]?.payload.items[0].jid, contact.jid);
 console.log("avatar service: ok");
