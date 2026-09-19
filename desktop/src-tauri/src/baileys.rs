@@ -301,6 +301,16 @@ impl BaileysState {
         let mut guard = self.0.lock().map_err(|e| e.to_string())?;
         if let Some(mut process) = guard.remove(&key) {
             let _ = process.child.kill();
+            let _ = process.child.wait();
+        }
+        Ok(())
+    }
+
+    pub fn stop_all(&self) -> Result<(), String> {
+        let mut guard = self.0.lock().map_err(|e| e.to_string())?;
+        for (_, mut process) in guard.drain() {
+            let _ = process.child.kill();
+            let _ = process.child.wait();
         }
         Ok(())
     }
@@ -323,6 +333,11 @@ pub fn baileys_stop_account(
     account_id: String,
 ) -> Result<(), String> {
     state.stop_account(&account_id)
+}
+
+#[tauri::command]
+pub fn baileys_stop_all(state: tauri::State<'_, BaileysState>) -> Result<(), String> {
+    state.stop_all()
 }
 
 impl Drop for BaileysState {

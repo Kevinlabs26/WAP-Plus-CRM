@@ -95,6 +95,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             baileys::baileys_runtime,
             baileys::baileys_stop_account,
+            baileys::baileys_stop_all,
             commands::list_adb_devices,
             commands::adb_forward,
             commands::phone_screenshot,
