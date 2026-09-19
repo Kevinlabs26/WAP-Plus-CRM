@@ -13,7 +13,13 @@ use tauri::{AppHandle, Manager};
 const MAX_BRIDGE_LOG_BYTES: u64 = 5 * 1024 * 1024;
 
 #[derive(Default)]
-pub struct BaileysState(Mutex<HashMap<String, BaileysProcess>>);
+pub struct BaileysState(Mutex<BaileysRegistry>);
+
+#[derive(Default)]
+struct BaileysRegistry {
+    processes: HashMap<String, BaileysProcess>,
+    update_started: bool,
+}
 
 struct BaileysProcess {
     child: Child,
@@ -283,23 +289,26 @@ impl BaileysState {
     ) -> Result<BaileysRuntime, String> {
         let key = sanitize_account_id(account_id);
         let mut guard = self.0.lock().map_err(|e| e.to_string())?;
-        if let Some(process) = guard.get_mut(&key) {
+        if guard.update_started {
+            return Err("Baileys 已停止，正在安装应用更新".into());
+        }
+        if let Some(process) = guard.processes.get_mut(&key) {
             if process.child.try_wait().map_err(|e| e.to_string())?.is_none() {
                 return Ok(process.runtime.clone());
             }
             let _ = process.child.kill();
-            guard.remove(&key);
+            guard.processes.remove(&key);
         }
         let process = spawn_account(app, &key)?;
         let runtime = process.runtime.clone();
-        guard.insert(key, process);
+        guard.processes.insert(key, process);
         Ok(runtime)
     }
 
     pub fn stop_account(&self, account_id: &str) -> Result<(), String> {
         let key = sanitize_account_id(account_id);
         let mut guard = self.0.lock().map_err(|e| e.to_string())?;
-        if let Some(mut process) = guard.remove(&key) {
+        if let Some(mut process) = guard.processes.remove(&key) {
             let _ = process.child.kill();
             let _ = process.child.wait();
         }
@@ -308,7 +317,8 @@ impl BaileysState {
 
     pub fn stop_all(&self) -> Result<(), String> {
         let mut guard = self.0.lock().map_err(|e| e.to_string())?;
-        for (_, mut process) in guard.drain() {
+        guard.update_started = true;
+        for (_, mut process) in guard.processes.drain() {
             let _ = process.child.kill();
             let _ = process.child.wait();
         }
@@ -342,8 +352,8 @@ pub fn baileys_stop_all(state: tauri::State<'_, BaileysState>) -> Result<(), Str
 
 impl Drop for BaileysState {
     fn drop(&mut self) {
-        if let Ok(map) = self.0.get_mut() {
-            for (_, process) in map.iter_mut() {
+        if let Ok(registry) = self.0.get_mut() {
+            for (_, process) in registry.processes.iter_mut() {
                 let _ = process.child.kill();
             }
         }

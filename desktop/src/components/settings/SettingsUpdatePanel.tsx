@@ -53,7 +53,7 @@ export function SettingsUpdatePanel() {
     setStatus(t("updates.downloading"));
     try {
       await installAppUpdate(update, (downloaded, total) => {
-        setProgress(total ? Math.min(100, Math.round((downloaded / total) * 100)) : null);
+        setProgress(total ? Math.min(100, Math.round((downloaded / total) * 100)) : -1);
       });
       setStatus(t("updates.installed"));
       pushToast(t("updates.installed"), "success");
@@ -92,13 +92,25 @@ export function SettingsUpdatePanel() {
         </div>
         <p className="mt-3 text-[11px] leading-5 text-zinc-400">{status}</p>
         {progress !== null && (
-          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-zinc-800">
-            <div className="h-full rounded-full bg-brand transition-[width]" style={{ width: `${progress}%` }} />
-          </div>
-        )}
-        {update?.body && (
-          <div className="mt-4 rounded-lg bg-zinc-900 px-3 py-2.5 text-[11px] leading-5 text-zinc-400 whitespace-pre-wrap">
-            {update.body}
+          <div className="mt-3 flex items-center gap-3">
+            <div
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progress >= 0 ? progress : undefined}
+              className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-zinc-800"
+            >
+              <div
+                className={
+                  "h-full rounded-full bg-brand transition-[width] " +
+                  (progress < 0 ? "w-1/3 animate-pulse" : "")
+                }
+                style={progress >= 0 ? { width: `${progress}%` } : undefined}
+              />
+            </div>
+            <span className="w-9 text-right text-[11px] tabular-nums text-zinc-500">
+              {progress >= 0 ? `${progress}%` : "…"}
+            </span>
           </div>
         )}
       </section>

@@ -23,13 +23,17 @@ export async function installAppUpdate(
   onProgress?: (downloaded: number, total?: number) => void
 ) {
   let downloaded = 0;
+  let total: number | undefined;
   await update.download((event) => {
     if (event.event === "Started") {
       downloaded = 0;
-      onProgress?.(0, event.data.contentLength);
+      total = event.data.contentLength;
+      onProgress?.(0, total);
     } else if (event.event === "Progress") {
       downloaded += event.data.chunkLength;
-      onProgress?.(downloaded);
+      onProgress?.(downloaded, total);
+    } else if (event.event === "Finished") {
+      onProgress?.(total ?? downloaded, total);
     }
   });
 

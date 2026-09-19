@@ -10,9 +10,9 @@ import {
 import { PENDING_UPDATE_STORAGE_KEY } from "@/lib/appUpdate";
 
 const LAST_RUNNING_VERSION_KEY = "wap-plus.last-running-version";
-// v0.1.6 predates this marker, so let the first release containing the
-// feature show the confirmation once even when the old app cannot write it.
-const FIRST_COMPLETION_MODAL_VERSION = "0.1.7";
+// Older builds predate this marker, so let this compatibility release show
+// the confirmation once even when the old app cannot write it.
+const FIRST_COMPLETION_MODAL_VERSION = "0.1.8";
 
 type PendingUpdate = {
   version?: string;
