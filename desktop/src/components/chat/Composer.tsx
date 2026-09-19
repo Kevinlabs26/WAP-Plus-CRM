@@ -354,7 +354,6 @@ function ComposerInner({
 
   const {
     pendingMedia,
-    mediaCaption,
     setMediaCaption,
     mediaSendingIndex,
     stageMedia,
@@ -796,12 +795,9 @@ function ComposerInner({
       {pendingMedia.length > 0 && (
         <MediaSendPreview
           items={pendingMedia}
-          caption={mediaCaption}
           sendingIndex={mediaSendingIndex}
-          onCaptionChange={setMediaCaption}
           onRemove={removeMedia}
           onClose={closeMediaPreview}
-          onSend={() => void sendPendingMedia()}
         />
       )}
       {recording && (
@@ -988,6 +984,7 @@ function ComposerInner({
                 const v = e.target.value;
                 traceInputLatency(e.timeStamp, v.length);
                 draftRef.current = v;
+                if (pendingMedia.length > 0) setMediaCaption(v);
                 scheduleTextareaResize();
                 updateHasDraft(v);
                 if (translateOriginal != null) setTranslateOriginal(null);
@@ -1125,6 +1122,10 @@ function ComposerInner({
                   flushDraftNow("");
                   return;
                 }
+                if (e.key === "Escape" && pendingMedia.length > 0) {
+                  closeMediaPreview();
+                  return;
+                }
                 if (e.key === "Escape" && attachmentOpen) {
                   setAttachmentOpen(false);
                   return;
@@ -1146,7 +1147,8 @@ function ComposerInner({
                   e.preventDefault();
                   if (inputLocked) return;
                   flushDraftNow(readDraft());
-                  void onSend();
+                  if (pendingMedia.length > 0) void sendPendingMedia();
+                  else void onSend();
                 }
               }}
               rows={1}
@@ -1223,14 +1225,15 @@ function ComposerInner({
               )}
             </div>
             <SendVoiceToggle
-              hasDraft={hasDraft}
-              sending={sending}
+              hasDraft={hasDraft || pendingMedia.length > 0}
+              sending={sending || mediaSendingIndex >= 0}
               disabled={inputLocked}
               isBaileys={isBaileys}
               onSend={() => {
                 if (inputLocked) return;
                 flushDraftNow(readDraft());
-                void onSend();
+                if (pendingMedia.length > 0) void sendPendingMedia();
+                else void onSend();
               }}
               onBeginVoice={() => void onBeginVoice()}
             />

@@ -10,6 +10,7 @@ export type FolderDialogState =
 
 export type PendingFolderAction = {
   chatId: string;
+  chatIds?: string[];
   mode: "move" | "clone";
 };
 

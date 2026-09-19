@@ -6,6 +6,7 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 
 export type ChatPointerDragState = {
   chatId: string;
+  chatIds: string[];
   x: number;
   y: number;
   active: boolean;
@@ -89,10 +90,10 @@ export function useChatFolderDrag({
       if (!cur.active) return;
       const target = folderAtPoint(e.clientX, e.clientY);
       if (target) {
-        const current = primaryFolderIdOf(cur.chatId);
+        const currentFolderIds = new Set(cur.chatIds.map(primaryFolderIdOf));
         const next = target === "__ungrouped" ? null : target;
-        if ((current || null) !== next) {
-          moveChatToFolder(cur.chatId, next);
+        if (![...currentFolderIds].every((folderId) => (folderId || null) === next)) {
+          cur.chatIds.forEach((chatId) => moveChatToFolder(chatId, next));
           if (next) {
             const name = chatFolders.find((f) => f.id === next)?.name || "分组";
             pushToast(`已移动到「${name}」`, "success");
@@ -126,9 +127,19 @@ export function useChatFolderDrag({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pointerDrag]);
 
-  const startChatPointerDrag = (e: ReactPointerEvent, chatId: string) => {
+  const startChatPointerDrag = (
+    e: ReactPointerEvent,
+    chatId: string,
+    memberChatIds?: string[]
+  ) => {
     if (e.button !== 0) return;
-    const pending = { chatId, x: e.clientX, y: e.clientY, active: false };
+    const pending = {
+      chatId,
+      chatIds: memberChatIds?.length ? memberChatIds : [chatId],
+      x: e.clientX,
+      y: e.clientY,
+      active: false,
+    };
     pointerDragRef.current = pending;
     setPointerDrag(pending);
   };

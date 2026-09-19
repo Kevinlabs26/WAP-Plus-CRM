@@ -317,6 +317,7 @@ export function PhoneSidebar() {
     x: number;
     y: number;
     chatId: string;
+    memberChatIds: string[];
   } | null>(null);
   const [ungroupedCollapsed, setUngroupedCollapsed] = useState(false);
   const lastAutoSyncViewRef = useRef<string>("");
@@ -780,7 +781,8 @@ export function PhoneSidebar() {
 
   const openChatMenu = (
     e: ReactMouseEvent | ReactPointerEvent,
-    chatId: string
+    chatId: string,
+    memberChatIds?: string[]
   ) => {
     e.preventDefault();
     e.stopPropagation();
@@ -793,6 +795,7 @@ export function PhoneSidebar() {
       x: Math.max(pad, Math.min(cx, window.innerWidth - w - pad)),
       y: Math.max(pad, Math.min(cy, window.innerHeight - h - pad)),
       chatId,
+      memberChatIds: memberChatIds?.length ? memberChatIds : [chatId],
     });
   };
 
@@ -836,38 +839,40 @@ export function PhoneSidebar() {
     chat: ChatPreview,
     action: ChatMenuAction,
     folderId?: string | null,
-    extra?: ChatMenuActionExtra
+    extra?: ChatMenuActionExtra,
+    memberChatIds?: string[]
   ) => {
     const contact = contacts.find((c) => c.id === chat.contactId);
     const target = chatTarget(contact, chat);
+    const targetChatIds = memberChatIds?.length ? memberChatIds : [chat.id];
     setChatMenu(null);
 
     try {
       if (action === "moveToFolder") {
         if (!folderId) return;
-        moveChatToFolder(chat.id, folderId);
+        targetChatIds.forEach((chatId) => moveChatToFolder(chatId, folderId));
         const name =
           chatFolders.find((f) => f.id === folderId)?.name || "分组";
         pushToast(`已移到「${name}」`, "success");
         return;
       }
       if (action === "removeFromFolder") {
-        moveChatToFolder(chat.id, null);
+        targetChatIds.forEach((chatId) => moveChatToFolder(chatId, null));
         pushToast("已移出分组", "info");
         return;
       }
       if (action === "cloneToFolder") {
         if (!folderId) return;
-        cloneChatToFolder(chat.id, folderId);
+        targetChatIds.forEach((chatId) => cloneChatToFolder(chatId, folderId));
         return;
       }
       if (action === "removeCloneFromFolder") {
         if (!folderId) return;
-        const hit = chatFolderClones.find(
-          (c) => c.folderId === folderId && c.sourceChatId === chat.id
+        const hits = chatFolderClones.filter(
+          (c) => c.folderId === folderId && targetChatIds.includes(c.sourceChatId)
         );
-        if (hit) {
-          removeChatFolderClone(hit.id);
+        if (hits.length) {
+          hits.forEach((hit) => removeChatFolderClone(hit.id));
           const name =
             chatFolders.find((f) => f.id === folderId)?.name || "分组";
           pushToast(`已取消「${name}」中的分身`, "info");
@@ -878,6 +883,7 @@ export function PhoneSidebar() {
         setFolderNameDraft("");
         setPendingFolderAction({
           chatId: chat.id,
+          chatIds: targetChatIds,
           mode: action === "createFolderAndMove" ? "move" : "clone",
         });
         setFolderDialog({ type: "create" });
@@ -1082,8 +1088,12 @@ export function PhoneSidebar() {
   const openChatMenuRef = useRef(openChatMenu);
   openChatMenuRef.current = openChatMenu;
   const onOpenMenuRow = useCallback(
-    (e: ReactMouseEvent | ReactPointerEvent, chatId: string) => {
-      openChatMenuRef.current(e, chatId);
+    (
+      e: ReactMouseEvent | ReactPointerEvent,
+      chatId: string,
+      memberChatIds?: string[]
+    ) => {
+      openChatMenuRef.current(e, chatId, memberChatIds);
     },
     []
   );
@@ -1099,8 +1109,8 @@ export function PhoneSidebar() {
     openContactRef.current(contactId);
   }, []);
   const onDragStartStable = useCallback(
-    (e: ReactPointerEvent, chatId: string) => {
-      startChatPointerDrag(e, chatId);
+    (e: ReactPointerEvent, chatId: string, memberChatIds?: string[]) => {
+      startChatPointerDrag(e, chatId, memberChatIds);
     },
     []
   );
@@ -1134,6 +1144,7 @@ export function PhoneSidebar() {
         accountShort={accountShortOf(chatAccountId)}
         accountLabel={accountLabelOf(chatAccountId)}
         accountCount={opts?.accountCount}
+        memberChatIds={opts?.memberChatIds}
         cloneId={opts?.cloneId}
         isDragging={dragChatId === chat.id}
         dragDisabled={(opts?.accountCount || 0) > 1}
@@ -1396,11 +1407,14 @@ export function PhoneSidebar() {
             if (folderDialog.type === "create") {
               const id = createChatFolder(name, folderDialog.parentId);
               if (id && pendingFolderAction) {
+                const targetChatIds = pendingFolderAction.chatIds?.length
+                  ? pendingFolderAction.chatIds
+                  : [pendingFolderAction.chatId];
                 if (pendingFolderAction.mode === "move") {
-                  moveChatToFolder(pendingFolderAction.chatId, id);
+                  targetChatIds.forEach((chatId) => moveChatToFolder(chatId, id));
                   pushToast(`已移到「${name}」`, "success");
                 } else {
-                  cloneChatToFolder(pendingFolderAction.chatId, id);
+                  targetChatIds.forEach((chatId) => cloneChatToFolder(chatId, id));
                 }
                 setPendingFolderAction(null);
               }
@@ -1432,6 +1446,8 @@ export function PhoneSidebar() {
         (() => {
           const chat = chats.find((c) => c.id === chatMenu.chatId);
           if (!chat) return null;
+          const primaryFolderId =
+            chatMenu.memberChatIds.map(primaryFolderIdOf).find(Boolean) || null;
           const contact = contacts.find((c) => c.id === chat.contactId);
           const aid =
             contact?.accountId ||
@@ -1454,11 +1470,12 @@ export function PhoneSidebar() {
               chat={chat}
               folders={chatFolders}
               clones={chatFolderClones}
-              primaryFolderId={primaryFolderIdOf(chat.id)}
+              chatIds={chatMenu.memberChatIds}
+              primaryFolderId={primaryFolderId}
               showBlock={showBlock}
               blocked={blocked}
               onAction={(c, a, folderId, extra) =>
-                void runChatAction(c, a, folderId, extra)
+                void runChatAction(c, a, folderId, extra, chatMenu.memberChatIds)
               }
               onClose={() => setChatMenu(null)}
             />

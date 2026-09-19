@@ -54,6 +54,7 @@ type Props = {
   chat: ChatPreview;
   folders: ChatFolder[];
   clones?: ChatFolderClone[];
+  chatIds?: string[];
   /** 当前会话主归属分组 id */
   primaryFolderId?: string | null;
   /** 1:1 私聊才显示拉黑 */
@@ -80,6 +81,7 @@ export function ChatContextMenu({
   chat,
   folders,
   clones = [],
+  chatIds,
   primaryFolderId,
   showBlock,
   blocked,
@@ -105,11 +107,12 @@ export function ChatContextMenu({
 
   const clonedFolderIds = useMemo(() => {
     const set = new Set<string>();
+    const sourceIds = new Set(chatIds?.length ? chatIds : [chat.id]);
     for (const c of clones) {
-      if (c.sourceChatId === chat.id) set.add(c.folderId);
+      if (sourceIds.has(c.sourceChatId)) set.add(c.folderId);
     }
     return set;
-  }, [clones, chat.id]);
+  }, [chat.id, chatIds, clones]);
 
   const filteredFolders = useMemo(() => {
     const q = query.trim().toLowerCase();

@@ -66,9 +66,11 @@ export type ChatSidebarRowProps = {
   onOpen: (contactId: string, chatId: string) => void;
   onOpenMenu: (
     e: React.MouseEvent | React.PointerEvent,
-    chatId: string
+    chatId: string,
+    memberChatIds?: string[]
   ) => void;
-  onDragStart?: (e: React.PointerEvent, chatId: string) => void;
+  memberChatIds?: string[];
+  onDragStart?: (e: React.PointerEvent, chatId: string, memberChatIds?: string[]) => void;
 };
 
 /**
@@ -87,6 +89,7 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
   accountShort,
   accountLabel,
   accountCount,
+  memberChatIds,
   cloneId,
   isDragging,
   dragDisabled,
@@ -179,13 +182,13 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
       }
       onPointerDown={(e) => {
         if (cloneId || dragDisabled) return;
-        onDragStart?.(e, chat.id);
+        onDragStart?.(e, chat.id, memberChatIds);
       }}
     >
       <ListRow
         active={active}
         onClick={() => onOpen(chat.contactId, chat.id)}
-        onContextMenu={(e) => onOpenMenu(e, chat.id)}
+        onContextMenu={(e) => onOpenMenu(e, chat.id, memberChatIds)}
         className="!items-center gap-2.5 !py-2 !pr-0"
       >
         <div className="relative shrink-0">
@@ -258,13 +261,13 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  onOpenMenu(e, chat.id);
+                  onOpenMenu(e, chat.id, memberChatIds);
                 }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
                     e.stopPropagation();
-                    onOpenMenu(e as unknown as React.MouseEvent, chat.id);
+                    onOpenMenu(e as unknown as React.MouseEvent, chat.id, memberChatIds);
                   }
                 }}
               >
