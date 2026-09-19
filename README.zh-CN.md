@@ -1,6 +1,20 @@
-# WAP Plus CRM
-
-> WhatsApp 销售 CRM：默认使用内嵌 Baileys 收发消息，也支持 Android Bridge 作为备用通道。
+<table>
+<tr>
+<td width="140" align="center" valign="top">
+<img src="desktop/src/assets/bridgecrm-icon.svg" alt="WAP Plus CRM 图标" width="112" />
+</td>
+<td valign="top">
+<h1>WAP Plus CRM</h1>
+<p>WhatsApp 销售 CRM：默认使用内嵌 Baileys 收发消息，也支持 Android Bridge 作为备用通道。</p>
+</td>
+<td align="right" valign="top">
+<strong>支持赞助</strong><br /><br />
+<a href="https://buymeacoffee.com/kevinlabs26"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?style=for-the-badge&amp;logo=buymeacoffee&amp;logoColor=000000" alt="Buy Me a Coffee" /></a><br />
+<a href="https://ko-fi.com/kevinlabs"><img src="https://img.shields.io/badge/Ko--fi-13C3FF?style=for-the-badge&amp;logo=ko-fi&amp;logoColor=ffffff" alt="Ko-fi" /></a><br />
+<a href="https://kevinlabs.lemonsqueezy.com/checkout/buy/7b60b363-50b5-4233-a982-91a0611eccd6"><img src="https://img.shields.io/badge/Lemon%20Squeezy-FFC233?style=for-the-badge&amp;logo=lemonsqueezy&amp;logoColor=000000" alt="Lemon Squeezy" /></a>
+</td>
+</tr>
+</table>
 
 [English documentation](README.md)
 
@@ -119,3 +133,7 @@ adb forward tcp:17890 tcp:17890
 | 默认通道 | 通过桌面 sidecar 运行的内嵌 Baileys |
 | 备用通道 | Kotlin · Accessibility · Overlay · ADB Android Bridge |
 | 协议 | 基于 TCP/WebSocket/ADB 的 JSON envelope |
+
+## 许可证
+
+本项目使用 [Apache License 2.0](LICENSE) 授权。

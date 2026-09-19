@@ -1,6 +1,20 @@
-# WAP Plus CRM
-
-> A WhatsApp sales CRM with embedded Baileys messaging by default and an Android Bridge fallback.
+<table>
+<tr>
+<td width="140" align="center" valign="top">
+<img src="desktop/src/assets/bridgecrm-icon.svg" alt="WAP Plus CRM icon" width="112" />
+</td>
+<td valign="top">
+<h1>WAP Plus CRM</h1>
+<p>A WhatsApp sales CRM with embedded Baileys messaging by default and an Android Bridge fallback.</p>
+</td>
+<td align="right" valign="top">
+<strong>Support the project</strong><br /><br />
+<a href="https://buymeacoffee.com/kevinlabs26"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?style=for-the-badge&amp;logo=buymeacoffee&amp;logoColor=000000" alt="Buy Me a Coffee" /></a><br />
+<a href="https://ko-fi.com/kevinlabs"><img src="https://img.shields.io/badge/Ko--fi-13C3FF?style=for-the-badge&amp;logo=ko-fi&amp;logoColor=ffffff" alt="Ko-fi" /></a><br />
+<a href="https://kevinlabs.lemonsqueezy.com/checkout/buy/7b60b363-50b5-4233-a982-91a0611eccd6"><img src="https://img.shields.io/badge/Lemon%20Squeezy-FFC233?style=for-the-badge&amp;logo=lemonsqueezy&amp;logoColor=000000" alt="Lemon Squeezy" /></a>
+</td>
+</tr>
+</table>
 
 [中文文档](README.zh-CN.md)
 
@@ -119,3 +133,7 @@ See the [Android guide](android/README.md) for details.
 | Default channel | Embedded Baileys via a desktop sidecar |
 | Fallback channel | Android Bridge with Kotlin, Accessibility, Overlay, and ADB |
 | Protocol | JSON envelopes over TCP/WebSocket/ADB |
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).
