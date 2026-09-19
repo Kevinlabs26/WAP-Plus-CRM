@@ -4,6 +4,7 @@
  */
 import type { AppSettings } from "@/store/appStore";
 import { normalizeVoiceInputLanguage } from "@/lib/voiceInputLanguage";
+import { mediaUrlToBlob } from "@/lib/mediaBlob";
 import { geminiTranscribeAudio } from "./gemini.ts";
 
 export interface TranscriptResult {
@@ -140,8 +141,7 @@ export async function transcribeVoice(
     return mockTranscript(provider);
   }
   try {
-    const res = await fetch(dataUrl);
-    const blob = await res.blob();
+    const blob = await mediaUrlToBlob(dataUrl, mimeType || "audio/webm");
     const mime = mimeType || blob.type || "audio/webm";
     if (settings.aiProvider === "gemini") {
       const base64 = await blobToBase64(blob);

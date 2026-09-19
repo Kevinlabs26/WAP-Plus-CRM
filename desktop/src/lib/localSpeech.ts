@@ -5,6 +5,7 @@
  * - 模型文件走 Tauri 原始字节通道上传，解包在 app_data_dir/speech-models/<name>/。
  */
 import { invoke } from "@tauri-apps/api/core";
+import { mediaUrlToBlob } from "@/lib/mediaBlob";
 
 export interface SpeechModelInfo {
   name: string;
@@ -88,9 +89,7 @@ export async function downloadSpeechModel(
 
 /** 把任意音频 URL（data:/blob:/http:）解码并重采样成 16k 单声道 PCM i16 */
 async function decodeToMono16k(mediaUrl: string): Promise<Int16Array> {
-  const resp = await fetch(mediaUrl);
-  if (!resp.ok) throw new Error(`无法读取语音文件：HTTP ${resp.status}`);
-  const audioBuf = await resp.arrayBuffer();
+  const audioBuf = await (await mediaUrlToBlob(mediaUrl, "audio/webm")).arrayBuffer();
   const ctx = new AudioContext();
   let decoded: AudioBuffer;
   try {
