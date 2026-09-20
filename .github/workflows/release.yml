@@ -30,7 +30,7 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
-          vsversion: "2022"
+          vsversion: "17.0"
 
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@v2
