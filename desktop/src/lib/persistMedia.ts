@@ -12,7 +12,7 @@ export function isHeavyDataUrl(url: string | undefined | null): boolean {
 
 /**
  * 落盘用消息：剥掉大体量 inline media，保留缩略图（若也过大则去掉）。
- * 内存中的 Message 不变，打开会话仍可用内存里的 mediaUrl；重启后靠补拉/重发。
+ * 内存中的 Message 不变；重启后优先从本地媒体缓存恢复，未命中再从 WhatsApp 补拉。
  */
 export function stripHeavyMediaForPersist(messages: Message[]): Message[] {
   let changed = false;

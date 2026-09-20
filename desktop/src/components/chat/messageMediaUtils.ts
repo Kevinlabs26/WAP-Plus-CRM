@@ -1,14 +1,17 @@
 import type { Message } from "@/types/crm";
 
 const AUTO_LOAD_MEDIA_TYPES = new Set(["image", "sticker", "audio"]);
+export const QUIET_MEDIA_RETRY_DELAYS_MS = [800, 2400] as const;
 
 export type MediaPlaceholderState = "loading" | "retry" | "failed";
 
 export function mediaPlaceholderState(
-  message: Pick<Message, "mediaUrl" | "mediaError">,
+  message: Pick<Message, "mediaUrl" | "mediaError" | "mediaPending">,
   busy: boolean
 ): MediaPlaceholderState {
-  if (busy) return "loading";
+  if (busy || (!message.mediaUrl && !message.mediaError && message.mediaPending)) {
+    return "loading";
+  }
   return !message.mediaUrl && message.mediaError ? "failed" : "retry";
 }
 
@@ -219,4 +222,3 @@ export async function openMediaInNewTab(url: string, mime?: string) {
   }
   window.open(url, "_blank", "noopener,noreferrer");
 }
-

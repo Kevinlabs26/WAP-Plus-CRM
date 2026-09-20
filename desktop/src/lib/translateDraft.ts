@@ -321,6 +321,21 @@ function cacheKey(text: string, to: string) {
   return `${to}::${text.trim()}`;
 }
 
+/** 校验译文是否符合用户选择的目标语言；短名称、号码和链接允许原样保留。 */
+export function translationMatchesTarget(
+  source: string,
+  translated: string,
+  targetLang: string
+): boolean {
+  const output = translated.trim();
+  if (!output) return false;
+  if (!LANG_NAME[targetLang]) return true;
+
+  const sourceLetters = source.match(/\p{L}/gu)?.length || 0;
+  if (sourceLetters < 12) return true;
+  return detectMessageLanguage(output) === targetLang;
+}
+
 function hasKey(s: AppSettings) {
   return hasAiCredentials(s);
 }
@@ -495,7 +510,11 @@ export async function translateDraftText(
 
   const ck = cacheKey(src, to);
   const hit = cache.get(ck);
-  if (hit && Date.now() - hit.at < CACHE_MS) {
+  if (
+    hit &&
+    Date.now() - hit.at < CACHE_MS &&
+    translationMatchesTarget(src, hit.text, to)
+  ) {
     return {
       text: hit.text,
       source: hit.source || (settings.aiProvider === "mock" ? "mock" : settings.aiProvider),
@@ -503,6 +522,7 @@ export async function translateDraftText(
       targetLang: to,
     };
   }
+  if (hit) cache.delete(ck);
 
   const provider = settings.aiProvider;
   const service = settings.translateService || "auto";
@@ -513,6 +533,9 @@ export async function translateDraftText(
   if (useGoogle) {
     try {
       const textOut = await googleTranslate(src, to);
+      if (!translationMatchesTarget(src, textOut, to)) {
+        throw new Error(`Google 翻译未返回${LANG_NAME[to]}译文`);
+      }
       cache.set(ck, { text: textOut, at: Date.now() });
       return {
         text: textOut,
@@ -570,6 +593,7 @@ export async function translateDraftText(
   const system = [
     "You are a professional translator for B2B WhatsApp sales chat.",
     `Translate the user's message into ${langName}.`,
+    `The output language MUST be ${langName}, even when the source is in another language.`,
     "Rules:",
     "- Output ONLY the translation, no quotes, no labels, no explanation.",
     "- Keep numbers, model names, URLs, @mentions and WhatsApp formatting.",
@@ -578,14 +602,43 @@ export async function translateDraftText(
   ].join("\n");
 
   try {
-    const raw = await chatComplete({
+    let raw = await chatComplete({
       provider: provider as Exclude<AppSettings["aiProvider"], "mock">,
       settings,
       system,
-      user: src,
+      user: `Target language: ${langName}\n<source>\n${src}\n</source>`,
     });
-    const textOut = stripTranslationFences(raw);
+    let textOut = stripTranslationFences(raw);
     if (!textOut) throw new Error("译文为空");
+
+    // 模型偶尔会忽略目标语言（尤其长消息）；同一提供商用更强约束重试一次。
+    if (!translationMatchesTarget(src, textOut, to)) {
+      raw = await chatComplete({
+        provider: provider as Exclude<AppSettings["aiProvider"], "mock">,
+        settings,
+        system: `${system}\nIMPORTANT: Your previous answer used the wrong language. Return ${langName} only.`,
+        user: `Translate ONLY into ${langName}:\n<source>\n${src}\n</source>`,
+      });
+      textOut = stripTranslationFences(raw);
+    }
+
+    // “自动”模式允许在 AI 连续返回错语言时改走已有的 Google 翻译后备。
+    if (!translationMatchesTarget(src, textOut, to) && service === "auto") {
+      const googleText = await googleTranslate(src, to);
+      if (!translationMatchesTarget(src, googleText, to)) {
+        throw new Error(`翻译服务未返回${langName}译文`);
+      }
+      cache.set(ck, { text: googleText, at: Date.now(), source: "google" });
+      return {
+        text: googleText,
+        source: "google",
+        fallback: false,
+        targetLang: to,
+      };
+    }
+    if (!translationMatchesTarget(src, textOut, to)) {
+      throw new Error(`AI 未返回${langName}译文，请重试`);
+    }
     cache.set(ck, {
       text: textOut,
       at: Date.now(),

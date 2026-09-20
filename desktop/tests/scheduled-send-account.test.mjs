@@ -10,7 +10,7 @@ const result = await build({
   plugins: [{ name: "watcher-boundaries", setup(b) {
     b.onResolve({ filter: /^(react|@\/store\/appStore|@\/channels)$/ }, (a) => ({ path: a.path, namespace: "mock" }));
     b.onLoad({ filter: /.*/, namespace: "mock" }, (a) => ({ contents:
-      a.path === "react" ? "export const useRef = (current) => ({current}); export const useEffect = (effect) => effect();" :
+      a.path === "react" ? "export const useRef = (current) => ({current}); export const useEffect = (effect) => effect(); export const useCallback = (fn) => fn;" :
       a.path === "@/store/appStore" ? "export const useAppStore = {getState: () => globalThis.__watcherState};" :
       'export const normalizeChannelId = (id) => id; export const dispatchSendText = async (request) => { globalThis.__sentRequests.push(request); await globalThis.__waitSend?.(); return {ok:true}; };'
     }));

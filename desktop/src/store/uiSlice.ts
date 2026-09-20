@@ -17,6 +17,7 @@ export function createUiSlice({ set, get }: SliceContext): Pick<
   | "applyAiSuggestion"
   | "setActiveNav"
   | "setSettingsOpen"
+  | "setUpdateAvailableVersion"
   | "setSettingsCategory"
   | "setCommandOpen"
   | "setBaileysLoginOpen"
@@ -122,6 +123,7 @@ export function createUiSlice({ set, get }: SliceContext): Pick<
             }
           : { settingsOpen: false }
       ),
+    setUpdateAvailableVersion: (version) => set({ updateAvailableVersion: version }),
     setSettingsCategory: (category) => set({ settingsCategory: category }),
     setCommandOpen: (open) => set({ commandOpen: open }),
     setBaileysLoginOpen: (open) => set({ baileysLoginOpen: open }),

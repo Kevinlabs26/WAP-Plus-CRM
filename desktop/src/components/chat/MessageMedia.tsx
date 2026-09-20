@@ -260,30 +260,36 @@ export const MessageMedia = memo(function MessageMedia({
       );
     }
     return (
-      <div className="space-y-1">
-        <div className="flex items-center gap-2 rounded-lg bg-black/20 px-2.5 py-2">
-          <Mic className="h-4 w-4 shrink-0 text-zinc-500" />
-          <div className="min-w-0 flex-1">
-            <div className="text-[12px] text-zinc-300">
-              {m.mediaPtt ? i18n("media.voice") : i18n("media.audio")}
-            </div>
-            <div className="mt-0.5 text-2xs tabular-nums text-zinc-500">
-              {m.mediaSeconds ? `${m.mediaSeconds}″ · ` : ""}
-              {state === "loading"
-                ? i18n("media.loading")
-                : state === "failed"
-                  ? i18n("media.retry")
-                  : i18n("media.load")}
-            </div>
+      <button
+        type="button"
+        disabled={!onReloadMedia || state === "loading"}
+        onClick={(event) => {
+          event.stopPropagation();
+          onReloadMedia?.();
+        }}
+        className="flex w-full items-center gap-2 rounded-lg bg-black/20 px-2.5 py-2 text-left transition-colors enabled:hover:bg-black/30 disabled:cursor-wait"
+      >
+        <Mic className="h-4 w-4 shrink-0 text-zinc-500" />
+        <div className="min-w-0 flex-1">
+          <div className="text-[12px] text-zinc-300">
+            {m.mediaPtt ? i18n("media.voice") : i18n("media.audio")}
+          </div>
+          <div className="mt-0.5 text-2xs tabular-nums text-zinc-500">
+            {m.mediaSeconds ? `${m.mediaSeconds}″ · ` : ""}
+            {state === "loading"
+              ? i18n("media.loading")
+              : state === "failed"
+                ? i18n("media.retryLoad")
+                : i18n("media.load")}
           </div>
         </div>
-        <MediaReloadHint
-          label=""
-          busy={mediaBusy}
-          failed={state === "failed"}
-          onReload={onReloadMedia}
+        <RefreshCw
+          className={cn(
+            "h-3.5 w-3.5 shrink-0 text-emerald-300/90",
+            state === "loading" && "animate-spin"
+          )}
         />
-      </div>
+      </button>
     );
   }
 

@@ -122,6 +122,8 @@ export interface AppState extends PersistSlice {
   draftReplyByChatId: Record<string, string>;
   activeNav: NavId;
   settingsOpen: boolean;
+  /** 启动检查发现的新版本（仅运行时，用于设置按钮角标） */
+  updateAvailableVersion: string | null;
   commandOpen: boolean;
   /** 顶栏 WhatsApp 扫码小弹窗 */
   baileysLoginOpen: boolean;
@@ -231,6 +233,7 @@ export interface AppState extends PersistSlice {
   listRetryableOutgoing: (nowIso?: string) => Message[];
   setActiveNav: (nav: NavId) => void;
   setSettingsOpen: (open: boolean, category?: string) => void;
+  setUpdateAvailableVersion: (version: string | null) => void;
   settingsCategory: string;
   setSettingsCategory: (category: string) => void;
   setCommandOpen: (open: boolean) => void;

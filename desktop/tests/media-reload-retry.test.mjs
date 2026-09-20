@@ -3,12 +3,14 @@ import test from "node:test";
 
 import {
   mediaPlaceholderState,
+  QUIET_MEDIA_RETRY_DELAYS_MS,
   shouldAutoLoadMessageMedia,
   shouldRetryMediaAfterSync,
 } from "../src/components/chat/messageMediaUtils.ts";
 
 test("media placeholders distinguish loading, retry and failure", () => {
   assert.equal(mediaPlaceholderState({}, true), "loading");
+  assert.equal(mediaPlaceholderState({ mediaPending: true }, false), "loading");
   assert.equal(mediaPlaceholderState({}, false), "retry");
   assert.equal(
     mediaPlaceholderState({ mediaError: "raw message missing" }, false),
@@ -18,6 +20,10 @@ test("media placeholders distinguish loading, retry and failure", () => {
     mediaPlaceholderState({ mediaUrl: "data:audio/ogg;base64,x", mediaError: "old" }, false),
     "retry"
   );
+});
+
+test("quiet media reload retries brief WhatsApp delivery gaps", () => {
+  assert.deepEqual(QUIET_MEDIA_RETRY_DELAYS_MS, [800, 2400]);
 });
 
 test("media reload only resyncs for a missing bridge message", () => {

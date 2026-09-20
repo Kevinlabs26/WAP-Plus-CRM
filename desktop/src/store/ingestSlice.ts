@@ -30,7 +30,10 @@ import {
 import { mergeImportedContactChatDuplicates } from "./chatDuplicateMerge";
 import { pruneChatFolderRefs } from "./chatFolderCleanup";
 import { resolveFollowUpRules } from "@/lib/followUpRules";
-import { cacheMediaUrl } from "@/lib/mediaCache";
+import {
+  bridgeMessageMediaCacheId,
+  cacheMediaUrl,
+} from "@/lib/mediaCache";
 import {
   clearStoredRemoteMessages,
   deleteStoredMessagesByKeys,
@@ -143,12 +146,26 @@ export function createIngestSlice({
       const ingestStarted = performance.now();
       for (const event of events) {
         const payload = ingestObject(event.payload) ?? {};
+        const ownerAccountId =
+          ingestString(
+            (event as { accountId?: string }).accountId ??
+              payload.accountId ??
+              event.deviceId ??
+              payload.id ??
+              payload.deviceId,
+            200
+          ) || "android-bridge";
         const items = Array.isArray(payload.items) ? payload.items : [];
         for (const item of items) {
           const mediaUrl = ingestString(item.mediaUrl, 5_000_000);
           if (!mediaUrl) continue;
+          const targetId = ingestString(item.targetMessageId, 300);
+          const rawId = ingestString(item.id, 300);
           const id =
-            ingestString(item.targetMessageId, 300) || ingestString(item.id, 300);
+            targetId ||
+            (event.type === "messages.sync"
+              ? bridgeMessageMediaCacheId(rawId, ownerAccountId)
+              : rawId);
           if (id) void cacheMediaUrl(id, mediaUrl);
         }
       }

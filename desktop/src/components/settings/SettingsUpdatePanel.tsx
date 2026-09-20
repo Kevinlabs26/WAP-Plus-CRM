@@ -13,11 +13,16 @@ import {
 export function SettingsUpdatePanel() {
   const { t } = useI18n();
   const pushToast = useAppStore((state) => state.pushToast);
+  const setUpdateAvailableVersion = useAppStore((state) => state.setUpdateAvailableVersion);
   const [version, setVersion] = useState(() => t("updates.browserPreview"));
   const [update, setUpdate] = useState<AppUpdate>(null);
   const [status, setStatus] = useState(() => t("updates.notChecked"));
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
+
+  useEffect(() => {
+    setUpdateAvailableVersion(null);
+  }, [setUpdateAvailableVersion]);
 
   useEffect(() => {
     if (!isTauri()) return;

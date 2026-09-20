@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   detectMessageLanguage,
   resolveTargetLang,
+  translationMatchesTarget,
 } from "../src/lib/translateDraft.ts";
 
 const settings = { translateTargetLang: "en" };
@@ -45,6 +46,51 @@ test("detect: ambiguous latin returns null (use global default)", () => {
   assert.equal(detectMessageLanguage("ok"), null);
   assert.equal(detectMessageLanguage(""), null);
   assert.equal(detectMessageLanguage("👍👍"), null);
+});
+
+test("translation validation rejects a long English result labeled as Chinese", () => {
+  const source = "Mon frère, j'ai un problème et je voudrais vous expliquer la situation.";
+  assert.equal(
+    translationMatchesTarget(
+      source,
+      "Bro, I have a problem and I would like to explain the situation.",
+      "zh"
+    ),
+    false
+  );
+  assert.equal(
+    translationMatchesTarget(source, "弟兄，我遇到了一个问题，想向你说明情况。", "zh"),
+    true
+  );
+  assert.equal(
+    translationMatchesTarget(
+      "弟兄，我遇到了一个问题，想向你详细说明现在的情况。",
+      "Brother, I have a problem and want to explain it.",
+      "zh"
+    ),
+    false
+  );
+});
+
+test("translation validation follows every selected target language", () => {
+  assert.equal(translationMatchesTarget("Alexandre", "Alexandre", "zh"), true);
+  assert.equal(
+    translationMatchesTarget("Bonjour mon frère", "Hello my brother", "en"),
+    true
+  );
+  const source = "Hello my brother, I would like to explain the situation clearly.";
+  assert.equal(
+    translationMatchesTarget(source, "Bonjour mon frère, je voudrais expliquer clairement la situation.", "fr"),
+    true
+  );
+  assert.equal(
+    translationMatchesTarget(source, "Hello my brother, I would like to explain the situation clearly.", "fr"),
+    false
+  );
+  assert.equal(
+    translationMatchesTarget(source, "안녕하세요 형제님, 상황을 자세히 설명하고 싶습니다.", "ko"),
+    true
+  );
 });
 
 test("resolveTargetLang: explicit preference wins", () => {

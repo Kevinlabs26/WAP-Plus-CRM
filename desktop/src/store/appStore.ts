@@ -37,6 +37,7 @@ export const useAppStore = create<AppState>((set, get) => {
     draftReplyByChatId: {},
     activeNav: "chats",
     settingsOpen: false,
+    updateAvailableVersion: null,
     settingsCategory: "connection",
     commandOpen: false,
     baileysLoginOpen: false,

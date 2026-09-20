@@ -198,7 +198,7 @@ export function PersonMultiAccountPanel({
     ]
   );
 
-  const setPrimary = (accountId: string) => {
+  const setPrimary = (accountId: string, clear = false) => {
     if (!personKey) {
       pushToast(t("multiAccount.noPersonKey"), "error");
       return;
@@ -207,11 +207,13 @@ export function PersonMultiAccountPanel({
       personPrimaryAccountByKey: setPersonPrimaryAccount(
         settings.personPrimaryAccountByKey,
         personKey,
-        accountId
+        clear ? "" : accountId
       ),
     });
     pushToast(
-      t("multiAccount.primaryAssigned", { name: labelOf(accountId, waAccounts) }),
+      clear
+        ? t("multiAccount.primaryCleared")
+        : t("multiAccount.primaryAssigned", { name: labelOf(accountId, waAccounts) }),
       "success"
     );
   };
@@ -475,10 +477,10 @@ export function PersonMultiAccountPanel({
               </button>
               <button
                 type="button"
-                title={isPrimary ? t("multiAccount.primaryAlready") : t("multiAccount.setPrimary")}
+                title={isPrimary ? t("multiAccount.removePrimary") : t("multiAccount.setPrimary")}
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (!isPrimary) setPrimary(row.accountId);
+                  setPrimary(row.accountId, isPrimary);
                 }}
                 className={cn(
                   "mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md",

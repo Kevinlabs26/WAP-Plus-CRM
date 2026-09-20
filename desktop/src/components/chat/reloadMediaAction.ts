@@ -8,6 +8,7 @@ import type { AppState } from "@/store/appStore";
 import type { Message } from "@/types/crm";
 import {
   inferMediaType,
+  QUIET_MEDIA_RETRY_DELAYS_MS,
   shouldRetryMediaAfterSync,
 } from "./messageMediaUtils";
 import { translateCurrent } from "@/i18n";
@@ -104,7 +105,9 @@ export async function reloadMedia({
     return;
   }
   if (!chatConnected) {
-    pushToast("请先连接 WhatsApp", "error");
+    const error = translateCurrent("chat.connectFirst");
+    updateMessageDelivery(message.id, { mediaError: error });
+    pushToast(error, "error");
     return;
   }
   const key = resolveMessageKey(sourceMessage);
@@ -124,16 +127,20 @@ export async function reloadMedia({
     : () => undefined;
   try {
     let res: Awaited<ReturnType<typeof baileysDownloadMedia>> | null = null;
-    try {
-      res = await baileysDownloadMedia(key, {
+    let lastDownloadError: unknown;
+    const download = () =>
+      baileysDownloadMedia(key, {
         mediaType: sourceMessage.mediaType || inferMediaType(sourceMessage) || undefined,
         mimetype: sourceMessage.mediaMime,
         accountId: chatAccountId,
       });
+    try {
+      res = await download();
     } catch (error) {
+      lastDownloadError = error;
       // The bridge can temporarily lose the in-memory message after restart.
       // A 404 is recoverable by syncing once and retrying the media request.
-      if (!shouldRetryMediaAfterSync(error)) throw error;
+      if (!quiet && !shouldRetryMediaAfterSync(error)) throw error;
     }
     if (!res?.mediaUrl) {
       const lastSync = mediaResyncAt.get(chatAccountId) || 0;
@@ -141,19 +148,28 @@ export async function reloadMedia({
         mediaResyncAt.set(chatAccountId, Date.now());
         try {
           await baileysSync(chatAccountId);
-          res = await baileysDownloadMedia(key, {
-            mediaType: sourceMessage.mediaType || inferMediaType(sourceMessage) || undefined,
-            mimetype: sourceMessage.mediaMime,
-            accountId: chatAccountId,
-          });
-        } catch {
+          res = await download();
+        } catch (error) {
+          lastDownloadError = error;
           /* 保留原始媒体错误提示 */
+        }
+      }
+    }
+    if (!res?.mediaUrl && quiet) {
+      for (const delayMs of QUIET_MEDIA_RETRY_DELAYS_MS) {
+        await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+        try {
+          res = await download();
+          if (res?.mediaUrl) break;
+        } catch (error) {
+          lastDownloadError = error;
         }
       }
     }
     if (!res?.mediaUrl) {
       const err =
         (res as { error?: string })?.error ||
+        (lastDownloadError instanceof Error ? lastDownloadError.message : "") ||
         translateCurrent("runtime.mediaMissingOriginal");
       pushToast(
         (message.mediaType === "video" || inferMediaType(message) === "video"

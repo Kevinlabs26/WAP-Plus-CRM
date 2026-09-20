@@ -22,6 +22,17 @@ test("translations interpolate long values without truncating them", () => {
   assert.equal(text.includes("{active}"), false);
 });
 
+test("queued message status follows the selected interface language", () => {
+  assert.equal(
+    translate("en", "messageBubble.queuedWithReason", { reason: "Offline" }),
+    "Queued · Offline"
+  );
+  assert.equal(
+    translate("fr", "messageBubble.queuedWithReason", { reason: "Hors ligne" }),
+    "En file · Hors ligne"
+  );
+});
+
 test("monitor and health copy is fully translated outside Chinese", () => {
   for (const locale of ["en", "fr"]) {
     const entries = Object.entries(LOCALES[locale].messages).filter(

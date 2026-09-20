@@ -11,6 +11,7 @@ import {
   isWaAccountConnected,
   resolveWaSendAccountId,
 } from "@/lib/accountConnection";
+import { translateCurrent } from "@/i18n";
 
 const MAX_AUTO_RETRIES = 5;
 
@@ -77,7 +78,7 @@ export function SendQueueWatcher() {
           !settings.waAccounts.some((account) => account.id === msg.accountId)) {
         state.updateMessageDelivery(msg.id, {
           deliveryStatus: "failed",
-          lastError: "原发送账号不存在",
+          lastError: translateCurrent("runtime.originalAccountMissing"),
           retryCount: MAX_AUTO_RETRIES,
           nextAttemptAt: undefined,
         });
@@ -111,7 +112,8 @@ export function SendQueueWatcher() {
         if (!msg.nextAttemptAt || Date.parse(msg.nextAttemptAt) <= Date.now()) {
           state.updateMessageDelivery(msg.id, {
             deliveryStatus: "queued",
-            lastError: msg.lastError || "等待 WhatsApp 连接",
+            lastError:
+              msg.lastError || translateCurrent("runtime.queueWaitingConnection"),
             nextAttemptAt: next,
           });
         }
@@ -175,7 +177,8 @@ export function SendQueueWatcher() {
         const wait = backoffMs(attempt, result.retryAfterMs);
         useAppStore.getState().updateMessageDelivery(msg.id, {
           deliveryStatus: canRetry ? "queued" : "failed",
-          lastError: result.message || result.error || "发送失败",
+          lastError:
+            result.message || result.error || translateCurrent("runtime.sendFailed"),
           nextAttemptAt: canRetry
             ? new Date(Date.now() + wait).toISOString()
             : undefined,

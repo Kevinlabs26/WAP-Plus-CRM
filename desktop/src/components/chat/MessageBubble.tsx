@@ -17,6 +17,7 @@ import { VoiceBubble } from "./VoiceBubble";
 import { baileysFetchAvatar } from "@/lib/baileys";
 import { useAppStore } from "@/store/appStore";
 import { useI18n } from "@/i18n";
+import { translationMatchesTarget } from "@/lib/translateDraft";
 
 type Props = {
   m: Message;
@@ -293,7 +294,24 @@ export const MessageBubble = memo(function MessageBubble({
           ? "delivered"
           : "sent"
       : null;
+  const localizedLastError = m.lastError
+    ? m.lastError === "等待 WhatsApp 连接"
+      ? t("runtime.queueWaitingConnection")
+      : m.lastError === "原发送账号不存在"
+        ? t("runtime.originalAccountMissing")
+        : m.lastError === "发送失败"
+          ? t("runtime.sendFailed")
+          : m.lastError
+    : "";
   const mediaKind = inferMediaType(m);
+  const hasUsableTranslation = Boolean(
+    m.translation &&
+      translationMatchesTarget(
+        m.transcript || m.body || "",
+        m.translation,
+        m.translationLang || ""
+      )
+  );
   const hasVoiceTranscript = mediaKind === "audio" && Boolean(m.transcript);
   const showVoiceTranscribe =
     mediaKind === "audio" &&
@@ -311,7 +329,7 @@ export const MessageBubble = memo(function MessageBubble({
     mediaKind !== "contact" &&
     m.mediaType !== "system" &&
     Boolean(onTranslate) &&
-    Boolean(m.translation || m.body?.trim());
+    Boolean(hasUsableTranslation || m.body?.trim());
   if (m.mediaType === "system" || mediaKind === "system") {
     return (
       <div
@@ -340,17 +358,21 @@ export const MessageBubble = memo(function MessageBubble({
       className={cn(
         st === "failed" ? "text-rose-300/95" : "text-amber-200/90"
       )}
-      title={m.lastError || undefined}
+      title={localizedLastError || undefined}
     >
       {st === "pending"
         ? t("messageBubble.sending")
         : st === "queued"
           ? m.lastError
-            ? `排队 · ${m.lastError.slice(0, 36)}`
+            ? t("messageBubble.queuedWithReason", {
+                reason: localizedLastError.slice(0, 36),
+              })
             : t("messageBubble.queueRetry")
           : st === "failed"
             ? m.lastError
-              ? `失败 · ${m.lastError.slice(0, 36)}`
+              ? t("messageBubble.failedWithReason", {
+                  reason: localizedLastError.slice(0, 36),
+                })
               : t("messageBubble.failed")
             : st}
     </span>
@@ -694,7 +716,7 @@ export const MessageBubble = memo(function MessageBubble({
             {m.edited && (
               <span className="ml-1 text-2xs text-zinc-500">{t("messageBubble.edited")}</span>
             )}
-            {showTextTranslate && m.translation && showTranslation && (
+            {showTextTranslate && hasUsableTranslation && showTranslation && (
               <div
                 className={cn(
                   "mt-1 border-t pt-1",
@@ -855,7 +877,7 @@ export const MessageBubble = memo(function MessageBubble({
               type="button"
               onClick={(event) => {
                 event.stopPropagation();
-                if (m.translation) {
+                if (hasUsableTranslation) {
                   setShowTranslation((v) => !v);
                 } else {
                   onTranslate?.(m.id);
@@ -878,7 +900,7 @@ export const MessageBubble = memo(function MessageBubble({
               )}
               {translating
                 ? t("tooltip.translating")
-                : m.translation
+                : hasUsableTranslation
                   ? showTranslation
                     ? t("tooltip.originalText")
                     : t("tooltip.translatedText")
@@ -911,8 +933,8 @@ export const MessageBubble = memo(function MessageBubble({
           ptt={Boolean(m.mediaPtt)}
           outbound={m.direction === "out"}
           transcript={m.transcript}
-          translation={m.translation}
-          translationLang={m.translationLang}
+          translation={hasUsableTranslation ? m.translation : undefined}
+          translationLang={hasUsableTranslation ? m.translationLang : undefined}
           renderTranscriptOnly
         />
       </div>

@@ -32,6 +32,7 @@ export function TopBar() {
   const setActiveNav = useAppStore((s) => s.setActiveNav);
   const goToChats = useAppStore((s) => s.goToChats);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
+  const updateAvailableVersion = useAppStore((s) => s.updateAvailableVersion);
   const setCommandOpen = useAppStore((s) => s.setCommandOpen);
   const sendChannel = useAppStore((s) => s.settings.sendChannel);
   const followUps = useAppStore((s) => s.followUps);
@@ -225,10 +226,25 @@ export function TopBar() {
         <Button
           variant="ghost"
           className="!min-h-8 w-8 !px-0"
-          title={t("nav.settings")}
-          onClick={() => setSettingsOpen(true)}
+          title={
+            updateAvailableVersion
+              ? t("updates.found", { version: updateAvailableVersion })
+              : t("nav.settings")
+          }
+          onClick={() =>
+            setSettingsOpen(true, updateAvailableVersion ? "updates" : undefined)
+          }
         >
-          <Settings className="h-4 w-4" />
+          <span className="relative inline-flex">
+            <Settings className="h-4 w-4" />
+            {updateAvailableVersion && (
+              <span
+                aria-label={t("updates.found", { version: updateAvailableVersion })}
+                title={t("updates.found", { version: updateAvailableVersion })}
+                className="absolute -right-1.5 -top-1 h-2 w-2 rounded-full bg-brand ring-2 ring-zinc-900"
+              />
+            )}
+          </span>
         </Button>
       </div>
       {donateOpen && <DonateModal onClose={() => setDonateOpen(false)} />}

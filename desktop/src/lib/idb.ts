@@ -94,6 +94,30 @@ export async function idbDelPrefix(prefix: string): Promise<number> {
   });
 }
 
+/** 读取指定前缀的数据；仅用于低频缓存维护，避免业务层直接操作 IDB 游标。 */
+export async function idbEntriesPrefix<T>(
+  prefix: string
+): Promise<Array<[string, T]>> {
+  const db = await openDb();
+  return await new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, "readonly");
+    const store = tx.objectStore(STORE);
+    const entries: Array<[string, T]> = [];
+    const req = store.openCursor();
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (!cursor) return;
+      if (typeof cursor.key === "string" && cursor.key.startsWith(prefix)) {
+        entries.push([cursor.key, cursor.value as T]);
+      }
+      cursor.continue();
+    };
+    req.onerror = () => reject(req.error);
+    tx.oncomplete = () => resolve(entries);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 /** 媒体缓存键：media:<messageId> */
 export const mediaCacheKey = (messageId: string) => `media:${messageId}`;
 
