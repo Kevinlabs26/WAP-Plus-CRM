@@ -4973,7 +4973,7 @@ dependencies = [
 
 [[package]]
 name = "wap-plus-crm"
-version = "0.1.9"
+version = "0.1.11"
 dependencies = [
  "bzip2",
  "chrono",
