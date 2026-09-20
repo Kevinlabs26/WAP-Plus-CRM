@@ -44,5 +44,11 @@ export async function installAppUpdate(
   // Windows starts the installer while the current process is still alive.
   // Stop every sidecar first so the installer can replace wap-plus-baileys.exe.
   await bridgeInvoke("baileys_stop_all");
-  await update.install({ restartAfterInstall: true });
+  try {
+    await update.install({ restartAfterInstall: true });
+  } catch (error) {
+    window.localStorage.removeItem(PENDING_UPDATE_STORAGE_KEY);
+    await bridgeInvoke("baileys_cancel_update").catch(() => undefined);
+    throw error;
+  }
 }

@@ -378,7 +378,7 @@ export const MessageBubble = memo(function MessageBubble({
     </span>
   ) : null;
   const retryNode =
-    m.direction === "out" && (st === "failed" || st === "queued") ? (
+    m.direction === "out" && st === "failed" ? (
       <button
         type="button"
         className={cn(

@@ -63,6 +63,7 @@ import {
 import type { WaAccount } from "@/types/account";
 import { PhoneListSection } from "./PhoneListSection";
 import { SidebarListHeader } from "./SidebarListHeader";
+import { LeadInboxSettingsPopover } from "./LeadInboxSettingsPopover";
 import { useChatFolderDrag } from "./useChatFolderDrag";
 import { useSidebarData } from "./useSidebarData";
 import { useI18n } from "@/i18n";
@@ -168,6 +169,7 @@ export function PhoneSidebar() {
     accountViewMode,
     activeAccountId,
     liveBaileysAccountId,
+    leadInbox,
     waAccounts,
     chatFolderClones,
     historySyncNoteByAccountId,
@@ -180,6 +182,7 @@ export function PhoneSidebar() {
       accountViewMode: s.settings.accountViewMode,
       activeAccountId: s.settings.activeAccountId,
       liveBaileysAccountId: s.settings.liveBaileysAccountId,
+      leadInbox: s.settings.leadInbox,
       waAccounts: s.settings.waAccounts ?? EMPTY_WA,
       chatFolderClones: s.settings.chatFolderClones ?? EMPTY_CLONES,
       historySyncNoteByAccountId: s.settings.historySyncNoteByAccountId,
@@ -293,6 +296,7 @@ export function PhoneSidebar() {
     return "unread";
   });
   const [chatSortOpen, setChatSortOpen] = useState(false);
+  const [leadSettingsOpen, setLeadSettingsOpen] = useState(false);
   const chatSortRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -714,6 +718,7 @@ export function PhoneSidebar() {
     accountLabelOf,
     accountShortOf,
     chatSortLabel,
+    leadCount,
     primaryFolderIdOf,
     sidebarItems,
     chatListFilter,
@@ -742,7 +747,11 @@ export function PhoneSidebar() {
 
   // StatsBar「今日活跃 / 待回复」跳转时强制回到会话列表
   useEffect(() => {
-    if (chatListFilter === "unread" || chatListFilter === "today") {
+    if (
+      chatListFilter === "unread" ||
+      chatListFilter === "today" ||
+      chatListFilter === "leads"
+    ) {
       setListTab("chats");
       setShowArchived(false);
     }
@@ -1186,6 +1195,19 @@ export function PhoneSidebar() {
           isBaileys={isBaileys}
           onCreateGroup={() => setCreateGroupOpen(true)}
           onBatchSaveContacts={() => setBatchSaveOpen(true)}
+          leadCount={leadCount}
+          leadActive={chatListFilter === "leads"}
+          leadEnabled={leadInbox.enabled}
+          onOpenLeads={() => {
+            if (!leadInbox.enabled) {
+              setLeadSettingsOpen(true);
+              return;
+            }
+            setListTab("chats");
+            setShowArchived(false);
+            setChatListFilter("leads");
+          }}
+          onOpenLeadSettings={() => setLeadSettingsOpen((open) => !open)}
           listFilter={chatListFilter}
           onClearFilter={() => setChatListFilter("all")}
           sortOpen={chatSortOpen}
@@ -1218,6 +1240,9 @@ export function PhoneSidebar() {
           }
           onSync={() => void syncConversations()}
         />
+        {leadSettingsOpen && (
+          <LeadInboxSettingsPopover onClose={() => setLeadSettingsOpen(false)} />
+        )}
         {visitedListTabs.has("contacts") && (
           <div
             className="min-h-0 flex-1"
@@ -1258,6 +1283,7 @@ export function PhoneSidebar() {
                   it.kind === "archive_toggle" ||
                   it.kind === "new_folder" ||
                   it.kind === "folder_empty" ||
+                  it.kind === "lead_date_header" ||
                   it.kind === "ungrouped_header" ||
                   it.kind === "empty"
                 ) {
@@ -1271,8 +1297,10 @@ export function PhoneSidebar() {
                             : it.kind === "new_folder"
                               ? { ...it, isAllAccountsView }
                               : it.kind === "folder_empty"
-                                ? { ...it, dragging: Boolean(dragChatId) }
-                                : it.kind === "ungrouped_header"
+                              ? { ...it, dragging: Boolean(dragChatId) }
+                              : it.kind === "lead_date_header"
+                                ? it
+                              : it.kind === "ungrouped_header"
                                   ? {
                                       ...it,
                                       collapsed: ungroupedCollapsed,

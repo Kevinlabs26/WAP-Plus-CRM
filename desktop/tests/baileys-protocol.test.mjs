@@ -110,6 +110,24 @@ const sendQueue = readFileSync(
 );
 assert.match(sendQueue, /if \(msg\.mediaType\) return/);
 
+const baileysCore = readFileSync(
+  new URL("../src/lib/baileysCore.ts", import.meta.url),
+  "utf8"
+);
+const baileysSend = readFileSync(
+  new URL("../src/lib/baileysSend.ts", import.meta.url),
+  "utf8"
+);
+const baileysChannel = readFileSync(
+  new URL("../src/channels/baileys.ts", import.meta.url),
+  "utf8"
+);
+assert.match(baileysCore, /AbortSignal\.timeout\(10_000\)/);
+assert.match(baileysCore, /method === "GET" \|\| method === "HEAD" \? 15_000 : 30_000/);
+assert.match(baileysCore, /errorName === "TimeoutError"/);
+assert.match(baileysSend, /AbortSignal\.timeout\(30_000\)/);
+assert.match(baileysChannel, /if \(!sendStarted\) return temporarilyUnavailableResult\(\)/);
+
 const gif = describeMessage({
   message: { videoMessage: { gifPlayback: true, mimetype: "video/mp4" } },
 });

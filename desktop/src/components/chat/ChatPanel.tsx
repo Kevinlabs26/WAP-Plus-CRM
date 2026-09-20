@@ -102,6 +102,7 @@ import {
 } from "./chatPanelHelpers";
 import { mergeMessagesByTime } from "@/store/messageOrdering";
 import { resolveMessageKeyFrom } from "./resolveMessageKey";
+import { findLatestEditableOutgoingMessage } from "./latestEditableMessage";
 import { ChatPanelHeader } from "./ChatPanelHeader";import { ChatPanelMessageMenu } from "./ChatPanelMessageMenu";
 import { SavedMessageToolbar } from "./SavedMessageToolbar";
 import { usePhoneScreenPolling } from "./usePhoneScreenPolling";
@@ -1055,6 +1056,17 @@ export function ChatPanel() {
       selectedContactId
     );
 
+  const editLatestMessage = useCallback(() => {
+    if (!isBaileys || editingId) return false;
+    const message = findLatestEditableOutgoingMessage(chatMessages);
+    if (!message || !resolveMessageKey(message)) return false;
+    setReplyTo(null);
+    setEditingId(message.id);
+    setDraftReply(message.body);
+    pushToast(t("messageMenu.editHint"), "info");
+    return true;
+  }, [chatMessages, editingId, isBaileys, pushToast, selectedContactId, t]);
+
   const reloadMedia = async (m: Message, quiet = false) => {
     const sourceMessage = m.savedFromMessageId
       ? useAppStore.getState().messages.find((item) => item.id === m.savedFromMessageId) || m
@@ -1760,6 +1772,7 @@ export function ChatPanel() {
           voicePaused={voicePaused}
           recordSec={recordSec}
           onSend={composerOnSend}
+          onEditLatest={editLatestMessage}
           onSendImage={composerOnSendImage}
           onSendSticker={composerOnSendSticker}
           onSendGif={composerOnSendGif}

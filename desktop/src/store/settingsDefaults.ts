@@ -58,6 +58,42 @@ export interface SettingsChatFolderClone {
   sourceChatId: string;
 }
 
+export type LeadInboxStatusFilter = "pending" | "all" | "replied";
+export type LeadInboxDateGrouping = "none" | "day" | "week" | "month";
+export type LeadInboxAccountScope = "view" | "all" | "selected";
+export type LeadInboxSort = "first_contact" | "last_message" | "unread";
+
+/** 主动联系智能夹子：只保存规则，成员由消息历史动态计算。 */
+export interface LeadInboxSettings {
+  enabled: boolean;
+  statusFilter: LeadInboxStatusFilter;
+  includeGroups: boolean;
+  dateGrouping: LeadInboxDateGrouping;
+  /** 0 = 不限制；否则按首次主动联系时间向前取天数。 */
+  dateRangeDays: number;
+  accountScope: LeadInboxAccountScope;
+  selectedAccountIds: string[];
+  mergeAccounts: boolean;
+  sort: LeadInboxSort;
+  /** 可选起始时间；为空时按现有消息历史识别。 */
+  captureSince: string;
+}
+
+export function createDefaultLeadInboxSettings(): LeadInboxSettings {
+  return {
+    enabled: true,
+    statusFilter: "pending",
+    includeGroups: false,
+    dateGrouping: "day",
+    dateRangeDays: 0,
+    accountScope: "view",
+    selectedAccountIds: [],
+    mergeAccounts: true,
+    sort: "first_contact",
+    captureSince: "",
+  };
+}
+
 export interface SettingsShape {
   openaiKey: string;
   groqKey: string;
@@ -129,6 +165,7 @@ export interface SettingsShape {
   voiceInputEngine: "browser" | "ai" | "auto";
   /** 说话语言；空值时 AI 自动检测，浏览器跟随系统语言。 */
   voiceInputLang: string;
+  leadInbox: LeadInboxSettings;
   chatFolders: SettingsChatFolder[];
   chatFolderClones: SettingsChatFolderClone[];
   /** 已添加的 WA 账号槽（可多号） */
@@ -270,6 +307,7 @@ export const defaultSettings: SettingsShape = {
   myLang: "",
   voiceInputEngine: "auto",
   voiceInputLang: "",
+  leadInbox: createDefaultLeadInboxSettings(),
   chatFolders: [],
   chatFolderClones: [],
   // 不预置「主账号」；登录/添加后再有槽
@@ -347,6 +385,38 @@ export function normalizeLoadedSettings(
       ? merged.voiceInputEngine
       : "auto";
   merged.voiceInputLang = normalizeVoiceInputLanguage(merged.voiceInputLang);
+  {
+    const base = defaultSettings.leadInbox;
+    const raw = merged.leadInbox && typeof merged.leadInbox === "object"
+      ? merged.leadInbox
+      : base;
+    const status = raw.statusFilter;
+    const grouping = raw.dateGrouping;
+    const scope = raw.accountScope;
+    const sort = raw.sort;
+    const days = Number(raw.dateRangeDays);
+    merged.leadInbox = {
+      enabled: raw.enabled !== false,
+      statusFilter:
+        status === "all" || status === "replied" ? status : "pending",
+      includeGroups: raw.includeGroups === true,
+      dateGrouping:
+        grouping === "none" || grouping === "week" || grouping === "month"
+          ? grouping
+          : "day",
+      dateRangeDays:
+        Number.isFinite(days) && days > 0 ? Math.min(3650, Math.round(days)) : 0,
+      accountScope:
+        scope === "all" || scope === "selected" ? scope : "view",
+      selectedAccountIds: Array.isArray(raw.selectedAccountIds)
+        ? [...new Set(raw.selectedAccountIds.map((id) => String(id || "").trim()).filter(Boolean))].slice(0, 50)
+        : [],
+      mergeAccounts: raw.mergeAccounts !== false,
+      sort:
+        sort === "last_message" || sort === "unread" ? sort : "first_contact",
+      captureSince: String(raw.captureSince || base.captureSince),
+    };
+  }
   {
     const raw = Array.isArray(merged.scheduledMessages)
       ? merged.scheduledMessages

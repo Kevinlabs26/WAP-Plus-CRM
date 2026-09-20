@@ -1,5 +1,5 @@
-mod bridge;
 mod baileys;
+mod bridge;
 mod commands;
 mod db;
 mod protocol;
@@ -96,6 +96,7 @@ pub fn run() {
             baileys::baileys_runtime,
             baileys::baileys_stop_account,
             baileys::baileys_stop_all,
+            baileys::baileys_cancel_update,
             commands::list_adb_devices,
             commands::adb_forward,
             commands::phone_screenshot,

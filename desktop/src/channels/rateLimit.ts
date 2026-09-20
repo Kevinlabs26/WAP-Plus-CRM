@@ -192,6 +192,18 @@ export function checkRateLimit(
   return { ok: true };
 }
 
+/** 跨账号发送开始前预留短冷却，避免并行账号同时穿过全局门闸。 */
+export function reserveGlobalSendGap(seconds = 0) {
+  hydrateFromStorage();
+  const gapSec = Math.max(0, seconds);
+  if (!gapSec) return;
+  globalNextAllowedAt = Math.max(
+    globalNextAllowedAt,
+    Date.now() + (gapSec + Math.random() * Math.min(1.5, gapSec)) * 1000
+  );
+  schedulePersist();
+}
+
 export function recordSend(
   phoneE164: string,
   deviceId?: string | null,

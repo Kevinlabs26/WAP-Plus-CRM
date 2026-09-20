@@ -38,6 +38,7 @@ export const baileysSend = (
     "/send",
     {
       method: "POST",
+      signal: AbortSignal.timeout(30_000),
       body: JSON.stringify({
         phoneE164,
         text,

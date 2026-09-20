@@ -187,13 +187,17 @@ export async function sendTextMessage({
     clearDraft();
     pushToast(result.message || translateCurrent("runtime.sent"), "success");
   } catch (error) {
-    const message = error instanceof Error ? error.message : translateCurrent("runtime.sendFailed");
-    updateMessageDelivery(msgId, {
-      deliveryStatus: "queued",
-      lastError: message,
-      nextAttemptAt: new Date(Date.now() + 3000).toISOString(),
+    const detail = error instanceof Error ? error.message : String(error);
+    const message = translateCurrent("runtime.sendUnknown", {
+      reason: detail.slice(0, 120),
     });
-    pushToast(translateCurrent("runtime.sendExceptionQueued"), "info");
+    updateMessageDelivery(msgId, {
+      // 请求异常时无法确认是否已送达，只能交给人工核对后再重试。
+      deliveryStatus: "failed",
+      lastError: message,
+      nextAttemptAt: undefined,
+    });
+    pushToast(message, "error");
   } finally {
     setSending(false);
   }

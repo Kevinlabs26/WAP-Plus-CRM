@@ -36,7 +36,7 @@ export type NavId =
   | "broadcast"
   | "starred"
   | "monitor";
-export type ChatListFilter = "all" | "unread" | "today";
+export type ChatListFilter = "all" | "unread" | "today" | "leads";
 
 export type ToastTone = "info" | "success" | "error";
 export interface ToastItem {

@@ -18,9 +18,14 @@ import { Avatar } from "@/components/ui/Avatar";
 import { useAppStore } from "@/store/appStore";
 import { resolveSendTarget } from "@/lib/utils";
 import { cn } from "@/lib/utils";
-import { isWaAccountConnected, resolveWaAccountConnection } from "@/lib/accountConnection";
+import {
+  isWaAccountConnected,
+  resolveWaAccountConnection,
+  resolveWaSendAccountId,
+} from "@/lib/accountConnection";
 import { reloadMedia as reloadMediaAction } from "@/components/chat/reloadMediaAction";
 import { resolveMessageKeyFrom } from "@/components/chat/resolveMessageKey";
+import { findLatestEditableOutgoingMessage } from "@/components/chat/latestEditableMessage";
 import { ForwardMessageModal } from "@/components/chat/ForwardMessageModal";
 import { VoiceBubble } from "@/components/chat/VoiceBubble";
 import { shouldAutoLoadMessageMedia } from "@/components/chat/messageMediaUtils";
@@ -187,7 +192,23 @@ export function MultiWindowCard({
   );
 
   const unread = (unreadCount ?? chat.unread) > 0;
-  const chatAccountId = chat.accountId || contact?.accountId || liveBaileysAccountId || activeAccountId || "";
+  const requestedChatAccountId =
+    chat.accountId ||
+    contact?.accountId ||
+    liveBaileysAccountId ||
+    activeAccountId;
+  // 多窗口可能保留旧账号别名；与主聊天面板使用同一套账号解析，
+  // 否则反应/删除会因路由到不存在的 session 而表现为“点击没反应”。
+  const chatAccountId =
+    resolveWaSendAccountId(
+      waAccounts,
+      requestedChatAccountId,
+      liveBaileysAccountId,
+      baileysConnection
+    ) ||
+    liveBaileysAccountId ||
+    activeAccountId ||
+    "wa-default";
   const chatConnection = resolveWaAccountConnection(waAccounts, chatAccountId, liveBaileysAccountId, baileysConnection);
   const chatConnected = isWaAccountConnected(waAccounts, chatAccountId, liveBaileysAccountId, baileysConnection);
   const {
@@ -272,6 +293,21 @@ export function MultiWindowCard({
       pushToast(t("multi.copyFailed"), "error");
     }
   };
+  const editLatestMessage = useCallback(() => {
+    if (editingId || sendChannel === "android_bridge") return false;
+    const message = findLatestEditableOutgoingMessage(messages);
+    if (
+      !message ||
+      !resolveMessageKeyFrom(message, allContacts, contact?.id || null)
+    ) {
+      return false;
+    }
+    setReplyTo(null);
+    setEditingId(message.id);
+    setDraftReply(message.body);
+    pushToast(t("messageMenu.editHint"), "info");
+    return true;
+  }, [allContacts, contact?.id, editingId, messages, pushToast, sendChannel, setDraftReply, setEditingId, setReplyTo, t]);
   const reloadMedia = useCallback((message: Message, quiet = false) => {
     const sourceMessage = useAppStore.getState().messages.find((item) => item.id === message.id) || message;
     return reloadMediaAction({
@@ -380,6 +416,7 @@ export function MultiWindowCard({
         value={draft}
         onChange={setDraftReply}
         onSend={() => void sendText()}
+        onEditLatest={editLatestMessage}
         onAttach={!editingId && !replyTo ? (file) => void attachFile(file) : undefined}
         ariaLabel={t("multi.messageFor", { title })}
         disabled={mediaSending || textSending}

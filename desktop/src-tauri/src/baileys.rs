@@ -1,23 +1,35 @@
 //! Baileys sidecar 管理：按 accountId 一号一进程（独立 auth 目录 + 端口）
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 
 const MAX_BRIDGE_LOG_BYTES: u64 = 5 * 1024 * 1024;
 
-#[derive(Default)]
-pub struct BaileysState(Mutex<BaileysRegistry>);
+pub struct BaileysState {
+    registry: Mutex<BaileysRegistry>,
+    ready: Condvar,
+}
+
+impl Default for BaileysState {
+    fn default() -> Self {
+        Self {
+            registry: Mutex::new(BaileysRegistry::default()),
+            ready: Condvar::new(),
+        }
+    }
+}
 
 #[derive(Default)]
 struct BaileysRegistry {
     processes: HashMap<String, BaileysProcess>,
+    starting: HashSet<String>,
     update_started: bool,
 }
 
@@ -52,8 +64,7 @@ fn sanitize_account_id(raw: &str) -> String {
 }
 
 fn resolve_baileys_bin() -> Result<(Command, String), String> {
-    let dev_script =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../baileys-bridge/index.mjs");
+    let dev_script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../baileys-bridge/index.mjs");
 
     #[cfg(debug_assertions)]
     {
@@ -181,8 +192,7 @@ fn spawn_account(app: &AppHandle, account_id: &str) -> Result<BaileysProcess, St
         .map_err(|e| e.to_string())?
         .join("baileys-auth")
         .join(&account_id);
-    std::fs::create_dir_all(&auth_dir)
-        .map_err(|e| format!("无法创建 Baileys 会话目录：{e}"))?;
+    std::fs::create_dir_all(&auth_dir).map_err(|e| format!("无法创建 Baileys 会话目录：{e}"))?;
 
     // 兼容旧版单目录 auth：仅默认槽且新目录为空时尝试迁移
     if account_id == "wa-default" {
@@ -282,32 +292,60 @@ fn spawn_account(app: &AppHandle, account_id: &str) -> Result<BaileysProcess, St
 }
 
 impl BaileysState {
-    pub fn runtime_for(
-        &self,
-        app: &AppHandle,
-        account_id: &str,
-    ) -> Result<BaileysRuntime, String> {
+    pub fn runtime_for(&self, app: &AppHandle, account_id: &str) -> Result<BaileysRuntime, String> {
         let key = sanitize_account_id(account_id);
-        let mut guard = self.0.lock().map_err(|e| e.to_string())?;
-        if guard.update_started {
-            return Err("Baileys 已停止，正在安装应用更新".into());
-        }
-        if let Some(process) = guard.processes.get_mut(&key) {
-            if process.child.try_wait().map_err(|e| e.to_string())?.is_none() {
-                return Ok(process.runtime.clone());
+        {
+            let mut guard = self.registry.lock().map_err(|e| e.to_string())?;
+            loop {
+                if guard.update_started {
+                    return Err("Baileys 已停止，正在安装应用更新".into());
+                }
+                if let Some(process) = guard.processes.get_mut(&key) {
+                    if process
+                        .child
+                        .try_wait()
+                        .map_err(|e| e.to_string())?
+                        .is_none()
+                    {
+                        return Ok(process.runtime.clone());
+                    }
+                    let _ = process.child.kill();
+                    guard.processes.remove(&key);
+                }
+                if guard.starting.insert(key.clone()) {
+                    break;
+                }
+                guard = self.ready.wait(guard).map_err(|e| e.to_string())?;
             }
-            let _ = process.child.kill();
-            guard.processes.remove(&key);
         }
-        let process = spawn_account(app, &key)?;
-        let runtime = process.runtime.clone();
-        guard.processes.insert(key, process);
-        Ok(runtime)
+
+        // 启动和 20 秒就绪检查不占用全局表锁，其他账号可以同时启动。
+        let spawned = spawn_account(app, &key);
+        let mut guard = self.registry.lock().map_err(|e| e.to_string())?;
+        guard.starting.remove(&key);
+        let result = match spawned {
+            Ok(mut process) if guard.update_started => {
+                let _ = process.child.kill();
+                let _ = process.child.wait();
+                Err("Baileys 已停止，正在安装应用更新".into())
+            }
+            Ok(process) => {
+                let runtime = process.runtime.clone();
+                guard.processes.insert(key, process);
+                Ok(runtime)
+            }
+            Err(error) => Err(error),
+        };
+        self.ready.notify_all();
+        result
     }
 
     pub fn stop_account(&self, account_id: &str) -> Result<(), String> {
         let key = sanitize_account_id(account_id);
-        let mut guard = self.0.lock().map_err(|e| e.to_string())?;
+        let mut guard = self.registry.lock().map_err(|e| e.to_string())?;
+        while guard.starting.contains(&key) {
+            guard = self.ready.wait(guard).map_err(|e| e.to_string())?;
+        }
         if let Some(mut process) = guard.processes.remove(&key) {
             let _ = process.child.kill();
             let _ = process.child.wait();
@@ -316,12 +354,22 @@ impl BaileysState {
     }
 
     pub fn stop_all(&self) -> Result<(), String> {
-        let mut guard = self.0.lock().map_err(|e| e.to_string())?;
+        let mut guard = self.registry.lock().map_err(|e| e.to_string())?;
         guard.update_started = true;
+        while !guard.starting.is_empty() {
+            guard = self.ready.wait(guard).map_err(|e| e.to_string())?;
+        }
         for (_, mut process) in guard.processes.drain() {
             let _ = process.child.kill();
             let _ = process.child.wait();
         }
+        Ok(())
+    }
+
+    pub fn cancel_update(&self) -> Result<(), String> {
+        let mut guard = self.registry.lock().map_err(|e| e.to_string())?;
+        guard.update_started = false;
+        self.ready.notify_all();
         Ok(())
     }
 }
@@ -350,9 +398,14 @@ pub fn baileys_stop_all(state: tauri::State<'_, BaileysState>) -> Result<(), Str
     state.stop_all()
 }
 
+#[tauri::command]
+pub fn baileys_cancel_update(state: tauri::State<'_, BaileysState>) -> Result<(), String> {
+    state.cancel_update()
+}
+
 impl Drop for BaileysState {
     fn drop(&mut self) {
-        if let Ok(registry) = self.0.get_mut() {
+        if let Ok(registry) = self.registry.get_mut() {
             for (_, process) in registry.processes.iter_mut() {
                 let _ = process.child.kill();
             }

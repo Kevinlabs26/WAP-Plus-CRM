@@ -63,6 +63,7 @@ export type SettingsSafeExport = {
   myLang: string;
   voiceInputEngine: AppSettings["voiceInputEngine"];
   voiceInputLang: string;
+  leadInbox: AppSettings["leadInbox"];
   chatFolders: AppSettings["chatFolders"];
   chatFolderClones: AppSettings["chatFolderClones"];
   scheduledMessages: AppSettings["scheduledMessages"];
@@ -135,6 +136,7 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     myLang: settings.myLang,
     voiceInputEngine: settings.voiceInputEngine,
     voiceInputLang: settings.voiceInputLang,
+    leadInbox: settings.leadInbox,
     chatFolders: settings.chatFolders,
     chatFolderClones: settings.chatFolderClones,
     scheduledMessages: settings.scheduledMessages || [],

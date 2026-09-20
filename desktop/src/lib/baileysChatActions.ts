@@ -43,6 +43,7 @@ export async function baileysSaveContacts(
       "/contacts/save_batch",
       {
         method: "POST",
+        signal: AbortSignal.timeout(120_000),
         body: JSON.stringify({ items: contacts.slice(start, start + 500) }),
       },
       accountId

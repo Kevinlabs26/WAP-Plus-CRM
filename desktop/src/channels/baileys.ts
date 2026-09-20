@@ -1,5 +1,6 @@
 import { baileysSend, baileysStatus } from "@/lib/baileys";
 import { resolveSendTarget } from "@/lib/utils";
+import { translateCurrent } from "@/i18n";
 import type { MessageChannel } from "./types";
 
 function notConnectedResult(message?: string) {
@@ -11,6 +12,18 @@ function notConnectedResult(message?: string) {
     message:
       message || "WhatsApp 未连接：请点顶栏「点击扫码」完成登录",
     error: "baileys_not_connected",
+    retryAfterMs: 4000,
+  };
+}
+
+function temporarilyUnavailableResult() {
+  return {
+    ok: false as const,
+    delivered: false as const,
+    channel: "baileys" as const,
+    status: "queued" as const,
+    message: translateCurrent("runtime.queueRetry"),
+    error: "baileys_transport_unavailable",
     retryAfterMs: 4000,
   };
 }
@@ -52,11 +65,13 @@ export const baileysChannel: MessageChannel = {
       };
     }
     const accountId = input.accountId || undefined;
+    let sendStarted = false;
     try {
       const status = await baileysStatus(accountId);
       if (status.connection !== "connected") {
         return notConnectedResult();
       }
+      sendStarted = true;
       const raw = await baileysSend(target, input.text, {
         quoted: input.quoted,
         accountId,
@@ -83,7 +98,7 @@ export const baileysChannel: MessageChannel = {
       };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      const lower = msg.toLowerCase();
+      const lower = `${error instanceof Error ? error.name : ""} ${msg}`.toLowerCase();
       if (
         msg.includes("尚未连接") ||
         msg.includes("未连接") ||
@@ -100,6 +115,7 @@ export const baileysChannel: MessageChannel = {
         lower.includes("timeout") ||
         msg.includes("409")
       ) {
+        if (!sendStarted) return temporarilyUnavailableResult();
         return {
           ok: false,
           delivered: false,

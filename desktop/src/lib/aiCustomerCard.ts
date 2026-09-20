@@ -182,6 +182,7 @@ async function openAiCompatibleInsight(opts: {
   const url = `${opts.baseUrl.replace(/\/$/, "")}/chat/completions`;
   const res = await fetch(url, {
     method: "POST",
+    signal: AbortSignal.timeout(60_000),
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${opts.apiKey}`,
@@ -242,6 +243,7 @@ async function ollamaInsight(
   const base = settings.ollamaUrl;
   const res = await fetch(`${base.replace(/\/$/, "")}/api/chat`, {
     method: "POST",
+    signal: AbortSignal.timeout(60_000),
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: settings.aiModel.trim() || "llama3.2",

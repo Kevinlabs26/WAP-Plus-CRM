@@ -150,4 +150,55 @@ const mod = await import(moduleUrl);
   assert.equal(secondResult.ok, false);
   assert.equal(secondResult.gate.error, "rate_limited");
 
+  let releaseAccountA;
+  let accountBEntered;
+  const accountADone = new Promise((resolve) => { releaseAccountA = resolve; });
+  const accountBReady = new Promise((resolve) => { accountBEntered = resolve; });
+  const accountASend = withSendGate(
+    { accountId: "parallel-a", phoneE164: "+12025550131" },
+    raceConfig,
+    async () => {
+      await accountADone;
+      return { ok: true };
+    }
+  );
+  const accountBSend = withSendGate(
+    { accountId: "parallel-b", phoneE164: "+12025550132" },
+    raceConfig,
+    async () => {
+      accountBEntered();
+      return { ok: true };
+    }
+  );
+  await accountBReady;
+  releaseAccountA();
+  const [accountAResult, accountBResult] = await Promise.all([accountASend, accountBSend]);
+  assert.equal(accountAResult.ok, true);
+  assert.equal(accountBResult.ok, true, "Different accounts must not block each other.");
+
+  let releaseGlobalA;
+  let globalAEntered;
+  const globalADone = new Promise((resolve) => { releaseGlobalA = resolve; });
+  const globalAReady = new Promise((resolve) => { globalAEntered = resolve; });
+  const globalConfig = { ...raceConfig, globalMinGapSec: 10 };
+  const globalASend = withSendGate(
+    { accountId: "global-a", phoneE164: "+12025550141" },
+    globalConfig,
+    async () => {
+      globalAEntered();
+      await globalADone;
+      return { ok: true };
+    }
+  );
+  await globalAReady;
+  const globalBResult = await withSendGate(
+    { accountId: "global-b", phoneE164: "+12025550142" },
+    globalConfig,
+    async () => ({ ok: true })
+  );
+  assert.equal(globalBResult.ok, false);
+  assert.equal(globalBResult.gate.error, "rate_limited");
+  releaseGlobalA();
+  await globalASend;
+
   console.log("send-gate.test.mjs ok");

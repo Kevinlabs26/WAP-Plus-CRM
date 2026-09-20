@@ -108,6 +108,9 @@ export async function request<T>(
   let lastError: unknown;
   const id = resolveBaileysAccountId(accountId);
   const method = (init?.method || "GET").toUpperCase();
+  const signal =
+    init?.signal ||
+    AbortSignal.timeout(method === "GET" || method === "HEAD" ? 15_000 : 30_000);
   // 写操作若已到达 WhatsApp、但响应途中丢失，自动重放会造成双发。
   // 读取可重试；POST/PUT/DELETE 只执行一次，由上层明确呈现“结果未知”。
   const maxAttempts = method === "GET" || method === "HEAD" ? 8 : 1;
@@ -116,6 +119,7 @@ export async function request<T>(
       const runtime = await getRuntime(id);
       const response = await fetch(`${runtime.baseUrl}${path}`, {
         ...init,
+        signal,
         headers: {
           "Content-Type": "application/json",
           "X-Wap-Token": runtime.token,
@@ -138,6 +142,15 @@ export async function request<T>(
       const status = (error as { status?: number })?.status;
       // 4xx 是接口/请求本身的问题，重试只会放大 UI 卡顿；网络和 5xx 才重试。
       if (status && status >= 400 && status < 500) break;
+      const errorName = (error as { name?: string })?.name || "";
+      // 同一个 AbortSignal 一旦超时就永久失效，继续重试只会立即失败。
+      if (
+        signal.aborted ||
+        errorName === "AbortError" ||
+        errorName === "TimeoutError"
+      ) {
+        break;
+      }
       invalidateBaileysRuntime(id);
       const msg = error instanceof Error ? error.message : String(error);
       if (
@@ -161,7 +174,11 @@ export async function request<T>(
 }
 
 export const baileysStatus = async (accountId?: string | null) => {
-  const status = await request<BaileysStatus>("/status", undefined, accountId);
+  const status = await request<BaileysStatus>(
+    "/status",
+    { signal: AbortSignal.timeout(10_000) },
+    accountId
+  );
   assertProtocol(status);
   return status;
 };
@@ -188,7 +205,7 @@ export const baileysSync = async (
   if (opts?.requestHistory) query.set("requestHistory", "1");
   const result = await request<BaileysSyncResponse>(
     `/sync${query.size ? `?${query}` : ""}`,
-    { method: "POST" },
+    { method: "POST", signal: AbortSignal.timeout(120_000) },
     accountId
   );
   assertProtocol(result);

@@ -9,6 +9,8 @@ import {
   Users,
   UsersRound,
   CheckCheck,
+  Settings2,
+  UserRoundPlus,
 } from "lucide-react";
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { isSyncDebugEnabled, syncLog } from "@/lib/syncDebug";
@@ -64,6 +66,11 @@ type Props = {
   onMarkAllGroupsRead: () => void;
   savedActive: boolean;
   onOpenSaved: () => void;
+  leadCount: number;
+  leadActive: boolean;
+  leadEnabled: boolean;
+  onOpenLeads: () => void;
+  onOpenLeadSettings: () => void;
   filter: string;
   onFilterChange: (value: string) => void;
   isBaileys: boolean;
@@ -96,6 +103,11 @@ export function SidebarListHeader({
   onMarkAllGroupsRead,
   savedActive,
   onOpenSaved,
+  leadCount,
+  leadActive,
+  leadEnabled,
+  onOpenLeads,
+  onOpenLeadSettings,
   filter,
   onFilterChange,
   isBaileys,
@@ -184,6 +196,38 @@ export function SidebarListHeader({
         <span className="min-w-0 flex-1 truncate font-semibold text-zinc-900 dark:text-zinc-100">{t("sidebar.saved")}</span>
         <span className="shrink-0 text-[11px] font-medium text-zinc-500 dark:text-zinc-400">{t("sidebar.savedLocal")}</span>
       </button>
+      {listTab === "chats" && (
+        <div className="mb-2 flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onOpenLeads}
+            className={cn(
+              "flex min-w-0 flex-1 items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left text-[12px] transition-colors",
+              leadActive
+                ? "border-brand/40 bg-brand/10 text-brand"
+                : "border-zinc-800/80 bg-zinc-900/45 text-zinc-400 hover:border-brand/30 hover:text-zinc-200",
+              !leadEnabled && "opacity-60"
+            )}
+          >
+            <UserRoundPlus className="h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">{t("leadInbox.title")}</span>
+            {leadCount > 0 && (
+              <span className="inline-flex min-w-4 items-center justify-center rounded-full bg-brand/20 px-1 text-[10px] font-semibold tabular-nums text-brand">
+                {leadCount}
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={onOpenLeadSettings}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-zinc-800/80 bg-zinc-900/45 text-zinc-500 hover:border-brand/30 hover:text-zinc-200"
+            title={t("leadInbox.settings")}
+            aria-label={t("leadInbox.settings")}
+          >
+            <Settings2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
       <div className="relative mb-2">
         <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-600" />
         <input
@@ -227,7 +271,9 @@ export function SidebarListHeader({
           <span className="min-w-0 truncate text-[11px] font-medium text-brand">
             {listFilter === "unread"
               ? t("sidebar.filterUnread", { count: filteredCount })
-              : t("sidebar.filterToday", { count: filteredCount })}
+              : listFilter === "today"
+                ? t("sidebar.filterToday", { count: filteredCount })
+                : t("leadInbox.filterActive", { count: filteredCount })}
           </span>
           <button
             type="button"
@@ -247,6 +293,8 @@ export function SidebarListHeader({
                 ? t("sidebar.unreadChats")
                 : listFilter === "today"
                   ? t("sidebar.todayChats")
+                  : listFilter === "leads"
+                    ? t("leadInbox.title")
                     : filter
                       ? t("sidebar.searchResults")
                       : t(GROUP_FILTER_LABELS[groupFilter])

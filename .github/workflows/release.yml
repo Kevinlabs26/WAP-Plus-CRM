@@ -26,6 +26,12 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Select Visual Studio 2022 toolchain
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+          vsversion: "2022"
+
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@v2
         with:
@@ -41,7 +47,17 @@ jobs:
       - name: Run tests and frontend build
         run: npm run check
 
-      - name: Build and publish Tauri installer
+      - name: Resolve and validate release tag
+        shell: pwsh
+        run: |
+          $config = Get-Content desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $releaseTag = "v$($config.version)"
+          if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -ne $releaseTag) {
+            throw "Git tag $env:GITHUB_REF_NAME does not match app version $releaseTag"
+          }
+          "RELEASE_TAG=$releaseTag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build and upload draft Tauri release
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -52,5 +68,15 @@ jobs:
           tagName: v__VERSION__
           releaseName: WAP Plus CRM v__VERSION__
           generateReleaseNotes: true
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
+
+      - name: Smoke test packaged Windows installer
+        shell: pwsh
+        run: .github/scripts/smoke-windows-installer.ps1
+
+      - name: Publish verified release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$env:RELEASE_TAG" --draft=false

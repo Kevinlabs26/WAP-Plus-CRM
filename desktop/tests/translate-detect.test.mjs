@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   detectMessageLanguage,
   resolveTargetLang,
+  resolveMyLang,
   translationMatchesTarget,
 } from "../src/lib/translateDraft.ts";
 
@@ -118,4 +119,9 @@ test("resolveTargetLang: auto-detects from last inbound message", () => {
 test("resolveTargetLang: falls back to global default", () => {
   const contact = { country: "", preferredLang: "" };
   assert.equal(resolveTargetLang(contact, settings, ""), "en");
+});
+
+test("resolveMyLang: message target setting is used when no explicit myLang exists", () => {
+  assert.equal(resolveMyLang({ translateTargetLang: "zh", myLang: "" }), "zh");
+  assert.equal(resolveMyLang({ translateTargetLang: "zh", myLang: "fr" }), "fr");
 });

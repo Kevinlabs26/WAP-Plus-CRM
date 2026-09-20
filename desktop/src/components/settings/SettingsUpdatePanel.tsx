@@ -21,10 +21,6 @@ export function SettingsUpdatePanel() {
   const [progress, setProgress] = useState<number | null>(null);
 
   useEffect(() => {
-    setUpdateAvailableVersion(null);
-  }, [setUpdateAvailableVersion]);
-
-  useEffect(() => {
     if (!isTauri()) return;
     void getAppInfo()
       .then((info) => setVersion(info.version))
@@ -42,6 +38,7 @@ export function SettingsUpdatePanel() {
     try {
       const next = await checkForAppUpdate();
       setUpdate(next);
+      setUpdateAvailableVersion(next?.version || null);
       setStatus(next ? t("updates.found", { version: next.version }) : t("updates.latest"));
     } catch (error) {
       const message = error instanceof Error ? error.message : t("updates.checkFailed");
@@ -60,6 +57,7 @@ export function SettingsUpdatePanel() {
       await installAppUpdate(update, (downloaded, total) => {
         setProgress(total ? Math.min(100, Math.round((downloaded / total) * 100)) : -1);
       });
+      setUpdateAvailableVersion(null);
       setStatus(t("updates.installed"));
       pushToast(t("updates.installed"), "success");
     } catch (error) {

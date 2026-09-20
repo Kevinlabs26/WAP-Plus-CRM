@@ -172,13 +172,16 @@ export function SendQueueWatcher() {
           return;
         }
 
+        const rateLimited = result.error === "rate_limited";
         const transient = isTransientError(result);
-        const canRetry = transient && attempt < MAX_AUTO_RETRIES;
+        // 冷却/限速本身就是可恢复状态，不消耗普通瞬时错误的重试额度。
+        const canRetry = rateLimited || (transient && attempt < MAX_AUTO_RETRIES);
         const wait = backoffMs(attempt, result.retryAfterMs);
         useAppStore.getState().updateMessageDelivery(msg.id, {
           deliveryStatus: canRetry ? "queued" : "failed",
           lastError:
             result.message || result.error || translateCurrent("runtime.sendFailed"),
+          ...(rateLimited ? { retryCount: Math.max(0, attempt - 1) } : {}),
           nextAttemptAt: canRetry
             ? new Date(Date.now() + wait).toISOString()
             : undefined,
@@ -186,13 +189,15 @@ export function SendQueueWatcher() {
       } catch (e) {
         if (cancelled) return;
         const text = e instanceof Error ? e.message : String(e);
-        const canRetry = attempt < MAX_AUTO_RETRIES;
         useAppStore.getState().updateMessageDelivery(msg.id, {
-          deliveryStatus: canRetry ? "queued" : "failed",
-          lastError: text.slice(0, 160),
-          nextAttemptAt: canRetry
-            ? new Date(Date.now() + backoffMs(attempt)).toISOString()
-            : undefined,
+          // 请求抛异常时无法确认 WhatsApp 是否已经收到，禁止自动重发，
+          // 避免把一次未知结果变成重复消息。
+          deliveryStatus: "failed",
+          lastError: translateCurrent("runtime.sendUnknown", {
+            reason: text.slice(0, 120),
+          }),
+          retryCount: MAX_AUTO_RETRIES,
+          nextAttemptAt: undefined,
         });
       } finally {
         inflight.current.delete(msg.id);

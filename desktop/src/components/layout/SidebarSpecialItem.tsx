@@ -2,6 +2,7 @@ import {
   Archive,
   ChevronDown,
   ChevronRight,
+  CalendarDays,
   Inbox,
   FolderPlus,
 } from "lucide-react";
@@ -13,6 +14,7 @@ export type SidebarSpecialItem =
   | { kind: "archive_toggle"; showArchived: boolean; archivedCount: number }
   | { kind: "new_folder"; isAllAccountsView: boolean }
   | { kind: "folder_empty"; folderId: string; dragging: boolean }
+  | { kind: "lead_date_header"; label: string }
   | {
       kind: "ungrouped_header";
       total: number;
@@ -85,6 +87,15 @@ export function SidebarSpecialItem({
           : item.folderId === "__ungrouped"
             ? t("folder.allGrouped")
             : t("folder.empty")}
+      </div>
+    );
+  }
+
+  if (item.kind === "lead_date_header") {
+    return (
+      <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+        <CalendarDays className="h-3 w-3" />
+        {item.label}
       </div>
     );
   }

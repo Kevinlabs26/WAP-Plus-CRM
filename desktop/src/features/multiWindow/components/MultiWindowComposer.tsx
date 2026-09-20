@@ -9,6 +9,7 @@ export function MultiWindowComposer({
   value,
   onChange,
   onSend,
+  onEditLatest,
   onAttach,
   ariaLabel,
   disabled = false,
@@ -19,6 +20,7 @@ export function MultiWindowComposer({
   value: string;
   onChange: (value: string) => void;
   onSend: () => void;
+  onEditLatest?: () => boolean;
   onAttach?: (file: File) => void;
   ariaLabel: string;
   disabled?: boolean;
@@ -120,6 +122,19 @@ export function MultiWindowComposer({
             ) {
               event.preventDefault();
               applyBold();
+              return;
+            }
+            if (
+              event.key === "ArrowUp" &&
+              !event.altKey &&
+              !event.ctrlKey &&
+              !event.metaKey &&
+              !event.shiftKey &&
+              !composingRef.current &&
+              !value.trim() &&
+              onEditLatest?.()
+            ) {
+              event.preventDefault();
               return;
             }
             if (

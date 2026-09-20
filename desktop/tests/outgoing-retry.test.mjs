@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { isRetryableOutgoing } from "../src/store/outgoingRetry.ts";
+import {
+  isRateLimitedMessage,
+  isRetryableOutgoing,
+} from "../src/store/outgoingRetry.ts";
 
 const base = {
   id: "m1",
@@ -36,5 +39,22 @@ assert.equal(
   false
 );
 assert.equal(isRetryableOutgoing({ ...base, deliveryStatus: "queued", retryCount: 5 }), false);
+assert.equal(
+  isRateLimitedMessage({ ...base, lastError: "多号全局冷却中，请 1s 后再发" }),
+  true
+);
+assert.equal(
+  isRetryableOutgoing({
+    ...base,
+    deliveryStatus: "queued",
+    retryCount: 5,
+    lastError: "多号全局冷却中，请 1s 后再发",
+  }),
+  true
+);
+assert.equal(
+  isRateLimitedMessage({ ...base, lastError: "发送结果未知，请先核对后再手动重试" }),
+  false
+);
 
 console.log("outgoing-retry.test.mjs ok");

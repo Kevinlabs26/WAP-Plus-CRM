@@ -93,6 +93,8 @@ type Props = {
   voicePaused: boolean;
   recordSec: number;
   onSend: () => void | Promise<void>;
+  /** ↑ 空输入框时编辑最近一条自己发送的文字消息。 */
+  onEditLatest?: () => boolean;
   onSendImage: (file: File, caption?: string) => boolean | Promise<boolean>;
   onSendAudio: (file: File, caption?: string) => boolean | Promise<boolean>;
   onSendSticker: (file: File) => boolean | Promise<boolean>;
@@ -144,6 +146,7 @@ function ComposerInner({
   voicePaused,
   recordSec,
   onSend,
+  onEditLatest,
   onSendImage,
   onSendAudio,
   onSendSticker,
@@ -1110,6 +1113,19 @@ function ComposerInner({
                     setMentionOpen(false);
                     return;
                   }
+                }
+                if (
+                  e.key === "ArrowUp" &&
+                  !e.altKey &&
+                  !e.ctrlKey &&
+                  !e.metaKey &&
+                  !e.shiftKey &&
+                  !composingRef.current &&
+                  !readDraft().trim() &&
+                  onEditLatest?.()
+                ) {
+                  e.preventDefault();
+                  return;
                 }
                 if (e.key === "Escape" && recording) {
                   e.preventDefault();

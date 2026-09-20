@@ -14,6 +14,7 @@ import {
   checkRateLimit,
   DEFAULT_RATE_LIMITS,
   recordSend,
+  reserveGlobalSendGap,
   type RateLimitKeyInput,
 } from "./rateLimit";
 import type { SendRateLimits } from "./types";
@@ -52,8 +53,8 @@ export type SendGateBlock = {
   queueable: boolean;
 };
 
-// ponytail: one process-wide queue keeps check/send/record atomic; split per account only if throughput requires it.
-let sendGateTail: Promise<void> = Promise.resolve();
+// 同一账号串行，避免检查/发送/记账竞态；不同账号互不阻塞。
+const sendGateTails = new Map<string, Promise<void>>();
 
 /** @deprecated 滚动计数后无需短缓存；保留 API 兼容 */
 export function invalidateAccountHealthCache(_accountId?: string | null) {
@@ -160,7 +161,8 @@ export function assertSendGate(
 export function recordOutboundSend(
   input: RateLimitKeyInput,
   config: SendGateConfig = {},
-  effectiveLimits?: SendRateLimits
+  effectiveLimits?: SendRateLimits,
+  globalGapReserved = false
 ) {
   const limits =
     effectiveLimits ||
@@ -168,7 +170,7 @@ export function recordOutboundSend(
   recordSend(input.phoneE164 || "", input.deviceId, input.accountId, {
     minIntervalSec: limits.minIntervalSec,
     jitterSec: config.rateJitterSec ?? 2,
-    globalMinGapSec: config.globalMinGapSec ?? 0,
+    globalMinGapSec: globalGapReserved ? 0 : config.globalMinGapSec ?? 0,
   });
   noteOutboundSend({
     accountId: input.accountId,
@@ -188,16 +190,21 @@ export async function withSendGate<T>(
   | { ok: true; result: T; gate: SendGateOk }
   | { ok: false; gate: SendGateBlock; result?: undefined }
 > {
-  const previous = sendGateTail;
+  const queueKey = input.accountId || input.deviceId || "default";
+  const previous = sendGateTails.get(queueKey) || Promise.resolve();
   let release!: () => void;
-  sendGateTail = new Promise<void>((resolve) => {
+  const current = new Promise<void>((resolve) => {
     release = resolve;
   });
+  sendGateTails.set(queueKey, current);
   await previous;
   try {
     const gate = assertSendGate(input, config);
     if (!gate.ok) {
       return { ok: false, gate };
+    }
+    if (config.rateLimitEnabled !== false) {
+      reserveGlobalSendGap(config.globalMinGapSec);
     }
     const result = await sendFn();
     const succeeded =
@@ -212,10 +219,11 @@ export async function withSendGate<T>(
         (!("delivered" in (result as object)) ||
           (result as { delivered?: boolean }).delivered !== false));
     if (succeeded) {
-      recordOutboundSend(input, config, gate.effectiveLimits);
+      recordOutboundSend(input, config, gate.effectiveLimits, true);
     }
     return { ok: true, result, gate };
   } finally {
     release();
+    if (sendGateTails.get(queueKey) === current) sendGateTails.delete(queueKey);
   }
 }

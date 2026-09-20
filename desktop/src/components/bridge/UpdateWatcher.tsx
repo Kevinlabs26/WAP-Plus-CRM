@@ -4,6 +4,7 @@ import { checkForAppUpdate } from "@/lib/appUpdate";
 import { useI18n } from "@/i18n";
 
 const UPDATE_CHECK_DELAY_MS = 12_000;
+const UPDATE_CHECK_INTERVAL_MS = 30 * 60_000;
 
 /** 启动后静默检查一次；下载和安装必须由用户主动确认。 */
 export function UpdateWatcher() {
@@ -12,9 +13,11 @@ export function UpdateWatcher() {
   const { t } = useI18n();
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
+    let cancelled = false;
+    const check = () => {
       void checkForAppUpdate()
         .then((update) => {
+          if (cancelled) return;
           setUpdateAvailableVersion(update?.version || null);
           if (update) {
             pushToast(t("updates.found", { version: update.version }), "info");
@@ -23,9 +26,15 @@ export function UpdateWatcher() {
         .catch((error) => {
           console.warn("[updater] automatic check failed", error);
         });
-    }, UPDATE_CHECK_DELAY_MS);
+    };
+    const initialTimer = window.setTimeout(check, UPDATE_CHECK_DELAY_MS);
+    const interval = window.setInterval(check, UPDATE_CHECK_INTERVAL_MS);
 
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(initialTimer);
+      window.clearInterval(interval);
+    };
   }, [pushToast, setUpdateAvailableVersion, t]);
 
   return null;

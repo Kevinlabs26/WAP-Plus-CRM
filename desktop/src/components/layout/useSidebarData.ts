@@ -18,6 +18,14 @@ import {
   type SidebarVirtItem,
 } from "./buildSidebarItems";
 import type { ChatFolder, ChatFolderClone } from "@/store/appStore";
+import { chatInView } from "@/store/accountScope";
+import {
+  leadCandidateForChat,
+  leadDateBucket,
+  leadDateLabel,
+  type LeadCandidate,
+} from "@/lib/leadInbox";
+import { normalizeLocale } from "@/i18n";
 
 const EMPTY_WA: WaAccount[] = [];
 const EMPTY_FOLDERS: ChatFolder[] = [];
@@ -50,6 +58,8 @@ export function useSidebarData({
   const chatListFilter = useAppStore((s) => s.chatListFilter);
   const setChatListFilter = useAppStore((s) => s.setChatListFilter);
   const userName = useAppStore((s) => s.baileysUi.userName);
+  const uiLanguage = useAppStore((s) => s.settings.uiLanguage);
+  const leadInbox = useAppStore((s) => s.settings.leadInbox);
   const messagesByChatId = useAppStore((s) => s.messagesByChatId);
   const sidebarMessages = useMemo(
     () => Object.values(messagesByChatId).flat(),
@@ -88,6 +98,76 @@ export function useSidebarData({
     for (const c of contacts) m.set(c.id, c);
     return m;
   }, [contacts]);
+
+  const leadCandidates = useMemo(() => {
+    const candidates = new Map<string, LeadCandidate>();
+    if (!leadInbox.enabled) return candidates;
+    const rangeStart =
+      leadInbox.dateRangeDays > 0
+        ? Date.now() - leadInbox.dateRangeDays * 24 * 60 * 60 * 1000
+        : 0;
+    const currentAccountId =
+      viewMode.type === "account" ? viewMode.accountId : filterFallback;
+    for (const chat of chats) {
+      const contact = contactById.get(chat.contactId);
+      const accountId =
+        chat.accountId || contact?.accountId || chat.phoneId || filterFallback;
+      if (
+        leadInbox.accountScope === "selected" &&
+        !leadInbox.selectedAccountIds.includes(accountId)
+      ) {
+        continue;
+      }
+      if (
+        leadInbox.accountScope === "view" &&
+        viewMode.type === "account" &&
+        !chatInView(
+          chat,
+          { type: "account", accountId: currentAccountId },
+          filterFallback,
+          filterLive
+        )
+      ) {
+        continue;
+      }
+      const candidate = leadCandidateForChat(
+        chat,
+        contact,
+        messagesByChatId[chat.id] || [],
+        leadInbox,
+        accountId
+      );
+      if (!candidate) continue;
+      if (rangeStart && Date.parse(candidate.firstInboundAt) < rangeStart) continue;
+      if (leadInbox.statusFilter === "pending" && candidate.status !== "pending") continue;
+      if (leadInbox.statusFilter === "replied" && candidate.status !== "replied") continue;
+      candidates.set(chat.id, candidate);
+    }
+    return candidates;
+  }, [
+    chats,
+    contactById,
+    filterFallback,
+    filterLive,
+    leadInbox,
+    messagesByChatId,
+    viewMode,
+  ]);
+
+  const leadDateGroupByChatId = useMemo(() => {
+    const locale = normalizeLocale(uiLanguage);
+    const out = new Map<string, string>();
+    for (const candidate of leadCandidates.values()) {
+      const bucket = leadDateBucket(candidate.firstInboundAt, leadInbox.dateGrouping);
+      if (bucket) {
+        out.set(
+          candidate.chatId,
+          leadDateLabel(bucket, leadInbox.dateGrouping, locale)
+        );
+      }
+    }
+    return out;
+  }, [leadCandidates, leadInbox.dateGrouping, uiLanguage]);
 
   const filteredContacts = useMemo(
     () =>
@@ -129,7 +209,12 @@ export function useSidebarData({
         selfName,
         sortMode: chatSort,
         listFilter: chatListFilter,
-        accountView: viewMode,
+        leadCandidates,
+        leadSort: leadInbox.sort,
+        accountView:
+          chatListFilter === "leads" && leadInbox.accountScope !== "view"
+            ? { type: "all" }
+            : viewMode,
         fallbackAccountId: filterFallback,
         liveAccountId: filterLive,
       }),
@@ -142,6 +227,9 @@ export function useSidebarData({
       selfName,
       chatSort,
       chatListFilter,
+      leadCandidates,
+      leadInbox.accountScope,
+      leadInbox.sort,
       sidebarMessages,
       viewMode,
       filterFallback,
@@ -233,7 +321,9 @@ export function useSidebarData({
     [chatFoldersAll, viewMode, dataAccountId]
   );
 
-  const isAllAccountsView = viewMode.type === "all";
+  const isAllAccountsView =
+    viewMode.type === "all" ||
+    (chatListFilter === "leads" && leadInbox.accountScope !== "view");
   const accountLabelOf = (accountId?: string | null) => {
     const id = (accountId || dataAccountId || "").trim();
     const acc = waAccounts.find((a) => a.id === id);
@@ -274,6 +364,9 @@ export function useSidebarData({
         filteredChats,
         chatFolders,
         chatFolderClones,
+        leadView: chatListFilter === "leads",
+        leadMergeAccounts: leadInbox.mergeAccounts,
+        leadDateGroupByChatId,
         contactById,
         ungroupedCollapsed,
         query,
@@ -288,6 +381,9 @@ export function useSidebarData({
       query,
       chatFolders,
       chatFolderClones,
+      chatListFilter,
+      leadDateGroupByChatId,
+      leadInbox.mergeAccounts,
       contactById,
       ungroupedCollapsed,
       waAccounts,
@@ -320,6 +416,7 @@ export function useSidebarData({
     accountLabelOf,
     accountShortOf,
     folderDisplayName,
+    leadCount: leadCandidates.size,
     chatSortLabel,
     primaryFolderIdOf,
     sidebarItems,

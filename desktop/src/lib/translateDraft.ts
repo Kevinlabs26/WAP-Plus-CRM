@@ -279,10 +279,17 @@ export function resolveTargetLang(
   return "en";
 }
 
-/** 我的语言（入站翻译目标，给自己看）：设置值 > 系统/浏览器语言 > en */
+/**
+ * 我的语言（入站翻译目标，给自己看）：
+ * 显式 myLang > 消息设置里的默认目标语言 > 系统/浏览器语言 > en。
+ * 这样旧版本没有 myLang 控件时，用户在“默认目标语言”里选择的语言
+ * 也会真正用于消息翻译和语音转写后的译文。
+ */
 export function resolveMyLang(settings: AppSettings): string {
   const set = (settings.myLang || "").trim().toLowerCase();
   if (set && LANG_NAME[set]) return set;
+  const configured = (settings.translateTargetLang || "").trim().toLowerCase();
+  if (configured && LANG_NAME[configured]) return configured;
   if (typeof navigator !== "undefined") {
     const raw = (navigator.language || navigator.languages?.[0] || "")
       .toLowerCase()

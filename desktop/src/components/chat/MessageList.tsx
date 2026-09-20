@@ -65,7 +65,7 @@ type Props = {
 };
 
 const listComponents = {
-  Header: () => <div className="h-3" aria-hidden="true" />,
+  Header: () => <div className="h-5" aria-hidden="true" />,
   Footer: () => <div className="h-1" aria-hidden="true" />,
 };
 

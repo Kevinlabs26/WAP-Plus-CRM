@@ -3,6 +3,7 @@ import type { AccountViewMode } from "@/types/account";
 import { DEFAULT_ACCOUNT_ID } from "@/types/account";
 import { displayContactLabel, resolveSendTarget } from "@/lib/utils";
 import { chatInView, contactInView } from "@/store/accountScope";
+import type { LeadCandidate } from "@/lib/leadInbox";
 
 export type ChatSortMode =
   | "recent"
@@ -166,7 +167,9 @@ export function filterAndSortSidebarChats(opts: {
   /** 默认最近消息；置顶始终优先 */
   sortMode?: ChatSortMode;
   /** StatsBar 快捷筛选：全部 / 未读 / 今日有更新 */
-  listFilter?: "all" | "unread" | "today";
+  listFilter?: "all" | "unread" | "today" | "leads";
+  leadCandidates?: ReadonlyMap<string, LeadCandidate>;
+  leadSort?: "first_contact" | "last_message" | "unread";
   /** 多账号浏览范围；默认全部 */
   accountView?: AccountViewMode;
   fallbackAccountId?: string;
@@ -175,6 +178,7 @@ export function filterAndSortSidebarChats(opts: {
 }) {
   const sortMode = opts.sortMode ?? "recent";
   const listFilter = opts.listFilter ?? "all";
+  const leadCandidates = opts.leadCandidates;
   const accountView = opts.accountView ?? { type: "all" as const };
   const fallbackAccountId = opts.fallbackAccountId || DEFAULT_ACCOUNT_ID;
   const liveAccountId = opts.liveAccountId || fallbackAccountId;
@@ -223,6 +227,7 @@ export function filterAndSortSidebarChats(opts: {
     ) {
       continue;
     }
+    if (listFilter === "leads" && !leadCandidates?.has(chat.id)) continue;
     if (q) {
       const body = lastBodyByChat.get(chat.id) || chat.lastMessage || "";
       const label = chatLabelFromContact(chat, c, body);
@@ -272,6 +277,25 @@ export function filterAndSortSidebarChats(opts: {
     const unreadB = b.unread || 0;
     const awaitA = lastDirByChat.get(a.id) === "in" ? 1 : 0;
     const awaitB = lastDirByChat.get(b.id) === "in" ? 1 : 0;
+
+    if (listFilter === "leads") {
+      const leadA = leadCandidates?.get(a.id);
+      const leadB = leadCandidates?.get(b.id);
+      if (opts.leadSort === "unread" && unreadB !== unreadA) {
+        return unreadB - unreadA;
+      }
+      const keyA = opts.leadSort === "last_message"
+        ? leadA?.lastMessageAt
+        : leadA?.firstInboundAt;
+      const keyB = opts.leadSort === "last_message"
+        ? leadB?.lastMessageAt
+        : leadB?.firstInboundAt;
+      const leadTsA = Date.parse(keyA || "") || 0;
+      const leadTsB = Date.parse(keyB || "") || 0;
+      if (leadTsB !== leadTsA) return leadTsB - leadTsA;
+      if (unreadB !== unreadA) return unreadB - unreadA;
+      return labelA.localeCompare(labelB, "zh");
+    }
 
     if (sortMode === "unread") {
       if (Number(unreadB > 0) !== Number(unreadA > 0))
