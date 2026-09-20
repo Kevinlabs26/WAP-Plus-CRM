@@ -26,12 +26,6 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Select Visual Studio 2022 toolchain
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-          vsversion: "17.0"
-
       - name: Cache Rust build artifacts
         uses: swatinem/rust-cache@v2
         with:
