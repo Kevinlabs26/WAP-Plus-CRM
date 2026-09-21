@@ -76,9 +76,8 @@ function runFfmpeg(
   });
 }
 
-export function runFfmpegToOggOpus(inputPath, outputPath) {
-  return runFfmpeg(
-    [
+export function runFfmpegToOggOpus(inputPath, outputPath, maxSeconds) {
+  const args = [
       "-y",
       "-i",
       inputPath,
@@ -99,12 +98,15 @@ export function runFfmpegToOggOpus(inputPath, outputPath) {
       "on",
       "-application",
       "voip",
-      "-t",
-      String(MAX_WHATSAPP_AUDIO_SECONDS),
       "-f",
       "ogg",
       outputPath,
-    ],
+    ];
+  if (Number.isFinite(maxSeconds) && maxSeconds > 0) {
+    args.splice(args.length - 2, 0, "-t", String(maxSeconds));
+  }
+  return runFfmpeg(
+    args,
     {
       timeoutMs: FFMPEG_AUDIO_TIMEOUT_MS,
       notFoundMessage:
@@ -165,7 +167,11 @@ async function buildWaveform(audioPath) {
  * 不直接相信扩展名或 MIME：即使是 OGG，也可能是 Vorbis 等非 Opus 编码。
  * 统一重编码，确保 WhatsApp 官方客户端能识别为语音消息。
  */
-export async function ensureOggOpusPtt(audioDataUrl, mimetypeHint = "") {
+export async function ensureOggOpusPtt(
+  audioDataUrl,
+  mimetypeHint = "",
+  maxSeconds,
+) {
   const parsed = parseDataUrl(audioDataUrl);
   if (!parsed?.buf?.length) throw new Error("音频 dataUrl 无效");
   if (parsed.buf.length > 14_000_000) throw new Error("语音过长或过大");
@@ -186,7 +192,7 @@ export async function ensureOggOpusPtt(audioDataUrl, mimetypeHint = "") {
   const outPath = join(dir, "out.ogg");
   try {
     await writeFile(inPath, parsed.buf);
-    await runFfmpegToOggOpus(inPath, outPath);
+    await runFfmpegToOggOpus(inPath, outPath, maxSeconds);
     const out = await readFile(outPath);
     if (!out.length) throw new Error("转码结果为空");
     const waveform = await buildWaveform(outPath).catch(() => undefined);

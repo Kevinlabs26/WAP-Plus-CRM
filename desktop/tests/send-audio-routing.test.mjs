@@ -8,9 +8,9 @@ const source = await readFile(
 
 assert.match(source, /const raw = deps\.isBaileys\s*\n?\s*\?/);
 assert.match(source, /baileysSendVoice\(recipient, dataUrl/);
-assert.match(source, /isLongAudio\s*\?/);
-assert.match(source, /baileysSendDocument\(recipient, dataUrl, file\.name/);
-assert.match(source, /mediaType: isLongAudio \? "document" : "audio"/);
+assert.match(source, /isLongAudio/);
+assert.match(source, /ptt: !isLongAudio/);
+assert.match(source, /mediaType: "audio"/);
 assert.match(source, /deps\.openAndroidMediaShare\(file, dataUrl, caption, recipient\)/);
 assert.match(source, /deliveryStatus: "local"/);
 

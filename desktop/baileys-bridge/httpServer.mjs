@@ -535,14 +535,15 @@ if (req.method === "POST" && url.pathname === "/restart") {
           );
           const { buf, mimetype, waveform } = await ensureOggOpusPtt(
             audioDataUrl,
-            mimeIn || ""
+            mimeIn || "",
+            asPtt ? MAX_WHATSAPP_AUDIO_SECONDS : undefined
           );
           console.log(
             `[ptt] converted ogg bytes=${buf.length} waveform=${waveform?.length || 0}`
           );
           const sec =
             typeof seconds === "number" && seconds > 0
-              ? Math.min(MAX_WHATSAPP_AUDIO_SECONDS, Math.round(seconds))
+              ? Math.round(seconds)
               : undefined;
           result = await d.socket.sendMessage(
             jid,

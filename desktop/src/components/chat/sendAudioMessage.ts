@@ -1,4 +1,4 @@
-import { baileysSendDocument, baileysSendVoice } from "@/lib/baileys";
+import { baileysSendVoice } from "@/lib/baileys";
 import { gatedMediaSend } from "@/channels/mediaGate";
 import type { ChannelId } from "@/channels";
 import type { AppState } from "@/store/appStore";
@@ -77,7 +77,6 @@ export async function sendAudioMessage(
     });
     const sourceSeconds = await readAudioSeconds(file);
     const isLongAudio = sourceSeconds > 600;
-    const seconds = Math.min(600, sourceSeconds);
     const caption = captionOverride?.trim() || "";
     msgId = deps.enqueueOutgoingMessage({
       body: caption || `[音频] ${file.name}`,
@@ -89,12 +88,11 @@ export async function sendAudioMessage(
       deliveryStatus: "pending",
     });
     msgId && deps.patchMessage(msgId, {
-      mediaType: isLongAudio ? "document" : "audio",
+      mediaType: "audio",
       mediaUrl: dataUrl,
-      mediaFileName: isLongAudio ? file.name : undefined,
       mediaMime: file.type || "audio/mp4",
-      mediaPtt: isLongAudio ? undefined : true,
-      mediaSeconds: isLongAudio ? undefined : seconds || undefined,
+      mediaPtt: !isLongAudio,
+      mediaSeconds: sourceSeconds || undefined,
       mediaCaption: caption || undefined,
     });
 
@@ -102,18 +100,12 @@ export async function sendAudioMessage(
       ? await gatedMediaSend(
           { phoneE164: recipient, accountId: deps.chatAccountId },
           () =>
-            isLongAudio
-              ? baileysSendDocument(recipient, dataUrl, file.name, {
-                  mimetype: file.type || "audio/mp4",
-                  caption,
-                  accountId: deps.chatAccountId,
-                })
-              : baileysSendVoice(recipient, dataUrl, {
-                  mimetype: file.type || "audio/mp4",
-                  ptt: true,
-                  seconds: seconds || undefined,
-                  accountId: deps.chatAccountId,
-                })
+            baileysSendVoice(recipient, dataUrl, {
+              mimetype: file.type || "audio/mp4",
+              ptt: !isLongAudio,
+              seconds: sourceSeconds || undefined,
+              accountId: deps.chatAccountId,
+            })
         )
       : await gatedMediaSend(
           { phoneE164: recipient, accountId: deps.chatAccountId },
@@ -138,7 +130,7 @@ export async function sendAudioMessage(
     }
     deps.pushToast(
       deps.isBaileys
-        ? translateCurrent(isLongAudio ? "runtime.fileSent" : "runtime.audioSent")
+        ? translateCurrent("runtime.audioSent")
         : translateCurrent("runtime.phoneShareConfirm"),
       "success"
     );
