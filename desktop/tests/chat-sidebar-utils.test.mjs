@@ -61,6 +61,35 @@ test("sidebar chat filtering reuses the supplied contact index", () => {
   assert.equal(result.filteredChats[0].id, "chat-1");
 });
 
+test("sidebar search matches formatted phone numbers", () => {
+  const contact = {
+    id: "phone-contact",
+    name: "Unknown contact",
+    phone: "+237 600 000 001",
+    tags: [],
+    stage: "new",
+  };
+  const byPhone = mod.filterSidebarContacts([contact], "600000001", "");
+  assert.equal(byPhone.length, 1);
+
+  const chats = mod.filterAndSortSidebarChats({
+    chats: [{
+      id: "phone-chat",
+      contactId: contact.id,
+      contactName: contact.name,
+      lastMessage: "hello",
+      unread: 0,
+      updatedAt: "2026-09-21T10:00:00.000Z",
+    }],
+    contacts: [contact],
+    contactById: new Map([[contact.id, contact]]),
+    query: "+237600000001",
+    showArchived: false,
+    selfName: "",
+  });
+  assert.equal(chats.filteredChats.length, 1);
+});
+
 test("sidebar preview uses the newest indexed message instead of stale chat preview", () => {
   const result = mod.filterAndSortSidebarChats({
     chats: [

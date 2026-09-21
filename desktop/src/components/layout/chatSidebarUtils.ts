@@ -20,6 +20,10 @@ export const CHAT_SORT_OPTIONS: { id: ChatSortMode; label: string }[] = [
   { id: "name_desc", label: "名称 Z → A" },
 ];
 
+function phoneDigits(value: unknown) {
+  return String(value || "").replace(/\D/g, "");
+}
+
 export function chatTarget(contact?: Contact | null, chat?: ChatPreview | null) {
   const t = resolveSendTarget({
     phone: contact?.phone,
@@ -195,6 +199,7 @@ export function filterAndSortSidebarChats(opts: {
   } =
     buildChatActivityMapsFromPreviews(opts.chats, opts.messages);
   const q = opts.query.trim().toLowerCase();
+  const qPhone = phoneDigits(q);
 
   let archivedCount = 0;
   const filteredChats: ChatPreview[] = [];
@@ -232,11 +237,17 @@ export function filterAndSortSidebarChats(opts: {
       const body = lastBodyByChat.get(chat.id) || chat.lastMessage || "";
       const label = chatLabelFromContact(chat, c, body);
       const phone = c?.phone || "";
+      const phoneMatches =
+        qPhone.length >= 3 &&
+        [phone, c?.channelAddress, chat.contactId].some((value) =>
+          phoneDigits(value).includes(qPhone)
+        );
       if (
         !chat.contactName.toLowerCase().includes(q) &&
         !label.toLowerCase().includes(q) &&
         !body.toLowerCase().includes(q) &&
-        !phone.toLowerCase().includes(q)
+        !phone.toLowerCase().includes(q) &&
+        !phoneMatches
       ) {
         continue;
       }
@@ -356,18 +367,21 @@ export function filterSidebarContacts(
   liveAccountId?: string
 ) {
   const q = query.trim().toLowerCase();
+  const qPhone = phoneDigits(q);
   return contacts.filter(
-    (contact) =>
-      !isGhostSelfContact(contact, selfName) &&
-      contactInView(
-        contact,
-        accountView,
-        fallbackAccountId,
-        liveAccountId || fallbackAccountId
-      ) &&
-      (!q ||
+    (contact) => {
+      if (isGhostSelfContact(contact, selfName)) return false;
+      if (!contactInView(contact, accountView, fallbackAccountId, liveAccountId || fallbackAccountId)) return false;
+      if (!q) return true;
+      const phoneMatches =
+        qPhone.length >= 3 &&
+        [contact.phone, contact.channelAddress].some((value) =>
+          phoneDigits(value).includes(qPhone)
+        );
+      return (
         contact.name.toLowerCase().includes(q) ||
-        contact.phone.includes(q) ||
+        contact.phone.toLowerCase().includes(q) ||
+        phoneMatches ||
         displayContactLabel(
           contact.name,
           contact.phone,
@@ -376,7 +390,9 @@ export function filterSidebarContacts(
           { isGroup: !!contact.isGroup }
         )
           .toLowerCase()
-          .includes(q))
+          .includes(q)
+      );
+    }
   );
 }
 
