@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 const FFMPEG_AUDIO_TIMEOUT_MS = 60_000;
 const FFMPEG_GIF_TIMEOUT_MS = 30_000;
+export const MAX_WHATSAPP_AUDIO_SECONDS = 600;
 
 export function parseDataUrl(dataUrl) {
   const m = String(dataUrl || "").match(
@@ -98,6 +99,8 @@ export function runFfmpegToOggOpus(inputPath, outputPath) {
       "on",
       "-application",
       "voip",
+      "-t",
+      String(MAX_WHATSAPP_AUDIO_SECONDS),
       "-f",
       "ogg",
       outputPath,

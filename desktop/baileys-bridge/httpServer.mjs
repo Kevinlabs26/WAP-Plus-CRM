@@ -1,7 +1,12 @@
 import http from "node:http";
 import { json, requestBody } from "./httpUtil.mjs";
 import { describeMessage } from "./messageDescribe.mjs";
-import { ensureGifMp4, ensureOggOpusPtt, parseDataUrl } from "./audioConvert.mjs";
+import {
+  ensureGifMp4,
+  ensureOggOpusPtt,
+  MAX_WHATSAPP_AUDIO_SECONDS,
+  parseDataUrl,
+} from "./audioConvert.mjs";
 import { tryHandleGroupRoutes } from "./groupRoutes.mjs";
 import { tryHandleGroupWriteRoutes } from "./groupWriteRoutes.mjs";
 import { tryHandleBlocklistRoutes } from "./blocklistRoutes.mjs";
@@ -537,7 +542,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
           );
           const sec =
             typeof seconds === "number" && seconds > 0
-              ? Math.min(600, Math.round(seconds))
+              ? Math.min(MAX_WHATSAPP_AUDIO_SECONDS, Math.round(seconds))
               : undefined;
           result = await d.socket.sendMessage(
             jid,

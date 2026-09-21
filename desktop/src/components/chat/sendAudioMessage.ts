@@ -75,7 +75,7 @@ export async function sendAudioMessage(
       reader.onerror = () => reject(new Error(translateCurrent("runtime.audioReadFailed")));
       reader.readAsDataURL(file);
     });
-    const seconds = await readAudioSeconds(file);
+    const seconds = Math.min(600, await readAudioSeconds(file));
     const caption = captionOverride?.trim() || "";
     msgId = deps.enqueueOutgoingMessage({
       body: caption || `[音频] ${file.name}`,
