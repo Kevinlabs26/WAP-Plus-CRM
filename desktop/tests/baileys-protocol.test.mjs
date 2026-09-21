@@ -31,6 +31,8 @@ assert.match(server, /mediaType === "sticker"/);
 assert.match(server, /sticker: parsed\.buf/);
 assert.match(server, /mediaType === "gif"/);
 assert.match(server, /gifPlayback: true/);
+assert.match(server, /File-selected audio is regular WhatsApp audio/);
+assert.match(server, /const parsed = parseDataUrl\(audioDataUrl\)/);
 assert.match(server, /forward: original/);
 assert.match(server, /rawWaByMsgId\.get\(forwardKey\.id\)/);
 assert.match(server, /url\.pathname === "\/labels"/);

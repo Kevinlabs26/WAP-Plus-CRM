@@ -533,11 +533,30 @@ if (req.method === "POST" && url.pathname === "/restart") {
           console.log(
             `[ptt] input audioDataUrl=${String(audioDataUrl || "").slice(0, 40)} len=${String(audioDataUrl || "").length} mime=${mimeIn || "-"} seconds=${seconds} ptt=${asPtt}`
           );
-          const { buf, mimetype, waveform } = await ensureOggOpusPtt(
-            audioDataUrl,
-            mimeIn || "",
-            asPtt ? MAX_WHATSAPP_AUDIO_SECONDS : undefined
-          );
+          let buf;
+          let mimetype;
+          let waveform;
+          if (asPtt) {
+            // Recorded voice notes must be OGG/Opus and get a waveform.
+            ({ buf, mimetype, waveform } = await ensureOggOpusPtt(
+              audioDataUrl,
+              mimeIn || "",
+              MAX_WHATSAPP_AUDIO_SECONDS
+            ));
+          } else {
+            // File-selected audio is regular WhatsApp audio. Keep the source
+            // bytes and duration; forcing it through the PTT ffmpeg pipeline
+            // caused valid MP3/M4A files to fail with code 234.
+            const parsed = parseDataUrl(audioDataUrl);
+            if (!parsed?.buf?.length) {
+              return json(res, 400, { error: "音频 dataUrl 无效" });
+            }
+            if (parsed.buf.length > 14_000_000) {
+              return json(res, 400, { error: "音频过大（限约 14MB）" });
+            }
+            buf = parsed.buf;
+            mimetype = mimeIn || parsed.mime || "audio/mp4";
+          }
           console.log(
             `[ptt] converted ogg bytes=${buf.length} waveform=${waveform?.length || 0}`
           );
