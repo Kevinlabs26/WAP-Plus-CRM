@@ -52,6 +52,7 @@ import type {
 import {
   baileysChatModify,
   baileysFetchMessageHistory,
+  baileysSync,
   baileysPresence,
   baileysSendContact,
 } from "@/lib/baileys";
@@ -262,7 +263,10 @@ export function ChatPanel() {
     const chatId = s.selectedChatId;
     if (!chatId) return EMPTY_MESSAGES;
     const indexed = s.messagesByChatId[chatId];
-    if (indexed) return indexed;
+    // The index is maintained by a subscription and can briefly lag behind
+    // messages when a bridge event arrives while switching chats. Never show
+    // an empty transcript if the source collection already has this chat.
+    if (indexed?.length) return indexed;
 
     const previous = chatMessagesFallbackRef.current;
     if (previous?.chatId === chatId && previous.messages === s.messages) {
@@ -627,6 +631,41 @@ export function ChatPanel() {
     settings.liveBaileysAccountId,
     baileysUi.connection
   );
+
+  // A chat preview can arrive from WhatsApp before its transcript does (for
+  // example after sending from the official app). Request one history sync so
+  // opening that chat does not leave the center panel on the empty state.
+  const emptyHistoryRequestRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (
+      !isBaileys ||
+      !selectedChatId ||
+      !chatConnected ||
+      chatMessages.length > 0 ||
+      !activeChat
+    ) {
+      return;
+    }
+    if (!(activeChat.lastMessage || activeChat.updatedAt)) return;
+    const requestKey = `${chatAccountId}:${selectedChatId}`;
+    if (emptyHistoryRequestRef.current.has(requestKey)) return;
+    emptyHistoryRequestRef.current.add(requestKey);
+    void baileysSync(chatAccountId, { requestHistory: true }).catch((error) => {
+      emptyHistoryRequestRef.current.delete(requestKey);
+      syncLog("ui.chat", "empty chat history sync failed", {
+        chatId: selectedChatId,
+        accountId: chatAccountId,
+        error: String(error),
+      });
+    });
+  }, [
+    activeChat,
+    chatAccountId,
+    chatConnected,
+    chatMessages.length,
+    isBaileys,
+    selectedChatId,
+  ]);
 
   const { exportingChat, exportChat } = useChatExport({
     activeChat,
