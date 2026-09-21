@@ -21,6 +21,24 @@ test("same protocol ID is deduplicated only within the same account", () => {
   assert.equal(cleanHydratedMessages([message, { ...message, accountId: "b" }]).length, 2);
 });
 
+test("waKey-only local echoes are merged after restart", () => {
+  const local = {
+    ...message,
+    id: "msg-local",
+    waMessageId: undefined,
+    waKey: { id: "wa-key-1", remoteJid: "12025550100@s.whatsapp.net", fromMe: true },
+  };
+  const echo = {
+    ...message,
+    id: "bridge-msg-a-wa-key-1",
+    waMessageId: "wa-key-1",
+    waKey: { id: "wa-key-1", remoteJid: "12025550100@s.whatsapp.net", fromMe: true },
+  };
+  const cleaned = cleanHydratedMessages([local, echo]);
+  assert.equal(cleaned.length, 1);
+  assert.equal(cleaned[0].waMessageId, "wa-key-1");
+});
+
 test("interrupted text and media require manual verification and never auto-retry", () => {
   for (const mediaType of [undefined, "image"]) {
     const recovered = recoverInterruptedMessage({ ...message, deliveryStatus: "pending", mediaType, nextAttemptAt: "2020-01-01" });

@@ -251,6 +251,60 @@ test("all-account ungrouped chats collapse by contact phone", async () => {
   assert.equal(chats[0].accountCount, 2);
 });
 
+test("incoming lead date headers expose batch ids and hide collapsed dates", async () => {
+  const built = buildSync({
+    entryPoints: [join(dir, "../src/components/layout/buildSidebarItems.ts")],
+    bundle: true,
+    format: "esm",
+    platform: "neutral",
+    alias: { "@": join(dir, "../src") },
+    loader: { ".ts": "ts", ".tsx": "tsx" },
+    write: false,
+  });
+  const folderMod = await import(
+    `data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString("base64")}`
+  );
+  const items = folderMod.buildSidebarItems({
+    listTab: "chats",
+    archivedCount: 0,
+    showArchived: false,
+    isAllAccountsView: true,
+    filteredChats: [
+      { id: "chat-a", contactId: "contact-a", accountId: "account-a", lastMessage: "A" },
+      { id: "chat-b", contactId: "contact-b", accountId: "account-b", lastMessage: "B" },
+      { id: "chat-c", contactId: "contact-c", accountId: "account-a", lastMessage: "C" },
+    ],
+    chatFolders: [],
+    chatFolderClones: [],
+    contactById: new Map([
+      ["contact-a", { id: "contact-a", phone: "+33123456789" }],
+      ["contact-b", { id: "contact-b", phone: "+33 1 23 45 67 89" }],
+      ["contact-c", { id: "contact-c", phone: "+33987654321" }],
+    ]),
+    ungroupedCollapsed: false,
+    query: "",
+    folderDisplayName: (folder) => folder.name,
+    leadView: true,
+    leadMergeAccounts: true,
+    leadDateGroupByChatId: new Map([
+      ["chat-a", { id: "2026-09-21", label: "9月21日" }],
+      ["chat-b", { id: "2026-09-21", label: "9月21日" }],
+      ["chat-c", { id: "2026-09-20", label: "9月20日" }],
+    ]),
+    collapsedLeadDateIds: new Set(["2026-09-21"]),
+  });
+
+  const headers = items.filter((item) => item.kind === "lead_date_header");
+  assert.equal(headers.length, 2);
+  assert.deepEqual(headers[0].chatIds, ["chat-a", "chat-b"]);
+  assert.equal(headers[0].total, 1);
+  assert.equal(headers[0].collapsed, true);
+  assert.deepEqual(
+    items.filter((item) => item.kind === "chat").map((item) => item.chat.id),
+    ["chat-c"]
+  );
+});
+
 test("all-account contacts keep one folder assignment across accounts", async () => {
   const built = buildSync({
     entryPoints: [join(dir, "../src/components/layout/buildSidebarItems.ts")],

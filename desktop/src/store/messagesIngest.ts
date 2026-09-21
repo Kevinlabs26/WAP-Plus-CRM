@@ -25,6 +25,7 @@ import {
   type MessageSyncIndex,
 } from "./messageSyncIndex";
 import { createChatIdLookup } from "./contactIndex";
+import { isConversationOutgoing } from "@/lib/leadInbox";
 
 let cachedMessageSyncIndex: MessageSyncIndex<Message> | null = null;
 
@@ -268,7 +269,10 @@ export function applyMessagesSync(opts: {
           if (mOwner && mOwner !== deviceId) continue;
           const mb = (m.body || "").replace(/\s+/g, " ").trim();
           if (mb !== normBody) continue;
-          const exactId = !!waId && m.waMessageId === waId;
+          // 文本发送会写 waMessageId，媒体/旧版本有时只写 waKey.id；
+          // 两者都代表同一个 WhatsApp 协议消息，必须优先合并回本地气泡。
+          const exactId =
+            !!waId && (m.waMessageId === waId || m.waKey?.id === waId);
           if (!exactId) {
             const sameThread =
               m.chatId === chatId ||
@@ -565,6 +569,11 @@ export function applyMessagesSync(opts: {
       const isSystemMsg =
         mediaType === "system" ||
         (typeof systemKind === "string" && !!systemKind);
+      const conversationOutgoing = isConversationOutgoing({
+        direction,
+        mediaType,
+        deliveryStatus: direction === "out" ? "sent" : undefined,
+      });
       // 系统消息（踢人/进群等）可更新预览文案，但 updatedAt 只跟真人说话走（对齐「最近消息」）
       const chat: ChatPreview = {
         id: chatId,
@@ -583,6 +592,8 @@ export function applyMessagesSync(opts: {
         phoneId: deviceId,
         accountId: deviceId,
         isGroup,
+        hasOutgoingHistory:
+          chats[chatIndex]?.hasOutgoingHistory || conversationOutgoing,
       };
       if (chatIndex >= 0) {
         const prev = chats[chatIndex];
@@ -626,6 +637,8 @@ export function applyMessagesSync(opts: {
                   ? body
                   : prev.lastMessage || chat.lastMessage,
               isGroup: isGroup || prev.isGroup,
+              hasOutgoingHistory:
+                prev.hasOutgoingHistory || conversationOutgoing,
             };
       } else {
         chats.push(chat);

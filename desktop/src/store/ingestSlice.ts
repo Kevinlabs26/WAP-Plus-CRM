@@ -58,22 +58,15 @@ function sliceIngestEvents(events: BridgeEvent[]): BridgeEvent[][] {
   const slices: BridgeEvent[][] = [];
   let current: BridgeEvent[] = [];
   let currentItems = 0;
-  // 断线重连补捞可能一次性带来大量积压事件；切块机制本身会让出主线程，
-  // 因此上限只防病态输入。绝不能静默截断——丢掉的第 N+1 个事件可能是
-  // messages.delete 片段，直接造成数据不一致。
-  const MAX_INGEST_EVENTS = 2000;
-  if (events.length > MAX_INGEST_EVENTS) {
-    console.warn(
-      `[wap-ingest] 单批事件数 ${events.length} 超过上限 ${MAX_INGEST_EVENTS}，超出部分被丢弃`
-    );
-  }
   const flush = () => {
     if (!current.length) return;
     slices.push(current);
     current = [];
     currentItems = 0;
   };
-  for (const event of events.slice(0, MAX_INGEST_EVENTS)) {
+  // 不能给事件数设置硬上限：全量历史同步可能超过 2000 个事件，
+  // 截断会让消息记录永久缺失。下面按事件和 item 分片，并在块之间让出主线程。
+  for (const event of events) {
     const payload = ingestObject(event.payload) ?? {};
     const rawItems = Array.isArray(payload.items) ? payload.items : null;
     if (rawItems && rawItems.length > INGEST_SLICE_ITEMS) {

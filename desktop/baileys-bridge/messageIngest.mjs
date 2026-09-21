@@ -88,14 +88,6 @@ export function createMessageIngest(deps) {
     scheduleEnrichFlush();
   }
 
-  function trimMessagesMap(limit = 5000) {
-    while (messages.size > limit) {
-      const first = messages.keys().next().value;
-      if (first == null) break;
-      messages.delete(first);
-    }
-  }
-
   function extractAltFromMessage(message) {
     const key = message?.key || {};
     const candidates = [
@@ -358,7 +350,8 @@ export function createMessageIngest(deps) {
     }
 
     messages.set(item.id, item);
-    trimMessagesMap(5000);
+    // 不在桥接内存里截断历史消息。/sync 是断线补偿和前端重启恢复的
+    // 最后一条链路，保留最近 5000 条会让更早的聊天记录永久消失。
     if (hasBinaryMedia) {
       rememberRawWa(item.id, message);
       if (item.waKey?.id && item.waKey.id !== item.id) {

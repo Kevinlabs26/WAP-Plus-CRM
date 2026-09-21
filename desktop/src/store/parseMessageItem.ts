@@ -176,8 +176,10 @@ export function parseMessageItem(
     ? new Date().toISOString()
     : parsedDate.toISOString();
   const sentTs = parsedDate.getTime();
+  const protocolKey = object(item.waKey ?? item.key);
   const waId =
     string(item.id, 300) ||
+    string(protocolKey?.id, 300) ||
     `bridge-msg-${deviceId}-${sentAt}-${messagesLength}`;
   const localMessageId = string(item.id, 300)
     ? `bridge-msg-${encodeURIComponent(deviceId)}-${encodeURIComponent(waId)}`

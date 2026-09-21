@@ -68,6 +68,7 @@ import { useChatFolderDrag } from "./useChatFolderDrag";
 import { useSidebarData } from "./useSidebarData";
 import { useI18n } from "@/i18n";
 import type { PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent } from "react";
+import { EyeOff, FolderInput, FolderPlus } from "lucide-react";
 
 const EMPTY_WA: WaAccount[] = [];
 const GROUP_CHAT_FILTERS: GroupChatFilter[] = [
@@ -297,6 +298,16 @@ export function PhoneSidebar() {
   });
   const [chatSortOpen, setChatSortOpen] = useState(false);
   const [leadSettingsOpen, setLeadSettingsOpen] = useState(false);
+  const [collapsedLeadDateIds, setCollapsedLeadDateIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [leadDateMenu, setLeadDateMenu] = useState<{
+    x: number;
+    y: number;
+    groupId: string;
+    label: string;
+    chatIds: string[];
+  } | null>(null);
   const chatSortRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -361,6 +372,48 @@ export function PhoneSidebar() {
       remove?.();
     };
   }, [chatMenu]);
+
+  useEffect(() => {
+    if (!leadDateMenu) return;
+    const onPointer = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.("[data-lead-date-menu]")) return;
+      setLeadDateMenu(null);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setLeadDateMenu(null);
+    };
+    window.addEventListener("pointerdown", onPointer, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointer, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [leadDateMenu]);
+
+  const toggleLeadDate = useCallback((groupId: string) => {
+    setCollapsedLeadDateIds((current) => {
+      const next = new Set(current);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  }, []);
+
+  const dismissLeadChats = useCallback(
+    (chatIds: string[]) => {
+      const current = useAppStore.getState().settings.leadInbox;
+      const dismissed = new Set(current.dismissedChatIds);
+      chatIds.forEach((chatId) => dismissed.add(chatId));
+      updateSettings({
+        leadInbox: {
+          ...current,
+          dismissedChatIds: [...dismissed].slice(-20_000),
+        },
+      });
+    },
+    [updateSettings]
+  );
 
   const markChatRead = async (chat: ChatPreview, contact?: Contact | null) => {    useAppStore.setState((s) => {
       const hold = { ...s.unreadHoldUntilByChatId };
@@ -717,6 +770,7 @@ export function PhoneSidebar() {
     isAllAccountsView,
     accountLabelOf,
     accountShortOf,
+    folderDisplayName,
     chatSortLabel,
     leadCount,
     primaryFolderIdOf,
@@ -733,7 +787,21 @@ export function PhoneSidebar() {
     chatSort,
     ungroupedCollapsed,
     groupFilter,
+    collapsedLeadDateIds,
   });
+
+  const moveLeadDateToFolder = useCallback(
+    (chatIds: string[], folderId: string, folderName: string) => {
+      chatIds.forEach((chatId) => moveChatToFolder(chatId, folderId));
+      dismissLeadChats(chatIds);
+      setLeadDateMenu(null);
+      pushToast(
+        t("leadInbox.movedDate", { count: chatIds.length, name: folderName }),
+        "success"
+      );
+    },
+    [dismissLeadChats, moveChatToFolder, pushToast, t]
+  );
 
   const {
     dragChatId,
@@ -1324,6 +1392,25 @@ export function PhoneSidebar() {
                         setFolderDialog({ type: "create" });
                       }}
                       onToggleUngrouped={() => setUngroupedCollapsed((v) => !v)}
+                      onToggleLeadDate={toggleLeadDate}
+                      onOpenLeadDateMenu={(event) => {
+                        const width = 240;
+                        const height = 360;
+                        setLeadDateMenu({
+                          x: Math.max(
+                            8,
+                            Math.min(event.clientX, window.innerWidth - width - 8)
+                          ),
+                          y: Math.max(
+                            8,
+                            Math.min(event.clientY, window.innerHeight - height - 8)
+                          ),
+                          groupId: it.kind === "lead_date_header" ? it.groupId : "",
+                          label: it.kind === "lead_date_header" ? it.label : "",
+                          chatIds:
+                            it.kind === "lead_date_header" ? it.chatIds : [],
+                        });
+                      }}
                       onSync={() => void syncConversations()}
                     />
                   );
@@ -1439,8 +1526,29 @@ export function PhoneSidebar() {
                   ? pendingFolderAction.chatIds
                   : [pendingFolderAction.chatId];
                 if (pendingFolderAction.mode === "move") {
+                  if (pendingFolderAction.dismissFromLead && isAllAccountsView) {
+                    const currentSettings = useAppStore.getState().settings;
+                    updateSettings({
+                      chatFolders: currentSettings.chatFolders.map((folder) =>
+                        folder.id === id
+                          ? { ...folder, scope: { type: "all" as const } }
+                          : folder
+                      ),
+                    });
+                  }
                   targetChatIds.forEach((chatId) => moveChatToFolder(chatId, id));
-                  pushToast(`已移到「${name}」`, "success");
+                  if (pendingFolderAction.dismissFromLead) {
+                    dismissLeadChats(targetChatIds);
+                  }
+                  pushToast(
+                    pendingFolderAction.dismissFromLead
+                      ? t("leadInbox.movedDate", {
+                          count: targetChatIds.length,
+                          name,
+                        })
+                      : `已移到「${name}」`,
+                    "success"
+                  );
                 } else {
                   targetChatIds.forEach((chatId) => cloneChatToFolder(chatId, id));
                 }
@@ -1468,6 +1576,111 @@ export function PhoneSidebar() {
             setFolderDialog(null);
           }}
         />
+      )}
+
+      {leadDateMenu && (
+        <div
+          data-lead-date-menu
+          className="fixed z-[10020] w-60 overflow-hidden rounded-xl border border-zinc-700/90 bg-zinc-900 p-1.5 shadow-2xl shadow-black/50"
+          style={{ left: leadDateMenu.x, top: leadDateMenu.y }}
+        >
+          <div className="border-b border-zinc-800 px-2 py-1.5">
+            <p className="truncate text-[11px] font-medium text-zinc-200">
+              {leadDateMenu.label}
+            </p>
+            <p className="mt-0.5 text-[10px] text-zinc-500">
+              {t("leadInbox.dateConversationCount", {
+                count: leadDateMenu.chatIds.length,
+              })}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="mt-1 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] text-zinc-300 hover:bg-zinc-800"
+            onClick={() => {
+              setFolderNameDraft("");
+              setPendingFolderAction({
+                chatId: leadDateMenu.chatIds[0] || "",
+                chatIds: leadDateMenu.chatIds,
+                mode: "move",
+                dismissFromLead: true,
+              });
+              setFolderDialog({ type: "create" });
+              setLeadDateMenu(null);
+            }}
+          >
+            <FolderPlus className="h-3.5 w-3.5 text-zinc-500" />
+            {t("leadInbox.moveDateToNewFolder")}
+          </button>
+          {chatFolders.length > 0 && (
+            <>
+              <p className="px-2 pb-1 pt-2 text-[9px] font-semibold uppercase tracking-wide text-zinc-600">
+                {t("leadInbox.moveDateToFolder")}
+              </p>
+              <div className="max-h-44 overflow-y-auto">
+                {chatFolders
+                  .filter((folder) => {
+                    const accountIds = new Set(
+                      leadDateMenu.chatIds
+                        .map((chatId) => {
+                          const chat = chats.find((item) => item.id === chatId);
+                          const contact = chat
+                            ? contacts.find((item) => item.id === chat.contactId)
+                            : undefined;
+                          return (
+                            chat?.accountId ||
+                            contact?.accountId ||
+                            chat?.phoneId ||
+                            dataAccountId
+                          );
+                        })
+                        .filter(Boolean)
+                    );
+                    if (accountIds.size > 1) return folder.scope?.type === "all";
+                    if (folder.scope?.type === "all") return true;
+                    const onlyAccount = [...accountIds][0] || dataAccountId;
+                    return !folder.scope || folder.scope.accountId === onlyAccount;
+                  })
+                  .map((folder) => (
+                  <button
+                    key={folder.id}
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] text-zinc-300 hover:bg-zinc-800"
+                    onClick={() =>
+                      moveLeadDateToFolder(
+                        leadDateMenu.chatIds,
+                        folder.id,
+                        folderDisplayName(folder)
+                      )
+                    }
+                  >
+                    <FolderInput className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+                    <span className="truncate">{folderDisplayName(folder)}</span>
+                  </button>
+                  ))}
+              </div>
+            </>
+          )}
+          <div className="mt-1 border-t border-zinc-800 pt-1">
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] text-amber-300 hover:bg-amber-500/10"
+              onClick={() => {
+                dismissLeadChats(leadDateMenu.chatIds);
+                pushToast(
+                  t("leadInbox.removedDate", {
+                    count: leadDateMenu.chatIds.length,
+                  }),
+                  "info"
+                );
+                setLeadDateMenu(null);
+              }}
+            >
+              <EyeOff className="h-3.5 w-3.5" />
+              {t("leadInbox.removeDate")}
+            </button>
+          </div>
+        </div>
       )}
 
       {chatMenu &&

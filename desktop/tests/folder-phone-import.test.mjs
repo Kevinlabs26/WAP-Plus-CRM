@@ -194,6 +194,7 @@ const mergedChats = mergeImportedContactChatDuplicates(
       updatedAt: "2026-01-02",
       phoneId: "wa-1",
       accountId: "wa-1",
+      hasOutgoingHistory: true,
     },
   ],
   [
@@ -211,6 +212,7 @@ const mergedChats = mergeImportedContactChatDuplicates(
 assert.equal(mergedChats.chats.length, 1);
 assert.equal(mergedChats.chats[0]?.id, "chat-c-new");
 assert.equal(mergedChats.chats[0]?.lastMessage, "sent");
+assert.equal(mergedChats.chats[0]?.hasOutgoingHistory, true);
 assert.equal(mergedChats.messages[0]?.chatId, "chat-c-new");
 assert.equal(mergedChats.selectedChatId, "chat-c-new");
 

@@ -1,11 +1,11 @@
 import { RotateCcw, X } from "lucide-react";
+import { useEffect } from "react";
 import { useAppStore } from "@/store/appStore";
 import {
   createDefaultLeadInboxSettings,
   type LeadInboxAccountScope,
   type LeadInboxDateGrouping,
   type LeadInboxSort,
-  type LeadInboxStatusFilter,
 } from "@/store/settingsDefaults";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -21,13 +21,29 @@ export function LeadInboxSettingsPopover({ onClose }: Props) {
   const patch = (value: Partial<typeof settings>) => {
     updateSettings({ leadInbox: { ...settings, ...value } });
   };
+  const dismissedCount = settings.dismissedChatIds?.length ?? 0;
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
 
   return (
-    <div className="mb-2 max-h-[min(60vh,28rem)] overflow-y-auto rounded-xl border border-brand/25 bg-zinc-900/95 p-3 shadow-xl shadow-black/30">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="lead-inbox-settings-title"
+      className="fixed inset-0 z-[220] flex items-center justify-center bg-black/65 p-4 backdrop-blur-[2px]"
+      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+    >
+      <div className="max-h-[min(82vh,38rem)] w-full max-w-lg overflow-y-auto rounded-xl border border-zinc-700/90 bg-zinc-900 p-4 shadow-2xl shadow-black/50">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div>
-          <h3 className="text-xs font-semibold text-zinc-100">{t("leadInbox.settingsTitle")}</h3>
-          <p className="mt-0.5 text-[10px] text-zinc-500">{t("leadInbox.settingsHint")}</p>
+          <h3 id="lead-inbox-settings-title" className="text-sm font-semibold text-zinc-100">{t("leadInbox.settingsTitle")}</h3>
+          <p className="mt-1 text-[11px] leading-4 text-zinc-500">{t("leadInbox.settingsHint")}</p>
         </div>
         <button
           type="button"
@@ -51,18 +67,6 @@ export function LeadInboxSettingsPopover({ onClose }: Props) {
       </label>
 
       <div className="grid grid-cols-2 gap-2">
-        <label className="text-[10px] text-zinc-500">
-          <span className="mb-1 block">{t("leadInbox.status")}</span>
-          <select
-            value={settings.statusFilter}
-            onChange={(event) => patch({ statusFilter: event.target.value as LeadInboxStatusFilter })}
-            className="ui-control h-8 w-full text-[11px]"
-          >
-            <option value="pending">{t("leadInbox.statusPending")}</option>
-            <option value="all">{t("leadInbox.statusAll")}</option>
-            <option value="replied">{t("leadInbox.statusReplied")}</option>
-          </select>
-        </label>
         <label className="text-[10px] text-zinc-500">
           <span className="mb-1 block">{t("leadInbox.dateGrouping")}</span>
           <select
@@ -163,14 +167,30 @@ export function LeadInboxSettingsPopover({ onClose }: Props) {
 
       <div className="mt-2 flex items-center justify-between gap-2 border-t border-zinc-800 pt-2">
         <p className="text-[10px] leading-4 text-zinc-600">{t("leadInbox.captureHint")}</p>
-        <button
-          type="button"
-          onClick={() => patch(createDefaultLeadInboxSettings())}
-          className={cn("inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[10px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200")}
-        >
-          <RotateCcw className="h-3 w-3" />
-          {t("leadInbox.reset")}
-        </button>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          {dismissedCount > 0 && (
+            <button
+              type="button"
+              onClick={() => patch({ dismissedChatIds: [] })}
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-amber-300 hover:bg-amber-500/10"
+              title={t("leadInbox.removedCount", {
+                count: dismissedCount,
+              })}
+            >
+              <RotateCcw className="h-3 w-3" />
+              {t("leadInbox.restoreRemoved")}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => patch(createDefaultLeadInboxSettings())}
+            className={cn("inline-flex items-center gap-1 rounded-md px-2 py-1 text-[10px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200")}
+          >
+            <RotateCcw className="h-3 w-3" />
+            {t("leadInbox.reset")}
+          </button>
+        </div>
+      </div>
       </div>
     </div>
   );

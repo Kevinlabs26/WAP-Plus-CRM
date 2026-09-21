@@ -14,7 +14,6 @@ const { leadCandidateForChat, leadDateBucket } = await import(moduleUrl);
 
 const settings = {
   enabled: true,
-  statusFilter: "pending",
   includeGroups: false,
   dateGrouping: "day",
   dateRangeDays: 0,
@@ -42,8 +41,8 @@ const inbound = {
   sentAt: "2026-09-20T10:00:00.000Z",
 };
 assert.equal(
-  leadCandidateForChat(chat, undefined, [inbound], settings, "wa-a").status,
-  "pending"
+  leadCandidateForChat(chat, undefined, [inbound], settings, "wa-a")?.chatId,
+  "chat-1"
 );
 assert.equal(
   leadCandidateForChat(
@@ -52,8 +51,31 @@ assert.equal(
     [inbound, { ...inbound, id: "m-2", direction: "out", sentAt: "2026-09-20T10:01:00.000Z" }],
     settings,
     "wa-a"
-  ).status,
-  "replied"
+  ),
+  null
+);
+assert.equal(
+  leadCandidateForChat(
+    { ...chat, hasOutgoingHistory: true },
+    undefined,
+    [inbound],
+    settings,
+    "wa-a"
+  ),
+  null
+);
+assert.equal(
+  leadCandidateForChat(
+    chat,
+    undefined,
+    [
+      { ...inbound, id: "m-0", direction: "out", deliveryStatus: "failed" },
+      inbound,
+    ],
+    settings,
+    "wa-a"
+  )?.chatId,
+  "chat-1"
 );
 assert.equal(
   leadCandidateForChat(

@@ -4,6 +4,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
@@ -869,6 +870,42 @@ fn load_table(conn: &Connection, table: &str) -> Result<Vec<Value>, String> {
     Ok(out)
 }
 
+fn load_chats_with_history(conn: &Connection) -> Result<Vec<Value>, String> {
+    let mut chats = load_table(conn, "chats")?;
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT DISTINCT chat_id FROM messages
+            WHERE COALESCE(chat_id, '') != ''
+              AND json_extract(json, '$.direction') = 'out'
+              AND COALESCE(json_extract(json, '$.mediaType'), '') != 'system'
+              AND COALESCE(json_extract(json, '$.deliveryStatus'), 'sent')
+                  NOT IN ('pending', 'queued', 'failed')
+            "#,
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    let mut outgoing_chat_ids = HashSet::new();
+    for row in rows {
+        outgoing_chat_ids.insert(row.map_err(|e| e.to_string())?);
+    }
+    for chat in &mut chats {
+        let Some(object) = chat.as_object_mut() else {
+            continue;
+        };
+        let has_outgoing = object
+            .get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| outgoing_chat_ids.contains(id));
+        if has_outgoing {
+            object.insert("hasOutgoingHistory".into(), Value::Bool(true));
+        }
+    }
+    Ok(chats)
+}
+
 /// 最近历史 + 未完成出站/定时任务引用的消息；普通冷历史仍按需分页。
 const BOOT_MESSAGES_CAP: i64 = 2_000;
 const BOOT_ACTIVITIES_CAP: i64 = 2_000;
@@ -984,7 +1021,7 @@ pub fn load_snapshot(conn: &Connection) -> Result<Option<AppSnapshot>, String> {
     Ok(Some(AppSnapshot {
         phones: load_table(conn, "phones")?,
         contacts: load_table(conn, "contacts")?,
-        chats: load_table(conn, "chats")?,
+        chats: load_chats_with_history(conn)?,
         messages: load_messages_boot(conn)?,
         follow_ups: load_table(conn, "follow_ups")?,
         activities: load_activities_boot(conn)?,
@@ -1379,6 +1416,14 @@ mod tests {
                 "contactName": "Alice",
                 "lastMessage": "Bonjour"
             })],
+            messages: vec![json!({
+                "id": "message-1",
+                "chatId": "chat-contact-1",
+                "direction": "out",
+                "body": "Bonjour",
+                "sentAt": "2026-09-21T10:00:00.000Z",
+                "deliveryStatus": "sent"
+            })],
             settings: json!({
                 "chatFolders": [{
                     "id": "folder-1",
@@ -1390,6 +1435,7 @@ mod tests {
             dirty: Some(PersistDirtyFlags {
                 contacts: true,
                 chats: true,
+                messages: true,
                 settings: true,
                 ..Default::default()
             }),
@@ -1401,6 +1447,7 @@ mod tests {
 
         assert_eq!(loaded.contacts[0]["name"], "Alice");
         assert_eq!(loaded.chats[0]["contactId"], "contact-1");
+        assert_eq!(loaded.chats[0]["hasOutgoingHistory"], true);
         assert_eq!(loaded.settings["chatFolders"][0]["id"], "folder-1");
         assert_eq!(loaded.settings["chatFolders"][0]["chatIds"][0], "chat-contact-1");
     }

@@ -27,6 +27,7 @@ import type {
 import { restoreLocalContactChats } from "./localContactChats";
 import { pruneChatFolderRefs } from "./chatFolderCleanup";
 import { mergeImportedContactChatDuplicates } from "./chatDuplicateMerge";
+import { backfillChatPreviewFromMessages } from "./chatReconcile";
 import { clearTrendBuckets } from "./trendBuckets";
 import { flushPersist } from "./persist";
 
@@ -282,6 +283,8 @@ export function createBootSlice({
       );
       chats = mergedLocalChats.chats;
       messages = mergedLocalChats.messages;
+      // 浏览器预览没有 SQLite 冷历史补全；用完整 IDB 消息标记已聊过会话。
+      chats = backfillChatPreviewFromMessages(chats, messages);
       const cleanedFolderRefs = pruneChatFolderRefs(
         settingsNorm.chatFolders || [],
         settingsNorm.chatFolderClones || [],

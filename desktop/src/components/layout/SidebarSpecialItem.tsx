@@ -5,6 +5,7 @@ import {
   CalendarDays,
   Inbox,
   FolderPlus,
+  MoreHorizontal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
@@ -14,7 +15,13 @@ export type SidebarSpecialItem =
   | { kind: "archive_toggle"; showArchived: boolean; archivedCount: number }
   | { kind: "new_folder"; isAllAccountsView: boolean }
   | { kind: "folder_empty"; folderId: string; dragging: boolean }
-  | { kind: "lead_date_header"; label: string }
+  | {
+      kind: "lead_date_header";
+      groupId: string;
+      label: string;
+      total: number;
+      collapsed: boolean;
+    }
   | {
       kind: "ungrouped_header";
       total: number;
@@ -31,6 +38,11 @@ type Props = {
   onToggleArchived: () => void;
   onCreateFolder: () => void;
   onToggleUngrouped: () => void;
+  onToggleLeadDate?: (groupId: string) => void;
+  onOpenLeadDateMenu?: (
+    event: React.MouseEvent<HTMLButtonElement>,
+    groupId: string
+  ) => void;
   onSync: () => void;
 };
 
@@ -40,6 +52,8 @@ export function SidebarSpecialItem({
   onToggleArchived,
   onCreateFolder,
   onToggleUngrouped,
+  onToggleLeadDate,
+  onOpenLeadDateMenu,
   onSync,
 }: Props) {
   const { t } = useI18n();
@@ -93,9 +107,35 @@ export function SidebarSpecialItem({
 
   if (item.kind === "lead_date_header") {
     return (
-      <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
-        <CalendarDays className="h-3 w-3" />
-        {item.label}
+      <div className="flex items-center gap-1 px-1 pb-1 pt-1.5 text-zinc-500">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left hover:bg-zinc-900/80 hover:text-zinc-300"
+          onClick={() => onToggleLeadDate?.(item.groupId)}
+          aria-expanded={!item.collapsed}
+        >
+          {item.collapsed ? (
+            <ChevronRight className="h-3 w-3 shrink-0" />
+          ) : (
+            <ChevronDown className="h-3 w-3 shrink-0" />
+          )}
+          <CalendarDays className="h-3 w-3 shrink-0" />
+          <span className="truncate text-[10px] font-semibold uppercase tracking-wide">
+            {item.label}
+          </span>
+          <span className="text-[10px] font-normal tabular-nums text-zinc-600">
+            {item.total}
+          </span>
+        </button>
+        <button
+          type="button"
+          className="rounded-md p-1 text-zinc-600 hover:bg-zinc-900 hover:text-zinc-300"
+          onClick={(event) => onOpenLeadDateMenu?.(event, item.groupId)}
+          title={t("leadInbox.dateActions")}
+          aria-label={t("leadInbox.dateActions")}
+        >
+          <MoreHorizontal className="h-3.5 w-3.5" />
+        </button>
       </div>
     );
   }

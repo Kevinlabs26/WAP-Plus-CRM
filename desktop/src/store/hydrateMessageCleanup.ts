@@ -17,22 +17,30 @@ export function cleanHydratedMessages(rawMessages: Message[]) {
     const bucketKey = `${message.chatId}\u0000${message.body ?? ""}`;
     const candidates = outgoingByChatAndBody.get(bucketKey) || [];
     const duplicateIndex = candidates.findIndex(({ message: candidate }) => {
-      if (candidate.accountId !== message.accountId) return false;
-      if (candidate.body !== message.body) return false;
       if (
-        candidate.waMessageId &&
-        message.waMessageId &&
-        candidate.waMessageId === message.waMessageId
+        candidate.accountId &&
+        message.accountId &&
+        candidate.accountId !== message.accountId
+      )
+        return false;
+      if (candidate.body !== message.body) return false;
+      const candidateProtocolId =
+        candidate.waMessageId || candidate.waKey?.id || "";
+      const messageProtocolId = message.waMessageId || message.waKey?.id || "";
+      if (
+        candidateProtocolId &&
+        messageProtocolId &&
+        candidateProtocolId === messageProtocolId
       ) {
         return true;
       }
       if (
         candidate.id === message.id ||
-        (candidate.waMessageId && candidate.waMessageId === message.id)
+        (candidateProtocolId && candidateProtocolId === message.id)
       ) {
         return true;
       }
-      if (message.waMessageId && candidate.id === message.waMessageId) return true;
+      if (messageProtocolId && candidate.id === messageProtocolId) return true;
       return false;
     });
     if (duplicateIndex >= 0) {
@@ -40,13 +48,15 @@ export function cleanHydratedMessages(rawMessages: Message[]) {
       const kept = keptRecord.message;
       if (
         !kept.waMessageId &&
-        (message.waMessageId || !String(message.id).startsWith("msg-"))
+        (message.waMessageId || message.waKey?.id || !String(message.id).startsWith("msg-"))
       ) {
         const merged: Message = {
           ...kept,
           ...message,
-          id: message.waMessageId || message.id,
-          waMessageId: message.waMessageId || kept.waMessageId,
+          id: message.waMessageId || message.waKey?.id || message.id,
+          waMessageId:
+            message.waMessageId || message.waKey?.id || kept.waMessageId,
+          waKey: message.waKey || kept.waKey,
           deliveryStatus: "sent",
         };
         messages[keptRecord.resultIndex] = merged;

@@ -12,6 +12,7 @@ export type PendingFolderAction = {
   chatId: string;
   chatIds?: string[];
   mode: "move" | "clone";
+  dismissFromLead?: boolean;
 };
 
 type FolderDialogProps = {

@@ -1,21 +1,30 @@
 import type { ChatPreview, Contact, Message } from "@/types/crm";
 import type { LeadInboxSettings } from "@/store/settingsDefaults";
 
-export type LeadStatus = "pending" | "replied";
-
 export interface LeadCandidate {
   chatId: string;
   firstInboundAt: string;
   lastMessageAt: string;
-  status: LeadStatus;
   accountId: string;
 }
 
 function meaningfulMessages(messages: Message[]) {
   return messages
-    .filter((message) => !message.systemKind && message.mediaType !== "system")
+    .filter((message) => message.mediaType !== "system")
     .slice()
     .sort((a, b) => (a.sentAt || "").localeCompare(b.sentAt || ""));
+}
+
+export function isConversationOutgoing(
+  message: Pick<Message, "direction" | "mediaType" | "deliveryStatus">
+) {
+  return (
+    message.direction === "out" &&
+    message.mediaType !== "system" &&
+    message.deliveryStatus !== "pending" &&
+    message.deliveryStatus !== "queued" &&
+    message.deliveryStatus !== "failed"
+  );
 }
 
 export function leadCandidateForChat(
@@ -29,8 +38,9 @@ export function leadCandidateForChat(
   if (!settings.includeGroups && (chat.isGroup || contact?.isGroup)) return null;
 
   const history = meaningfulMessages(messages);
-  const first = history[0];
-  if (!first || first.direction !== "in") return null;
+  if (chat.hasOutgoingHistory || history.some(isConversationOutgoing)) return null;
+  const first = history.find((message) => message.direction === "in");
+  if (!first) return null;
 
   const captureSince = Date.parse(settings.captureSince || "");
   const firstAt = Date.parse(first.sentAt || "");
@@ -39,12 +49,10 @@ export function leadCandidateForChat(
   }
 
   const last = history[history.length - 1];
-  const replied = history.some((message) => message.direction === "out");
   return {
     chatId: chat.id,
     firstInboundAt: first.sentAt,
     lastMessageAt: last?.sentAt || first.sentAt,
-    status: replied ? "replied" : "pending",
     accountId,
   };
 }

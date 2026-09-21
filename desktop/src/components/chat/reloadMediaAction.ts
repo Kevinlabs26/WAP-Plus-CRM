@@ -1,5 +1,6 @@
 import {
   baileysDownloadMedia,
+  baileysFetchMessageHistory,
   baileysSync,
 } from "@/lib/baileys";
 import { bridgeInvoke } from "@/lib/bridge";
@@ -128,6 +129,7 @@ export async function reloadMedia({
   try {
     let res: Awaited<ReturnType<typeof baileysDownloadMedia>> | null = null;
     let lastDownloadError: unknown;
+    let missingBridgeMessage = false;
     const download = () =>
       baileysDownloadMedia(key, {
         mediaType: sourceMessage.mediaType || inferMediaType(sourceMessage) || undefined,
@@ -138,6 +140,7 @@ export async function reloadMedia({
       res = await download();
     } catch (error) {
       lastDownloadError = error;
+      missingBridgeMessage = shouldRetryMediaAfterSync(error);
       // The bridge can temporarily lose the in-memory message after restart.
       // A 404 is recoverable by syncing once and retrying the media request.
       if (!quiet && !shouldRetryMediaAfterSync(error)) throw error;
@@ -153,6 +156,27 @@ export async function reloadMedia({
           lastDownloadError = error;
           /* 保留原始媒体错误提示 */
         }
+      }
+    }
+    // /sync 只能补齐消息索引；如果桥接刚重启，原始媒体对象还需要通过
+    // WhatsApp 历史游标重新推回，随后再尝试一次下载。
+    if (!res?.mediaUrl && missingBridgeMessage && !quiet && key.remoteJid) {
+      try {
+        const timestampMs = Date.parse(sourceMessage.sentAt || "");
+        await baileysFetchMessageHistory(
+          {
+            key,
+            oldestMsgTimestampMs: Number.isFinite(timestampMs)
+              ? timestampMs
+              : Date.now(),
+            count: 50,
+          },
+          chatAccountId
+        );
+        await new Promise((resolve) => window.setTimeout(resolve, 900));
+        res = await download();
+      } catch (error) {
+        lastDownloadError = error;
       }
     }
     if (!res?.mediaUrl && quiet) {

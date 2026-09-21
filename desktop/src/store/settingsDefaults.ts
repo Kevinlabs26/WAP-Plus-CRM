@@ -58,7 +58,6 @@ export interface SettingsChatFolderClone {
   sourceChatId: string;
 }
 
-export type LeadInboxStatusFilter = "pending" | "all" | "replied";
 export type LeadInboxDateGrouping = "none" | "day" | "week" | "month";
 export type LeadInboxAccountScope = "view" | "all" | "selected";
 export type LeadInboxSort = "first_contact" | "last_message" | "unread";
@@ -66,7 +65,6 @@ export type LeadInboxSort = "first_contact" | "last_message" | "unread";
 /** 主动联系智能夹子：只保存规则，成员由消息历史动态计算。 */
 export interface LeadInboxSettings {
   enabled: boolean;
-  statusFilter: LeadInboxStatusFilter;
   includeGroups: boolean;
   dateGrouping: LeadInboxDateGrouping;
   /** 0 = 不限制；否则按首次主动联系时间向前取天数。 */
@@ -77,12 +75,13 @@ export interface LeadInboxSettings {
   sort: LeadInboxSort;
   /** 可选起始时间；为空时按现有消息历史识别。 */
   captureSince: string;
+  /** 用户从智能夹子中手动移除的会话；不删除原会话和消息。 */
+  dismissedChatIds: string[];
 }
 
 export function createDefaultLeadInboxSettings(): LeadInboxSettings {
   return {
     enabled: true,
-    statusFilter: "pending",
     includeGroups: false,
     dateGrouping: "day",
     dateRangeDays: 0,
@@ -91,6 +90,7 @@ export function createDefaultLeadInboxSettings(): LeadInboxSettings {
     mergeAccounts: true,
     sort: "first_contact",
     captureSince: "",
+    dismissedChatIds: [],
   };
 }
 
@@ -390,15 +390,12 @@ export function normalizeLoadedSettings(
     const raw = merged.leadInbox && typeof merged.leadInbox === "object"
       ? merged.leadInbox
       : base;
-    const status = raw.statusFilter;
     const grouping = raw.dateGrouping;
     const scope = raw.accountScope;
     const sort = raw.sort;
     const days = Number(raw.dateRangeDays);
     merged.leadInbox = {
       enabled: raw.enabled !== false,
-      statusFilter:
-        status === "all" || status === "replied" ? status : "pending",
       includeGroups: raw.includeGroups === true,
       dateGrouping:
         grouping === "none" || grouping === "week" || grouping === "month"
@@ -415,6 +412,15 @@ export function normalizeLoadedSettings(
       sort:
         sort === "last_message" || sort === "unread" ? sort : "first_contact",
       captureSince: String(raw.captureSince || base.captureSince),
+      dismissedChatIds: Array.isArray(raw.dismissedChatIds)
+        ? [
+            ...new Set(
+              raw.dismissedChatIds
+                .map((id) => String(id || "").trim())
+                .filter(Boolean)
+            ),
+          ].slice(0, 20_000)
+        : [],
     };
   }
   {

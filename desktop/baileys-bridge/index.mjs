@@ -504,12 +504,14 @@ function snapshot() {
     })),
   });
   return {
-    contacts: outContacts
-      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-      .slice(0, 500),
-    messages: [...messages.values()]
-      .sort((a, b) => a.sentAt - b.sentAt)
-      .slice(-2000),
+    // 不要在同步快照里截断联系人。联系人/消息的完整性比单次响应大小更
+    // 重要；前端会按批处理并分页，截断会让首次同步后永远缺少旧联系人。
+    contacts: outContacts.sort(
+      (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)
+    ),
+    // 事件缓冲溢出后会依赖 /sync 补齐，不能只返回最近 2000 条，否则
+    // 历史消息会永久丢失。前端 ingest 会分片让出主线程。
+    messages: [...messages.values()].sort((a, b) => a.sentAt - b.sentAt),
   };
 }
 

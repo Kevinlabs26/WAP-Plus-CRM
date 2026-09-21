@@ -36,26 +36,13 @@ export function createMediaDownloader(deps) {
    */
   function schedule(work, opts = {}) {
     const force = Boolean(opts.force);
-    // force（手动重载）插队并允许略超并发
-    if (force) {
-      return new Promise((resolve) => {
-        mediaDownloadInFlight++;
-        void work()
-          .then(resolve)
-          .catch(() => resolve(""))
-          .finally(() => {
-            mediaDownloadInFlight = Math.max(0, mediaDownloadInFlight - 1);
-            pumpQueue();
-          });
-      });
-    }
     return new Promise((resolve) => {
-      waitQueue.push({ run: work, resolve });
-      // 队列过长时丢掉最旧的非 force 任务，避免内存爆
-      if (waitQueue.length > 80) {
-        const dropped = waitQueue.shift();
-        dropped?.resolve("");
-      }
+      // 手动重试优先，但仍然经过同一个并发队列，避免同时发起大量
+      // 下载把连接/内存打满。队列中的任务不能静默丢弃，否则图片会
+      // 永久停留在“重新尝试”状态。
+      const job = { run: work, resolve };
+      if (force) waitQueue.unshift(job);
+      else waitQueue.push(job);
       pumpQueue();
     });
   }

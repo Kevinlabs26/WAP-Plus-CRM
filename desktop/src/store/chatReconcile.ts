@@ -1,4 +1,5 @@
 import type { ChatPreview, Contact, Message } from "@/types/crm";
+import { isConversationOutgoing } from "@/lib/leadInbox";
 import { isInternalContactName } from "./contactIngestHelpers";
 
 /**
@@ -53,7 +54,9 @@ export function backfillChatPreviewFromMessages(
   const lastAt = new Map<string, string>();
   const lastBody = new Map<string, string>();
   const lastDirection = new Map<string, Message["direction"]>();
+  const chatsWithOutgoing = new Set<string>();
   for (const m of messages) {
+    if (isConversationOutgoing(m)) chatsWithOutgoing.add(m.chatId);
     if (m.mediaType === "system" || m.systemKind) continue;
     const prev = lastAt.get(m.chatId);
     if (!prev || m.sentAt >= prev) {
@@ -62,11 +65,16 @@ export function backfillChatPreviewFromMessages(
       lastDirection.set(m.chatId, m.direction);
     }
   }
-  if (!lastAt.size) return chats;
+  if (!lastAt.size && !chatsWithOutgoing.size) return chats;
   let changed = false;
   const next = chats.map((ch) => {
+    const needOutgoing = chatsWithOutgoing.has(ch.id) && !ch.hasOutgoingHistory;
     const at = lastAt.get(ch.id);
-    if (!at) return ch;
+    if (!at) {
+      if (!needOutgoing) return ch;
+      changed = true;
+      return { ...ch, hasOutgoingHistory: true };
+    }
     const body = lastBody.get(ch.id);
     const direction = lastDirection.get(ch.id);
     const needTime = !ch.updatedAt || at > ch.updatedAt;
@@ -75,13 +83,14 @@ export function backfillChatPreviewFromMessages(
       (!(ch.lastMessage || "").trim() ||
         (ch.lastMessage || "").startsWith("["));
     const needDirection = direction && ch.lastMessageDirection !== direction;
-    if (!needTime && !needBody && !needDirection) return ch;
+    if (!needTime && !needBody && !needDirection && !needOutgoing) return ch;
     changed = true;
     return {
       ...ch,
       updatedAt: needTime ? at : ch.updatedAt,
       lastMessage: needBody ? body! : ch.lastMessage,
       lastMessageDirection: needDirection ? direction : ch.lastMessageDirection,
+      hasOutgoingHistory: needOutgoing ? true : ch.hasOutgoingHistory,
     };
   });
   return changed ? next : chats;

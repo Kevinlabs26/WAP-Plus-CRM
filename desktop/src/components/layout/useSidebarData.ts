@@ -39,6 +39,7 @@ export type UseSidebarDataArgs = {
   chatSort: ChatSortMode;
   ungroupedCollapsed: boolean;
   groupFilter: GroupChatFilter;
+  collapsedLeadDateIds: ReadonlySet<string>;
 };
 
 /**
@@ -52,6 +53,7 @@ export function useSidebarData({
   chatSort,
   ungroupedCollapsed,
   groupFilter,
+  collapsedLeadDateIds,
 }: UseSidebarDataArgs) {
   const contacts = useAppStore((s) => s.contacts);
   const chats = useAppStore((s) => s.chats);
@@ -102,6 +104,7 @@ export function useSidebarData({
   const leadCandidates = useMemo(() => {
     const candidates = new Map<string, LeadCandidate>();
     if (!leadInbox.enabled) return candidates;
+    const dismissed = new Set(leadInbox.dismissedChatIds || []);
     const rangeStart =
       leadInbox.dateRangeDays > 0
         ? Date.now() - leadInbox.dateRangeDays * 24 * 60 * 60 * 1000
@@ -109,6 +112,7 @@ export function useSidebarData({
     const currentAccountId =
       viewMode.type === "account" ? viewMode.accountId : filterFallback;
     for (const chat of chats) {
+      if (dismissed.has(chat.id)) continue;
       const contact = contactById.get(chat.contactId);
       const accountId =
         chat.accountId || contact?.accountId || chat.phoneId || filterFallback;
@@ -139,8 +143,6 @@ export function useSidebarData({
       );
       if (!candidate) continue;
       if (rangeStart && Date.parse(candidate.firstInboundAt) < rangeStart) continue;
-      if (leadInbox.statusFilter === "pending" && candidate.status !== "pending") continue;
-      if (leadInbox.statusFilter === "replied" && candidate.status !== "replied") continue;
       candidates.set(chat.id, candidate);
     }
     return candidates;
@@ -156,13 +158,16 @@ export function useSidebarData({
 
   const leadDateGroupByChatId = useMemo(() => {
     const locale = normalizeLocale(uiLanguage);
-    const out = new Map<string, string>();
+    const out = new Map<string, { id: string; label: string }>();
     for (const candidate of leadCandidates.values()) {
       const bucket = leadDateBucket(candidate.firstInboundAt, leadInbox.dateGrouping);
       if (bucket) {
         out.set(
           candidate.chatId,
-          leadDateLabel(bucket, leadInbox.dateGrouping, locale)
+          {
+            id: bucket,
+            label: leadDateLabel(bucket, leadInbox.dateGrouping, locale),
+          }
         );
       }
     }
@@ -367,6 +372,7 @@ export function useSidebarData({
         leadView: chatListFilter === "leads",
         leadMergeAccounts: leadInbox.mergeAccounts,
         leadDateGroupByChatId,
+        collapsedLeadDateIds,
         contactById,
         ungroupedCollapsed,
         query,
@@ -384,6 +390,7 @@ export function useSidebarData({
       chatListFilter,
       leadDateGroupByChatId,
       leadInbox.mergeAccounts,
+      collapsedLeadDateIds,
       contactById,
       ungroupedCollapsed,
       waAccounts,

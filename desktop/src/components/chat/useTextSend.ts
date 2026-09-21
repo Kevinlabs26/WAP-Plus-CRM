@@ -1,4 +1,4 @@
-import type { MutableRefObject } from "react";
+import { useRef, type MutableRefObject } from "react";
 import type { ChannelId } from "@/channels";
 import type { AppState } from "@/store/appStore";
 import { useAppStore } from "@/store/appStore";
@@ -58,6 +58,9 @@ type UseTextSendOptions = {
  * 从 ChatPanel 抽离。返回 sendText。
  */
 export function useTextSend(opts: UseTextSendOptions) {
+  // React 的 sending 状态更新是异步的；Enter + 点击发送按钮在同一帧内
+  // 可能同时进入，导致一次输入被 enqueue 两次。
+  const sendLockRef = useRef(false);
   const resolveMessageKey = (m: Message) =>
     resolveMessageKeyFrom(
       m,
@@ -67,11 +70,13 @@ export function useTextSend(opts: UseTextSendOptions) {
 
   const sendText = async () => {
     const text = (opts.getDraft?.() ?? useAppStore.getState().draftReply).trim();
-    if (!text || opts.sending) return;
+    if (!text || opts.sending || sendLockRef.current) return;
     if (!opts.guardBlockedSend()) return;
+    sendLockRef.current = true;
 
-    // 编辑已发消息
-    if (opts.editingId) {
+    try {
+      // 编辑已发消息
+      if (opts.editingId) {
       const target =
         opts.chatMessages.find((m) => m.id === opts.editingId) ||
         useAppStore.getState().messages.find((m) => m.id === opts.editingId);
@@ -89,12 +94,12 @@ export function useTextSend(opts: UseTextSendOptions) {
         setReplyTo: opts.setReplyTo,
         pushToast: opts.pushToast,
       });
-      return;
-    }
+        return;
+      }
 
-    // 自己发消息始终跟到底部
-    opts.stickToBottom();
-    const contact = opts.activeContact;
+      // 自己发消息始终跟到底部
+      opts.stickToBottom();
+      const contact = opts.activeContact;
     // 仅 LID 客户：channelAddress 可能空，从 contact/chat id 恢复
     const recipient = resolveSendTarget({
       phone: contact?.phone,
@@ -105,26 +110,26 @@ export function useTextSend(opts: UseTextSendOptions) {
           (contact?.id || opts.selectedChatId || opts.selectedContactId)) ||
         undefined,
     });
-    if (!contact || !recipient) {
-      opts.pushToast(
-        opts.isBaileys
-          ? "当前客户没有可发送的 WhatsApp 地址（需手机号或会话 LID；可点「同步会话」后再试）"
-          : "当前客户没有电话号码",
-        "error"
-      );
-      return;
-    }
-    // 补写 channelAddress，避免下次再丢
-    if (
-      opts.isBaileys &&
-      recipient.includes("@") &&
-      !contact.channelAddress &&
-      contact.id
-    ) {
-      opts.updateContact(contact.id, { channelAddress: recipient });
-    }
+      if (!contact || !recipient) {
+        opts.pushToast(
+          opts.isBaileys
+            ? "当前客户没有可发送的 WhatsApp 地址（需手机号或会话 LID；可点「同步会话」后再试）"
+            : "当前客户没有电话号码",
+          "error"
+        );
+        return;
+      }
+      // 补写 channelAddress，避免下次再丢
+      if (
+        opts.isBaileys &&
+        recipient.includes("@") &&
+        !contact.channelAddress &&
+        contact.id
+      ) {
+        opts.updateContact(contact.id, { channelAddress: recipient });
+      }
 
-    const quoted = !opts.replyTo
+      const quoted = !opts.replyTo
       ? undefined
       : (() => {
           const qm =
@@ -143,8 +148,8 @@ export function useTextSend(opts: UseTextSendOptions) {
           };
         })();
 
-    // 未连上：本地入队，连上后由 SendQueueWatcher 冲刷
-    if (opts.isBaileys && !opts.chatConnected) {
+      // 未连上：本地入队，连上后由 SendQueueWatcher 冲刷
+      if (opts.isBaileys && !opts.chatConnected) {
       const queuedId = queueTextMessage({
         text,
         chatId: opts.selectedChatId,
@@ -170,11 +175,11 @@ export function useTextSend(opts: UseTextSendOptions) {
         });
         opts.setReplyTo(null);
       }
-      return;
-    }
+        return;
+      }
 
-    opts.setSending(true);
-    const msgId = opts.enqueueOutgoingMessage({
+      opts.setSending(true);
+      const msgId = opts.enqueueOutgoingMessage({
       body: text,
       chatId: opts.selectedChatId,
       phoneE164: recipient,
@@ -184,12 +189,12 @@ export function useTextSend(opts: UseTextSendOptions) {
       accountId: opts.chatAccountId,
       deliveryStatus: "pending",
     });
-    if (!msgId) {
-      opts.setSending(false);
-      opts.pushToast("无法发送：未选中会话", "error");
-      return;
-    }
-    if (opts.replyTo) {
+      if (!msgId) {
+        opts.setSending(false);
+        opts.pushToast("无法发送：未选中会话", "error");
+        return;
+      }
+      if (opts.replyTo) {
       opts.patchMessage(msgId, {
         quoted: {
           id: opts.replyTo.id,
@@ -197,16 +202,16 @@ export function useTextSend(opts: UseTextSendOptions) {
           fromMe: opts.replyTo.direction === "out",
         },
       });
-    }
+      }
 
-    void baileysPresence("paused", {
+      void baileysPresence("paused", {
       phoneE164: recipient.includes("@") ? undefined : recipient,
       channelAddress: recipient.includes("@") ? recipient : undefined,
       jid: recipient.includes("@") ? recipient : undefined,
       accountId: opts.chatAccountId,
-    }).catch(() => undefined);
+      }).catch(() => undefined);
 
-    const mentionedJid =
+      const mentionedJid =
       contact.isGroup || opts.activeChat?.isGroup
         ? resolveMentionsForSend(
             text,
@@ -215,7 +220,7 @@ export function useTextSend(opts: UseTextSendOptions) {
           )
         : undefined;
 
-    await sendTextMessage({
+      await sendTextMessage({
       msgId,
       text,
       recipient,
@@ -237,7 +242,10 @@ export function useTextSend(opts: UseTextSendOptions) {
       },
       setSending: opts.setSending,
       pushToast: opts.pushToast,
-    });
+      });
+    } finally {
+      sendLockRef.current = false;
+    }
   };
 
   return { sendText };

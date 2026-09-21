@@ -34,7 +34,15 @@ export type SidebarVirtItem =
       id: string;
       folderId: string;
     }
-  | { kind: "lead_date_header"; id: string; label: string }
+  | {
+      kind: "lead_date_header";
+      id: string;
+      groupId: string;
+      label: string;
+      chatIds: string[];
+      total: number;
+      collapsed: boolean;
+    }
   | {
       kind: "ungrouped_header";
       id: string;
@@ -57,7 +65,11 @@ type BuildSidebarItemsArgs = {
   folderDisplayName: (folder: ChatFolder) => string;
   leadView?: boolean;
   leadMergeAccounts?: boolean;
-  leadDateGroupByChatId?: ReadonlyMap<string, string>;
+  leadDateGroupByChatId?: ReadonlyMap<
+    string,
+    { id: string; label: string }
+  >;
+  collapsedLeadDateIds?: ReadonlySet<string>;
 };
 
 function chatHasContent(chat: ChatPreview): boolean {
@@ -97,6 +109,7 @@ export function buildSidebarItems({
   leadView = false,
   leadMergeAccounts = true,
   leadDateGroupByChatId,
+  collapsedLeadDateIds,
 }: BuildSidebarItemsArgs): SidebarVirtItem[] {
   if (listTab === "contacts") return [];
   const items: SidebarVirtItem[] = [];
@@ -111,24 +124,62 @@ export function buildSidebarItems({
             accountCount: 1,
             memberChatIds: [chat.id],
           }));
-    let previousGroup = "";
-    for (const item of displayChats) {
-      const group = leadDateGroupByChatId?.get(item.chat.id) || "";
-      if (group && group !== previousGroup) {
-        items.push({
-          kind: "lead_date_header",
-          id: `lead-date-${group}`,
-          label: group,
-        });
-        previousGroup = group;
+    const blocks: Array<{
+      group?: { id: string; label: string };
+      chats: typeof displayChats;
+    }> = [];
+    const blockByGroupId = new Map<string, (typeof blocks)[number]>();
+    for (const displayChat of displayChats) {
+      const group = leadDateGroupByChatId?.get(displayChat.chat.id);
+      if (!group) {
+        blocks.push({ chats: [displayChat] });
+        continue;
       }
+      let block = blockByGroupId.get(group.id);
+      if (!block) {
+        block = { group, chats: [] };
+        blockByGroupId.set(group.id, block);
+        blocks.push(block);
+      }
+      block.chats.push(displayChat);
+    }
+
+    for (const block of blocks) {
+      if (!block.group) {
+        const first = block.chats[0]!;
+        items.push({
+          kind: "chat",
+          id: first.chat.id,
+          chat: first.chat,
+          accountCount: first.accountCount,
+          memberChatIds: first.memberChatIds,
+        });
+        continue;
+      }
+      const group = block.group;
+      const grouped = block.chats;
+      const collapsed = collapsedLeadDateIds?.has(group.id) ?? false;
+      const chatIds = [...new Set(grouped.flatMap((item) => item.memberChatIds))];
       items.push({
-        kind: "chat",
-        id: item.chat.id,
-        chat: item.chat,
-        accountCount: item.accountCount,
-        memberChatIds: item.memberChatIds,
+        kind: "lead_date_header",
+        id: `lead-date-${group.id}`,
+        groupId: group.id,
+        label: group.label,
+        chatIds,
+        total: grouped.length,
+        collapsed,
       });
+      if (!collapsed) {
+        for (const item of grouped) {
+          items.push({
+            kind: "chat",
+            id: item.chat.id,
+            chat: item.chat,
+            accountCount: item.accountCount,
+            memberChatIds: item.memberChatIds,
+          });
+        }
+      }
     }
     if (!displayChats.length) items.push({ kind: "empty", id: "__empty" });
     return items;

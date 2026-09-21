@@ -8,6 +8,7 @@ import { pruneChatFolderRefs } from "./chatFolderCleanup";
 import { isRetryableOutgoing } from "./outgoingRetry";
 import { mergeMessagesByTime } from "./messageOrdering";
 import { setChatDraftValue } from "@/lib/chatDrafts";
+import { isConversationOutgoing } from "@/lib/leadInbox";
 
 export function createMessageActionsSlice({
   set,
@@ -75,6 +76,8 @@ export function createMessageActionsSlice({
                 ...c,
                 lastMessage: input.body,
                 lastMessageDirection: "out",
+                hasOutgoingHistory:
+                  c.hasOutgoingHistory || isConversationOutgoing(msg),
                 updatedAt: sentAt,
                 unread: 0,
               }
@@ -127,6 +130,15 @@ export function createMessageActionsSlice({
       const applied = get().patchMessage(id, patch);
       if (!applied) return;
       const next = get().messages.find((m) => m.id === id);
+      if (next && isConversationOutgoing(next)) {
+        set((state) => ({
+          chats: state.chats.map((chat) =>
+            chat.id === next.chatId && !chat.hasOutgoingHistory
+              ? { ...chat, hasOutgoingHistory: true }
+              : chat
+          ),
+        }));
+      }
       if (
         prev &&
         next &&

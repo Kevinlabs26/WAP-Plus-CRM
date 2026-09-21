@@ -46,6 +46,8 @@ export function mergeImportedContactChatDuplicates(
         archived: chat.archived || bridge.archived,
         mutedUntil: chat.mutedUntil ?? bridge.mutedUntil,
         isGroup: chat.isGroup || bridge.isGroup,
+        hasOutgoingHistory:
+          chat.hasOutgoingHistory || bridge.hasOutgoingHistory,
       };
     });
   const nextMessages = messages.map((message) => {
