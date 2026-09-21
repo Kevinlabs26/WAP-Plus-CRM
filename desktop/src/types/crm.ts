@@ -114,7 +114,7 @@ export interface ChatPreview {
   lastMessage: string;
   /** 最后一条真实消息方向，用于判断是否仍等待我回复 */
   lastMessageDirection?: "in" | "out";
-  /** 完整历史中是否有成功的我方消息；主动联系视图据此排除旧会话。 */
+  /** 完整历史中是否有成功的我方消息；按主动联系设置决定是否排除。 */
   hasOutgoingHistory?: boolean;
   unread: number;
   updatedAt: string;

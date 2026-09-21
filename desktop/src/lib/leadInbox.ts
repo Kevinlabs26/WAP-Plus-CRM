@@ -38,7 +38,12 @@ export function leadCandidateForChat(
   if (!settings.includeGroups && (chat.isGroup || contact?.isGroup)) return null;
 
   const history = meaningfulMessages(messages);
-  if (chat.hasOutgoingHistory || history.some(isConversationOutgoing)) return null;
+  if (
+    settings.removeAfterReply &&
+    (chat.hasOutgoingHistory || history.some(isConversationOutgoing))
+  ) {
+    return null;
+  }
   const first = history.find((message) => message.direction === "in");
   if (!first) return null;
 

@@ -165,6 +165,16 @@ export function LeadInboxSettingsPopover({ onClose }: Props) {
         {t("leadInbox.mergeAccounts")}
       </label>
 
+      <label className="mt-2 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 px-2 py-1.5 text-[11px] text-zinc-300">
+        <input
+          type="checkbox"
+          checked={settings.removeAfterReply}
+          onChange={(event) => patch({ removeAfterReply: event.target.checked })}
+          className="accent-emerald-500"
+        />
+        {t("leadInbox.removeAfterReply")}
+      </label>
+
       <div className="mt-2 flex items-center justify-between gap-2 border-t border-zinc-800 pt-2">
         <p className="text-[10px] leading-4 text-zinc-600">{t("leadInbox.captureHint")}</p>
         <div className="flex shrink-0 flex-col items-end gap-1">

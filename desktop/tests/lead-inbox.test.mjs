@@ -21,6 +21,7 @@ const settings = {
   selectedAccountIds: [],
   mergeAccounts: true,
   sort: "first_contact",
+  removeAfterReply: false,
   captureSince: "",
 };
 const chat = {
@@ -51,8 +52,8 @@ assert.equal(
     [inbound, { ...inbound, id: "m-2", direction: "out", sentAt: "2026-09-20T10:01:00.000Z" }],
     settings,
     "wa-a"
-  ),
-  null
+  )?.chatId,
+  "chat-1"
 );
 assert.equal(
   leadCandidateForChat(
@@ -61,8 +62,8 @@ assert.equal(
     [inbound],
     settings,
     "wa-a"
-  ),
-  null
+  )?.chatId,
+  "chat-1"
 );
 assert.equal(
   leadCandidateForChat(
@@ -76,6 +77,19 @@ assert.equal(
     "wa-a"
   )?.chatId,
   "chat-1"
+);
+assert.equal(
+  leadCandidateForChat(
+    chat,
+    undefined,
+    [
+      inbound,
+      { ...inbound, id: "m-3", direction: "out", sentAt: "2026-09-20T10:01:00.000Z" },
+    ],
+    { ...settings, removeAfterReply: true },
+    "wa-a"
+  ),
+  null
 );
 assert.equal(
   leadCandidateForChat(

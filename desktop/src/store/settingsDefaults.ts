@@ -73,6 +73,8 @@ export interface LeadInboxSettings {
   selectedAccountIds: string[];
   mergeAccounts: boolean;
   sort: LeadInboxSort;
+  /** 回复后是否自动从主动联系视图移除；默认保留，方便继续跟进。 */
+  removeAfterReply: boolean;
   /** 可选起始时间；为空时按现有消息历史识别。 */
   captureSince: string;
   /** 用户从智能夹子中手动移除的会话；不删除原会话和消息。 */
@@ -89,6 +91,7 @@ export function createDefaultLeadInboxSettings(): LeadInboxSettings {
     selectedAccountIds: [],
     mergeAccounts: true,
     sort: "first_contact",
+    removeAfterReply: false,
     captureSince: "",
     dismissedChatIds: [],
   };
@@ -411,6 +414,7 @@ export function normalizeLoadedSettings(
       mergeAccounts: raw.mergeAccounts !== false,
       sort:
         sort === "last_message" || sort === "unread" ? sort : "first_contact",
+      removeAfterReply: raw.removeAfterReply === true,
       captureSince: String(raw.captureSince || base.captureSince),
       dismissedChatIds: Array.isArray(raw.dismissedChatIds)
         ? [
