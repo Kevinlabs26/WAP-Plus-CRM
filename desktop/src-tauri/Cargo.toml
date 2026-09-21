@@ -1,6 +1,6 @@
 [package]
 name = "wap-plus-crm"
-version = "0.1.18"
+version = "0.1.19"
 description = "WAP Plus CRM — WhatsApp sales CRM desktop"
 authors = ["WAP Plus CRM"]
 edition = "2021"

@@ -76,7 +76,10 @@ export async function sendAudioMessage(
       reader.readAsDataURL(file);
     });
     const sourceSeconds = await readAudioSeconds(file);
-    const isLongAudio = sourceSeconds > 600;
+    // Audio selected from the attachment picker is a regular audio file, not
+    // a recorded voice note. Only finishVoiceRecording sends PTT messages.
+    // Keeping this false also preserves the native WhatsApp headphone-player
+    // UI for short files instead of turning them into voice bars.
     const caption = captionOverride?.trim() || "";
     msgId = deps.enqueueOutgoingMessage({
       body: caption || `[音频] ${file.name}`,
@@ -91,7 +94,7 @@ export async function sendAudioMessage(
       mediaType: "audio",
       mediaUrl: dataUrl,
       mediaMime: file.type || "audio/mp4",
-      mediaPtt: !isLongAudio,
+      mediaPtt: false,
       mediaSeconds: sourceSeconds || undefined,
       mediaCaption: caption || undefined,
     });
@@ -102,7 +105,7 @@ export async function sendAudioMessage(
           () =>
             baileysSendVoice(recipient, dataUrl, {
               mimetype: file.type || "audio/mp4",
-              ptt: !isLongAudio,
+              ptt: false,
               seconds: sourceSeconds || undefined,
               accountId: deps.chatAccountId,
             })
