@@ -98,13 +98,11 @@ export function runFfmpegToOggOpus(inputPath, outputPath, maxSeconds) {
       "on",
       "-application",
       "voip",
-      "-f",
-      "ogg",
-      outputPath,
     ];
   if (Number.isFinite(maxSeconds) && maxSeconds > 0) {
-    args.splice(args.length - 2, 0, "-t", String(maxSeconds));
+    args.push("-t", String(maxSeconds));
   }
+  args.push("-f", "ogg", outputPath);
   return runFfmpeg(
     args,
     {

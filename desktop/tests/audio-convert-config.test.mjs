@@ -11,6 +11,8 @@ assert.match(source, /parsed\.buf\.length > 14_000_000/);
 assert.match(source, /"-b:a",\s*"64k"/);
 assert.match(source, /MAX_WHATSAPP_AUDIO_SECONDS\s*=\s*600/);
 assert.match(source, /maxSeconds/);
+assert.doesNotMatch(source, /args\.splice/);
+assert.match(source, /args\.push\("-t", String\(maxSeconds\)\)[\s\S]*args\.push\("-f", "ogg", outputPath\)/);
 assert.match(source, /new Uint8Array\(64\)/);
 assert.match(source, /waveform/);
 
