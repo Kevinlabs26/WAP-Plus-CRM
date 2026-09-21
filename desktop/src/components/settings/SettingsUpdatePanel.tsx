@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Download, RefreshCw, ShieldCheck } from "lucide-react";
 import { Button, SectionLabel } from "@/components/ui/primitives";
 import { useAppStore } from "@/store/appStore";
@@ -19,6 +19,7 @@ export function SettingsUpdatePanel() {
   const [status, setStatus] = useState(() => t("updates.notChecked"));
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
+  const autoChecked = useRef(false);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -47,6 +48,12 @@ export function SettingsUpdatePanel() {
       setBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (autoChecked.current) return;
+    autoChecked.current = true;
+    void checkNow();
+  }, []);
 
   const install = async () => {
     if (!update) return;

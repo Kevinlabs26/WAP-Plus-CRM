@@ -169,7 +169,7 @@ export function persist(
   get: () => AppState,
   immediate = false,
   debounceMs = PERSIST_DEBOUNCE_MS
-) {
+): Promise<void> | undefined {
   // hydrate 前禁止写盘，防止空白初始 state 覆盖本地库
   if (!get().hydrated) return;
   const state = get();
@@ -184,15 +184,16 @@ export function persist(
       : undefined;
     persistedRefs = captureRefs(state);
     pendingDirty = noDirty();
-    void saveAppState(
+    const savePromise = saveAppState(
       buildPersistSlice(
         () => state,
         allDirty(),
         state.messages,
         messageDelta?.deletedIds
       )
-    ).catch((error) => reportPersistError(get, error));
-    return;
+    );
+    void savePromise.catch((error) => reportPersistError(get, error));
+    return savePromise;
   }
   if (persistTimer) clearTimeout(persistTimer);
   const run = () => {
@@ -228,7 +229,7 @@ export function persist(
 
 /** 关键路径立即落盘（清空数据、导出前等） */
 export function flushPersist(get: () => AppState) {
-  persist(get, true);
+  return persist(get, true) || Promise.resolve();
 }
 
 export function accountCreatedAtOf(settings: AppSettings, accountId: string): string | null {

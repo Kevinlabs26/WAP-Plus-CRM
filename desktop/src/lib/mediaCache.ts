@@ -25,7 +25,18 @@ export type MediaCacheIndex = Record<
   { chars: number; cachedAt: number }
 >;
 
+export type MediaCacheStats = {
+  items: number;
+  chars: number;
+  limitChars: number;
+};
+
 let mediaMutation = Promise.resolve();
+
+/** 等待已排队的媒体缓存写入完成，再提交消息游标/快照。 */
+export function waitForMediaCacheWrites(): Promise<void> {
+  return mediaMutation;
+}
 
 function runMediaMutation(task: () => Promise<void>): Promise<void> {
   const next = mediaMutation.then(task, task);
@@ -70,6 +81,22 @@ async function loadMediaIndex(): Promise<MediaCacheIndex> {
     };
   }
   return index;
+}
+
+export async function getMediaCacheStats(): Promise<MediaCacheStats> {
+  try {
+    const index = await loadMediaIndex();
+    return {
+      items: Object.keys(index).length,
+      chars: Object.values(index).reduce(
+        (sum, entry) => sum + Math.max(0, entry.chars || 0),
+        0
+      ),
+      limitChars: MEDIA_CACHE_MAX_CHARS,
+    };
+  } catch {
+    return { items: 0, chars: 0, limitChars: MEDIA_CACHE_MAX_CHARS };
+  }
 }
 
 /** bridge 的原始消息 id 转成前端实际保存的消息 id。 */

@@ -77,9 +77,7 @@ export function MessageMediaMenuActions({
             onClick={() => {
               void copyImageToClipboard(message.mediaUrl!)
                 .then(() => pushToast(t("messageMenu.imageCopied"), "success"))
-                .catch((error) =>
-                  pushToast(error instanceof Error ? error.message : t("messageMenu.copyImageFailed"), "error")
-                )
+                .catch(() => pushToast(t("messageMenu.copyImageFailed"), "error"))
                 .finally(onClose);
             }}
           >

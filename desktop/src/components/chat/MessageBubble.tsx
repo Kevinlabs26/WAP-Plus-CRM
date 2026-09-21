@@ -294,15 +294,22 @@ export const MessageBubble = memo(function MessageBubble({
           ? "delivered"
           : "sent"
       : null;
-  const localizedLastError = m.lastError
-    ? m.lastError === "等待 WhatsApp 连接"
-      ? t("runtime.queueWaitingConnection")
-      : m.lastError === "原发送账号不存在"
-        ? t("runtime.originalAccountMissing")
-        : m.lastError === "发送失败"
-          ? t("runtime.sendFailed")
-          : m.lastError
-    : "";
+  const localizedLastError = (() => {
+    const error = m.lastError || "";
+    if (!error) return "";
+    if (error === "等待 WhatsApp 连接") return t("runtime.queueWaitingConnection");
+    if (error === "原发送账号不存在") return t("runtime.originalAccountMissing");
+    if (error === "发送失败") return t("runtime.sendFailed");
+    const globalCooldown = error.match(/多号全局冷却中，请 (\d+)s/);
+    if (globalCooldown) return t("runtime.globalCooldown", { wait: globalCooldown[1] });
+    const tooFast = error.match(/发送过快，请 (\d+)s/);
+    if (tooFast) return t("runtime.sendTooFast", { wait: tooFast[1] });
+    const perMinute = error.match(/已达每分钟上限（(\d+) 条\/分钟）/);
+    if (perMinute) return t("runtime.perMinuteLimit", { limit: perMinute[1] });
+    const perHour = error.match(/已达每小时上限（(\d+) 条\/小时）/);
+    if (perHour) return t("runtime.perHourLimit", { limit: perHour[1] });
+    return error;
+  })();
   const mediaKind = inferMediaType(m);
   const hasUsableTranslation = Boolean(
     m.translation &&
@@ -728,7 +735,7 @@ export const MessageBubble = memo(function MessageBubble({
                 <span className="text-2xs font-medium opacity-70">
                   {m.translationLang === "zh"
                     ? t("messageBubble.translatedZh")
-                    : `译文（${String(m.translationLang || "").toUpperCase()}）`}
+                    : `${t("tooltip.translatedText")} (${String(m.translationLang || "").toUpperCase()})`}
                 </span>
                 <div className="whitespace-pre-wrap break-words text-zinc-400">
                   {m.translation}

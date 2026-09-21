@@ -4,7 +4,11 @@ import {
   baileysSync,
 } from "@/lib/baileys";
 import { bridgeInvoke } from "@/lib/bridge";
-import { cacheMediaUrl, readMediaCache } from "@/lib/mediaCache";
+import {
+  bridgeMessageMediaCacheId,
+  cacheMediaUrl,
+  readMediaCache,
+} from "@/lib/mediaCache";
 import type { AppState } from "@/store/appStore";
 import type { Message } from "@/types/crm";
 import {
@@ -72,7 +76,18 @@ export async function reloadMedia({
 }: ReloadMediaActionDeps) {
   if (quiet) pushToast = () => undefined;
   const mediaCacheId = sourceMessage.id;
-  const cached = await readMediaCache(mediaCacheId);
+  const cacheIds = [
+    mediaCacheId,
+    sourceMessage.waMessageId,
+    sourceMessage.waKey?.id
+      ? bridgeMessageMediaCacheId(sourceMessage.waKey.id, chatAccountId)
+      : "",
+  ].filter((id, index, all): id is string => Boolean(id) && all.indexOf(id) === index);
+  let cached: string | undefined;
+  for (const cacheId of cacheIds) {
+    cached = await readMediaCache(cacheId);
+    if (cached) break;
+  }
   if (cached) {
     updateMessageDelivery(message.id, {
       mediaUrl: cached,
@@ -123,6 +138,8 @@ export async function reloadMedia({
   mediaInFlight.add(message.id);
   updateMessageDelivery(message.id, { mediaError: undefined });
   if (!quiet) setMediaBusyId(message.id);
+  // Limit the first download too. Acquiring after the initial request allowed
+  // every visible media item to start a network fetch at the same time.
   const releaseQuietSlot = quiet
     ? await acquireQuietMediaSlot()
     : () => undefined;
@@ -216,7 +233,9 @@ export async function reloadMedia({
       mediaPending: false,
       mediaError: undefined,
     });
-    await cacheMediaUrl(mediaCacheId, res.mediaUrl);
+    for (const cacheId of cacheIds) {
+      await cacheMediaUrl(cacheId, res.mediaUrl);
+    }
     pushToast(
       message.mediaType === "video" || inferMediaType(message) === "video"
         ? translateCurrent("runtime.videoLoaded")

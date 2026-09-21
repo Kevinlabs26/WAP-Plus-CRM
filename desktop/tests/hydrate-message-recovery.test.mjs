@@ -21,6 +21,12 @@ test("same protocol ID is deduplicated only within the same account", () => {
   assert.equal(cleanHydratedMessages([message, { ...message, accountId: "b" }]).length, 2);
 });
 
+test("inbound protocol aliases are also deduplicated after restart", () => {
+  const inbound = { ...message, direction: "in", id: "local-inbound", waMessageId: "wa-inbound" };
+  const echo = { ...inbound, id: "bridge-copy", waKey: { id: "wa-inbound" } };
+  assert.equal(cleanHydratedMessages([inbound, echo]).length, 1);
+});
+
 test("waKey-only local echoes are merged after restart", () => {
   const local = {
     ...message,

@@ -174,7 +174,7 @@ export function triggerMediaDownload(url: string, filename: string) {
 }
 
 export async function copyImageToClipboard(url: string): Promise<void> {
-  const response = await fetch(url);
+  const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
   if (!response.ok) throw new Error("图片读取失败");
   const source = await response.blob();
   let image = source;

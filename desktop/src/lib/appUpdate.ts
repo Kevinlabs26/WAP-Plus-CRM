@@ -1,8 +1,20 @@
 import { bridgeInvoke, isTauri } from "@/lib/bridge";
 
-export type AppUpdate = Awaited<ReturnType<typeof checkForAppUpdate>>;
+type UpdateDownloadEvent =
+  | { event: "Started"; data?: { contentLength?: number } }
+  | { event: "Progress"; data?: { chunkLength?: number } }
+  | { event: "Finished"; data?: Record<string, never> };
+
+export type AppUpdate = {
+  version: string;
+  download: (
+    onEvent?: (event: UpdateDownloadEvent) => void
+  ) => Promise<void>;
+  install: (options: { restartAfterInstall: boolean }) => Promise<void>;
+} | null;
 
 export const PENDING_UPDATE_STORAGE_KEY = "wap-plus.pending-update";
+let updateCheckInFlight: Promise<AppUpdate> | null = null;
 
 function rememberPendingUpdate(version: string) {
   if (typeof window === "undefined") return;
@@ -12,10 +24,18 @@ function rememberPendingUpdate(version: string) {
   );
 }
 
-export async function checkForAppUpdate() {
+export async function checkForAppUpdate(): Promise<AppUpdate> {
   if (!isTauri()) return null;
-  const { check } = await import("@tauri-apps/plugin-updater");
-  return check({ timeout: 12_000 });
+  if (updateCheckInFlight) return updateCheckInFlight;
+  updateCheckInFlight = (async () => {
+    const { check } = await import("@tauri-apps/plugin-updater");
+    return check({ timeout: 12_000 });
+  })();
+  try {
+    return await updateCheckInFlight;
+  } finally {
+    updateCheckInFlight = null;
+  }
 }
 
 export async function installAppUpdate(
@@ -27,10 +47,10 @@ export async function installAppUpdate(
   await update.download((event) => {
     if (event.event === "Started") {
       downloaded = 0;
-      total = event.data.contentLength;
+      total = event.data?.contentLength;
       onProgress?.(0, total);
     } else if (event.event === "Progress") {
-      downloaded += event.data.chunkLength;
+      downloaded += event.data?.chunkLength || 0;
       onProgress?.(downloaded, total);
     } else if (event.event === "Finished") {
       onProgress?.(total ?? downloaded, total);

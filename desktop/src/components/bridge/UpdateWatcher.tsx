@@ -14,16 +14,22 @@ export function UpdateWatcher() {
 
   useEffect(() => {
     let cancelled = false;
+    const notifiedVersion = { current: "" };
     const check = () => {
       void checkForAppUpdate()
         .then((update) => {
           if (cancelled) return;
           setUpdateAvailableVersion(update?.version || null);
           if (update) {
-            pushToast(t("updates.found", { version: update.version }), "info");
+            if (notifiedVersion.current !== update.version) {
+              notifiedVersion.current = update.version;
+              pushToast(t("updates.found", { version: update.version }), "info");
+            }
+          } else {
+            notifiedVersion.current = "";
           }
         })
-        .catch((error) => {
+        .catch((error: unknown) => {
           console.warn("[updater] automatic check failed", error);
         });
     };

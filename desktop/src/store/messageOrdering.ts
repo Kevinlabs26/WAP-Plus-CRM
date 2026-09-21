@@ -23,10 +23,25 @@ export function mergeMessagesByTime(
     (message) => !isHiddenProtocolMessageBody(message.body)
   );
   if (!added.length) return kept.length === existing.length ? existing : kept;
-  const seen = new Set(kept.map((message) => message.id));
+  const seen = new Set<string>();
+  const addIdentity = (message: Message) => {
+    const owner = message.accountId || message.deviceId || "";
+    for (const value of [
+      message.id,
+      message.waMessageId,
+      message.waKey?.id,
+    ]) {
+      if (value) seen.add(`${owner}\u0000${value}`);
+    }
+  };
+  kept.forEach(addIdentity);
   const unique = added.filter((message) => {
-    if (seen.has(message.id)) return false;
-    seen.add(message.id);
+    const owner = message.accountId || message.deviceId || "";
+    const identities = [message.id, message.waMessageId, message.waKey?.id]
+      .filter(Boolean)
+      .map((value) => `${owner}\u0000${value}`);
+    if (identities.some((value) => seen.has(value))) return false;
+    identities.forEach((value) => seen.add(value));
     return true;
   });
   if (!unique.length) return kept.length === existing.length ? existing : kept;

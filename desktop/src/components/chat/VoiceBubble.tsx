@@ -161,7 +161,7 @@ export function VoiceBubble({
               <span className="text-2xs font-semibold tracking-wide text-brand">
                 {translationLang === "zh"
                   ? t("voice.translationZh")
-                  : `译文 (${String(translationLang || "").toUpperCase()})`}
+                  : `${t("tooltip.translatedText")} (${String(translationLang || "").toUpperCase()})`}
               </span>
             </div>
             <div className="leading-relaxed">{translation}</div>
@@ -263,9 +263,9 @@ export function VoiceBubble({
             <div className="leading-relaxed text-zinc-100">
               <div className="mb-1.5 flex items-center justify-between">
                 <span className="text-2xs font-semibold tracking-wide text-brand">
-                  {translationLang === "zh"
-                    ? t("voice.translationZh")
-                    : `译文 (${String(translationLang || "").toUpperCase()})`}
+                {translationLang === "zh"
+                  ? t("voice.translationZh")
+                  : `${t("tooltip.translatedText")} (${String(translationLang || "").toUpperCase()})`}
                 </span>
               </div>
               <div className="leading-relaxed">{translation}</div>

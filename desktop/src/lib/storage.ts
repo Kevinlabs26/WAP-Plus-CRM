@@ -8,10 +8,12 @@
 
 import {
   clearAppState as idbClear,
+  idbDelPrefix,
   loadAppState as idbLoad,
   saveAppState as idbSave,
 } from "@/lib/idb";
 import { isTauri } from "@/lib/bridge";
+import { clearMediaCache } from "@/lib/mediaCache";
 
 export type StorageEngine = "sqlite" | "idb" | "none";
 
@@ -483,6 +485,9 @@ async function clearAppStateNow(): Promise<void> {
     await tryInvoke("db_clear");
   }
   await idbClear();
+  // 应用数据清空应包含下载媒体和未发送附件草稿，避免重置后磁盘仍留旧文件。
+  await clearMediaCache();
+  await idbDelPrefix("composer-media:");
   lastSavedWeight = 0;
   lastSavedMsgCount = 0;
   lastSavedChatCount = 0;

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ClipboardEvent } from "react";
+import { idbDel, idbGet, idbSet } from "@/lib/idb";
 import type {
   PendingMediaItem,
   PendingMediaKind,
@@ -19,6 +20,105 @@ type UseComposerMediaOptions = {
   onStageMedia?: () => void;
 };
 
+// Composer may be remounted when the chat pane changes mode. Keep staged File
+// objects at module scope so a remount in the same app session does not lose
+// attachments before the user presses send.
+const savedMediaByChat = new Map<
+  string,
+  { items: PendingMediaItem[]; caption: string }
+>();
+const MAX_SAVED_MEDIA_CHATS = 20;
+const PENDING_MEDIA_KEY_PREFIX = "composer-media:";
+const MAX_PERSISTED_MEDIA_BYTES = 128 * 1024 * 1024;
+
+type PersistedMediaDraft = {
+  caption: string;
+  items: Array<{
+    id: string;
+    kind: PendingMediaKind;
+    name: string;
+    type: string;
+    lastModified: number;
+    blob: Blob;
+  }>;
+};
+
+const pendingMediaKey = (chatKey: string) =>
+  `${PENDING_MEDIA_KEY_PREFIX}${encodeURIComponent(chatKey)}`;
+
+async function persistMediaDraft(
+  chatKey: string,
+  items: PendingMediaItem[],
+  caption: string
+) {
+  if (!items.length && !caption) {
+    await idbDel(pendingMediaKey(chatKey));
+    return;
+  }
+  const totalBytes = items.reduce((sum, item) => sum + item.file.size, 0);
+  if (totalBytes > MAX_PERSISTED_MEDIA_BYTES) {
+    // Keep the live in-memory draft, but avoid turning a large attachment into
+    // a hidden database copy that can unexpectedly exhaust local storage.
+    await idbDel(pendingMediaKey(chatKey));
+    return;
+  }
+  await idbSet(pendingMediaKey(chatKey), {
+    caption,
+    items: items.map((item) => ({
+      id: item.id,
+      kind: item.kind,
+      name: item.file.name,
+      type: item.file.type,
+      lastModified: item.file.lastModified,
+      blob: item.file,
+    })),
+  } satisfies PersistedMediaDraft);
+}
+
+async function loadMediaDraft(chatKey: string): Promise<{
+  items: PendingMediaItem[];
+  caption: string;
+} | null> {
+  try {
+    const saved = await idbGet<PersistedMediaDraft>(pendingMediaKey(chatKey));
+    if (!saved?.items?.length && !saved?.caption) return null;
+    const items = (saved.items || []).flatMap((item) => {
+      if (!item?.blob || !item.id || !item.name) return [];
+      const file = new File([item.blob], item.name, {
+        type: item.type || item.blob.type || "application/octet-stream",
+        lastModified: item.lastModified || Date.now(),
+      });
+      return [{
+        id: item.id,
+        kind: item.kind,
+        file,
+        previewUrl: file.type.startsWith("image/")
+          ? URL.createObjectURL(file)
+          : undefined,
+      } satisfies PendingMediaItem];
+    });
+    return { items, caption: saved.caption || "" };
+  } catch {
+    return null;
+  }
+}
+
+function rememberSavedMedia(
+  chatKey: string,
+  items: PendingMediaItem[],
+  caption: string
+) {
+  savedMediaByChat.delete(chatKey);
+  savedMediaByChat.set(chatKey, { items, caption });
+  while (savedMediaByChat.size > MAX_SAVED_MEDIA_CHATS) {
+    const oldestKey = savedMediaByChat.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    const oldest = savedMediaByChat.get(oldestKey);
+    oldest?.items.forEach((item) => item.previewUrl && URL.revokeObjectURL(item.previewUrl));
+    savedMediaByChat.delete(oldestKey);
+  }
+}
+
 /**
  * 附件/媒体暂存 + 发送：独立管理 pendingMedia 列表、预览 URL 生命周期与发送进度，
  * 从 Composer 抽离以缩小组件体积。
@@ -36,14 +136,19 @@ export function useComposerMedia(opts: UseComposerMediaOptions) {
     onSendFile,
     onStageMedia,
   } = opts;
-  const [pendingMedia, setPendingMedia] = useState<PendingMediaItem[]>([]);
-  const [mediaCaption, setMediaCaption] = useState("");
+  const initialSaved = savedMediaByChat.get(chatKey);
+  const [pendingMedia, setPendingMedia] = useState<PendingMediaItem[]>(
+    () => initialSaved?.items || []
+  );
+  const [mediaCaption, setMediaCaption] = useState(
+    () => initialSaved?.caption || ""
+  );
   const [mediaSendingIndex, setMediaSendingIndex] = useState(-1);
   const pendingMediaRef = useRef<PendingMediaItem[]>([]);
   const mediaCaptionRef = useRef("");
   const activeChatKeyRef = useRef(chatKey);
-  const savedMediaByChatRef = useRef(
-    new Map<string, { items: PendingMediaItem[]; caption: string }>()
+  const persistTimersRef = useRef(
+    new Map<string, ReturnType<typeof setTimeout>>()
   );
 
   const isAudioFile = (file: File) => {
@@ -59,15 +164,31 @@ export function useComposerMedia(opts: UseComposerMediaOptions) {
     mediaCaptionRef.current = mediaCaption;
   }, [mediaCaption]);
 
+  const schedulePersist = (
+    key: string,
+    items: PendingMediaItem[],
+    caption: string
+  ) => {
+    const previous = persistTimersRef.current.get(key);
+    if (previous) clearTimeout(previous);
+    const timer = setTimeout(() => {
+      persistTimersRef.current.delete(key);
+      void persistMediaDraft(key, items, caption).catch(() => undefined);
+    }, 250);
+    persistTimersRef.current.set(key, timer);
+  };
+
   const saveCurrentMedia = (
     items = pendingMediaRef.current,
     caption = mediaCaptionRef.current
   ) => {
     if (!activeChatKeyRef.current) return;
     if (items.length || caption) {
-      savedMediaByChatRef.current.set(activeChatKeyRef.current, { items, caption });
+      rememberSavedMedia(activeChatKeyRef.current, items, caption);
+      schedulePersist(activeChatKeyRef.current, items, caption);
     } else {
-      savedMediaByChatRef.current.delete(activeChatKeyRef.current);
+      savedMediaByChat.delete(activeChatKeyRef.current);
+      schedulePersist(activeChatKeyRef.current, [], "");
     }
   };
 
@@ -78,9 +199,44 @@ export function useComposerMedia(opts: UseComposerMediaOptions) {
   };
 
   useEffect(() => {
+    let cancelled = false;
+    if (!savedMediaByChat.has(chatKey)) {
+      void loadMediaDraft(chatKey).then((restored) => {
+        if (
+          cancelled ||
+          !restored ||
+          activeChatKeyRef.current !== chatKey ||
+          pendingMediaRef.current.length
+        ) {
+          restored?.items.forEach(
+            (item) => item.previewUrl && URL.revokeObjectURL(item.previewUrl)
+          );
+          return;
+        }
+        rememberSavedMedia(chatKey, restored.items, restored.caption);
+        pendingMediaRef.current = restored.items;
+        mediaCaptionRef.current = restored.caption;
+        setPendingMedia(restored.items);
+        setMediaCaption(restored.caption);
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [chatKey]);
+
+  useEffect(() => () => {
+    void persistMediaDraft(
+      activeChatKeyRef.current,
+      pendingMediaRef.current,
+      mediaCaptionRef.current
+    ).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
     if (activeChatKeyRef.current === chatKey) return;
     saveCurrentMedia();
-    const next = savedMediaByChatRef.current.get(chatKey);
+    const next = savedMediaByChat.get(chatKey);
     activeChatKeyRef.current = chatKey;
     pendingMediaRef.current = next?.items || [];
     mediaCaptionRef.current = next?.caption || "";
@@ -88,20 +244,6 @@ export function useComposerMedia(opts: UseComposerMediaOptions) {
     setMediaCaption(mediaCaptionRef.current);
     setMediaSendingIndex(-1);
   }, [chatKey]);
-
-  useEffect(
-    () => () => {
-      const allItems = new Set<PendingMediaItem>();
-      pendingMediaRef.current.forEach((item) => allItems.add(item));
-      savedMediaByChatRef.current.forEach(({ items }) =>
-        items.forEach((item) => allItems.add(item))
-      );
-      allItems.forEach(
-        (item) => item.previewUrl && URL.revokeObjectURL(item.previewUrl)
-      );
-    },
-    []
-  );
 
   const stageMedia = (
     list: FileList | File[] | null | undefined,

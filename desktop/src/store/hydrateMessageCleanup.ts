@@ -1,5 +1,5 @@
 import type { Message } from "@/types/crm";
-import { isHiddenProtocolMessageBody } from "./messageOrdering";
+import { isHiddenProtocolMessageBody, mergeMessagesByTime } from "./messageOrdering";
 
 export function cleanHydratedMessages(rawMessages: Message[]) {
   const messages: Message[] = [];
@@ -68,7 +68,9 @@ export function cleanHydratedMessages(rawMessages: Message[]) {
     candidates.push({ message, resultIndex: messages.length - 1 });
     outgoingByChatAndBody.set(bucketKey, candidates);
   }
-  return messages;
+  // 旧版本可能已经把同一条协议消息以不同本地 id 写入数据库。
+  // 启动时统一按 account + id/waMessageId/waKey.id 再合并一次，避免历史重复重新出现。
+  return mergeMessagesByTime([], messages);
 }
 
 /** 请求可能已到达 WhatsApp；重启后不能把结果未知的消息自动再发一次。 */

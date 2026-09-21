@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "@/store/appStore";
 import { Button, SectionLabel } from "@/components/ui/primitives";
 import { getDbInfo, getStorageEngine, resolveStorageEngine } from "@/lib/storage";
-import { clearMediaCache } from "@/lib/mediaCache";
+import { clearMediaCache, getMediaCacheStats, type MediaCacheStats } from "@/lib/mediaCache";
 import { findInactiveChats } from "@/lib/inactiveChatCleanup";
 import { ContactImportModal } from "./ContactImportModal";
 import { useI18n } from "@/i18n";
@@ -18,6 +18,7 @@ export function SettingsDataPanel() {
   const [dbLabel, setDbLabel] = useState("");
   const [importing, setImporting] = useState(false);
   const [clearingMedia, setClearingMedia] = useState(false);
+  const [mediaCacheStats, setMediaCacheStats] = useState<MediaCacheStats | null>(null);
   const [clearingData, setClearingData] = useState(false);
   const [releasingHistory, setReleasingHistory] = useState(false);
   const [releaseDays, setReleaseDays] = useState(90);
@@ -53,8 +54,14 @@ export function SettingsDataPanel() {
       } else {
         setDbLabel(t("settingsData.indexedDb"));
       }
+      setMediaCacheStats(await getMediaCacheStats());
     })();
   }, [t]);
+
+  const formatCacheSize = (chars: number) => {
+    const mb = chars / (1024 * 1024);
+    return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(1)} MB`;
+  };
 
   const onPickImport = async (file: File | null) => {
     if (!file) return;
@@ -236,6 +243,15 @@ export function SettingsDataPanel() {
         <p className="mt-2 text-[11px] leading-5 text-zinc-500">
           {t("settingsData.mediaDescription")}
         </p>
+        <p className="mt-2 text-2xs text-zinc-500">
+          {mediaCacheStats
+            ? t("settingsData.mediaUsage", {
+                used: formatCacheSize(mediaCacheStats.chars),
+                limit: formatCacheSize(mediaCacheStats.limitChars),
+                items: mediaCacheStats.items,
+              })
+            : t("settingsData.checking")}
+        </p>
         <Button
           variant="secondary"
           size="sm" className="mt-3 text-2xs"
@@ -252,6 +268,7 @@ export function SettingsDataPanel() {
               setClearingMedia(true);
               try {
                 const count = await clearMediaCache();
+                setMediaCacheStats(await getMediaCacheStats());
                 pushToast(t("settingsData.mediaCleared", { count }), "success");
               } catch (e) {
                 pushToast(e instanceof Error ? e.message : t("settingsData.mediaClearFailed"), "error");

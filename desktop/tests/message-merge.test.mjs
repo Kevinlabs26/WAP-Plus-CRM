@@ -16,6 +16,26 @@ test("mergeMessagesByTime inserts history in order and skips duplicates", () => 
   assert.equal(mergeMessagesByTime(existing, [existing[0]]), existing);
 });
 
+test("mergeMessagesByTime skips protocol aliases for the same message", () => {
+  const existing = [{
+    id: "msg-local-1",
+    accountId: "account-1",
+    deviceId: "account-1",
+    body: "hello",
+    sentAt: "2026-09-22T10:00:00.000Z",
+    waMessageId: "wa-1",
+  }];
+  const merged = mergeMessagesByTime(existing, [{
+    id: "bridge-msg-1",
+    accountId: "account-1",
+    deviceId: "account-1",
+    body: "hello",
+    sentAt: "2026-09-22T10:00:00.000Z",
+    waKey: { id: "wa-1" },
+  }]);
+  assert.equal(merged.length, 1);
+});
+
 test("mergeMessagesByTime drops secret protocol placeholders", () => {
   const hidden = { ...message("hidden", "2026-01-03"), body: "[secretEncrypted]" };
   assert.deepEqual(mergeMessagesByTime([hidden], []), []);

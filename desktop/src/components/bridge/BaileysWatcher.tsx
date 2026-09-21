@@ -10,7 +10,9 @@ import { notifyGroupJoinRequests } from "@/lib/groupJoinNotify";
 import { syncLog } from "@/lib/syncDebug";
 import { isComposerTypingBusy } from "@/lib/composerActivity";
 import { useAppStore } from "@/store/appStore";
-import { persist } from "@/store/persist";
+import { flushPersist, persist } from "@/store/persist";
+import { useI18n } from "@/i18n";
+import { waitForMediaCacheWrites } from "@/lib/mediaCache";
 import type { BridgeEvent } from "@/lib/bridge";
 import {
   extractAccountHumanName,
@@ -53,6 +55,17 @@ const LABELS_REFRESH_MS = 300_000;
 const MAX_ACCOUNTS_PER_TICK = 2;
 /** 连续失败这么多次才把 UI 标成断开 */
 const FAIL_DEMOTE_AFTER = 3;
+const DURABLE_EVENT_TYPES = new Set([
+  "messages.sync",
+  "messages.delete",
+  "messages.ack",
+  "contacts.sync",
+  "chats.delete",
+]);
+
+function hasDurableEvents(events: BridgeEvent[]) {
+  return events.some((event) => DURABLE_EVENT_TYPES.has(event.type));
+}
 
 function readCursor(accountId: string): number {
   try {
@@ -122,6 +135,7 @@ function emptyRt(): AcctRuntime {
  * baileysUi 仍展示「直播槽」状态（扫码 UI）；其它号在后台收事件入库。
  */
 export function BaileysWatcher() {
+  const { t } = useI18n();
   const enabled = useAppStore(
     (state) => state.settings.sendChannel !== "android_bridge"
   );
@@ -146,7 +160,29 @@ export function BaileysWatcher() {
     let ingestIdle: number | null = null;
     let ingestDelayTimer: number | null = null;
     let ingestQueue: BridgeEvent[][] = [];
+    // 只在消息真正交给 store 后持久化游标；应用在排队期间退出时，旧游标会让下次启动重新拉取。
+    const pendingCursorByAccount = new Map<string, number>();
     const INGEST_CHUNK_SIZE = 4;
+
+    const commitPendingCursors = () => {
+      if (!pendingCursorByAccount.size || !useAppStore.getState().hydrated) return;
+      const cursorSnapshot = new Map(pendingCursorByAccount);
+      void Promise.all([
+        waitForMediaCacheWrites(),
+        flushPersist(() => useAppStore.getState()),
+      ])
+        .then(() => {
+          for (const [accountId, cursor] of cursorSnapshot) {
+            // Newer events may have arrived while SQLite was saving; keep
+            // their cursor pending until the next durable snapshot.
+            if (pendingCursorByAccount.get(accountId) === cursor) {
+              writeCursor(accountId, cursor);
+              pendingCursorByAccount.delete(accountId);
+            }
+          }
+        })
+        .catch(() => undefined);
+    };
 
     const hasPendingUserInput = () => {
       try {
@@ -205,12 +241,20 @@ export function BaileysWatcher() {
       }
       if (merged.length) {
         ingest(merged);
+        if (!ingestQueue.length && pendingCursorByAccount.size) {
+          if (!useAppStore.getState().hydrated) {
+            scheduleIngestPump();
+            return;
+          }
+          commitPendingCursors();
+        }
         // 合并过程中用户开始打字：剩余批次等下一个空闲片再处理
         if (isComposerTypingBusy()) {
           scheduleIngestPump();
           return;
         }
       }
+      if (!merged.length && !ingestQueue.length) commitPendingCursors();
       if (ingestQueue.length) scheduleIngestPump();
     };
 
@@ -782,7 +826,17 @@ export function BaileysWatcher() {
           } else {
             r.cursor = result.cursor;
           }
-          writeCursor(accountId, r.cursor);
+          if (result.events.length && hasDurableEvents(result.events)) {
+            pendingCursorByAccount.set(
+              accountId,
+              Math.max(pendingCursorByAccount.get(accountId) || 0, r.cursor)
+            );
+          } else if (result.events.length) {
+            // Presence/status-only events do not represent durable CRM data.
+            writeCursor(accountId, r.cursor);
+          } else {
+            writeCursor(accountId, r.cursor);
+          }
         }
 
         if (result.events.length) {
@@ -827,9 +881,9 @@ export function BaileysWatcher() {
             if ((ev as { type?: string }).type === "history.sync_status") {
               const p = (ev as { payload?: { status?: string } }).payload || {};
               const st = String(p.status || "");
-              if (st === "complete") pushToast("历史同步完成", "success");
+              if (st === "complete") pushToast(t("runtime.historySyncComplete"), "success");
               else if (st === "paused")
-                pushToast("历史同步暂停，可稍后点同步", "info");
+                pushToast(t("runtime.historySyncPaused"), "info");
             }
           }
           queueEvents(tagged as BridgeEvent[]);
@@ -908,7 +962,7 @@ export function BaileysWatcher() {
           const msg = e instanceof Error ? e.message : String(e);
           pushToast(
             msg.includes("Failed to fetch") || msg.includes("无法连接")
-              ? "Baileys 后台未就绪（请用 tauri dev 并重试扫码）"
+              ? t("runtime.baileysNotReady")
               : msg.slice(0, 120),
             "error"
           );
@@ -1023,6 +1077,7 @@ export function BaileysWatcher() {
     setBaileysUi,
     setBaileysLoginOpen,
     syncWhatsAppLabels,
+    t,
   ]);
 
   return null;

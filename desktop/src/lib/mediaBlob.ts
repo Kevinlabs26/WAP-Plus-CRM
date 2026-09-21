@@ -30,7 +30,9 @@ export async function mediaUrlToBlob(
   if (mediaUrl.toLowerCase().startsWith("data:")) {
     return dataUrlToBlob(mediaUrl, fallbackMimeType);
   }
-  const response = await fetch(mediaUrl);
+  const response = await fetch(mediaUrl, {
+    signal: AbortSignal.timeout(30_000),
+  });
   if (!response.ok) throw new Error(`无法读取语音文件：HTTP ${response.status}`);
   return response.blob();
 }
