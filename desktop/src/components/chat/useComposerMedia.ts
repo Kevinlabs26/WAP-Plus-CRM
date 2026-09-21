@@ -6,6 +6,7 @@ import type {
 } from "./MediaSendPreview";
 
 type UseComposerMediaOptions = {
+  chatKey: string;
   readDraft: () => string;
   setDraftLocal: (text: string) => void;
   flushDraftNow: (text: string) => void;
@@ -24,6 +25,7 @@ type UseComposerMediaOptions = {
  */
 export function useComposerMedia(opts: UseComposerMediaOptions) {
   const {
+    chatKey,
     readDraft,
     setDraftLocal,
     flushDraftNow,
@@ -38,6 +40,11 @@ export function useComposerMedia(opts: UseComposerMediaOptions) {
   const [mediaCaption, setMediaCaption] = useState("");
   const [mediaSendingIndex, setMediaSendingIndex] = useState(-1);
   const pendingMediaRef = useRef<PendingMediaItem[]>([]);
+  const mediaCaptionRef = useRef("");
+  const activeChatKeyRef = useRef(chatKey);
+  const savedMediaByChatRef = useRef(
+    new Map<string, { items: PendingMediaItem[]; caption: string }>()
+  );
 
   const isAudioFile = (file: File) => {
     if (file.type.toLowerCase().startsWith("audio/")) return true;
@@ -48,9 +55,48 @@ export function useComposerMedia(opts: UseComposerMediaOptions) {
     pendingMediaRef.current = pendingMedia;
   }, [pendingMedia]);
 
+  useEffect(() => {
+    mediaCaptionRef.current = mediaCaption;
+  }, [mediaCaption]);
+
+  const saveCurrentMedia = (
+    items = pendingMediaRef.current,
+    caption = mediaCaptionRef.current
+  ) => {
+    if (!activeChatKeyRef.current) return;
+    if (items.length || caption) {
+      savedMediaByChatRef.current.set(activeChatKeyRef.current, { items, caption });
+    } else {
+      savedMediaByChatRef.current.delete(activeChatKeyRef.current);
+    }
+  };
+
+  const updateMediaCaption = (value: string) => {
+    mediaCaptionRef.current = value;
+    setMediaCaption(value);
+    saveCurrentMedia(pendingMediaRef.current, value);
+  };
+
+  useEffect(() => {
+    if (activeChatKeyRef.current === chatKey) return;
+    saveCurrentMedia();
+    const next = savedMediaByChatRef.current.get(chatKey);
+    activeChatKeyRef.current = chatKey;
+    pendingMediaRef.current = next?.items || [];
+    mediaCaptionRef.current = next?.caption || "";
+    setPendingMedia(pendingMediaRef.current);
+    setMediaCaption(mediaCaptionRef.current);
+    setMediaSendingIndex(-1);
+  }, [chatKey]);
+
   useEffect(
     () => () => {
-      pendingMediaRef.current.forEach(
+      const allItems = new Set<PendingMediaItem>();
+      pendingMediaRef.current.forEach((item) => allItems.add(item));
+      savedMediaByChatRef.current.forEach(({ items }) =>
+        items.forEach((item) => allItems.add(item))
+      );
+      allItems.forEach(
         (item) => item.previewUrl && URL.revokeObjectURL(item.previewUrl)
       );
     },
@@ -93,26 +139,35 @@ export function useComposerMedia(opts: UseComposerMediaOptions) {
     items
       .slice(capacity)
       .forEach((item) => item.previewUrl && URL.revokeObjectURL(item.previewUrl));
-    setPendingMedia((current) => [...current, ...accepted]);
-    if (!pendingMediaRef.current.length) setMediaCaption(readDraft());
+    const nextItems = [...pendingMediaRef.current, ...accepted];
+    pendingMediaRef.current = nextItems;
+    const nextCaption = pendingMediaRef.current.length === accepted.length
+      ? readDraft()
+      : mediaCaptionRef.current;
+    mediaCaptionRef.current = nextCaption;
+    setPendingMedia(nextItems);
+    setMediaCaption(nextCaption);
+    saveCurrentMedia(nextItems, nextCaption);
     onStageMedia?.();
   };
 
   const closeMediaPreview = () => {
-    setPendingMedia((items) => {
-      items.forEach((item) => item.previewUrl && URL.revokeObjectURL(item.previewUrl));
-      return [];
-    });
+    pendingMediaRef.current.forEach((item) => item.previewUrl && URL.revokeObjectURL(item.previewUrl));
+    pendingMediaRef.current = [];
+    mediaCaptionRef.current = "";
+    setPendingMedia([]);
     setMediaCaption("");
+    saveCurrentMedia([], "");
     setMediaSendingIndex(-1);
   };
 
   const removeMedia = (id: string) => {
-    setPendingMedia((items) => {
-      const removed = items.find((item) => item.id === id);
-      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
-      return items.filter((item) => item.id !== id);
-    });
+    const removed = pendingMediaRef.current.find((item) => item.id === id);
+    if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+    const nextItems = pendingMediaRef.current.filter((item) => item.id !== id);
+    pendingMediaRef.current = nextItems;
+    setPendingMedia(nextItems);
+    saveCurrentMedia(nextItems);
   };
 
   const handleComposerPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -156,12 +211,20 @@ export function useComposerMedia(opts: UseComposerMediaOptions) {
         if (caption) captionUsed = true;
       }
     }
-    pendingMedia.forEach(
-      (item) => item.previewUrl && URL.revokeObjectURL(item.previewUrl)
-    );
-    setPendingMedia([]);
+    pendingMedia.forEach((item) => {
+      if (sent.has(item.id) && item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+    });
+    const remaining = pendingMedia.filter((item) => !sent.has(item.id));
+    pendingMediaRef.current = remaining;
+    setPendingMedia(remaining);
     setMediaSendingIndex(-1);
-    setMediaCaption("");
+    if (!remaining.length) {
+      mediaCaptionRef.current = "";
+      setMediaCaption("");
+      saveCurrentMedia([], "");
+    } else {
+      saveCurrentMedia(remaining, mediaCaptionRef.current);
+    }
     if (sent.size && mediaCaption.trim()) {
       setDraftLocal("");
       flushDraftNow("");
@@ -170,18 +233,19 @@ export function useComposerMedia(opts: UseComposerMediaOptions) {
 
   /** 切换会话时重置 */
   const resetMedia = () => {
-    setPendingMedia((items) => {
-      items.forEach((item) => item.previewUrl && URL.revokeObjectURL(item.previewUrl));
-      return [];
-    });
+    pendingMediaRef.current.forEach((item) => item.previewUrl && URL.revokeObjectURL(item.previewUrl));
+    pendingMediaRef.current = [];
+    mediaCaptionRef.current = "";
+    setPendingMedia([]);
     setMediaCaption("");
+    saveCurrentMedia([], "");
     setMediaSendingIndex(-1);
   };
 
   return {
     pendingMedia,
     mediaCaption,
-    setMediaCaption,
+    setMediaCaption: updateMediaCaption,
     mediaSendingIndex,
     setMediaSendingIndex,
     stageMedia,

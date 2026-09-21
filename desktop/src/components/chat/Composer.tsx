@@ -364,8 +364,8 @@ function ComposerInner({
     closeMediaPreview,
     sendPendingMedia,
     handleComposerPaste,
-    resetMedia,
   } = useComposerMedia({
+    chatKey: resetKey || "default",
     readDraft,
     setDraftLocal,
     flushDraftNow,
@@ -522,7 +522,6 @@ function ComposerInner({
     setTranslateOriginal(null);
     resetVoiceInput();
     setDragOver(false);
-    resetMedia();
     // 每个会话读取自己的草稿，避免未发送内容串到其它联系人。
     const state = useAppStore.getState();
     const d =

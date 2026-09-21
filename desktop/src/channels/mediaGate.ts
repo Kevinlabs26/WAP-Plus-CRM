@@ -11,6 +11,9 @@ import { useAppStore } from "@/store/appStore";
 import { sendRuntimeFromSettings } from "./index";
 import { withSendGate } from "./sendGate";
 
+const MAX_AUTO_RETRY_WAIT_MS = 15_000;
+const MAX_AUTO_RETRIES = 3;
+
 export class MediaGateBlockedError extends Error {
   readonly gateError: "send_paused" | "overheated" | "rate_limited";
   readonly retryAfterMs?: number;
@@ -43,11 +46,27 @@ export async function gatedMediaSend<T>(
     state.settings.liveBaileysAccountId ||
     state.settings.activeAccountId ||
     "wa-default";
-  const out = await withSendGate(
+  let out = await withSendGate(
     { phoneE164: input.phoneE164, accountId },
     runtime,
     sendFn
   );
+  for (let attempt = 0; !out.ok && attempt < MAX_AUTO_RETRIES; attempt++) {
+    const waitMs = out.gate.retryAfterMs;
+    if (
+      out.gate.error !== "rate_limited" ||
+      !waitMs ||
+      waitMs > MAX_AUTO_RETRY_WAIT_MS
+    ) {
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, waitMs + 100));
+    out = await withSendGate(
+      { phoneE164: input.phoneE164, accountId },
+      runtime,
+      sendFn
+    );
+  }
   if (!out.ok) {
     throw new MediaGateBlockedError(
       out.gate.reason,
