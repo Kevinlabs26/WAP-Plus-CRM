@@ -757,7 +757,10 @@ function ComposerInner({
         multiple
         className="hidden"
         onChange={(e) => {
-          const files = e.target.files;
+          // Copy the FileList before clearing the input. In WebView2/Tauri the
+          // live FileList can be emptied by `value = ""`, which made the
+          // picker appear to do nothing (especially for audio files).
+          const files = Array.from(e.target.files || []);
           e.target.value = "";
           stageMedia(files);
         }}
@@ -768,7 +771,9 @@ function ComposerInner({
         multiple
         className="hidden"
         onChange={(e) => {
-          const files = e.target.files;
+          // FileList is live in some WebViews; copy it before resetting the
+          // input so selecting a file reliably reaches the preview pipeline.
+          const files = Array.from(e.target.files || []);
           e.target.value = "";
           stageMedia(files, "file");
         }}
