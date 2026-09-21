@@ -174,9 +174,6 @@ export function triggerMediaDownload(url: string, filename: string) {
 }
 
 export async function copyImageToClipboard(url: string): Promise<void> {
-  if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
-    throw new Error("当前环境不支持复制图片");
-  }
   const response = await fetch(url);
   if (!response.ok) throw new Error("图片读取失败");
   const source = await response.blob();
@@ -192,9 +189,51 @@ export async function copyImageToClipboard(url: string): Promise<void> {
       canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("图片转换失败"))), "image/png")
     );
   }
-  await navigator.clipboard.write([
-    new ClipboardItem({ "image/png": image }),
-  ]);
+  if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({ "image/png": image }),
+      ]);
+      return;
+    } catch {
+      // Tauri/WebView2 may expose clipboard.write but reject image MIME data.
+      // Fall through to the native browser copy command below.
+    }
+  }
+
+  // WebView2 fallback: selecting a real image element lets Chromium place a
+  // bitmap on the Windows clipboard even when ClipboardItem image writes are
+  // unavailable or denied by the app origin.
+  if (!document.body || typeof document.execCommand !== "function") {
+    throw new Error("当前环境不支持复制图片");
+  }
+  const objectUrl = URL.createObjectURL(image);
+  const img = document.createElement("img");
+  img.src = objectUrl;
+  img.alt = "";
+  img.style.position = "fixed";
+  img.style.left = "-10000px";
+  img.style.top = "-10000px";
+  img.style.width = "1px";
+  img.style.height = "1px";
+  document.body.appendChild(img);
+  const selection = window.getSelection();
+  const previous = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+  try {
+    if (typeof img.decode === "function") await img.decode();
+    const range = document.createRange();
+    range.selectNode(img);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    if (!document.execCommand("copy")) {
+      throw new Error("当前环境不支持复制图片");
+    }
+  } finally {
+    selection?.removeAllRanges();
+    if (previous) selection?.addRange(previous);
+    img.remove();
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 export async function openMediaInNewTab(url: string, mime?: string) {
