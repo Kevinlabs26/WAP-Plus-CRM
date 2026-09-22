@@ -1,6 +1,8 @@
 import {
   normalizeQuickReplyCategory,
+  QUICK_REPLY_CATEGORIES,
   type QuickReplyCategory,
+  type QuickReplyCategoryOption,
 } from "@/lib/quickReplies";
 
 export interface SettingsQuickReply {
@@ -8,6 +10,14 @@ export interface SettingsQuickReply {
   title: string;
   body: string;
   category: QuickReplyCategory;
+  /** 本地快捷话术媒体；WhatsApp 快捷指令同步只同步文字字段 */
+  media?: {
+    dataUrl: string;
+    fileName: string;
+    mimeType: string;
+    kind: "image" | "audio" | "video" | "file";
+    size: number;
+  };
 }
 
 import type { AccountViewMode, FolderScope, WaAccount } from "@/types/account";
@@ -158,6 +168,7 @@ export interface SettingsShape {
   ratePerHour: number;
   rateMinIntervalSec: number;
   quickReplies: SettingsQuickReply[];
+  quickReplyCustomCategories: QuickReplyCategoryOption[];
   translateTargetLang: string;
   /** 我的语言（母语）：入站消息/语音翻译的译出目标（给自己看）。空 = 自动检测系统语言 */
   myLang: string;
@@ -306,6 +317,7 @@ export const defaultSettings: SettingsShape = {
   ratePerHour: 80,
   rateMinIntervalSec: 4,
   quickReplies: defaultQuickReplies,
+  quickReplyCustomCategories: [],
   translateTargetLang: "en",
   myLang: "",
   voiceInputEngine: "auto",
@@ -356,24 +368,82 @@ export function normalizeLoadedSettings(
     ...defaultSettings,
     ...(src as Partial<SettingsShape>),
   };
+  merged.quickReplyCustomCategories = Array.isArray(
+    merged.quickReplyCustomCategories
+  )
+    ? merged.quickReplyCustomCategories
+        .map((item, index) => ({
+          id: String(item?.id || `custom-${index}`).trim().slice(0, 48),
+          label: String(item?.label || "").trim().slice(0, 32),
+        }))
+        .filter((item, index, items) =>
+          item.id &&
+          item.label &&
+          !QUICK_REPLY_CATEGORIES.some((category) => category.id === item.id) &&
+          items.findIndex((candidate) => candidate.id === item.id) === index
+        )
+        .slice(0, 20)
+    : [];
   const ch = String(merged.sendChannel ?? "");
   merged.sendChannel =
     ch === "android_bridge" ? "android_bridge" : "baileys";
   if (!Array.isArray(merged.quickReplies) || merged.quickReplies.length === 0) {
     merged.quickReplies = defaultQuickReplies;
   } else {
+    let quickReplyMediaBytes = 0;
+    const maxQuickReplyMediaBytes = 64 * 1024 * 1024;
     merged.quickReplies = merged.quickReplies
       .map((r, i) => {
         const title = String(r?.title || "").slice(0, 40);
         const body = String(r?.body || "").slice(0, 2000);
+        const rawMedia =
+          r?.media && typeof r.media === "object"
+            ? (r.media as Record<string, unknown>)
+            : null;
+        const dataUrl = String(rawMedia?.dataUrl || "");
+        const mimeType = String(rawMedia?.mimeType || "").slice(0, 120);
+        const kind: "image" | "audio" | "video" | "file" =
+          rawMedia?.kind === "image" ||
+          rawMedia?.kind === "audio" ||
+          rawMedia?.kind === "video" ||
+          rawMedia?.kind === "file"
+            ? rawMedia.kind
+            : "file";
+        const mediaSize = Math.max(
+          0,
+          Math.min(
+            12 * 1024 * 1024,
+            Number(rawMedia?.size) || Math.floor(dataUrl.length * 0.75)
+          )
+        );
+        const keepMedia =
+          dataUrl.startsWith("data:") &&
+          dataUrl.length <= 12 * 1024 * 1024 &&
+          quickReplyMediaBytes + mediaSize <= maxQuickReplyMediaBytes;
+        if (keepMedia) quickReplyMediaBytes += mediaSize;
+        const media = keepMedia
+            ? {
+                dataUrl,
+                fileName: String(rawMedia?.fileName || "媒体").slice(0, 180),
+                mimeType,
+                kind,
+                size: mediaSize,
+              }
+            : undefined;
         return {
           id: String(r?.id || `qr-${i}`),
           title,
           body,
-          category: normalizeQuickReplyCategory(r?.category, title, body),
+          media,
+          category: normalizeQuickReplyCategory(
+            r?.category,
+            title,
+            body,
+            merged.quickReplyCustomCategories
+          ),
         };
       })
-      .filter((r) => r.title || r.body)
+      .filter((r) => r.title || r.body || r.media)
       .slice(0, 40);
   }
   merged.theme = merged.theme === "light" ? "light" : "dark";

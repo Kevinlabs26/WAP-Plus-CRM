@@ -164,6 +164,7 @@ export type MessageMediaType =
   | "location"
   | "product"
   | "order"
+  | "poll"
   | "contact"
   | "";
 
@@ -245,6 +246,9 @@ export interface Message {
   mediaSeconds?: number;
   mediaPtt?: boolean;
   mediaCaption?: string;
+  pollName?: string;
+  pollOptions?: string[];
+  pollSelectableCount?: number;
   /** 视频/图协议缩略图 data URL */
   mediaThumbUrl?: string;
   /** bridge 侧媒体待按需拉取（无 mediaUrl） */
@@ -262,6 +266,11 @@ export interface Message {
     fromMe?: boolean;
     remoteJid?: string;
     participant?: string;
+    /** 群聊中被引用消息的发送者显示名 */
+    senderName?: string;
+    /** 被引用的媒体类型/时长，用于没有文字说明的媒体 */
+    mediaType?: string;
+    mediaSeconds?: number;
   };
   /** 是否编辑过 */
   edited?: boolean;

@@ -1,6 +1,7 @@
 import {
   Captions,
   ContactRound,
+  BarChart3,
   Image,
   Loader2,
   Paperclip,
@@ -55,6 +56,7 @@ import { VOICE_INPUT_LANGUAGES } from "@/lib/voiceInputLanguage";
 import { getChatDraftValue } from "@/lib/chatDrafts";
 import { toggleComposerBold } from "@/lib/composerFormatting";
 import { useI18n } from "@/i18n";
+import { onQuickReplyMedia, quickReplyMediaToFile } from "@/lib/quickReplyMedia";
 
 const TYPING_DEBUG_ENABLED = isTypingDiagnosticsEnabled();
 const EmojiStickerGifPanel = lazy(() =>
@@ -93,6 +95,7 @@ type Props = {
   voicePaused: boolean;
   recordSec: number;
   onSend: () => void | Promise<void>;
+  onSendPoll?: (name: string, values: string[]) => void | Promise<void>;
   /** ↑ 空输入框时编辑最近一条自己发送的文字消息。 */
   onEditLatest?: () => boolean;
   onSendImage: (file: File, caption?: string) => boolean | Promise<boolean>;
@@ -146,6 +149,7 @@ function ComposerInner({
   voicePaused,
   recordSec,
   onSend,
+  onSendPoll,
   onEditLatest,
   onSendImage,
   onSendAudio,
@@ -199,6 +203,9 @@ function ComposerInner({
   const [dragOver, setDragOver] = useState(false);
   const [attachmentOpen, setAttachmentOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [pollOpen, setPollOpen] = useState(false);
+  const [pollName, setPollName] = useState("");
+  const [pollOptions, setPollOptions] = useState("");
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionIdx, setMentionIdx] = useState(0);
   const [mentionQuery, setMentionQuery] = useState("");
@@ -384,6 +391,15 @@ function ComposerInner({
   // 改用原生 window 级捕获监听 + files/items 双重读取，落区覆盖整个聊天面板（消息区 + 输入框）。
   const stageMediaRef = useRef(stageMedia);
   stageMediaRef.current = stageMedia;
+  useEffect(() => {
+    return onQuickReplyMedia((selection) => {
+      if (selection.target === "multi") return;
+      const file = quickReplyMediaToFile(selection);
+      if (!file) return;
+      stageMediaRef.current([file]);
+      if (selection.caption) setMediaCaption(selection.caption);
+    });
+  }, [setMediaCaption]);
   const dragDepthRef = useRef(0);
   useEffect(() => {
     const filesFromTransfer = (transfer: DataTransfer | null) => {
@@ -856,6 +872,39 @@ function ComposerInner({
         </div>
       )}
 
+      {pollOpen && !recording && (
+        <div className="mb-2 rounded-lg border border-brand/25 bg-brand/5 p-2.5">
+          <div className="mb-2 text-xs font-medium text-brand">新建投票</div>
+          <input
+            value={pollName}
+            onChange={(event) => setPollName(event.target.value)}
+            placeholder="投票问题"
+            className="mb-2 w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-100 outline-none focus:border-brand"
+          />
+          <input
+            value={pollOptions}
+            onChange={(event) => setPollOptions(event.target.value)}
+            placeholder="选项，用逗号分隔（至少两个）"
+            className="w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-100 outline-none focus:border-brand"
+          />
+          <div className="mt-2 flex justify-end gap-2">
+            <button type="button" className="text-2xs text-zinc-500 hover:text-zinc-200" onClick={() => setPollOpen(false)}>取消</button>
+            <button
+              type="button"
+              className="rounded bg-brand px-2.5 py-1 text-2xs text-white disabled:opacity-40"
+              disabled={!pollName.trim() || pollOptions.split(/[,，]/u).filter((value) => value.trim()).length < 2 || sending}
+              onClick={() => {
+                const values = pollOptions.split(/[,，]/u).map((value) => value.trim()).filter(Boolean);
+                void onSendPoll?.(pollName.trim(), values);
+                setPollOpen(false);
+                setPollName("");
+                setPollOptions("");
+              }}
+            >发送投票</button>
+          </div>
+        </div>
+      )}
+
       {!recording && <div
         className={cn(
           "composer-editor flex flex-col rounded-2xl border bg-zinc-900/90 shadow-sm shadow-black/20 transition-all duration-150 focus-within:border-brand/60 focus-within:ring-2 focus-within:ring-brand/15",
@@ -1191,6 +1240,18 @@ function ComposerInner({
           </div>
 
           <div className="flex shrink-0 items-center gap-1 pb-0.5">
+            {isBaileys && onSendPoll && (
+              <button
+                type="button"
+                title="发送投票"
+                aria-label="发送投票"
+                disabled={recording || sending || inputLocked}
+                onClick={() => setPollOpen((open) => !open)}
+                className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <BarChart3 className="h-4 w-4" />
+              </button>
+            )}
             <div ref={emojiPanelRef} className="relative">
               <button
                 type="button"

@@ -35,6 +35,7 @@ type Props = {
   onReloadMedia: (m: Message) => void;
   onPreview: (src: string, alt: string) => void;
   onSenderClick?: (m: Message) => void;
+  onQuoteClick?: (messageId: string) => void;
   onTranscribe?: (messageId: string) => void;
   onTranslate?: (messageId: string) => void;
   translating?: boolean;
@@ -159,6 +160,7 @@ export const MessageBubble = memo(function MessageBubble({
   onReloadMedia,
   onPreview,
   onSenderClick,
+  onQuoteClick,
   onTranscribe,
   onTranslate,
   translating = false,
@@ -668,15 +670,41 @@ export const MessageBubble = memo(function MessageBubble({
         })()}
         {m.quoted && (
           <div
+            role={onQuoteClick ? "button" : undefined}
+            tabIndex={onQuoteClick ? 0 : undefined}
+            title={onQuoteClick ? t("messageBubble.jumpToQuoted") : undefined}
+            onClick={
+              onQuoteClick
+                ? (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onQuoteClick(m.quoted!.id);
+                  }
+                : undefined
+            }
+            onKeyDown={
+              onQuoteClick
+                ? (event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onQuoteClick(m.quoted!.id);
+                  }
+                : undefined
+            }
             className={cn(
               "rounded-md border-l-2 px-2 py-1 text-[11px]",
+              onQuoteClick && "cursor-pointer transition-colors hover:bg-white/10",
               m.direction === "out"
                 ? "border-emerald-400/50 bg-black/15 text-zinc-300"
                 : "border-sky-400/50 bg-black/20 text-zinc-400"
             )}
           >
             <div className="text-2xs font-medium opacity-80">
-              {m.quoted.fromMe ? t("messageBubble.you") : t("messageBubble.other")}
+              {m.quoted.senderName ||
+                (m.quoted.fromMe
+                  ? t("messageBubble.you")
+                  : t("messageBubble.other"))}
             </div>
             <div className="line-clamp-2 opacity-90">
               <MessageBody

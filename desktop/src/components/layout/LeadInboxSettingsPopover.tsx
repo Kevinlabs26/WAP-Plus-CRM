@@ -39,8 +39,8 @@ export function LeadInboxSettingsPopover({ onClose }: Props) {
       className="fixed inset-0 z-[220] flex items-center justify-center bg-black/65 p-4 backdrop-blur-[2px]"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
-      <div className="max-h-[min(82vh,38rem)] w-full max-w-lg overflow-y-auto rounded-xl border border-zinc-700/90 bg-zinc-900 p-4 shadow-2xl shadow-black/50">
-      <div className="mb-2 flex items-center justify-between gap-2">
+      <div className="max-h-[min(86vh,42rem)] w-full max-w-2xl overflow-y-auto rounded-2xl border border-zinc-700/90 bg-zinc-900 p-5 shadow-2xl shadow-black/50">
+      <div className="mb-4 flex items-start justify-between gap-3 border-b border-zinc-800 pb-3">
         <div>
           <h3 id="lead-inbox-settings-title" className="text-sm font-semibold text-zinc-100">{t("leadInbox.settingsTitle")}</h3>
           <p className="mt-1 text-[11px] leading-4 text-zinc-500">{t("leadInbox.settingsHint")}</p>
@@ -56,7 +56,7 @@ export function LeadInboxSettingsPopover({ onClose }: Props) {
         </button>
       </div>
 
-      <label className="mb-2 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/50 px-2 py-1.5 text-[11px] text-zinc-300">
+      <label className="mb-4 flex items-center gap-2 rounded-lg border border-brand/25 bg-brand/5 px-3 py-2 text-[12px] text-zinc-200">
         <input
           type="checkbox"
           checked={settings.enabled}
@@ -66,7 +66,9 @@ export function LeadInboxSettingsPopover({ onClose }: Props) {
         {t("leadInbox.enabled")}
       </label>
 
-      <div className="grid grid-cols-2 gap-2">
+      <section className="rounded-xl border border-zinc-800 bg-zinc-950/25 p-3">
+        <h4 className="mb-2 text-[11px] font-medium text-zinc-300">{t("leadInbox.displayRules")}</h4>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <label className="text-[10px] text-zinc-500">
           <span className="mb-1 block">{t("leadInbox.dateGrouping")}</span>
           <select
@@ -105,8 +107,11 @@ export function LeadInboxSettingsPopover({ onClose }: Props) {
           </select>
         </label>
       </div>
+      </section>
 
-      <div className="mt-2 grid grid-cols-2 gap-2">
+      <section className="mt-3 rounded-xl border border-zinc-800 bg-zinc-950/25 p-3">
+        <h4 className="mb-2 text-[11px] font-medium text-zinc-300">{t("leadInbox.accountRules")}</h4>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
         <label className="text-[10px] text-zinc-500">
           <span className="mb-1 block">{t("leadInbox.accountScope")}</span>
           <select
@@ -119,7 +124,7 @@ export function LeadInboxSettingsPopover({ onClose }: Props) {
             <option value="selected">{t("leadInbox.accountSelected")}</option>
           </select>
         </label>
-        <label className="flex items-end gap-2 pb-1 text-[11px] text-zinc-300">
+        <label className="flex min-h-8 items-center gap-2 text-[11px] text-zinc-300">
           <input
             type="checkbox"
             checked={settings.includeGroups}
@@ -129,6 +134,17 @@ export function LeadInboxSettingsPopover({ onClose }: Props) {
           {t("leadInbox.includeGroups")}
         </label>
       </div>
+
+      <label className="mt-3 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 px-2 py-1.5 text-[11px] text-zinc-300">
+        <input
+          type="checkbox"
+          checked={settings.mergeAccounts}
+          onChange={(event) => patch({ mergeAccounts: event.target.checked })}
+          className="accent-emerald-500"
+        />
+        {t("leadInbox.mergeAccounts")}
+      </label>
+      </section>
 
       {settings.accountScope === "selected" && (
         <div className="mt-2 space-y-1 rounded-lg border border-zinc-800 bg-zinc-950/40 p-2">
@@ -155,17 +171,7 @@ export function LeadInboxSettingsPopover({ onClose }: Props) {
         </div>
       )}
 
-      <label className="mt-2 flex items-center gap-2 text-[11px] text-zinc-300">
-        <input
-          type="checkbox"
-          checked={settings.mergeAccounts}
-          onChange={(event) => patch({ mergeAccounts: event.target.checked })}
-          className="accent-emerald-500"
-        />
-        {t("leadInbox.mergeAccounts")}
-      </label>
-
-      <label className="mt-2 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950/40 px-2 py-1.5 text-[11px] text-zinc-300">
+      <label className="mt-3 flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] text-zinc-300">
         <input
           type="checkbox"
           checked={settings.removeAfterReply}
@@ -175,9 +181,9 @@ export function LeadInboxSettingsPopover({ onClose }: Props) {
         {t("leadInbox.removeAfterReply")}
       </label>
 
-      <div className="mt-2 flex items-center justify-between gap-2 border-t border-zinc-800 pt-2">
-        <p className="text-[10px] leading-4 text-zinc-600">{t("leadInbox.captureHint")}</p>
-        <div className="flex shrink-0 flex-col items-end gap-1">
+      <div className="mt-4 flex flex-col gap-3 border-t border-zinc-800 pt-3 sm:flex-row sm:items-start sm:justify-between">
+        <p className="min-w-0 flex-1 text-[10px] leading-4 text-zinc-600">{t("leadInbox.captureHint")}</p>
+        <div className="flex shrink-0 flex-wrap items-center gap-1 sm:justify-end">
           {dismissedCount > 0 && (
             <button
               type="button"

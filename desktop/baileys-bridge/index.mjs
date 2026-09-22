@@ -3,7 +3,6 @@ import makeWASocket, {
   Browsers,
   DisconnectReason,
   proto,
-  useMultiFileAuthState,
 } from "baileys";
 import pino from "pino";
 import QRCode from "qrcode";
@@ -42,6 +41,8 @@ import {
 } from "./messageIngest.mjs";
 import { createAvatarService } from "./avatarService.mjs";
 import { createContactStore } from "./contactStore.mjs";
+import { useAtomicAuthState } from "./authState.mjs";
+import { BoundedMessageMap } from "./messageStore.mjs";
 import {
   BAILEYS_BRIDGE_PROTOCOL_VERSION,
   BAILEYS_LIBRARY_VERSION,
@@ -104,7 +105,9 @@ function safeJson(v) {
   }
 }
 const contacts = new Map();
-const messages = new Map();
+// ponytail: runtime cache only; SQLite owns full CRM history, so cap this map
+// to prevent full-history sync from growing the sidecar indefinitely.
+const messages = new BoundedMessageMap(20_000);
 const labels = new Map();
 const chatLabelIds = new Map();
 const products = new Map();
@@ -129,6 +132,37 @@ let connecting = false;
 let reconnectAttempts = 0;
 let lastDisconnectAt = 0;
 let lastFullHistoryRequestAt = 0;
+let connectPromise = null;
+
+function createMemoryCache(ttlMs, maxEntries = 5000) {
+  const values = new Map();
+  const cache = {
+    get(key) {
+      const item = values.get(String(key));
+      if (!item || item.expiresAt <= Date.now()) {
+        values.delete(String(key));
+        return undefined;
+      }
+      return item.value;
+    },
+    set(key, value) {
+      const k = String(key);
+      values.delete(k);
+      values.set(k, { value, expiresAt: Date.now() + ttlMs });
+      while (values.size > maxEntries) values.delete(values.keys().next().value);
+      return cache;
+    },
+    delete(key) { return values.delete(String(key)); },
+    clear() { values.clear(); },
+    flushAll() { values.clear(); },
+  };
+  return cache;
+}
+
+const msgRetryCounterCache = createMemoryCache(10 * 60_000, 10_000);
+const groupMetadataCache = new Map();
+const groupMetadataTtlMs = 5 * 60_000;
+const rawWaStore = createRawMediaStore(`${authDir}/message-index`, 20_000);
 
 async function requestFullHistorySync() {
   if (connection !== "connected" || !socket) {
@@ -212,12 +246,32 @@ function rememberRawWa(id, waMessage) {
   // 刷新插入顺序，近似 LRU（Map 保持插入序）
   if (rawWaByMsgId.has(id)) rawWaByMsgId.delete(id);
   rawWaByMsgId.set(id, waMessage);
-  void rawMediaStore.save(id, waMessage);
-  while (rawWaByMsgId.size > 4000) {
+  void rawWaStore.save(id, waMessage);
+  while (rawWaByMsgId.size > 2000) {
     const oldest = rawWaByMsgId.keys().next().value;
     if (oldest == null) break;
     rawWaByMsgId.delete(oldest);
   }
+}
+
+function rememberRawMedia(id, waMessage) {
+  if (id && waMessage) void rawMediaStore.save(id, waMessage);
+}
+
+function rawWaKey(key) {
+  const id = String(key?.id || "").trim();
+  if (!id) return "";
+  return key?.remoteJid ? `${key.remoteJid}:${id}` : id;
+}
+
+async function getRawWaByKey(key) {
+  const direct = rawWaByMsgId.get(rawWaKey(key)) || rawWaByMsgId.get(key?.id);
+  if (direct) return direct;
+  const stored =
+    (await rawWaStore.load(rawWaKey(key))) ||
+    (await rawWaStore.load(key?.id));
+  if (stored) rememberRawWa(rawWaKey(key) || key?.id, stored);
+  return stored;
 }
 
 function findStoredMessageByKey(key) {
@@ -278,6 +332,7 @@ const {
   mergeHumanName,
   rememberLidPn,
   rememberRawWa,
+  rememberRawMedia,
   mediaToDataUrl,
   getOrderDetails: (orderId, token) => socket?.getOrderDetails(orderId, token),
   enrichContact,
@@ -537,10 +592,56 @@ async function endSocketQuietly() {
   }
 }
 
+async function getCachedGroupMetadata(jid) {
+  const id = String(jid || "").trim();
+  if (!id.endsWith("@g.us")) return undefined;
+  const cached = groupMetadataCache.get(id);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+  try {
+    const meta = await socket?.groupMetadata?.(id);
+    if (meta) groupMetadataCache.set(id, {
+      value: meta,
+      expiresAt: Date.now() + groupMetadataTtlMs,
+    });
+    return meta;
+  } catch {
+    return undefined;
+  }
+}
+
+function cacheGroupMetadata(meta) {
+  if (meta?.id && Array.isArray(meta.participants)) {
+    groupMetadataCache.set(meta.id, {
+      value: meta,
+      expiresAt: Date.now() + groupMetadataTtlMs,
+    });
+  }
+}
+
+function isIgnoredJid(jid) {
+  const value = String(jid || "").toLowerCase();
+  return value === "status@broadcast" ||
+    value.endsWith("@broadcast") ||
+    value.endsWith("@newsletter");
+}
+
 /**
  * @param {{ clearAuth?: boolean }} [opts]
  */
 async function connect(opts = {}) {
+  if (connectPromise) {
+    if (!opts.clearAuth) return connectPromise;
+    await connectPromise.catch(() => {});
+  }
+  const next = connectInternal(opts);
+  connectPromise = next.finally(() => {
+    if (connectPromise === wrapped) connectPromise = null;
+  });
+  const wrapped = connectPromise;
+  return wrapped;
+}
+
+async function connectInternal(opts = {}) {
   const myGen = ++connectGeneration;
   if (connecting) {
     // 等上一轮结束
@@ -562,23 +663,29 @@ async function connect(opts = {}) {
       qrDataUrl = "";
     }
 
-    const { state, saveCreds } = await useMultiFileAuthState(authDir);
+    const { state, saveCreds } = await useAtomicAuthState(
+      `${authDir}/auth-state.json`,
+      logger
+    );
     if (myGen !== connectGeneration) return;
     authMe = state.creds.me || undefined;
 
     const sock = makeWASocket({
       auth: state,
       logger,
-      // Windows 上用 Ubuntu 指纹更稳，减少异常断开
-      browser: Browsers.ubuntu("Chrome"),
-      // 多号第二账号也要历史会话；false 时内存常空，/sync 一直 0
+      // Desktop 指纹配合完整历史同步；官方推荐用于更完整的历史。
+      browser: Browsers.macOS("Desktop"),
       syncFullHistory: true,
-      // Baileys 默认会跳过 FULL 历史包，导致“同步”只能重复读取残缺内存。
       shouldSyncHistoryMessage: () => true,
-      // 需要收对方 composing：连接后呈 available（仍可被系统切 unavailable）
-      markOnlineOnConnect: true,
-      printQRInTerminal: false,
-      getMessage: async () => undefined,
+      // 后台 CRM 默认不占用在线态，避免抑制手机端推送。
+      markOnlineOnConnect: false,
+      msgRetryCounterCache,
+      cachedGroupMetadata: getCachedGroupMetadata,
+      shouldIgnoreJid: isIgnoredJid,
+      getMessage: async (key) => {
+        const raw = await getRawWaByKey(key);
+        return raw?.message || raw || undefined;
+      },
     });
     socket = sock;
 
@@ -685,6 +792,7 @@ async function connect(opts = {}) {
     sock.ev.on("groups.upsert", (items) => {
       let n = 0;
       for (const group of items || []) {
+        cacheGroupMetadata(group);
         if (upsertWaGroup(group)) n++;
       }
       if (n) scheduleContactsPush();
@@ -692,9 +800,14 @@ async function connect(opts = {}) {
     sock.ev.on("groups.update", (items) => {
       let n = 0;
       for (const group of items || []) {
+        cacheGroupMetadata(group);
         if (upsertWaGroup(group)) n++;
       }
       if (n) scheduleContactsPush();
+    });
+    sock.ev.on("group-participants.update", ({ id }) => {
+      if (!id) return;
+      void sock.groupMetadata(id).then(cacheGroupMetadata).catch(() => {});
     });
     attachGroupParticipantEvents(sock, {
       getSocket: () => sock,
@@ -1160,10 +1273,6 @@ async function connect(opts = {}) {
           model: "Baileys",
           battery: 100,
         });
-        // 显式 available，便于服务端推送对方 chatstate
-        setTimeout(() => {
-          void sock.sendPresenceUpdate("available").catch(() => {});
-        }, 800);
         // 连上后给最近会话慢慢补头像
         setTimeout(() => scheduleAvatarsForActive(24), 2500);
         setTimeout(() => void hydrateGroupSubjects(), 2_500);
@@ -1261,6 +1370,68 @@ function resolveSendJid(address) {
   const digits = addr.replace(/\D/g, "");
   if (!digits || digits.length < 7) return Promise.resolve("");
   return Promise.resolve(`${digits}@s.whatsapp.net`);
+}
+
+async function requestPairingCode(phoneNumber) {
+  const raw = String(phoneNumber || "").trim();
+  const digits = raw.replace(/\D/g, "");
+  if (!/^\d{7,15}$/.test(digits) || /[^\d+\s().-]/.test(raw)) {
+    throw new Error("手机号必须包含国家码，且只允许数字、空格、+、括号或短横线");
+  }
+  if (!socket || !["starting", "qr", "reconnecting"].includes(connection)) {
+    throw new Error("请先启动未登录的 WhatsApp 会话");
+  }
+  if (socket.authState?.creds?.registered || socket.user) {
+    throw new Error("当前会话已经登录");
+  }
+  return { phoneNumber: digits, code: await socket.requestPairingCode(digits) };
+}
+
+async function checkWhatsAppNumbers(numbers) {
+  if (!socket || connection !== "connected") throw new Error("WhatsApp 尚未连接");
+  const input = [...new Set((Array.isArray(numbers) ? numbers : [numbers])
+    .map((value) => String(value || "").replace(/\D/g, ""))
+    .filter((value) => /^\d{7,15}$/.test(value)))].slice(0, 50);
+  if (!input.length) return [];
+  const results = await socket.onWhatsApp(...input);
+  return input.map((phoneNumber) => {
+    const row = results.find((item) =>
+      String(item?.jid || "").replace(/\D/g, "") === phoneNumber
+    );
+    return {
+      phoneNumber,
+      exists: Boolean(row?.exists),
+      jid: row?.jid || "",
+    };
+  });
+}
+
+async function getPrivacySettings(force = true) {
+  if (!socket || connection !== "connected") throw new Error("WhatsApp 尚未连接");
+  return socket.fetchPrivacySettings(Boolean(force));
+}
+
+async function updatePrivacySettings(patch = {}) {
+  if (!socket || connection !== "connected") throw new Error("WhatsApp 尚未连接");
+  const methods = {
+    lastSeen: "updateLastSeenPrivacy",
+    online: "updateOnlinePrivacy",
+    profilePicture: "updateProfilePicturePrivacy",
+    status: "updateStatusPrivacy",
+    readReceipts: "updateReadReceiptsPrivacy",
+    groupsAdd: "updateGroupsAddPrivacy",
+  };
+  for (const [key, method] of Object.entries(methods)) {
+    if (patch[key] !== undefined && typeof socket[method] === "function") {
+      await socket[method](String(patch[key]));
+    }
+  }
+  if (patch.defaultDisappearing !== undefined) {
+    await socket.updateDefaultDisappearingMode(
+      Math.max(0, Number(patch.defaultDisappearing) || 0)
+    );
+  }
+  return getPrivacySettings(true);
 }
 
 function statusPayload() {
@@ -1383,11 +1554,16 @@ function getHttpDeps() {
     fetchAvatarForJids,
     selfJidCandidates,
     resolveSendJid,
+    requestPairingCode,
+    checkWhatsAppNumbers,
+    getPrivacySettings,
+    updatePrivacySettings,
     mediaToDataUrl,
     findStoredMessageByKey,
     upsertContact,
     rawWaByMsgId,
     loadRawWaById: rawMediaStore.load,
+    getRawWaByKey,
     requestFullHistorySync,
     connect,
     push,

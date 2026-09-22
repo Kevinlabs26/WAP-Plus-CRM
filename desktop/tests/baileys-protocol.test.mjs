@@ -12,11 +12,18 @@ import { createMessageIngest } from "../baileys-bridge/messageIngest.mjs";
 import { describeMessage } from "../baileys-bridge/messageDescribe.mjs";
 import { isHumanName } from "../baileys-bridge/jidUtils.mjs";
 import { createBaileysRequestHandler } from "../baileys-bridge/httpServer.mjs";
+import { BoundedMessageMap } from "../baileys-bridge/messageStore.mjs";
 
 assert.equal(sharedVersion, runtimeVersion);
 assert.equal(sharedLibraryVersion, runtimeLibraryVersion);
 assert.equal(isHumanName("群成员"), false);
 assert.equal(isHumanName("+225 0710288215"), false);
+
+const boundedMessages = new BoundedMessageMap(2);
+boundedMessages.set("a", 1).set("b", 2).set("c", 3);
+assert.deepEqual([...boundedMessages.keys()], ["b", "c"]);
+boundedMessages.set("b", 4);
+assert.deepEqual([...boundedMessages.entries()], [["c", 3], ["b", 4]]);
 
 const server = readFileSync(
   new URL("../baileys-bridge/httpServer.mjs", import.meta.url),
@@ -195,5 +202,29 @@ assert.equal(groupMessage?.isGroup, true);
 assert.equal(groupMessage?.senderName, "Alice");
 assert.equal(groupMessage?.senderPhoneE164, "+12025550123");
 assert.equal(contacts.get("120363012345678@g.us")?.lastMessage, "Alice: 大家好");
+
+const quotedGroupMessage = ingest.ingestMessage({
+  key: {
+    id: "group-reply-1",
+    remoteJid: "120363012345678@g.us",
+    participant: "12025550123@s.whatsapp.net",
+    fromMe: false,
+  },
+  pushName: "Alice",
+  messageTimestamp: 1_700_000_001,
+  message: {
+    extendedTextMessage: {
+      text: "Ça c'est qui?",
+      contextInfo: {
+        stanzaId: "group-message-1",
+        participant: "12025550123@s.whatsapp.net",
+        quotedMessage: { audioMessage: { seconds: 76, ptt: true } },
+      },
+    },
+  },
+});
+assert.equal(quotedGroupMessage?.quoted?.id, "group-message-1");
+assert.equal(quotedGroupMessage?.quoted?.body, "[语音 76s]");
+assert.equal(quotedGroupMessage?.quoted?.senderName, "Alice");
 
 console.log("baileys-protocol.test.mjs ok");

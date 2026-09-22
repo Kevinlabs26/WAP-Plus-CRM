@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   baileysLogout,
+  baileysPairingCode,
   baileysRestart,
   baileysStatus,
   baileysSync,
@@ -16,6 +17,7 @@ import {
   extractAccountHumanName,
 } from "@/lib/accountLabels";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { BaileysPrivacyPanel } from "./BaileysPrivacyPanel";
 
 type Props = {
   className?: string;
@@ -66,9 +68,11 @@ export function BaileysConnectCard({
   const { t } = useI18n();
   const [status, setStatus] = useState<BaileysStatus>();
   const [error, setError] = useState("");
-  const [busyAction, setBusyAction] = useState<"qr" | "sync" | "reconnect" | "logout" | "profile" | null>(null);
+  const [busyAction, setBusyAction] = useState<"qr" | "sync" | "reconnect" | "logout" | "profile" | "pairing" | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [hint, setHint] = useState("");
+  const [pairingPhone, setPairingPhone] = useState("");
+  const [pairingCode, setPairingCode] = useState("");
   const [lastSyncedAt, setLastSyncedAt] = useState<Date>();
   const tauri = isTauri();
   const setBaileysUi = useAppStore((s) => s.setBaileysUi);
@@ -211,6 +215,25 @@ export function BaileysConnectCard({
         );
       }
     } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const requestPairing = async () => {
+    if (!tauri) {
+      setError("配对码只能在桌面端使用");
+      return;
+    }
+    setBusyAction("pairing");
+    setError("");
+    try {
+      const result = await baileysPairingCode(pairingPhone, slotAccountId);
+      setPairingCode(result.code);
+      setHint("请在手机 WhatsApp：设置 → 已连接的设备 → 连接设备 → 使用电话号码连接中输入此配对码");
+    } catch (reason) {
+      setPairingCode("");
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusyAction(null);
@@ -573,6 +596,7 @@ export function BaileysConnectCard({
       return (
         <div className={className}>
           {connectedActions}
+          <BaileysPrivacyPanel accountId={slotAccountId} />
           {profileEditor}
         </div>
       );
@@ -660,7 +684,10 @@ export function BaileysConnectCard({
       )}
 
       {connectedUi ? (
-        connectedActions
+        <>
+          {connectedActions}
+          <BaileysPrivacyPanel accountId={slotAccountId} />
+        </>
       ) : status?.qrDataUrl ? (
         <>
           <div className="mb-2 text-xs text-zinc-300">{t("baileysConnect.scanToConnect")}</div>
@@ -684,6 +711,32 @@ export function BaileysConnectCard({
           >
             {busyAction === "qr" ? t("baileysConnect.generating") : t("baileysConnect.refreshQr")}
           </Button>
+          <div className="mt-3 border-t border-zinc-800 pt-3 text-left">
+            <div className="mb-1 text-2xs text-zinc-500">也可以使用手机号配对（包含国家码）</div>
+            <div className="flex gap-2">
+              <input
+                value={pairingPhone}
+                onChange={(event) => setPairingPhone(event.target.value)}
+                placeholder="例如 8613812345678"
+                className="min-w-0 flex-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-100 outline-none focus:border-brand"
+                inputMode="tel"
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                className="text-2xs"
+                disabled={busy || !tauri || pairingPhone.replace(/\D/g, "").length < 7}
+                onClick={() => void requestPairing()}
+              >
+                {busyAction === "pairing" ? "生成中…" : "获取配对码"}
+              </Button>
+            </div>
+            {pairingCode && (
+              <div className="mt-2 rounded bg-emerald-500/10 px-3 py-2 text-center text-lg font-semibold tracking-[0.25em] text-emerald-200">
+                {pairingCode}
+              </div>
+            )}
+          </div>
         </>
       ) : (
         <div className="space-y-2 py-5">
@@ -717,6 +770,32 @@ export function BaileysConnectCard({
           >
             {busyAction === "qr" ? t("baileysConnect.generating") : t("baileysConnect.getNewQr")}
           </Button>
+          <div className="mt-3 border-t border-zinc-800 pt-3 text-left">
+            <div className="mb-1 text-2xs text-zinc-500">或使用手机号配对（需包含国家码）</div>
+            <div className="flex gap-2">
+              <input
+                value={pairingPhone}
+                onChange={(event) => setPairingPhone(event.target.value)}
+                placeholder="例如 8613812345678"
+                className="min-w-0 flex-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-100 outline-none focus:border-brand"
+                inputMode="tel"
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                className="text-2xs"
+                disabled={busy || !tauri || pairingPhone.replace(/\D/g, "").length < 7}
+                onClick={() => void requestPairing()}
+              >
+                {busyAction === "pairing" ? "生成中…" : "获取配对码"}
+              </Button>
+            </div>
+            {pairingCode && (
+              <div className="mt-2 rounded bg-emerald-500/10 px-3 py-2 text-center text-lg font-semibold tracking-[0.25em] text-emerald-200">
+                {pairingCode}
+              </div>
+            )}
+          </div>
           {!compact && (
             <button
               type="button"

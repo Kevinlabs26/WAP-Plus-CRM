@@ -1,4 +1,4 @@
-import { describeMessage } from "./messageDescribe.mjs";
+import { describeMessage, unwrapContent } from "./messageDescribe.mjs";
 import {
   isHumanName,
   isLidJid,
@@ -25,7 +25,7 @@ export function extractChatLastMessages(chats) {
  * deps: {
  *   contacts, messages, // Maps
  *   isSelfJid, upsertContact, mergeHumanName, rememberLidPn,
- *   rememberRawWa, mediaToDataUrl, getOrderDetails, enrichContact, enqueueAvatar,
+ *   rememberRawWa, rememberRawMedia, mediaToDataUrl, getOrderDetails, enrichContact, enqueueAvatar,
  *   push, timestamp,
  * }
  */
@@ -38,6 +38,7 @@ export function createMessageIngest(deps) {
     mergeHumanName,
     rememberLidPn,
     rememberRawWa,
+    rememberRawMedia,
     mediaToDataUrl,
     getOrderDetails,
     enrichContact,
@@ -233,6 +234,56 @@ export function createMessageIngest(deps) {
     const sentAt = timestamp(message.messageTimestamp);
     const key = message.key || {};
 
+    // 引用消息上下文不是正文的一部分，必须从 Baileys 的 contextInfo 单独传出。
+    // 不同消息类型会把 contextInfo 放在各自的 *Message 节点里；这里统一读取，
+    // 这样图片、语音、文件和普通文本的引用都能保持一致。
+    const contextInfo = (() => {
+      const content = unwrapContent(message) || message?.message || {};
+      return (
+        content?.extendedTextMessage?.contextInfo ||
+        content?.imageMessage?.contextInfo ||
+        content?.videoMessage?.contextInfo ||
+        content?.audioMessage?.contextInfo ||
+        content?.documentMessage?.contextInfo ||
+        content?.stickerMessage?.contextInfo ||
+        content?.documentWithCaptionMessage?.message?.documentMessage?.contextInfo ||
+        meta?.contextInfo ||
+        {}
+      );
+    })();
+    const quoted = (() => {
+      const quotedMessage = contextInfo?.quotedMessage;
+      const quotedId = String(contextInfo?.stanzaId || "").trim();
+      if (!quotedMessage || !quotedId) return undefined;
+      const quotedMeta = describeMessage({ message: quotedMessage });
+      const quotedRemoteJid = String(
+        contextInfo?.remoteJid || key.remoteJid || jid || ""
+      ).trim();
+      const quotedParticipant = String(contextInfo?.participant || "").trim();
+      const quotedFromMe =
+        contextInfo?.fromMe === true ||
+        (Boolean(contextInfo?.participant) && isSelfJid(contextInfo.participant));
+      const quotedSenderName = quotedFromMe
+        ? ""
+        : isGroup
+          ? lookupStoredName(quotedParticipant) ||
+            (quotedParticipant === participant ? senderName : "") ||
+            pushName ||
+            contact.displayName ||
+            ""
+          : contact.displayName || pushName || "";
+      return {
+        id: quotedId,
+        body: String(quotedMeta.body || "").slice(0, 20_000),
+        fromMe: quotedFromMe,
+        remoteJid: quotedRemoteJid || undefined,
+        participant: quotedParticipant || undefined,
+        senderName: quotedSenderName || undefined,
+        mediaType: quotedMeta.mediaType || undefined,
+        mediaSeconds: quotedMeta.seconds || undefined,
+      };
+    })();
+
     // 表情回应：推 reaction 事件，不占一条会话气泡
     if (isReaction) {
       const emoji = meta.reactionEmoji || "";
@@ -277,13 +328,7 @@ export function createMessageIngest(deps) {
 
     const mentionedJids = (() => {
       try {
-        const ctx =
-          message?.message?.extendedTextMessage?.contextInfo ||
-          message?.message?.imageMessage?.contextInfo ||
-          message?.message?.videoMessage?.contextInfo ||
-          message?.message?.documentMessage?.contextInfo ||
-          meta?.contextInfo ||
-          {};
+        const ctx = contextInfo;
         const arr = ctx.mentionedJid || ctx.mentionedJids || [];
         return Array.isArray(arr)
           ? [...new Set(arr.map((x) => String(x || "").trim()).filter(Boolean))]
@@ -324,10 +369,14 @@ export function createMessageIngest(deps) {
       mediaSeconds: meta.seconds || 0,
       mediaPtt: Boolean(meta.ptt),
       mediaCaption: meta.caption || "",
+      pollName: meta.pollName || "",
+      pollOptions: meta.pollOptions || [],
+      pollSelectableCount: Number(meta.pollSelectableCount) || 0,
       contactCard: meta.contactCard || undefined,
       mediaUrl: "",
       /** 协议自带 jpeg 缩略图，视频未下完也能先看封面 */
       mediaThumbUrl: meta.thumbnailUrl || "",
+      quoted,
       // 协议操作用：撤回/已读/引用
       waKey: {
         remoteJid: key.remoteJid || jid,
@@ -352,10 +401,11 @@ export function createMessageIngest(deps) {
     messages.set(item.id, item);
     // 不在桥接内存里截断历史消息。/sync 是断线补偿和前端重启恢复的
     // 最后一条链路，保留最近 5000 条会让更早的聊天记录永久消失。
+    rememberRawWa(item.id, message);
     if (hasBinaryMedia) {
-      rememberRawWa(item.id, message);
+      rememberRawMedia?.(item.id, message);
       if (item.waKey?.id && item.waKey.id !== item.id) {
-        rememberRawWa(item.waKey.id, message);
+        rememberRawMedia?.(item.waKey.id, message);
       }
     }
 

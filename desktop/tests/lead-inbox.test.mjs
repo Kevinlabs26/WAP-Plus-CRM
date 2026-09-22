@@ -57,6 +57,19 @@ assert.equal(
 );
 assert.equal(
   leadCandidateForChat(
+    chat,
+    undefined,
+    [
+      { ...inbound, id: "m-before", direction: "out", sentAt: "2026-09-20T09:59:00.000Z" },
+      inbound,
+    ],
+    settings,
+    "wa-a"
+  ),
+  null
+);
+assert.equal(
+  leadCandidateForChat(
     { ...chat, hasOutgoingHistory: true },
     undefined,
     [inbound],

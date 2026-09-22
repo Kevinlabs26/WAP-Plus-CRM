@@ -1,9 +1,10 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Pencil, Reply, Send, X, Zap } from "lucide-react";
 import { Textarea } from "@/components/ui/primitives";
 import { toggleComposerBold } from "@/lib/composerFormatting";
 import { MultiWindowAttachmentButton } from "@/features/multiWindow/components/MultiWindowAttachmentButton";
 import { useI18n } from "@/i18n";
+import { onQuickReplyMedia, quickReplyMediaToFile } from "@/lib/quickReplyMedia";
 
 export function MultiWindowComposer({
   value,
@@ -35,6 +36,15 @@ export function MultiWindowComposer({
   const { t } = useI18n();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
+
+  useEffect(() => {
+    if (!onAttach) return;
+    return onQuickReplyMedia((selection) => {
+      if (selection.target !== "multi") return;
+      const file = quickReplyMediaToFile(selection);
+      if (file) onAttach(file);
+    });
+  }, [onAttach]);
 
   const applyBold = () => {
     const textarea = textareaRef.current;

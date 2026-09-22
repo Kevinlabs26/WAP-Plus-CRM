@@ -41,6 +41,9 @@ function shallowMessageSame(a: Message, b: Message): boolean {
     a.mediaSeconds === b.mediaSeconds &&
     a.mediaPtt === b.mediaPtt &&
     a.mediaCaption === b.mediaCaption &&
+    a.pollName === b.pollName &&
+    a.pollOptions === b.pollOptions &&
+    a.pollSelectableCount === b.pollSelectableCount &&
     a.mediaThumbUrl === b.mediaThumbUrl &&
     a.mediaPending === b.mediaPending &&
     a.mediaError === b.mediaError &&
@@ -53,6 +56,14 @@ function shallowMessageSame(a: Message, b: Message): boolean {
     a.senderPhoneE164 === b.senderPhoneE164 &&
     a.senderName === b.senderName &&
     a.senderAvatarUrl === b.senderAvatarUrl &&
+    a.quoted?.id === b.quoted?.id &&
+    a.quoted?.body === b.quoted?.body &&
+    a.quoted?.fromMe === b.quoted?.fromMe &&
+    a.quoted?.remoteJid === b.quoted?.remoteJid &&
+    a.quoted?.participant === b.quoted?.participant &&
+    a.quoted?.senderName === b.quoted?.senderName &&
+    a.quoted?.mediaType === b.quoted?.mediaType &&
+    a.quoted?.mediaSeconds === b.quoted?.mediaSeconds &&
     a.systemKind === b.systemKind &&
     a.systemAction === b.systemAction &&
     a.waKey === b.waKey &&
@@ -230,6 +241,9 @@ export function applyMessagesSync(opts: {
         mediaSeconds,
         mediaPtt,
         mediaCaption,
+        pollName,
+        pollOptions,
+        pollSelectableCount,
         mediaThumbUrl,
         mediaPending,
         contactCard,
@@ -240,6 +254,7 @@ export function applyMessagesSync(opts: {
         senderPhoneE164,
         senderName,
         senderAvatarUrl,
+        quoted,
         waKey,
         systemKind,
         systemAction,
@@ -429,6 +444,9 @@ export function applyMessagesSync(opts: {
           mediaSeconds: mediaSeconds ?? prev.mediaSeconds,
           mediaPtt: mediaPtt || prev.mediaPtt,
           mediaCaption: mediaCaption || prev.mediaCaption,
+          pollName: pollName || prev.pollName,
+          pollOptions: pollOptions || prev.pollOptions,
+          pollSelectableCount: pollSelectableCount || prev.pollSelectableCount,
           mediaThumbUrl: mediaThumbUrl || prev.mediaThumbUrl,
           mediaPending: mediaUrl || prev.mediaUrl ? false : mediaPending || prev.mediaPending,
           mediaError: mediaUrl ? undefined : prev.mediaError,
@@ -439,6 +457,7 @@ export function applyMessagesSync(opts: {
           senderPhoneE164: senderPhoneE164 || prev.senderPhoneE164,
           senderName: senderName || prev.senderName,
           senderAvatarUrl: senderAvatarUrl || prev.senderAvatarUrl,
+          quoted: quoted || prev.quoted,
           systemKind:
             (typeof systemKind === "string" && systemKind) ||
             prev.systemKind,
@@ -489,6 +508,7 @@ export function applyMessagesSync(opts: {
         senderPhoneE164: isGroup ? senderPhoneE164 : undefined,
         senderName: isGroup ? senderName : undefined,
         senderAvatarUrl: isGroup ? senderAvatarUrl : undefined,
+        quoted,
         systemKind:
           typeof systemKind === "string" ? systemKind : undefined,
         systemAction:
@@ -502,6 +522,9 @@ export function applyMessagesSync(opts: {
         mediaSeconds,
         mediaPtt: mediaPtt || undefined,
         mediaCaption: mediaCaption || undefined,
+        pollName,
+        pollOptions,
+        pollSelectableCount,
         mediaThumbUrl: mediaThumbUrl || undefined,
         mediaPending: mediaUrl ? false : mediaPending || undefined,
         contactCard,

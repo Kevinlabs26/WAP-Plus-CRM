@@ -3,10 +3,12 @@ import { useMemo, useState } from "react";
 import { useAppStore } from "@/store/appStore";
 import {
   filterQuickReplies,
+  getQuickReplyCategories,
   QUICK_REPLY_CATEGORIES,
   type QuickReplyCategoryFilter,
 } from "@/lib/quickReplies";
-import { useI18n } from "@/i18n";
+import { useI18n, type TranslationKey } from "@/i18n";
+import { emitQuickReplyMedia } from "@/lib/quickReplyMedia";
 
 export function MultiWindowQuickReplies({
   onPick,
@@ -21,15 +23,18 @@ export function MultiWindowQuickReplies({
 }) {
   const { t } = useI18n();
   const quickReplies = useAppStore((state) => state.settings.quickReplies || []);
+  const customCategories = useAppStore(
+    (state) => state.settings.quickReplyCustomCategories || []
+  );
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState<QuickReplyCategoryFilter>("all");
 
   const availableCategories = useMemo(
     () =>
-      QUICK_REPLY_CATEGORIES.filter((item) =>
+      getQuickReplyCategories(customCategories).filter((item) =>
         quickReplies.some((reply) => reply.category === item.id)
       ),
-    [quickReplies]
+    [quickReplies, customCategories]
   );
   const filteredReplies = useMemo(
     () => filterQuickReplies(quickReplies, category, query),
@@ -90,7 +95,9 @@ export function MultiWindowQuickReplies({
                   }`}
                   onClick={() => setCategory(item.id)}
                 >
-                  {t(`quickReply.category.${item.id}`)}
+                    {QUICK_REPLY_CATEGORIES.some((category) => category.id === item.id)
+                      ? t(`quickReply.category.${item.id}` as TranslationKey)
+                      : item.label}
                 </button>
               ))}
             </div>
@@ -103,20 +110,34 @@ export function MultiWindowQuickReplies({
           <button
             key={reply.id}
             type="button"
-            disabled={!reply.body.trim()}
+            disabled={!reply.body.trim() && !reply.media}
             className="flex w-full flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
-            onClick={() => onPick(reply.body)}
+            onClick={() => {
+              onPick(reply.body);
+              if (reply.media) {
+                emitQuickReplyMedia({
+                  ...reply.media,
+                  caption: reply.body,
+                  token: `${reply.id}-${Date.now()}`,
+                  target: "multi",
+                });
+              }
+            }}
           >
             <span className="flex w-full items-center justify-between gap-2">
               <span className="truncate text-[10px] font-medium text-zinc-200">
                 {reply.title}
               </span>
               <span className="shrink-0 text-[9px] text-zinc-600">
-                {t(`quickReply.category.${reply.category}`)}
+                {QUICK_REPLY_CATEGORIES.some((category) => category.id === reply.category)
+                  ? t(`quickReply.category.${reply.category}` as TranslationKey)
+                  : getQuickReplyCategories(customCategories).find(
+                      (category) => category.id === reply.category
+                    )?.label || t("multi.noContent")}
               </span>
             </span>
             <span className="line-clamp-2 text-[10px] leading-relaxed text-zinc-500">
-              {reply.body || t("multi.noContent")}
+              {reply.body || reply.media?.fileName || t("multi.noContent")}
             </span>
           </button>
         ))}

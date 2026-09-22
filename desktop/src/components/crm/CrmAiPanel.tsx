@@ -32,10 +32,12 @@ import { filterMessagesForAccount } from "@/lib/personThreads";
 import { isWaAccountConnected } from "@/lib/accountConnection";
 import {
   filterQuickReplies,
+  getQuickReplyCategories,
   QUICK_REPLY_CATEGORIES,
   type QuickReplyCategoryFilter,
 } from "@/lib/quickReplies";
-import { useI18n } from "@/i18n";
+import { useI18n, type TranslationKey } from "@/i18n";
+import { emitQuickReplyMedia } from "@/lib/quickReplyMedia";
 
 function threadForContact(
   messages: Message[],
@@ -197,10 +199,10 @@ export function CrmAiPanel() {
   );
   const availableQuickCategories = useMemo(
     () =>
-      QUICK_REPLY_CATEGORIES.filter((category) =>
+      getQuickReplyCategories(settings.quickReplyCustomCategories).filter((category) =>
         settings.quickReplies?.some((reply) => reply.category === category.id)
       ),
-    [settings.quickReplies]
+    [settings.quickReplies, settings.quickReplyCustomCategories]
   );
 
   const makeSuggestionKey = () =>
@@ -1063,10 +1065,18 @@ export function CrmAiPanel() {
                 <li key={reply.id}>
                   <button
                     type="button"
-                    disabled={!reply.body.trim()}
+                    disabled={!reply.body.trim() && !reply.media}
                     className="flex w-full flex-col gap-1 rounded-xl px-3 py-3 text-left transition-colors hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
                     onClick={() => {
                       applyAiSuggestion(reply.body, "append");
+                      if (reply.media) {
+                        emitQuickReplyMedia({
+                          ...reply.media,
+                          caption: reply.body,
+                          token: `${reply.id}-${Date.now()}`,
+                          target: "main",
+                        });
+                      }
                       pushToast(t("crmPanel.appended"), "success");
                     }}
                   >
@@ -1075,13 +1085,15 @@ export function CrmAiPanel() {
                         {reply.title || t("crmPanel.unnamed")}
                       </span>
                       <span className="shrink-0 rounded-full bg-zinc-800 px-2 py-0.5 text-[9px] text-zinc-500">
-                        {QUICK_REPLY_CATEGORIES.find(
-                          (category) => category.id === reply.category
-                        )?.label || t("crmPanel.unnamed")}
+                        {QUICK_REPLY_CATEGORIES.some((category) => category.id === reply.category)
+                          ? t(`quickReply.category.${reply.category}` as TranslationKey)
+                          : getQuickReplyCategories(settings.quickReplyCustomCategories).find(
+                              (category) => category.id === reply.category
+                            )?.label || t("crmPanel.unnamed")}
                       </span>
                     </span>
                     <span className="line-clamp-3 text-[11px] leading-relaxed text-zinc-500">
-                      {reply.body || t("crmPanel.noContent")}
+                      {reply.body || reply.media?.fileName || t("crmPanel.noContent")}
                     </span>
                   </button>
                 </li>

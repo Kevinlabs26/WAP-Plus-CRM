@@ -27,3 +27,12 @@ test("quick replies filter by category and title or body", () => {
     ["跟进"]
   );
 });
+
+test("custom quick-reply categories are accepted", () => {
+  assert.equal(
+    normalizeQuickReplyCategory("custom-sales", "", "", [
+      { id: "custom-sales", label: "销售" },
+    ]),
+    "custom-sales"
+  );
+});

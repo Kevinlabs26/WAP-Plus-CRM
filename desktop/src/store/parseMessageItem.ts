@@ -49,6 +49,9 @@ export type ParsedEnvelope = {
   mediaSeconds?: number;
   mediaPtt?: boolean;
   mediaCaption?: string;
+  pollName?: string;
+  pollOptions?: string[];
+  pollSelectableCount?: number;
   mediaThumbUrl?: string;
   mediaPending?: boolean;
   contactCard?: MessageContactCard;
@@ -60,6 +63,16 @@ export type ParsedEnvelope = {
   senderPhoneE164?: string;
   senderName?: string;
   senderAvatarUrl?: string;
+  quoted?: {
+    id: string;
+    body: string;
+    fromMe?: boolean;
+    remoteJid?: string;
+    participant?: string;
+    senderName?: string;
+    mediaType?: string;
+    mediaSeconds?: number;
+  };
   waKey?: WaMessageKey;
   systemKind?: string;
   systemAction?: string;
@@ -209,6 +222,11 @@ export function parseMessageItem(
         : undefined;
   const mediaPtt = Boolean(item.mediaPtt ?? item.ptt);
   const mediaCaption = string(item.mediaCaption ?? item.caption, 2000);
+  const pollName = string(item.pollName, 300) || undefined;
+  const pollOptions = Array.isArray(item.pollOptions)
+    ? item.pollOptions.map((value) => string(value, 100)).filter(Boolean).slice(0, 12)
+    : undefined;
+  const pollSelectableCount = Number(item.pollSelectableCount) || undefined;
   const rawThumb = string(
     item.mediaThumbUrl ?? item.thumbnailUrl,
     5_000_000
@@ -225,6 +243,46 @@ export function parseMessageItem(
         mediaType.toLowerCase()
       ) &&
       !mediaUrl);
+  const rawQuoted = object(item.quoted ?? item.replyTo ?? item.quotedMessage);
+  const quoted = (() => {
+    if (!rawQuoted) return undefined;
+    const id = string(rawQuoted.id ?? rawQuoted.stanzaId, 300);
+    if (!id) return undefined;
+    const quotedMediaType = string(rawQuoted.mediaType, 40) || undefined;
+    const quotedMediaSeconds =
+      typeof rawQuoted.mediaSeconds === "number"
+        ? rawQuoted.mediaSeconds
+        : typeof rawQuoted.seconds === "number"
+          ? rawQuoted.seconds
+          : undefined;
+    const explicitBody = string(
+      rawQuoted.body ?? rawQuoted.text ?? rawQuoted.caption,
+      20_000
+    );
+    const body =
+      explicitBody ||
+      (quotedMediaType === "audio"
+        ? quotedMediaSeconds
+          ? `[语音 ${quotedMediaSeconds}s]`
+          : "[语音]"
+        : quotedMediaType === "image"
+          ? "[图片]"
+          : quotedMediaType === "video"
+            ? "[视频]"
+            : quotedMediaType === "document"
+              ? "[文件]"
+              : "");
+    return {
+      id,
+      body,
+      fromMe: rawQuoted.fromMe === true,
+      remoteJid: string(rawQuoted.remoteJid, 200) || undefined,
+      participant: string(rawQuoted.participant, 200) || undefined,
+      senderName: string(rawQuoted.senderName, 200) || undefined,
+      mediaType: quotedMediaType,
+      mediaSeconds: quotedMediaSeconds,
+    };
+  })();
   const rawContactCard = object(item.contactCard);
   const contactCard = rawContactCard
     ? {
@@ -270,6 +328,9 @@ body,
     mediaSeconds,
     mediaPtt: mediaPtt || undefined,
     mediaCaption: mediaCaption || undefined,
+    pollName,
+    pollOptions,
+    pollSelectableCount,
     mediaThumbUrl: mediaThumbUrl || undefined,
     mediaPending: mediaUrl ? false : mediaPending || undefined,
     contactCard:
@@ -292,6 +353,7 @@ body,
     senderAvatarUrl:
       string(item.senderAvatarUrl ?? item.avatarUrl, 5_000_000) ||
       undefined,
+    quoted,
     waKey,
     systemKind:
       typeof item.systemKind === "string" ? item.systemKind : undefined,

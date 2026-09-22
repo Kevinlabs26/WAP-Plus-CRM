@@ -88,6 +88,37 @@ assert.equal(media.isReaction === false && media.senderName, "Sample Contact B")
 assert.equal(media.isReaction === false && media.mentionedMe, true);
 assert.equal(media.isReaction === false && media.waKey?.id, "k1");
 
+// —— 引用消息：保留原消息正文和发送者，媒体无正文时也给出可读占位 ——
+const quoted = resultOf({
+  body: "Ça c'est qui?",
+  direction: "in",
+  id: "reply-1",
+  quoted: {
+    id: "voice-1",
+    body: "[语音 76s]",
+    fromMe: false,
+    remoteJid: "123@s.whatsapp.net",
+    senderName: "Celeste Temoin",
+    mediaType: "audio",
+    mediaSeconds: 76,
+  },
+});
+assert.equal(quoted.isReaction === false && quoted.quoted?.id, "voice-1");
+assert.equal(
+  quoted.isReaction === false && quoted.quoted?.body,
+  "[语音 76s]"
+);
+assert.equal(
+  quoted.isReaction === false && quoted.quoted?.senderName,
+  "Celeste Temoin"
+);
+const quotedImage = resultOf({
+  body: "reply",
+  id: "reply-2",
+  quoted: { id: "image-1", mediaType: "image" },
+});
+assert.equal(quotedImage.isReaction === false && quotedImage.quoted?.body, "[图片]");
+
 const contactCard = resultOf({
   body: "[名片] Shared Person",
   mediaType: "contact",

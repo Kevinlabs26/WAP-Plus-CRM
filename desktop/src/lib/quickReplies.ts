@@ -7,15 +7,41 @@ export const QUICK_REPLY_CATEGORIES = [
 ] as const;
 
 export type QuickReplyCategory =
-  (typeof QUICK_REPLY_CATEGORIES)[number]["id"];
+  | (typeof QUICK_REPLY_CATEGORIES)[number]["id"]
+  | (string & {});
 export type QuickReplyCategoryFilter = QuickReplyCategory | "all";
+
+export type QuickReplyCategoryOption = {
+  id: string;
+  label: string;
+};
+
+export function getQuickReplyCategories(
+  custom: QuickReplyCategoryOption[] = []
+): QuickReplyCategoryOption[] {
+  const seen = new Set<string>(QUICK_REPLY_CATEGORIES.map((item) => item.id));
+  return [
+    ...QUICK_REPLY_CATEGORIES,
+    ...custom.filter((item) => {
+      const id = String(item?.id || "").trim();
+      const label = String(item?.label || "").trim();
+      if (!id || !label || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    }),
+  ];
+}
 
 export function normalizeQuickReplyCategory(
   value: unknown,
   title = "",
-  body = ""
+  body = "",
+  custom: QuickReplyCategoryOption[] = []
 ): QuickReplyCategory {
-  if (QUICK_REPLY_CATEGORIES.some((category) => category.id === value)) {
+  if (
+    QUICK_REPLY_CATEGORIES.some((category) => category.id === value) ||
+    custom.some((category) => category.id === value)
+  ) {
     return value as QuickReplyCategory;
   }
   const text = `${title} ${body}`;
@@ -27,13 +53,20 @@ export function normalizeQuickReplyCategory(
 }
 
 export function filterQuickReplies<
-  T extends { title: string; body: string; category: QuickReplyCategory },
+  T extends {
+    title: string;
+    body: string;
+    category: string;
+    media?: { fileName?: string };
+  },
 >(items: T[], category: QuickReplyCategoryFilter, query: string): T[] {
   const keyword = query.trim().toLocaleLowerCase();
   return items.filter(
     (item) =>
       (category === "all" || item.category === category) &&
       (!keyword ||
-        `${item.title}\n${item.body}`.toLocaleLowerCase().includes(keyword))
+        `${item.title}\n${item.body}\n${item.media?.fileName || ""}`
+          .toLocaleLowerCase()
+          .includes(keyword))
   );
 }

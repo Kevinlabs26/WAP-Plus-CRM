@@ -139,6 +139,39 @@ export function createBaileysRequestHandler(getD) {
         }
         return json(res, 200, body);
       }
+      if (req.method === "POST" && url.pathname === "/pairing-code") {
+        if (!d.socket || !["starting", "qr", "reconnecting"].includes(d.connection))
+          return json(res, 409, { error: "请先启动未登录的 WhatsApp 会话" });
+        const body = await requestBody(req);
+        const result = await d.requestPairingCode(body.phoneNumber || body.phone);
+        return json(res, 200, { ok: true, ...result });
+      }
+      if (req.method === "POST" && url.pathname === "/check-numbers") {
+        if (d.connection !== "connected" || !d.socket)
+          return json(res, 409, { error: "WhatsApp 尚未连接" });
+        const body = await requestBody(req);
+        return json(res, 200, {
+          ok: true,
+          results: await d.checkWhatsAppNumbers(body.numbers || body.phoneNumbers),
+        });
+      }
+      if (req.method === "GET" && url.pathname === "/privacy") {
+        if (d.connection !== "connected" || !d.socket)
+          return json(res, 409, { error: "WhatsApp 尚未连接" });
+        return json(res, 200, {
+          ok: true,
+          privacy: await d.getPrivacySettings(true),
+        });
+      }
+      if (req.method === "POST" && url.pathname === "/privacy") {
+        if (d.connection !== "connected" || !d.socket)
+          return json(res, 409, { error: "WhatsApp 尚未连接" });
+        const body = await requestBody(req);
+        return json(res, 200, {
+          ok: true,
+          privacy: await d.updatePrivacySettings(body),
+        });
+      }
       if (req.method === "GET" && url.pathname === "/labels") {
         return json(res, 200, {
           ok: true,
@@ -389,10 +422,15 @@ if (req.method === "POST" && url.pathname === "/restart") {
           text,
           jid: jidIn,
           imageDataUrl,
+          imageUrl,
           stickerDataUrl,
+          stickerUrl,
           gifDataUrl,
+          gifUrl,
           audioDataUrl,
+          audioUrl,
           fileDataUrl,
+          fileUrl,
           fileName,
           mediaType,
           ptt,
@@ -405,6 +443,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
           mentions,
           contactName,
           contactPhone,
+          poll,
         } = body || {};
         const address = String(phoneE164 || jidIn || "").trim();
         const caption = String(text || "").trim();
@@ -423,23 +462,37 @@ if (req.method === "POST" && url.pathname === "/restart") {
         const hasImage =
           typeof imageDataUrl === "string" &&
           imageDataUrl.startsWith("data:image");
+        const hasImageUrl = /^https?:\/\//i.test(String(imageUrl || ""));
         const hasSticker =
           typeof stickerDataUrl === "string" &&
           stickerDataUrl.startsWith("data:image/webp;base64,");
+        const hasStickerUrl = /^https?:\/\//i.test(String(stickerUrl || ""));
         const hasGif =
           typeof gifDataUrl === "string" &&
           gifDataUrl.startsWith("data:image/gif;base64,");
+        const hasGifUrl = /^https?:\/\//i.test(String(gifUrl || ""));
         const hasAudio =
           typeof audioDataUrl === "string" &&
           audioDataUrl.startsWith("data:audio");
+        const hasAudioUrl = /^https?:\/\//i.test(String(audioUrl || ""));
         const hasFile =
           typeof fileDataUrl === "string" &&
           fileDataUrl.startsWith("data:") &&
           (mediaType === "document" || mediaType === "file");
+        const hasFileUrl = /^https?:\/\//i.test(String(fileUrl || ""));
         const contactCard =
           mediaType === "contact"
             ? buildContactVcard(contactName, contactPhone)
             : null;
+        const pollName = String(poll?.name || body?.pollName || "").trim().slice(0, 300);
+        const pollValues = [...new Set((Array.isArray(poll?.values) ? poll.values : body?.pollOptions || [])
+          .map((value) => String(value || "").trim().slice(0, 100))
+          .filter(Boolean))].slice(0, 12);
+        const hasPoll = Boolean(pollName && pollValues.length >= 2);
+        const pollSelectableCount = Math.max(
+          1,
+          Math.min(pollValues.length, Number(poll?.selectableCount || body?.pollSelectableCount || 1))
+        );
 
         // 编辑：只改已有消息正文
         if (edit?.id && edit?.remoteJid) {
@@ -467,6 +520,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
           if (!to) return json(res, 400, { error: "转发目标无效" });
           const stored = d.findStoredMessageByKey(forwardKey);
           const original =
+            (await d.getRawWaByKey?.(forwardKey)) ||
             d.rawWaByMsgId.get(forwardKey.id) ||
             (stored?.id ? d.rawWaByMsgId.get(stored.id) : null) ||
             (stored?.waKey?.id ? d.rawWaByMsgId.get(stored.waKey.id) : null) ||
@@ -489,7 +543,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
 
         if (
           !address ||
-          (!caption && !hasImage && !hasSticker && !hasGif && !hasAudio && !hasFile && !contactCard)
+          (!caption && !hasImage && !hasImageUrl && !hasSticker && !hasStickerUrl && !hasGif && !hasGifUrl && !hasAudio && !hasAudioUrl && !hasFile && !hasFileUrl && !contactCard && !hasPoll)
         )
           return json(res, 400, { error: "号码或消息为空" });
 
@@ -514,7 +568,20 @@ if (req.method === "POST" && url.pathname === "/restart") {
         }
 
         let result;
-        if (contactCard) {
+        if (hasPoll) {
+          result = await d.socket.sendMessage(
+            jid,
+            {
+              poll: {
+                name: pollName,
+                values: pollValues,
+                selectableCount: pollSelectableCount,
+                toAnnouncementGroup: Boolean(poll?.toAnnouncementGroup),
+              },
+            },
+            quotedOpt ? { quoted: quotedOpt } : undefined
+          );
+        } else if (contactCard) {
           result = await d.socket.sendMessage(
             jid,
             {
@@ -528,7 +595,13 @@ if (req.method === "POST" && url.pathname === "/restart") {
             },
             quotedOpt ? { quoted: quotedOpt } : undefined
           );
-} else if (hasAudio || mediaType === "audio" || mediaType === "ptt") {
+        } else if (hasAudioUrl) {
+          result = await d.socket.sendMessage(jid, {
+            audio: { url: String(audioUrl) },
+            mimetype: mimeIn || "audio/mpeg",
+            ptt: ptt === true,
+          }, quotedOpt ? { quoted: quotedOpt } : undefined);
+        } else if (hasAudio || mediaType === "audio" || mediaType === "ptt") {
           const asPtt = ptt !== false; // 默认语音条
           console.log(
             `[ptt] input audioDataUrl=${String(audioDataUrl || "").slice(0, 40)} len=${String(audioDataUrl || "").length} mime=${mimeIn || "-"} seconds=${seconds} ptt=${asPtt}`
@@ -578,6 +651,12 @@ if (req.method === "POST" && url.pathname === "/restart") {
           console.log(
             `[ptt] sent id=${result?.key?.id} type=${result?.message?.audioMessage ? "audio" : JSON.stringify(Object.keys(result?.message || {}))} seconds=${result?.message?.audioMessage?.seconds} ptt=${result?.message?.audioMessage?.ptt} mimetype=${result?.message?.audioMessage?.mimetype} len=${result?.message?.audioMessage?.fileLength}`
           );
+        } else if (hasGifUrl) {
+          result = await d.socket.sendMessage(jid, {
+            video: { url: String(gifUrl) },
+            gifPlayback: true,
+            ...(caption ? { caption } : {}),
+          }, quotedOpt ? { quoted: quotedOpt } : undefined);
         } else if (hasGif || mediaType === "gif") {
           const { buf, mimetype } = await ensureGifMp4(gifDataUrl);
           result = await d.socket.sendMessage(
@@ -590,6 +669,10 @@ if (req.method === "POST" && url.pathname === "/restart") {
             },
             quotedOpt ? { quoted: quotedOpt } : undefined
           );
+        } else if (hasStickerUrl) {
+          result = await d.socket.sendMessage(jid, {
+            sticker: { url: String(stickerUrl) },
+          }, quotedOpt ? { quoted: quotedOpt } : undefined);
         } else if (hasSticker || mediaType === "sticker") {
           const parsed = parseDataUrl(stickerDataUrl);
           if (!parsed?.buf?.length || parsed.mime !== "image/webp")
@@ -601,6 +684,11 @@ if (req.method === "POST" && url.pathname === "/restart") {
             { sticker: parsed.buf },
             quotedOpt ? { quoted: quotedOpt } : undefined
           );
+        } else if (hasImageUrl) {
+          result = await d.socket.sendMessage(jid, {
+            image: { url: String(imageUrl) },
+            caption: caption || undefined,
+          }, quotedOpt ? { quoted: quotedOpt } : undefined);
         } else if (hasImage || mediaType === "image") {
           const m = String(imageDataUrl).match(
             /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/
@@ -618,6 +706,13 @@ if (req.method === "POST" && url.pathname === "/restart") {
             },
             quotedOpt ? { quoted: quotedOpt } : undefined
           );
+        } else if (hasFileUrl) {
+          result = await d.socket.sendMessage(jid, {
+            document: { url: String(fileUrl) },
+            mimetype: mimeIn || "application/octet-stream",
+            fileName: String(fileName || "file").slice(0, 180),
+            caption: caption || undefined,
+          }, quotedOpt ? { quoted: quotedOpt } : undefined);
         } else if (hasFile) {
           const parsed = parseDataUrl(fileDataUrl);
           if (!parsed?.buf?.length)

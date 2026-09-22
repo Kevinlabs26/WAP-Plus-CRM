@@ -231,6 +231,25 @@ export function describeMessage(message) {
       orderToken: order.token || "",
     };
   }
+  const poll =
+    content.pollCreationMessage ||
+    content.pollCreationMessageV2 ||
+    content.pollCreationMessageV3 ||
+    content.pollCreationMessageV5;
+  if (poll) {
+    const options = Array.isArray(poll.options)
+      ? poll.options.map((item) => String(item?.optionName || "").trim()).filter(Boolean)
+      : [];
+    const name = String(poll.name || "投票").trim();
+    return {
+      ...empty,
+      body: `[投票] ${name}`,
+      mediaType: "poll",
+      pollName: name,
+      pollOptions: options,
+      pollSelectableCount: Number(poll.selectableOptionsCount) || 1,
+    };
+  }
   if (content.reactionMessage) {
     // 反应不是独立气泡；由 ingestMessage 特殊处理
     const emoji = content.reactionMessage.text || "";

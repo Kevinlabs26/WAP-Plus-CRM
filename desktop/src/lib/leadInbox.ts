@@ -44,6 +44,14 @@ export function leadCandidateForChat(
   ) {
     return null;
   }
+  // A lead must have been started by the other person. Outbound messages that
+  // never succeeded (failed/pending/queued) do not count as a prior chat.
+  const firstConversationMessage = history.find(
+    (message) => message.direction === "in" || isConversationOutgoing(message)
+  );
+  if (!firstConversationMessage || firstConversationMessage.direction !== "in") {
+    return null;
+  }
   const first = history.find((message) => message.direction === "in");
   if (!first) return null;
 

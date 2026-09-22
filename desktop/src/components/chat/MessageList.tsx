@@ -55,6 +55,7 @@ type Props = {
   onReloadMedia: (m: Message, quiet?: boolean) => void;
   onPreview: (src: string, alt: string) => void;
   onSenderClick?: (m: Message) => void;
+  onQuoteClick?: (messageId: string) => void;
   selectable?: boolean;
   selectedMessageIds?: ReadonlySet<string>;
   onToggleSelect?: (messageId: string) => void;
@@ -88,6 +89,7 @@ const MessageListInner = forwardRef<MessageListHandle, Props>(
       onReloadMedia,
       onPreview,
       onSenderClick,
+      onQuoteClick,
       selectable,
       selectedMessageIds,
       onToggleSelect,
@@ -226,6 +228,7 @@ const MessageListInner = forwardRef<MessageListHandle, Props>(
             onReloadMedia={onReloadMedia}
             onPreview={onPreview}
             onSenderClick={onSenderClick}
+            onQuoteClick={onQuoteClick}
             selectable={selectable}
             selected={selectedMessageIds?.has(message.id)}
             onToggleSelect={onToggleSelect}
@@ -245,6 +248,7 @@ const MessageListInner = forwardRef<MessageListHandle, Props>(
         onReloadMedia,
         onRetry,
         onSenderClick,
+        onQuoteClick,
         onToggleSelect,
         onTranscribe,
         onTranslate,
@@ -281,7 +285,12 @@ const MessageListInner = forwardRef<MessageListHandle, Props>(
           });
         },
         scrollToMessage: (messageId, behavior = "smooth") => {
-          const index = messages.findIndex((message) => message.id === messageId);
+          const index = messages.findIndex(
+            (message) =>
+              message.id === messageId ||
+              message.waMessageId === messageId ||
+              message.waKey?.id === messageId
+          );
           if (index < 0) return;
           virtuosoRef.current?.scrollToIndex({
             index,

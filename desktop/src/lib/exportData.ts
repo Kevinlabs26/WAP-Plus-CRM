@@ -59,6 +59,7 @@ export type SettingsSafeExport = {
   ratePerHour: number;
   rateMinIntervalSec: number;
   quickReplies: AppSettings["quickReplies"];
+  quickReplyCustomCategories: AppSettings["quickReplyCustomCategories"];
   translateTargetLang: string;
   myLang: string;
   voiceInputEngine: AppSettings["voiceInputEngine"];
@@ -132,6 +133,7 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     ratePerHour: settings.ratePerHour,
     rateMinIntervalSec: settings.rateMinIntervalSec,
     quickReplies: settings.quickReplies,
+    quickReplyCustomCategories: settings.quickReplyCustomCategories || [],
     translateTargetLang: settings.translateTargetLang,
     myLang: settings.myLang,
     voiceInputEngine: settings.voiceInputEngine,
@@ -454,6 +456,14 @@ function sanitizeMessage(raw: unknown): Message | null {
         id: quotedId,
         body: str(quoted.body, 20000),
         fromMe: Boolean(quoted.fromMe) || undefined,
+        remoteJid: str(quoted.remoteJid, 200) || undefined,
+        participant: str(quoted.participant, 200) || undefined,
+        senderName: str(quoted.senderName, 200) || undefined,
+        mediaType: str(quoted.mediaType, 40) || undefined,
+        mediaSeconds:
+          typeof quoted.mediaSeconds === "number"
+            ? Math.max(0, Math.min(86_400, quoted.mediaSeconds))
+            : undefined,
       };
     })(),
     starred: Boolean(m.starred) || undefined,
