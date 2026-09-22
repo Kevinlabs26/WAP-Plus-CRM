@@ -16,6 +16,10 @@
 </tr>
 </table>
 
+<p align="center">
+<img src="docs/images/wap-plus-crm-screenshot.png" alt="WAP Plus CRM desktop application" width="1200" />
+</p>
+
 [中文文档](README.zh-CN.md)
 
 > **Public repository notice:** This is an independent personal/community project and is not affiliated with WhatsApp. Baileys and Android Accessibility may be affected by platform rules, version changes, or account restrictions. Evaluate compliance and account risk for your own use. Do not market this project as a way to avoid bans.

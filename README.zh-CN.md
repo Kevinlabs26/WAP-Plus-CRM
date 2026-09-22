@@ -16,6 +16,10 @@
 </tr>
 </table>
 
+<p align="center">
+<img src="docs/images/wap-plus-crm-screenshot.png" alt="WAP Plus CRM 桌面应用界面" width="1200" />
+</p>
+
 [English documentation](README.md)
 
 > **公开仓库说明：** 本项目是个人/社区实验性软件，与 WhatsApp 无官方关联。Baileys 和 Android Accessibility 通道可能受到平台规则、版本变化或账号限制影响，请自行评估合规性和账号风险。不要将本项目宣传为“防封”工具。
