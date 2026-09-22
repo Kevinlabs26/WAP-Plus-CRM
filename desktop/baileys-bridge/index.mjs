@@ -3,6 +3,7 @@ import makeWASocket, {
   Browsers,
   DisconnectReason,
   proto,
+  useMultiFileAuthState,
 } from "baileys";
 import pino from "pino";
 import QRCode from "qrcode";
@@ -41,7 +42,6 @@ import {
 } from "./messageIngest.mjs";
 import { createAvatarService } from "./avatarService.mjs";
 import { createContactStore } from "./contactStore.mjs";
-import { useAtomicAuthState } from "./authState.mjs";
 import { BoundedMessageMap } from "./messageStore.mjs";
 import {
   BAILEYS_BRIDGE_PROTOCOL_VERSION,
@@ -663,10 +663,7 @@ async function connectInternal(opts = {}) {
       qrDataUrl = "";
     }
 
-    const { state, saveCreds } = await useAtomicAuthState(
-      `${authDir}/auth-state.json`,
-      logger
-    );
+    const { state, saveCreds } = await useMultiFileAuthState(authDir);
     if (myGen !== connectGeneration) return;
     authMe = state.creds.me || undefined;
 

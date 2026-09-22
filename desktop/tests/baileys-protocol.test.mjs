@@ -61,6 +61,8 @@ assert.match(bridgeIndex, /sock\.ev\.on\("labels\.association"/);
 assert.match(bridgeIndex, /eventsDroppedThrough = removed\[removed\.length - 1\]\?\.seq/);
 assert.match(bridgeIndex, /shouldSyncHistoryMessage: \(\) => true/);
 assert.match(bridgeIndex, /FULL_HISTORY_SYNC_ON_DEMAND/);
+assert.match(bridgeIndex, /useMultiFileAuthState\(authDir\)/);
+assert.doesNotMatch(bridgeIndex, /auth-state\.json|useAtomicAuthState/);
 
 const audioConvert = readFileSync(
   new URL("../baileys-bridge/audioConvert.mjs", import.meta.url),
