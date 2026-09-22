@@ -670,8 +670,8 @@ async function connectInternal(opts = {}) {
     const sock = makeWASocket({
       auth: state,
       logger,
-      // Desktop 指纹配合完整历史同步；官方推荐用于更完整的历史。
-      browser: Browsers.macOS("Desktop"),
+      // Desktop 子平台会被 WhatsApp 立即以 428 终止；Web 浏览器指纹可正常登录。
+      browser: Browsers.ubuntu("Chrome"),
       syncFullHistory: true,
       shouldSyncHistoryMessage: () => true,
       // 后台 CRM 默认不占用在线态，避免抑制手机端推送。

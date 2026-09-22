@@ -63,6 +63,8 @@ assert.match(bridgeIndex, /shouldSyncHistoryMessage: \(\) => true/);
 assert.match(bridgeIndex, /FULL_HISTORY_SYNC_ON_DEMAND/);
 assert.match(bridgeIndex, /useMultiFileAuthState\(authDir\)/);
 assert.doesNotMatch(bridgeIndex, /auth-state\.json|useAtomicAuthState/);
+assert.match(bridgeIndex, /browser: Browsers\.ubuntu\("Chrome"\)/);
+assert.doesNotMatch(bridgeIndex, /Browsers\.macOS\("Desktop"\)/);
 
 const audioConvert = readFileSync(
   new URL("../baileys-bridge/audioConvert.mjs", import.meta.url),
