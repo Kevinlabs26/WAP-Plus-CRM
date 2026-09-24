@@ -10,6 +10,7 @@ import {
 import { tryHandleGroupRoutes } from "./groupRoutes.mjs";
 import { tryHandleGroupWriteRoutes } from "./groupWriteRoutes.mjs";
 import { tryHandleBlocklistRoutes } from "./blocklistRoutes.mjs";
+import { tryHandleCatalogRoutes } from "./catalogRoutes.mjs";
 import { buildContactVcard } from "./contactVcard.mjs";
 
 const syncDebugOn =
@@ -243,73 +244,7 @@ export function createBaileysRequestHandler(getD) {
         await d.socket.removeQuickReply(timestamp);
         return json(res, 200, { ok: true });
       }
-      if (req.method === "GET" && url.pathname === "/catalog") {
-        if (d.connection !== "connected" || !d.socket)
-          return json(res, 409, { error: "WhatsApp is not connected" });
-        const products = [];
-        let cursor;
-        for (let page = 0; page < 5; page++) {
-          const result = await d.socket.getCatalog({ limit: 50, cursor });
-          products.push(...(result.products || []));
-          cursor = result.nextPageCursor;
-          if (!cursor) break;
-        }
-        const visibleProducts = products.filter((product) => !product.isHidden);
-        d.products.clear();
-        for (const product of visibleProducts) {
-          if (product?.id) d.products.set(product.id, product);
-        }
-        return json(res, 200, {
-          ok: true,
-          products: visibleProducts.map((product) => ({
-            id: product.id,
-            name: product.name,
-            description: product.description || "",
-            price: Number(product.price) || 0,
-            currency: product.currency || "",
-            retailerId: product.retailerId || "",
-            url: product.url || "",
-            imageUrl: Object.values(product.imageUrls || {}).find(Boolean) || "",
-          })),
-        });
-      }
-      if (req.method === "POST" && url.pathname === "/catalog/send") {
-        if (d.connection !== "connected" || !d.socket)
-          return json(res, 409, { error: "WhatsApp is not connected" });
-        const body = await requestBody(req);
-        const address = String(body.jid || body.phoneE164 || "").trim();
-        const productId = String(body.productId || "").trim();
-        const product = d.products.get(productId);
-        if (!address || !product)
-          return json(res, 400, { error: "Missing recipient or catalog product" });
-        const imageUrl = Object.values(product.imageUrls || {}).find(Boolean);
-        if (!imageUrl) return json(res, 400, { error: "Product has no image" });
-        const jid = await d.resolveSendJid(address);
-        if (!jid) return json(res, 400, { error: "Invalid recipient" });
-        const ownerJid = String(d.socket.user?.id || "").replace(/:\d+@/, "@");
-        const result = await d.socket.sendMessage(jid, {
-          product: {
-            productImage: { url: imageUrl },
-            productId: product.id,
-            title: product.name,
-            description: product.description || "",
-            currencyCode: product.currency,
-            priceAmount1000: Number(product.price) || 0,
-            retailerId: product.retailerId,
-            url: product.url,
-            productImageCount: Object.keys(product.imageUrls || {}).length,
-          },
-          businessOwnerJid: ownerJid,
-          body: String(body.caption || "").trim() || undefined,
-        });
-        return json(res, 200, {
-          ok: true,
-          id: result?.key?.id,
-          jid,
-          productId,
-        });
-      }
-            if (req.method === "GET" && url.pathname === "/avatar") {
+      if (req.method === "GET" && url.pathname === "/avatar") {
         const jid = url.searchParams.get("jid") || "";
         const phone = url.searchParams.get("phone") || "";
         const quality = (url.searchParams.get("quality") || "preview").toLowerCase();
@@ -443,7 +378,6 @@ if (req.method === "POST" && url.pathname === "/restart") {
           mentions,
           contactName,
           contactPhone,
-          poll,
         } = body || {};
         const address = String(phoneE164 || jidIn || "").trim();
         const caption = String(text || "").trim();
@@ -484,15 +418,6 @@ if (req.method === "POST" && url.pathname === "/restart") {
           mediaType === "contact"
             ? buildContactVcard(contactName, contactPhone)
             : null;
-        const pollName = String(poll?.name || body?.pollName || "").trim().slice(0, 300);
-        const pollValues = [...new Set((Array.isArray(poll?.values) ? poll.values : body?.pollOptions || [])
-          .map((value) => String(value || "").trim().slice(0, 100))
-          .filter(Boolean))].slice(0, 12);
-        const hasPoll = Boolean(pollName && pollValues.length >= 2);
-        const pollSelectableCount = Math.max(
-          1,
-          Math.min(pollValues.length, Number(poll?.selectableCount || body?.pollSelectableCount || 1))
-        );
 
         // 编辑：只改已有消息正文
         if (edit?.id && edit?.remoteJid) {
@@ -543,7 +468,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
 
         if (
           !address ||
-          (!caption && !hasImage && !hasImageUrl && !hasSticker && !hasStickerUrl && !hasGif && !hasGifUrl && !hasAudio && !hasAudioUrl && !hasFile && !hasFileUrl && !contactCard && !hasPoll)
+          (!caption && !hasImage && !hasImageUrl && !hasSticker && !hasStickerUrl && !hasGif && !hasGifUrl && !hasAudio && !hasAudioUrl && !hasFile && !hasFileUrl && !contactCard)
         )
           return json(res, 400, { error: "号码或消息为空" });
 
@@ -568,20 +493,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
         }
 
         let result;
-        if (hasPoll) {
-          result = await d.socket.sendMessage(
-            jid,
-            {
-              poll: {
-                name: pollName,
-                values: pollValues,
-                selectableCount: pollSelectableCount,
-                toAnnouncementGroup: Boolean(poll?.toAnnouncementGroup),
-              },
-            },
-            quotedOpt ? { quoted: quotedOpt } : undefined
-          );
-        } else if (contactCard) {
+        if (contactCard) {
           result = await d.socket.sendMessage(
             jid,
             {
@@ -918,8 +830,20 @@ if (req.method === "POST" && url.pathname === "/restart") {
                 : 8 * 60 * 60 * 1000; // 默认 8 小时
           mod = { mute: ms };
         } else if (action === "unmute") mod = { mute: null };
-        else if (action === "markRead") mod = { markRead: true };
-        else if (action === "markUnread") mod = { markRead: false };
+        else if (action === "markRead") {
+          const lastMessages = Array.isArray(body.lastMessages)
+            ? body.lastMessages.filter(
+                (message) =>
+                  message?.key?.remoteJid &&
+                  message?.key?.id &&
+                  Number.isFinite(message?.messageTimestamp)
+              )
+            : [];
+          mod = {
+            markRead: true,
+            ...(lastMessages.length ? { lastMessages } : {}),
+          };
+        } else if (action === "markUnread") mod = { markRead: false };
         else if (action === "delete") mod = { delete: true };
         else if (action === "clear") mod = { clear: true };
         else return json(res, 400, { error: `未知 action: ${action}` });
@@ -1134,6 +1058,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
       }
 
       // 写路由优先（含 GET invite）；再只读 metadata
+      if (await tryHandleCatalogRoutes(req, res, url, d)) return;
       if (await tryHandleGroupWriteRoutes(req, res, url, d)) return;
       if (await tryHandleBlocklistRoutes(req, res, url, d)) return;
       if (await tryHandleGroupRoutes(req, res, url, d)) return;

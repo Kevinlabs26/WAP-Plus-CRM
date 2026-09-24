@@ -152,6 +152,9 @@ export function createMessageIngest(deps) {
 
   function ingestMessage(message) {
     const jid = message?.key?.remoteJid;
+    const protocolContent = unwrapContent(message) || message?.message;
+    // 投票回执属于协议更新，不作为独立聊天气泡显示。
+    if (protocolContent?.pollUpdateMessage) return null;
     const meta = describeMessage(message);
     const body = meta.body;
     if (!jid) return null;
@@ -368,10 +371,8 @@ export function createMessageIngest(deps) {
       mediaFileName: meta.fileName || "",
       mediaSeconds: meta.seconds || 0,
       mediaPtt: Boolean(meta.ptt),
+      mediaWaveform: meta.waveform || undefined,
       mediaCaption: meta.caption || "",
-      pollName: meta.pollName || "",
-      pollOptions: meta.pollOptions || [],
-      pollSelectableCount: Number(meta.pollSelectableCount) || 0,
       contactCard: meta.contactCard || undefined,
       mediaUrl: "",
       /** 协议自带 jpeg 缩略图，视频未下完也能先看封面 */

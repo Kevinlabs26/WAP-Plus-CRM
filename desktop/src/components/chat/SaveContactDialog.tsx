@@ -7,11 +7,13 @@ type Props = {
   initialName: string;
   phone: string;
   saving: boolean;
+  editing?: boolean;
+  hint?: string;
   onClose: () => void;
   onSave: (name: string) => void;
 };
 
-export function SaveContactDialog({ initialName, phone, saving, onClose, onSave }: Props) {
+export function SaveContactDialog({ initialName, phone, saving, editing = false, hint, onClose, onSave }: Props) {
   const { t } = useI18n();
   const [name, setName] = useState(initialName);
 
@@ -45,9 +47,9 @@ export function SaveContactDialog({ initialName, phone, saving, onClose, onSave 
           </span>
           <div className="min-w-0 flex-1">
             <h2 id="save-contact-title" className="text-[14px] font-semibold text-zinc-100">
-              {t("saveContact.title")}
+              {t(editing ? "saveContact.editTitle" : "saveContact.title")}
             </h2>
-            <p className="mt-0.5 text-[11px] text-zinc-500">{t("saveContact.hint")}</p>
+            <p className="mt-0.5 text-[11px] text-zinc-500">{hint || t("saveContact.hint")}</p>
           </div>
           <button
             type="button"
@@ -83,7 +85,7 @@ export function SaveContactDialog({ initialName, phone, saving, onClose, onSave 
             {t("common.cancel")}
           </Button>
           <Button type="submit" variant="primary" disabled={!name.trim() || saving}>
-            {saving ? t("common.saving") : t("saveContact.title")}
+            {saving ? t("common.saving") : t(editing ? "saveContact.update" : "saveContact.title")}
           </Button>
         </div>
       </form>

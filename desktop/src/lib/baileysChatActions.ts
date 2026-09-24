@@ -18,7 +18,19 @@ export const baileysChatModify = (
     channelAddress?: string;
     accountId?: string | null;
   },
-  extra?: { durationMs?: number | null; value?: boolean }
+  extra?: {
+    durationMs?: number | null;
+    value?: boolean;
+    lastMessages?: Array<{
+      key: {
+        remoteJid: string;
+        id: string;
+        fromMe?: boolean;
+        participant?: string;
+      };
+      messageTimestamp: number;
+    }>;
+  }
 ) =>
   request<BaileysOkResponse>("/chat/modify", {
     method: "POST",

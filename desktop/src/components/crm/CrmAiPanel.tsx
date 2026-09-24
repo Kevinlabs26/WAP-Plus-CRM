@@ -107,6 +107,7 @@ export function CrmAiPanel() {
     useState<QuickReplyCategoryFilter>("all");
   const [loading, setLoading] = useState(false);
   const [aiSource, setAiSource] = useState<string>(settings.aiProvider);
+  const [aiError, setAiError] = useState("");
   const autoKey = useRef("");
   const suggestionCache = useRef(
     new Map<string, { suggestions: SuggestResult[]; source: string }>()
@@ -310,6 +311,7 @@ export function CrmAiPanel() {
     setFollowSchedulerOpen(false);
     setFollowNote("");
     autoKey.current = "";
+    setAiError("");
     useAppStore.setState({ aiSuggestions: [] });
   }, [selectedChatId, selectedContactId]);
 
@@ -321,16 +323,18 @@ export function CrmAiPanel() {
       return;
     }
     setLoading(true);
+    setAiError("");
     try {
       const result = await generateSuggestions(contact, thread, settings, {
         accountId: aiAccountId,
       });
       useAppStore.setState({ aiSuggestions: result.suggestions });
-      setAiSource(result.source === "mock" ? settings.aiProvider : result.source);
+      setAiSource(result.source === "mock" ? t("crmPanel.localTemplate") : result.source);
+      setAiError(result.error || "");
       rememberSuggestions(result);
       pushToast(
-        result.fallback ? "API \u4e0d\u53ef\u7528 \u00b7 \u5df2\u7528\u672c\u5730\u5efa\u8bae" : "\u5df2\u751f\u6210\u56de\u590d\u5efa\u8bae",
-        result.fallback ? "info" : "success"
+        result.fallback ? result.error || "API \u4e0d\u53ef\u7528" : "\u5df2\u751f\u6210\u56de\u590d\u5efa\u8bae",
+        result.fallback ? "error" : "success"
       );
     } catch (error) {
       pushToast(error instanceof Error ? error.message : "\u751f\u6210\u5efa\u8bae\u5931\u8d25", "error");
@@ -347,12 +351,14 @@ export function CrmAiPanel() {
     const cached = suggestionCache.current.get(key);
     if (cached) {
       useAppStore.setState({ aiSuggestions: cached.suggestions });
-      setAiSource(cached.source === "mock" ? settings.aiProvider : cached.source);
+      setAiSource(cached.source === "mock" ? t("crmPanel.localTemplate") : cached.source);
+      setAiError("");
       setLoading(false);
       return;
     }
     let cancelled = false;
     setLoading(true);
+    setAiError("");
     const timer = window.setTimeout(() => {
       void generateSuggestions(contact, thread, settings, {
         accountId: aiAccountId,
@@ -360,7 +366,8 @@ export function CrmAiPanel() {
         .then((result) => {
           if (cancelled) return;
           useAppStore.setState({ aiSuggestions: result.suggestions });
-          setAiSource(result.source === "mock" ? settings.aiProvider : result.source);
+          setAiSource(result.source === "mock" ? t("crmPanel.localTemplate") : result.source);
+          setAiError(result.error || "");
           rememberSuggestions(result);
           setLoading(false);
         })
@@ -931,6 +938,11 @@ export function CrmAiPanel() {
               <p className="mb-1.5 break-words text-[10px] leading-3 text-zinc-600">{t("crmPanel.suggestionHint")}</p>
             )}
             <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
+              {!loading && aiError && (
+                <p role="alert" className="rounded-lg border border-amber-800/50 bg-amber-950/20 p-2 text-[11px] leading-4 text-amber-300">
+                  {t("crmPanel.suggestionError", { error: aiError })}
+                </p>
+              )}
               {!loading && aiSuggestions.map((suggestion) => (
                 <div
                   key={suggestion.id}

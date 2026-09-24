@@ -88,6 +88,7 @@ export function shouldShowBodyText(m: Message): boolean {
 /** 无 mediaType 的历史占位，尽量猜一种展示 */
 export function inferMediaType(m: Message): string {
   const t = (m.mediaType || "").toLowerCase();
+  if (t === "ptt" || t === "audio") return "audio";
   if (t) return t;
   const b = (m.body || "").trim();
   if (b === "[图片]" || b.startsWith("[图片]")) return "image";

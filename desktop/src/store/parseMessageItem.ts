@@ -48,10 +48,8 @@ export type ParsedEnvelope = {
   mediaFileName?: string;
   mediaSeconds?: number;
   mediaPtt?: boolean;
+  mediaWaveform?: number[];
   mediaCaption?: string;
-  pollName?: string;
-  pollOptions?: string[];
-  pollSelectableCount?: number;
   mediaThumbUrl?: string;
   mediaPending?: boolean;
   contactCard?: MessageContactCard;
@@ -221,12 +219,14 @@ export function parseMessageItem(
         ? item.seconds
         : undefined;
   const mediaPtt = Boolean(item.mediaPtt ?? item.ptt);
-  const mediaCaption = string(item.mediaCaption ?? item.caption, 2000);
-  const pollName = string(item.pollName, 300) || undefined;
-  const pollOptions = Array.isArray(item.pollOptions)
-    ? item.pollOptions.map((value) => string(value, 100)).filter(Boolean).slice(0, 12)
+  const rawWaveform = item.mediaWaveform ?? item.waveform;
+  const mediaWaveform = Array.isArray(rawWaveform)
+    ? rawWaveform
+        .slice(0, 128)
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value >= 0 && value <= 255)
     : undefined;
-  const pollSelectableCount = Number(item.pollSelectableCount) || undefined;
+  const mediaCaption = string(item.mediaCaption ?? item.caption, 2000);
   const rawThumb = string(
     item.mediaThumbUrl ?? item.thumbnailUrl,
     5_000_000
@@ -327,10 +327,8 @@ body,
     mediaFileName: mediaFileName || undefined,
     mediaSeconds,
     mediaPtt: mediaPtt || undefined,
+    mediaWaveform: mediaWaveform?.length ? mediaWaveform : undefined,
     mediaCaption: mediaCaption || undefined,
-    pollName,
-    pollOptions,
-    pollSelectableCount,
     mediaThumbUrl: mediaThumbUrl || undefined,
     mediaPending: mediaUrl ? false : mediaPending || undefined,
     contactCard:

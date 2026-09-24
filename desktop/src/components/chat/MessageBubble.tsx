@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Captions, Languages, Loader2, MessageCircle, MoreVertical, Pin, Star, UserPlus } from "lucide-react";
+import { Captions, Languages, Loader2, MessageCircle, MoreVertical, Pencil, Pin, Star, UserPlus } from "lucide-react";
 import type { Message, MessageReaction } from "@/types/crm";
 import { avatarInitials, cn } from "@/lib/utils";
 import { Avatar } from "@/components/ui/Avatar";
@@ -18,6 +18,7 @@ import { baileysFetchAvatar } from "@/lib/baileys";
 import { useAppStore } from "@/store/appStore";
 import { useI18n } from "@/i18n";
 import { translationMatchesTarget } from "@/lib/translateDraft";
+import { SaveContactDialog } from "./SaveContactDialog";
 
 type Props = {
   m: Message;
@@ -47,56 +48,76 @@ type Props = {
 function ContactCardMessage({ m }: { m: Message }) {
   const { t } = useI18n();
   const card = m.contactCard;
-  if (!card) return null;
-  const digits = card.phoneE164.replace(/\D/g, "");
+  const digits = (card?.phoneE164 || "").replace(/\D/g, "");
   const canUse = digits.length >= 7 && digits.length <= 15;
 
   // 优先从本地已知通讯录读取真实头像（如果有），否则展示带有姓名字母的彩色头像
   const savedContact = useAppStore((s) =>
-    s.contacts.find((c) => !c.isGroup && c.phone.replace(/\D/g, "") === digits)
-  );
-  const avatarSrc = savedContact?.avatarUrl || null;
-
-  const save = (openChat: boolean) => {
-    if (!canUse) return;
-    const accountId = m.accountId || undefined;
-    const findSaved = () => {
-      const contacts = useAppStore.getState().contacts;
-      return (
-        contacts.find(
+    digits
+      ? s.contacts.find(
           (contact) =>
             !contact.isGroup &&
             contact.phone.replace(/\D/g, "") === digits &&
-            (!accountId || contact.accountId === accountId)
-        ) ||
-        contacts.find(
-          (contact) =>
-            !contact.isGroup && contact.phone.replace(/\D/g, "") === digits
+            (!m.accountId || !contact.accountId || contact.accountId === m.accountId)
         )
-      );
-    };
-    let saved = findSaved();
-    if (!saved) {
-      useAppStore.getState().importContacts([
-        {
-          name: card.displayName || `+${digits}`,
-          phone: `+${digits}`,
-          accountId,
-          source: "contact-card",
-          tags: [],
-          stage: "new",
-        },
-      ]);
-      saved = findSaved();
-    }
-    if (!saved) {
+      : undefined
+  );
+  const avatarSrc = savedContact?.avatarUrl || null;
+  const [nameDialogOpen, setNameDialogOpen] = useState(false);
+  const [savingName, setSavingName] = useState(false);
+
+  if (!card) return null;
+
+  const save = (openChat: boolean, editedName?: string) => {
+    if (!canUse) return;
+    try {
+      const accountId = m.accountId || undefined;
+      const findSaved = () => {
+        const contacts = useAppStore.getState().contacts;
+        return contacts.find(
+          (contact) =>
+            !contact.isGroup &&
+            contact.phone.replace(/\D/g, "") === digits &&
+            (!accountId || !contact.accountId || contact.accountId === accountId)
+        );
+      };
+      let saved = findSaved();
+      const name = editedName?.trim() || card.displayName || `+${digits}`;
+      if (!saved) {
+        useAppStore.getState().importContacts([
+          {
+            name,
+            phone: `+${digits}`,
+            accountId,
+            source: "contact-card",
+            tags: [],
+            stage: "new",
+          },
+        ]);
+        saved = findSaved();
+      } else if (editedName) {
+        useAppStore.getState().updateContact(saved.id, { name });
+      }
+      if (!saved) {
+        useAppStore.getState().pushToast(t("messageBubble.contactSaveFailed"), "error");
+        return;
+      }
+      if (openChat) useAppStore.getState().openContactWorkspace(saved.id);
+      useAppStore
+        .getState()
+        .pushToast(
+          openChat
+            ? t("messageBubble.contactOpened")
+            : editedName
+              ? t(savedContact ? "messageBubble.contactRenamed" : "messageBubble.contactSaved")
+              : t("messageBubble.contactSaved"),
+          "success"
+        );
+      return true;
+    } catch {
       useAppStore.getState().pushToast(t("messageBubble.contactSaveFailed"), "error");
-      return;
+      return false;
     }
-    if (openChat) useAppStore.getState().openContactWorkspace(saved.id);
-    useAppStore
-      .getState()
-      .pushToast(openChat ? t("messageBubble.contactOpened") : t("messageBubble.contactSaved"), "success");
   };
 
   return (
@@ -122,18 +143,24 @@ function ContactCardMessage({ m }: { m: Message }) {
         <button
           type="button"
           disabled={!canUse}
+          title={!canUse ? t("messageBubble.contactNeedsPhone") : undefined}
           onClick={(event) => {
             event.stopPropagation();
-            save(false);
+            setNameDialogOpen(true);
           }}
-          className="contact-vcard-btn inline-flex items-center justify-center gap-1.5 border-r border-black/5 px-3 py-2 text-2xs font-medium text-zinc-400 hover:bg-black/5 hover:text-zinc-200 active:scale-95 transition-all disabled:opacity-40"
+          className="contact-vcard-btn inline-flex items-center justify-center gap-1.5 border-r border-black/5 px-3 py-2 text-2xs font-medium text-zinc-400 hover:bg-black/5 hover:text-zinc-200 active:scale-95 transition-all disabled:opacity-60"
         >
-          <UserPlus className="h-3.5 w-3.5" />
-          {t("messageBubble.save")}
+          {savedContact ? (
+            <Pencil className="h-3.5 w-3.5" />
+          ) : (
+            <UserPlus className="h-3.5 w-3.5" />
+          )}
+          {savedContact ? t("messageBubble.editName") : t("messageBubble.save")}
         </button>
         <button
           type="button"
           disabled={!canUse}
+          title={!canUse ? t("messageBubble.contactNeedsPhone") : undefined}
           onClick={(event) => {
             event.stopPropagation();
             save(true);
@@ -144,6 +171,22 @@ function ContactCardMessage({ m }: { m: Message }) {
           {t("messageBubble.sendMessage")}
         </button>
       </div>
+      {nameDialogOpen && createPortal(
+        <SaveContactDialog
+          phone={card.phoneE164}
+          initialName={savedContact?.name || card.displayName || ""}
+          saving={savingName}
+          editing={Boolean(savedContact)}
+          hint={t("messageBubble.contactNameHint")}
+          onClose={() => setNameDialogOpen(false)}
+          onSave={(name) => {
+            setSavingName(true);
+            if (save(false, name)) setNameDialogOpen(false);
+            setSavingName(false);
+          }}
+        />,
+        document.body
+      )}
     </div>
   );
 }
@@ -169,6 +212,22 @@ export const MessageBubble = memo(function MessageBubble({
   onToggleSelect,
 }: Props) {
   const { t } = useI18n();
+  const voiceAvatarUrl = useAppStore((s) => {
+    if (m.direction === "out") {
+      const accountId = m.accountId || s.settings.activeAccountId;
+      return s.settings.waAccounts.find((account) => account.id === accountId)?.avatarUrl || "";
+    }
+    return (
+      senderPresentation?.avatarUrl ||
+      m.senderAvatarUrl ||
+      s.contacts.find(
+        (contact) =>
+          contact.id === m.contactId &&
+          (!m.accountId || !contact.accountId || contact.accountId === m.accountId)
+      )?.avatarUrl ||
+      ""
+    );
+  });
   const [showTranslation, setShowTranslation] = useState(true);
   // 群头像悬停大图：fixed 定位，避免被气泡 overflow 裁成指甲盖
   const [avatarHover, setAvatarHover] = useState<{
@@ -722,6 +781,7 @@ export const MessageBubble = memo(function MessageBubble({
         <MessageMedia
           m={m}
           outbound={m.direction === "out"}
+          avatarUrl={voiceAvatarUrl}
           flush={imageFlush || hasCaption}
           mediaBusy={mediaBusy}
           onReloadMedia={stableReloadMedia}
@@ -864,92 +924,92 @@ export const MessageBubble = memo(function MessageBubble({
       ) : (
         <div
           className={cn(
-            "mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-2xs tabular-nums text-zinc-500",
+            "mt-1 flex w-full items-center justify-between gap-x-2 gap-y-0.5 text-2xs tabular-nums text-zinc-500",
+            m.direction === "out" && "flex-row-reverse",
             hasCaption && "px-3.5 pb-2"
           )}
         >
-          {m.starred && (
-            <span title={t("tooltip.starred")} className="inline-flex">
-              <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
-            </span>
-          )}
-          {m.savedPinned && (
-            <span title={t("tooltip.pinned")} className="inline-flex">
-              <Pin className="h-3 w-3 fill-brand text-brand" />
-            </span>
-          )}
-          <span>{timeLabel}</span>
-          {tick && <Ticks kind={tick} />}
-          {statusNode}
-          {retryNode}
-          {showVoiceTranscribe && (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                stableTranscribe();
-              }}
-              disabled={transcribing}
-              className={cn(
-                "ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs transition-colors",
-                m.direction === "out"
-                  ? "text-zinc-300 hover:bg-zinc-700"
-                  : "text-zinc-300 hover:bg-zinc-700",
-                transcribing && "opacity-60"
-              )}
-              title={t("tooltip.transcribeVoice")}
-            >
-              {transcribing ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <Captions className="h-3 w-3" />
-              )}
-              {transcribing ? t("messageBubble.transcribing") : t("messageBubble.toText")}
-            </button>
-          )}
-          {showTextTranslate && (
-            <button
-              type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                if (hasUsableTranslation) {
-                  setShowTranslation((v) => !v);
-                } else {
-                  onTranslate?.(m.id);
-                }
-              }}
-              disabled={translating}
-              className={cn(
-                "ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs transition-colors",
-                m.direction === "out"
-                  ? "text-zinc-300 hover:bg-zinc-700"
-                  : "text-zinc-300 hover:bg-zinc-700",
-                translating && "opacity-60"
-              )}
-              title={t("tooltip.translateMessage")}
-            >
-              {translating ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <Languages className="h-3 w-3" />
-              )}
-              {translating
-                ? t("tooltip.translating")
-                : hasUsableTranslation
-                  ? showTranslation
-                    ? t("tooltip.originalText")
-                    : t("tooltip.translatedText")
-                  : t("tooltip.translate")}
-            </button>
-          )}
-          <span
-            className={cn(
-              "inline-flex opacity-60 group-hover/msg:opacity-100",
-              !showVoiceTranscribe && !showTextTranslate && "ml-auto"
+          <div className="inline-flex items-center gap-1.5 shrink-0">
+            {m.starred && (
+              <span title={t("tooltip.starred")} className="inline-flex">
+                <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
+              </span>
             )}
-          >
-            {moreBtn}
-          </span>
+            {m.savedPinned && (
+              <span title={t("tooltip.pinned")} className="inline-flex">
+                <Pin className="h-3 w-3 fill-brand text-brand" />
+              </span>
+            )}
+            <span>{timeLabel}</span>
+            {tick && <Ticks kind={tick} />}
+            {statusNode}
+            {retryNode}
+          </div>
+          <div className="inline-flex items-center gap-1.5 shrink-0">
+            {showVoiceTranscribe && (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  stableTranscribe();
+                }}
+                disabled={transcribing}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs transition-colors",
+                  m.direction === "out"
+                    ? "text-zinc-300 hover:bg-zinc-700"
+                    : "text-zinc-300 hover:bg-zinc-700",
+                  transcribing && "opacity-60"
+                )}
+                title={t("tooltip.transcribeVoice")}
+              >
+                {transcribing ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Captions className="h-3 w-3" />
+                )}
+                {transcribing ? t("messageBubble.transcribing") : t("messageBubble.toText")}
+              </button>
+            )}
+            {showTextTranslate && (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (hasUsableTranslation) {
+                    setShowTranslation((v) => !v);
+                  } else {
+                    onTranslate?.(m.id);
+                  }
+                }}
+                disabled={translating}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs transition-colors",
+                  m.direction === "out"
+                    ? "text-zinc-300 hover:bg-zinc-700"
+                    : "text-zinc-300 hover:bg-zinc-700",
+                  translating && "opacity-60"
+                )}
+                title={t("tooltip.translateMessage")}
+              >
+                {translating ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Languages className="h-3 w-3" />
+                )}
+                {translating
+                  ? t("tooltip.translating")
+                  : hasUsableTranslation
+                    ? showTranslation
+                      ? t("tooltip.originalText")
+                      : t("tooltip.translatedText")
+                    : t("tooltip.translate")}
+              </button>
+            )}
+            <span className="inline-flex opacity-60 group-hover/msg:opacity-100">
+              {moreBtn}
+            </span>
+          </div>
         </div>
       )}
     </div>
@@ -966,7 +1026,9 @@ export const MessageBubble = memo(function MessageBubble({
           src={m.mediaUrl || ""}
           seconds={m.mediaSeconds}
           ptt={Boolean(m.mediaPtt)}
+          waveform={m.mediaWaveform}
           outbound={m.direction === "out"}
+          avatarUrl={voiceAvatarUrl}
           transcript={m.transcript}
           translation={hasUsableTranslation ? m.translation : undefined}
           translationLang={hasUsableTranslation ? m.translationLang : undefined}

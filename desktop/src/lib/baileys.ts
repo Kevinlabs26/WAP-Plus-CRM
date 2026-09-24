@@ -10,6 +10,7 @@ import { request } from "./baileysCore";
 
 export * from "./baileysCore";
 export * from "./baileysSend";
+export * from "./baileysCatalog";
 export * from "./baileysChatActions";
 export * from "./baileysLabels";
 export * from "./baileysProfile";

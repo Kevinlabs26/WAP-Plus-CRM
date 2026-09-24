@@ -10,6 +10,7 @@ import {
 import { TopBar } from "@/components/layout/TopBar";
 import { StatsBar } from "@/components/layout/StatsBar";
 import { ConfirmHost } from "@/components/ui/ConfirmHost";
+import { ToastHost } from "@/components/ui/ToastHost";
 import { UpdateWatcher } from "@/components/bridge/UpdateWatcher";
 import { UpdateCompleteModal } from "@/components/UpdateCompleteModal";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
@@ -803,6 +804,7 @@ export default function App() {
             <NavBody interactive={interactive} />
           </div>
           <ConfirmHost />
+          <ToastHost />
           <DeferredModals interactive={interactive} />
           <DeferredWatchers interactive={interactive} />
         </div>

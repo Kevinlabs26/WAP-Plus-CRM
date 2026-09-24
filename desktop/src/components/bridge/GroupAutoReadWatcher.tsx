@@ -19,34 +19,60 @@ export function GroupAutoReadWatcher() {
       }
     };
 
-    const unsubscribe = useAppStore.subscribe((state, prev) => {
+    const reconcile = (state: ReturnType<typeof useAppStore.getState>) => {
       if (!state.settings.autoReadGroupMessages) {
         clearAll();
         return;
       }
-      if (state.chats === prev.chats) return;
       const selected = state.selectedChatId;
-      const contacts = state.contacts;
+
+      for (const [id, timer] of timers.current) {
+        const chat = state.chats.find((item) => item.id === id);
+        if (!chat?.isGroup || !(chat.unread > 0) || chat.id === selected) {
+          window.clearTimeout(timer);
+          timers.current.delete(id);
+        }
+      }
+
       for (const chat of state.chats) {
         if (!chat.isGroup) continue;
         const hasUnread = (chat.unread || 0) > 0;
-        if (!hasUnread || chat.id === selected) {
-          const timer = timers.current.get(chat.id);
-          if (timer != null) {
-            window.clearTimeout(timer);
-            timers.current.delete(chat.id);
-          }
-          continue;
-        }
+        if (!hasUnread || chat.id === selected) continue;
         if (timers.current.has(chat.id)) continue;
-        const contact = contacts.find((c) => c.id === chat.contactId);
         const timer = window.setTimeout(() => {
           timers.current.delete(chat.id);
-          void markChatReadRemote(chat, contact);
+          const current = useAppStore.getState();
+          const latestChat = current.chats.find((item) => item.id === chat.id);
+          if (
+            !current.settings.autoReadGroupMessages ||
+            !latestChat?.isGroup ||
+            !(latestChat.unread > 0) ||
+            latestChat.id === current.selectedChatId
+          ) {
+            return;
+          }
+          const contact = current.contacts.find(
+            (item) => item.id === latestChat.contactId
+          );
+          void markChatReadRemote(latestChat, contact);
         }, AUTO_READ_DELAY_MS);
         timers.current.set(chat.id, timer);
       }
+    };
+
+    const unsubscribe = useAppStore.subscribe((state, prev) => {
+      if (
+        state.chats === prev.chats &&
+        state.contacts === prev.contacts &&
+        state.selectedChatId === prev.selectedChatId &&
+        state.settings.autoReadGroupMessages ===
+          prev.settings.autoReadGroupMessages
+      ) {
+        return;
+      }
+      reconcile(state);
     });
+    reconcile(useAppStore.getState());
 
     return () => {
       unsubscribe();

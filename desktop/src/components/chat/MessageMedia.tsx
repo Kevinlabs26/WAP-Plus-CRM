@@ -167,6 +167,7 @@ function VideoTile({
 export const MessageMedia = memo(function MessageMedia({
   m,
   outbound,
+  avatarUrl,
   flush,
   mediaBusy,
   onReloadMedia,
@@ -174,6 +175,7 @@ export const MessageMedia = memo(function MessageMedia({
 }: {
   m: Message;
   outbound?: boolean;
+  avatarUrl?: string;
   /** 纯图：与气泡同圆角、无内边距，避免双层框 */
   flush?: boolean;
   mediaBusy?: boolean;
@@ -251,7 +253,9 @@ export const MessageMedia = memo(function MessageMedia({
           src={m.mediaUrl}
           seconds={m.mediaSeconds}
           ptt={Boolean(m.mediaPtt)}
+          waveform={m.mediaWaveform}
           outbound={outbound}
+          avatarUrl={avatarUrl}
           transcript={m.transcript}
           translation={m.translation}
           translationLang={m.translationLang}

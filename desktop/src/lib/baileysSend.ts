@@ -49,28 +49,6 @@ export const baileysSend = (
     opts?.accountId
   );
 
-export const baileysSendPoll = (
-  phoneE164: string,
-  poll: { name: string; values: string[]; selectableCount?: number },
-  opts?: { quoted?: QuotePayload; accountId?: string | null }
-) =>
-  request<BaileysSendResponse>(
-    "/send",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        phoneE164,
-        poll: {
-          name: poll.name,
-          values: poll.values,
-          selectableCount: poll.selectableCount ?? 1,
-        },
-        quoted: opts?.quoted,
-      }),
-    },
-    opts?.accountId
-  );
-
 export const baileysSendContact = (
   phoneE164: string,
   contact: { displayName: string; phoneE164: string },

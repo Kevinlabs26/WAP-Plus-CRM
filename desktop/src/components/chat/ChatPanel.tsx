@@ -55,7 +55,6 @@ import {
   baileysSync,
   baileysPresence,
   baileysSendContact,
-  baileysSendPoll,
 } from "@/lib/baileys";
 import { applyChatPreference } from "@/lib/chatPreferences";
 import { Button } from "@/components/ui/primitives";
@@ -87,6 +86,9 @@ import { useForwardMessage } from "./useForwardMessage";
 import { useMessageActions } from "./useMessageActions";
 const ProductPicker = lazy(() =>
   import("./ProductPicker").then((m) => ({ default: m.ProductPicker }))
+);
+const ProductManager = lazy(() =>
+  import("./ProductManager").then((m) => ({ default: m.ProductManager }))
 );
 import { usePeerPresence } from "./usePeerPresence";
 import { retryMessage as retryMessageAction } from "./retryMessageAction";
@@ -1284,10 +1286,13 @@ export function ChatPanel() {
   const {
     catalogOpen,
     setCatalogOpen,
+    catalogManageOpen,
+    setCatalogManageOpen,
     catalogLoading,
     products,
     refreshCatalog,
     openCatalog,
+    openProductManager,
     handleSendProduct,
   } = useCatalog({
     isBaileys,
@@ -1480,35 +1485,6 @@ export function ChatPanel() {
   };
 
   const composerOnSend = useEventCallback(sendText);
-  const composerOnSendPoll = useEventCallback(async (name: string, values: string[]) => {
-    if (!isBaileys || !guardBlockedSend()) return;
-    const { contact, recipient } = resolveRecipient();
-    if (!contact || !recipient) {
-      pushToast(t("chat.noSendAddress"), "error");
-      return;
-    }
-    setSending(true);
-    try {
-      const raw = await gatedMediaSend(
-        { phoneE164: recipient, accountId: chatAccountId },
-        () => baileysSendPoll(recipient, { name, values, selectableCount: 1 }, { accountId: chatAccountId })
-      );
-      const id = enqueueOutgoingMessage({
-        body: `[投票] ${name}`,
-        phoneE164: recipient,
-        contactId: contact.id,
-        channelId,
-        deviceId: selectedPhoneId,
-        accountId: chatAccountId || undefined,
-        deliveryStatus: "sent",
-      });
-      if (id) patchMessage(id, { mediaType: "poll", pollName: name, pollOptions: values, pollSelectableCount: 1, waMessageId: raw.id });
-    } catch (error) {
-      pushToast(error instanceof Error ? error.message : "投票发送失败", "error");
-    } finally {
-      setSending(false);
-    }
-  });
   const composerOnSendImage = useEventCallback((file: File, caption?: string) =>
     sendImage(file, false, caption)
   );
@@ -1844,7 +1820,6 @@ export function ChatPanel() {
           voicePaused={voicePaused}
           recordSec={recordSec}
           onSend={composerOnSend}
-          onSendPoll={composerOnSendPoll}
           onEditLatest={editLatestMessage}
           onSendImage={composerOnSendImage}
           onSendSticker={composerOnSendSticker}
@@ -1879,6 +1854,16 @@ export function ChatPanel() {
           onClose={() => setCatalogOpen(false)}
           onRefresh={() => void refreshCatalog()}
           onSend={handleSendProduct}
+          onManageProducts={openProductManager}
+        />
+      )}
+      {catalogManageOpen && (
+        <ProductManager
+          products={products}
+          loading={catalogLoading}
+          accountId={chatAccountId}
+          onClose={() => setCatalogManageOpen(false)}
+          onRefresh={refreshCatalog}
         />
       )}
       {contactPickerOpen && (

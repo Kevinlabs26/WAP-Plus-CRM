@@ -28,6 +28,7 @@ type UseCatalogOptions = {
  */
 export function useCatalog(opts: UseCatalogOptions) {
   const [catalogOpen, setCatalogOpen] = useState(false);
+  const [catalogManageOpen, setCatalogManageOpen] = useState(false);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [products, setProducts] = useState<WhatsAppProduct[]>([]);
 
@@ -51,6 +52,11 @@ export function useCatalog(opts: UseCatalogOptions) {
     }
     setCatalogOpen(true);
     void refreshCatalog();
+  };
+
+  const openProductManager = () => {
+    setCatalogOpen(false);
+    setCatalogManageOpen(true);
   };
 
   const handleSendProduct = async (product: WhatsAppProduct) => {
@@ -80,10 +86,13 @@ export function useCatalog(opts: UseCatalogOptions) {
   return {
     catalogOpen,
     setCatalogOpen,
+    catalogManageOpen,
+    setCatalogManageOpen,
     catalogLoading,
     products,
     refreshCatalog,
     openCatalog,
+    openProductManager,
     handleSendProduct,
   };
 }

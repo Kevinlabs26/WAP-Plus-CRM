@@ -159,6 +159,11 @@ export function describeMessage(message) {
     const sec = Number(content.audioMessage.seconds) || 0;
     const ptt = Boolean(content.audioMessage.ptt);
     const label = ptt ? "语音" : "音频";
+    const rawWaveform = content.audioMessage.waveform;
+    const waveform =
+      rawWaveform instanceof Uint8Array || Array.isArray(rawWaveform)
+        ? Array.from(rawWaveform).slice(0, 128).map(Number)
+        : undefined;
     return {
       ...empty,
       body: sec ? `[${label} ${sec}s]` : `[${label}]`,
@@ -166,6 +171,7 @@ export function describeMessage(message) {
       mimetype: content.audioMessage.mimetype || "audio/ogg; codecs=opus",
       seconds: sec,
       ptt,
+      waveform,
     };
   }
   if (content.documentMessage) {
@@ -237,17 +243,10 @@ export function describeMessage(message) {
     content.pollCreationMessageV3 ||
     content.pollCreationMessageV5;
   if (poll) {
-    const options = Array.isArray(poll.options)
-      ? poll.options.map((item) => String(item?.optionName || "").trim()).filter(Boolean)
-      : [];
     const name = String(poll.name || "投票").trim();
     return {
       ...empty,
       body: `[投票] ${name}`,
-      mediaType: "poll",
-      pollName: name,
-      pollOptions: options,
-      pollSelectableCount: Number(poll.selectableOptionsCount) || 1,
     };
   }
   if (content.reactionMessage) {
@@ -266,6 +265,7 @@ export function describeMessage(message) {
       reactionTargetParticipant: targetKey.participant || undefined,
     };
   }
+  if (content.pollUpdateMessage) return empty;
   if (content.protocolMessage || content.secretEncryptedMessage) {
     return empty;
   }

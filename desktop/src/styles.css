@@ -354,6 +354,9 @@ select {
     @apply flex w-full items-center gap-2 rounded-md px-2.5 text-left;
     min-height: var(--row-h);
   }
+  .sidebar-chat-scroll {
+    margin-right: -10px;
+  }
   .ui-row-active {
     @apply bg-zinc-800/90 text-zinc-50;
     box-shadow: inset 2px 0 0 var(--app-brand);

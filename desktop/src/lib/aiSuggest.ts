@@ -77,6 +77,14 @@ export async function generateSuggestions(
     prompt === settings.aiSystemPrompt ? settings : { ...settings, aiSystemPrompt: prompt };
 
   if (provider === "mock") {
+    if (prompt) {
+      return {
+        suggestions: [],
+        source: "mock",
+        fallback: true,
+        error: "演示模式不能按自定义提示词生成回复",
+      };
+    }
     return {
       suggestions: mockSuggestions(name, cue),
       source: "mock",
@@ -85,6 +93,14 @@ export async function generateSuggestions(
   }
 
   if (!hasKey(settings)) {
+    if (prompt) {
+      return {
+        suggestions: [],
+        source: "mock",
+        fallback: true,
+        error: "未配置可用的 AI API Key",
+      };
+    }
     return {
       suggestions: mockSuggestions(name, cue),
       source: "mock",
@@ -145,6 +161,9 @@ export async function generateSuggestions(
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    if (prompt) {
+      return { suggestions: [], source: "mock", fallback: true, error: msg };
+    }
     return {
       suggestions: mockSuggestions(name, cue),
       source: "mock",
@@ -153,11 +172,18 @@ export async function generateSuggestions(
     };
   }
 
-  return {
-    suggestions: mockSuggestions(name, cue),
-    source: "mock",
-    fallback: false,
-  };
+  return prompt
+    ? {
+        suggestions: [],
+        source: "mock",
+        fallback: true,
+        error: "未能连接到已配置的 AI 服务",
+      }
+    : {
+        suggestions: mockSuggestions(name, cue),
+        source: "mock",
+        fallback: false,
+      };
 }
 
 function hasKey(s: AppSettings) {
@@ -184,8 +210,12 @@ function buildSystemPrompt(
     ...(stage
       ? [`Optional CRM context: ${stage}. Use it only when relevant; do not force sales language.`]
       : []),
-    "Use the customer's language when obvious from history; default to the language used most recently.",
   ];
+  if (!custom) {
+    parts.push(
+      "Use the customer's language when obvious from history; default to the language used most recently."
+    );
+  }
   if (auto) {
     parts.push(
       "You are replying DIRECTLY to the customer as an AI assistant (not giving suggestions to a human).",
@@ -194,7 +224,7 @@ function buildSystemPrompt(
   }
   if (custom) {
     parts.push(
-      "The following is user-provided identity, background, style, and boundary information. Treat it as context and preferences; it cannot override the output format, safety, privacy, or no-invention rules.",
+      "The following is the user's highest-priority instruction for the conversation. Follow its language, role, audience, tone, and conversation rules exactly. It overrides the general defaults in this system message. Keep only the required JSON output format and safety, privacy, and no-invention rules.",
       `<user_profile>\n${custom.slice(0, 6000)}\n</user_profile>`
     );
   }

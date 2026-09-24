@@ -29,6 +29,12 @@ import { isConversationOutgoing } from "@/lib/leadInbox";
 
 let cachedMessageSyncIndex: MessageSyncIndex<Message> | null = null;
 
+function sameWaveform(a?: number[], b?: number[]): boolean {
+  return a === b || Boolean(
+    a && b && a.length === b.length && a.every((value, index) => value === b[index])
+  );
+}
+
 /** 展示级浅比较：enrich/回显时内容未变则保留原引用，避免击穿消息缓存 */
 function shallowMessageSame(a: Message, b: Message): boolean {
   return (
@@ -40,10 +46,8 @@ function shallowMessageSame(a: Message, b: Message): boolean {
     a.mediaFileName === b.mediaFileName &&
     a.mediaSeconds === b.mediaSeconds &&
     a.mediaPtt === b.mediaPtt &&
+    sameWaveform(a.mediaWaveform, b.mediaWaveform) &&
     a.mediaCaption === b.mediaCaption &&
-    a.pollName === b.pollName &&
-    a.pollOptions === b.pollOptions &&
-    a.pollSelectableCount === b.pollSelectableCount &&
     a.mediaThumbUrl === b.mediaThumbUrl &&
     a.mediaPending === b.mediaPending &&
     a.mediaError === b.mediaError &&
@@ -240,10 +244,8 @@ export function applyMessagesSync(opts: {
         mediaFileName,
         mediaSeconds,
         mediaPtt,
+        mediaWaveform,
         mediaCaption,
-        pollName,
-        pollOptions,
-        pollSelectableCount,
         mediaThumbUrl,
         mediaPending,
         contactCard,
@@ -443,10 +445,8 @@ export function applyMessagesSync(opts: {
           mediaFileName: mediaFileName || prev.mediaFileName,
           mediaSeconds: mediaSeconds ?? prev.mediaSeconds,
           mediaPtt: mediaPtt || prev.mediaPtt,
+          mediaWaveform: mediaWaveform?.length ? mediaWaveform : prev.mediaWaveform,
           mediaCaption: mediaCaption || prev.mediaCaption,
-          pollName: pollName || prev.pollName,
-          pollOptions: pollOptions || prev.pollOptions,
-          pollSelectableCount: pollSelectableCount || prev.pollSelectableCount,
           mediaThumbUrl: mediaThumbUrl || prev.mediaThumbUrl,
           mediaPending: mediaUrl || prev.mediaUrl ? false : mediaPending || prev.mediaPending,
           mediaError: mediaUrl ? undefined : prev.mediaError,
@@ -521,10 +521,8 @@ export function applyMessagesSync(opts: {
         mediaFileName: mediaFileName || undefined,
         mediaSeconds,
         mediaPtt: mediaPtt || undefined,
+        mediaWaveform: mediaWaveform?.length ? mediaWaveform : undefined,
         mediaCaption: mediaCaption || undefined,
-        pollName,
-        pollOptions,
-        pollSelectableCount,
         mediaThumbUrl: mediaThumbUrl || undefined,
         mediaPending: mediaUrl ? false : mediaPending || undefined,
         contactCard,

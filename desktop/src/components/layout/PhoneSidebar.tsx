@@ -1338,7 +1338,7 @@ export function PhoneSidebar() {
             }}
           >
             <Virtuoso
-              className="h-full"
+              className="sidebar-chat-scroll h-full"
               data={sidebarItems}
               computeItemKey={(_i, it) => it.id}
               defaultItemHeight={44}

@@ -24,7 +24,8 @@ export async function markChatReadRemote(
 
   const target = chatTarget(contact, chat);
   // 已读键（最近几条）提供可靠的 remoteJid，优先用作 jid 兜底
-  const keys = inboundReadKeys(s, chat);
+  const lastMessages = inboundReadMessages(s, chat);
+  const keys = lastMessages.map((message) => message.key);
   const jid =
     target.jid ||
     target.channelAddress ||
@@ -37,13 +38,23 @@ export async function markChatReadRemote(
   const accountId = contact?.accountId || chat.accountId;
   // 远端尽量尝试：bridge 未连接会返回错误（静默即可），不再因本地状态机
   // 判断不准而静默跳过——之前这里曾导致“本地读了、手机没读”。
-  try {
-    if (keys.length) {
+  if (keys.length) {
+    try {
       await baileysMessagesRead(keys, accountId);
+    } catch {
+      /* Let chat.modify make its independent remote-read attempt. */
     }
-    await baileysChatModify("markRead", { jid, accountId });
-  } catch {
-    /* 本地已清未读；远端失败不打断 */
+  }
+  if (lastMessages.length) {
+    try {
+      await baileysChatModify(
+        "markRead",
+        { jid, accountId },
+        { lastMessages }
+      );
+    } catch {
+      /* Local unread is already cleared; remote failures are best-effort. */
+    }
   }
 }
 
@@ -53,15 +64,16 @@ export async function markChatReadRemote(
  * 因此大群（上千条）也只需一个请求，不用发全量键。
  * 群消息键缺 participant 时用 senderJid 补齐。
  */
-function inboundReadKeys(
+function inboundReadMessages(
   s: ReturnType<typeof useAppStore.getState>,
   chat: ChatPreview
-): Array<{ remoteJid: string; id: string; fromMe?: boolean; participant?: string }> {
+): Array<{
+  key: { remoteJid: string; id: string; fromMe?: boolean; participant?: string };
+  messageTimestamp: number;
+}> {
   const out: Array<{
-    remoteJid: string;
-    id: string;
-    fromMe?: boolean;
-    participant?: string;
+    key: { remoteJid: string; id: string; fromMe?: boolean; participant?: string };
+    messageTimestamp: number;
   }> = [];
   const limit = 3;
   let count = 0;
@@ -72,11 +84,16 @@ function inboundReadKeys(
     if (!k?.remoteJid || !k.id) continue;
     const participant =
       k.participant || (chat.isGroup ? m.senderJid : undefined) || undefined;
+    const messageTimestamp = Math.floor(Date.parse(m.sentAt) / 1000);
+    if (!Number.isFinite(messageTimestamp) || messageTimestamp <= 0) continue;
     out.push({
-      remoteJid: k.remoteJid,
-      id: k.id,
-      fromMe: k.fromMe,
-      ...(participant ? { participant } : {}),
+      key: {
+        remoteJid: k.remoteJid,
+        id: k.id,
+        fromMe: k.fromMe,
+        ...(participant ? { participant } : {}),
+      },
+      messageTimestamp,
     });
     count += 1;
   }

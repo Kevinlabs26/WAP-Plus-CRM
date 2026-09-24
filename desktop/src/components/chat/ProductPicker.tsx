@@ -1,4 +1,4 @@
-import { Loader2, RefreshCw, Search, ShoppingBag, X } from "lucide-react";
+import { Loader2, RefreshCw, Search, Settings2, ShoppingBag, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { WhatsAppProduct } from "@/types/crm";
 import { useI18n } from "@/i18n";
@@ -9,6 +9,7 @@ type Props = {
   onClose: () => void;
   onRefresh: () => void;
   onSend: (product: WhatsAppProduct) => Promise<void>;
+  onManageProducts: () => void;
 };
 
 function priceLabel(product: WhatsAppProduct) {
@@ -29,6 +30,7 @@ export function ProductPicker({
   onClose,
   onRefresh,
   onSend,
+  onManageProducts,
 }: Props) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
@@ -65,6 +67,15 @@ export function ProductPicker({
             {"WhatsApp \u5546\u54c1\u76ee\u5f55"}
           </div>
           <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={onManageProducts}
+              disabled={busyId !== null}
+              className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-[11px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-40"
+              title={t("catalog.manageTitle")}
+            >
+              <Settings2 className="h-4 w-4" />{t("catalog.manage")}
+            </button>
             <button
               type="button"
               onClick={onRefresh}

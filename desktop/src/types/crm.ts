@@ -164,7 +164,6 @@ export type MessageMediaType =
   | "location"
   | "product"
   | "order"
-  | "poll"
   | "contact"
   | "";
 
@@ -245,10 +244,8 @@ export interface Message {
   mediaFileName?: string;
   mediaSeconds?: number;
   mediaPtt?: boolean;
+  mediaWaveform?: number[];
   mediaCaption?: string;
-  pollName?: string;
-  pollOptions?: string[];
-  pollSelectableCount?: number;
   /** 视频/图协议缩略图 data URL */
   mediaThumbUrl?: string;
   /** bridge 侧媒体待按需拉取（无 mediaUrl） */

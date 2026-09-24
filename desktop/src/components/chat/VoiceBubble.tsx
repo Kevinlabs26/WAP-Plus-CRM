@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Captions, Loader2, Pause, Play } from "lucide-react";
+import { Captions, Loader2, Mic, Pause, Play, UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 
@@ -16,16 +16,28 @@ const MAX_WHATSAPP_AUDIO_SECONDS = 600;
 /** 伪波形条（固定种子，同一条消息形状稳定） */
 function WaveBars({
   progress,
+  waveform,
   active,
   outbound,
 }: {
   progress: number; // 0–1 played
+  waveform?: number[];
   active?: boolean;
   outbound?: boolean;
 }) {
   const bars = 28;
   // 确定性高度序列
   const heights = useMemo(() => {
+    if (waveform?.length) {
+      const peak = Math.max(1, ...waveform);
+      return Array.from({ length: bars }, (_, i) => {
+        const start = Math.floor((waveform.length * i) / bars);
+        const end = Math.max(start + 1, Math.floor((waveform.length * (i + 1)) / bars));
+        const samples = waveform.slice(start, end);
+        const average = samples.reduce((sum, value) => sum + value, 0) / samples.length;
+        return 0.18 + (average / peak) * 0.82;
+      });
+    }
     const h: number[] = [];
     let x = 7;
     for (let i = 0; i < bars; i++) {
@@ -33,7 +45,7 @@ function WaveBars({
       h.push(0.28 + (x / 23) * 0.72);
     }
     return h;
-  }, []);
+  }, [waveform]);
   return (
     <div className="flex h-7 flex-1 items-center gap-[2.5px]" aria-hidden>
       {heights.map((ht, i) => {
@@ -64,7 +76,9 @@ export function VoiceBubble({
   src,
   seconds,
   ptt,
+  waveform,
   outbound,
+  avatarUrl,
   transcript,
   translation,
   translationLang,
@@ -76,7 +90,9 @@ export function VoiceBubble({
   src: string;
   seconds?: number;
   ptt?: boolean;
+  waveform?: number[];
   outbound?: boolean;
+  avatarUrl?: string;
   transcript?: string;
   translation?: string;
   translationLang?: string;
@@ -207,7 +223,8 @@ export function VoiceBubble({
     >
       <audio ref={audioRef} src={src} preload="metadata" className="hidden" />
       {/* 核心语音播放条：固定黄金宽度 230px，波形固定条数，永不拉伸 */}
-      <div className="flex w-[230px] shrink-0 items-center gap-2.5 px-0.5 py-0.5">
+      <div className="flex w-[274px] shrink-0 items-center gap-2 px-0.5 py-0.5">
+        {!outbound && <VoiceAvatar src={avatarUrl} className="order-1" />}
         <button
           type="button"
           onClick={(e) => {
@@ -215,7 +232,7 @@ export function VoiceBubble({
             toggle();
           }}
           className={cn(
-            "voice-play-button flex h-8 w-8 shrink-0 items-center justify-center rounded-full shadow-xs transition-all duration-150 active:scale-95",
+            "voice-play-button order-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-full shadow-xs transition-all duration-150 active:scale-95",
             outbound
               ? "bg-brand/20 text-brand hover:bg-brand/30"
               : "bg-zinc-800 text-zinc-100 hover:bg-zinc-700"
@@ -228,7 +245,7 @@ export function VoiceBubble({
             <Play className="h-3.5 w-3.5 translate-x-0.5 fill-current" />
           )}
         </button>
-        <div className="w-[185px] shrink-0">
+        <div className={cn("w-[185px] shrink-0", outbound ? "order-1" : "order-3")}>
           <div
             role="slider"
             tabIndex={0}
@@ -243,11 +260,15 @@ export function VoiceBubble({
           >
             <WaveBars
               progress={progress}
+              waveform={waveform}
               active={playing}
               outbound={outbound}
             />
           </div>
-          <div className="mt-1 flex items-center justify-between text-[11px] tabular-nums font-medium text-zinc-500">
+          <div className={cn(
+            "mt-1 flex items-center justify-between text-[11px] tabular-nums font-medium text-zinc-500",
+            outbound && "flex-row-reverse"
+          )}>
             <span>{labelLeft}</span>
             {ptt !== false && (
               <span className="text-[10px] text-zinc-500/80">
@@ -256,6 +277,7 @@ export function VoiceBubble({
             )}
           </div>
         </div>
+        {outbound && <VoiceAvatar src={avatarUrl} className="order-3" />}
       </div>
       {!renderAudioOnly && transcript ? (
         <div className="voice-transcript-card mt-2.5 w-full min-w-[280px] max-w-[min(72vw,36rem)] rounded-2xl border border-black/10 bg-black/5 p-3 text-[13px] leading-relaxed break-words whitespace-pre-wrap shadow-xs">
@@ -328,5 +350,28 @@ export function VoiceBubble({
         </button>
       ) : null}
     </div>
+  );
+}
+
+function VoiceAvatar({ src, className }: { src?: string; className?: string }) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <span className={cn("relative h-8 w-8 shrink-0 rounded-full bg-zinc-700", className)}>
+      {src && !failed ? (
+        <img
+          src={src}
+          alt=""
+          className="h-full w-full rounded-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <span className="flex h-full w-full items-center justify-center rounded-full text-zinc-200">
+          <UserRound className="h-4 w-4" />
+        </span>
+      )}
+      <span className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full border border-zinc-900 bg-brand text-zinc-950">
+        <Mic className="h-2 w-2" />
+      </span>
+    </span>
   );
 }
