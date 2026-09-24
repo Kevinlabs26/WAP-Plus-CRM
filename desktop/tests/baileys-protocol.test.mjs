@@ -47,10 +47,15 @@ assert.match(server, /addChatLabel/);
 assert.match(server, /removeChatLabel/);
 assert.match(server, /addOrEditQuickReply/);
 assert.match(server, /removeQuickReply/);
-assert.match(server, /getCatalog/);
-assert.match(server, /priceAmount1000/);
 assert.match(server, /eventsDroppedThrough/);
 assert.match(server, /count: droppedThrough - after/);
+
+const catalogRoutes = readFileSync(
+  new URL("../baileys-bridge/catalogRoutes.mjs", import.meta.url),
+  "utf8"
+);
+assert.match(catalogRoutes, /getCatalog/);
+assert.match(catalogRoutes, /priceAmount1000/);
 
 const bridgeIndex = readFileSync(
   new URL("../baileys-bridge/index.mjs", import.meta.url),

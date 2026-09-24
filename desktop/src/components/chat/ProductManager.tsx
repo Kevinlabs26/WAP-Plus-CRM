@@ -112,7 +112,14 @@ export function ProductManager({ products, loading, accountId, onClose, onRefres
   };
 
   const remove = async (product: WhatsAppProduct) => {
-    if (!window.confirm(t("catalog.confirmDelete", { name: product.name }))) return;
+    const confirmed = await useAppStore.getState().requestConfirm({
+      title: t("catalog.delete"),
+      description: t("catalog.confirmDelete", { name: product.name }),
+      confirmLabel: t("catalog.delete"),
+      cancelLabel: t("common.cancel"),
+      tone: "danger",
+    });
+    if (!confirmed) return;
     setBusy(true);
     try {
       await baileysDeleteProduct(product.id, accountId);
