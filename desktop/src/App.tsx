@@ -17,6 +17,7 @@ import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { BootSplash } from "@/components/BootSplash";
 import { useI18n } from "@/i18n";
 import { ChatWelcome } from "@/components/chat/ChatWelcome";
+import { VoicePlaybackHost } from "@/components/chat/VoiceBubble";
 import { useAppStore } from "@/store/appStore";
 import { flushPersist, primePersistBaseline } from "@/store/persist";
 import { setBaileysAccountIdResolver } from "@/lib/baileys";
@@ -803,6 +804,7 @@ export default function App() {
           <div className="flex min-h-0 flex-1 overflow-hidden">
             <NavBody interactive={interactive} />
           </div>
+          <VoicePlaybackHost />
           <ConfirmHost />
           <ToastHost />
           <DeferredModals interactive={interactive} />

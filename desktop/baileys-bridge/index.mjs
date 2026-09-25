@@ -1188,10 +1188,11 @@ async function connectInternal(opts = {}) {
         const receipt = u?.receipt;
         if (!key?.id) continue;
         // receipt 可能含 receiptTimestamp / readTimestamp
-        let ack = "delivered";
-        if (receipt?.playedTimestamp) ack = "played";
-        else if (receipt?.readTimestamp) ack = "read";
-        else if (receipt?.receiptTimestamp) ack = "delivered";
+        let ack = "";
+        if (receipt?.playedTimestamp != null) ack = "played";
+        else if (receipt?.readTimestamp != null) ack = "read";
+        else if (receipt?.receiptTimestamp != null) ack = "delivered";
+        if (!ack) continue;
         items.push({
           id: key.id,
           remoteJid: key.remoteJid,

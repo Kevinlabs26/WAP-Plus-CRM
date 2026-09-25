@@ -4,12 +4,14 @@ import {
   ChevronRight,
   Folder,
   FolderPlus,
+  Link2,
   GripVertical,
   LayoutGrid,
   MoreHorizontal,
   Pencil,
   Trash2,
   Upload,
+  Users,
   UserRoundX,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -30,6 +32,8 @@ type FolderHeaderRowProps = {
   onCreateChild: () => void;
   onOpenMultiWindow: () => void;
   onImport: () => void;
+  onImportGroupLinks: () => void;
+  onSelectGroups: () => void;
   onRename: () => void;
   onClear: () => void;
   onDelete: () => void;
@@ -50,6 +54,8 @@ export function FolderHeaderRow({
   onCreateChild,
   onOpenMultiWindow,
   onImport,
+  onImportGroupLinks,
+  onSelectGroups,
   onRename,
   onClear,
   onDelete,
@@ -77,8 +83,8 @@ export function FolderHeaderRow({
 
   const openMenu = (x: number, y: number) => {
     setMenu({
-      x: Math.max(8, Math.min(x, window.innerWidth - 184)),
-      y: Math.max(8, Math.min(y, window.innerHeight - 208)),
+      x: Math.max(8, Math.min(x, window.innerWidth - 248)),
+      y: Math.max(8, Math.min(y, window.innerHeight - 312)),
     });
   };
   const run = (action: () => void) => {
@@ -162,7 +168,7 @@ export function FolderHeaderRow({
           data-folder-action-menu
           role="menu"
           aria-label={t("folder.actionsFor", { name })}
-          className="fixed z-[9999] min-w-[11rem] overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/50"
+          className="fixed z-[9999] min-w-[15rem] overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/50"
           style={{ left: menu.x, top: menu.y }}
           onContextMenu={(event) => event.preventDefault()}
         >
@@ -194,6 +200,24 @@ export function FolderHeaderRow({
           >
             <Upload className="h-3.5 w-3.5 text-zinc-500" />
             {t("folder.importNumbers")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={itemClass}
+            onClick={() => run(onImportGroupLinks)}
+          >
+            <Link2 className="h-3.5 w-3.5 text-brand" />
+            {t("folderGroups.importLinksAction")}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className={itemClass}
+            onClick={() => run(onSelectGroups)}
+          >
+            <Users className="h-3.5 w-3.5 text-zinc-500" />
+            {t("folderGroups.selectAction")}
           </button>
           <button
             type="button"

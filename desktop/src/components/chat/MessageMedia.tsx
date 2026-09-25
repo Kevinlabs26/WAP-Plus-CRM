@@ -251,6 +251,10 @@ export const MessageMedia = memo(function MessageMedia({
       return (
         <VoiceBubble
           src={m.mediaUrl}
+          chatId={m.chatId}
+          messageId={m.id}
+          accountId={m.accountId}
+          sentAt={m.sentAt}
           seconds={m.mediaSeconds}
           ptt={Boolean(m.mediaPtt)}
           waveform={m.mediaWaveform}

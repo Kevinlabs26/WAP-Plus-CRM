@@ -11,6 +11,7 @@ import { baileysSync } from "@/lib/baileys";
 import type { GroupDetails } from "@/types/crm";
 import { openJoinedGroup } from "./openJoinedGroup";
 import { useI18n } from "@/i18n";
+import { extractWhatsAppInvite } from "@/lib/whatsappGroupInvite";
 
 type Props = {
   /** 消息正文或链接 */
@@ -19,14 +20,6 @@ type Props = {
   className?: string;
   onJoined?: (groupJid: string) => void;
 };
-
-const INVITE_RE =
-  /(?:https?:\/\/)?(?:www\.)?chat\.whatsapp\.com\/(?:invite\/)?([A-Za-z0-9_-]+)/i;
-
-export function extractWhatsAppInvite(text: string): string {
-  const m = String(text || "").match(INVITE_RE);
-  return m?.[0] || "";
-}
 
 /** 聊天气泡内：预览邀请链接（只读 + 可选加入） */
 export function GroupInviteCard({

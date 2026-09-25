@@ -37,6 +37,7 @@ import {
   SAVED_MESSAGES_CHAT_ID,
   type ChatPreview,
   type Contact,
+  type GroupDetails,
 } from "@/types/crm";
 import type { ContactSyncItem } from "@shared/protocol";
 import {
@@ -47,6 +48,7 @@ import {
 import { ChatSidebarRow } from "./ChatSidebarRow";
 import { ContactSidebarList } from "./ContactSidebarList";
 import { FolderHeaderRow } from "./FolderHeaderRow";
+import { FolderGroupImportDialog } from "./FolderGroupImportDialog";
 import { SidebarSpecialItem } from "./SidebarSpecialItem";
 import {
   FolderDialog,
@@ -342,6 +344,10 @@ export function PhoneSidebar() {
   const [folderNameDraft, setFolderNameDraft] = useState("");
   const folderNameInputRef = useRef<HTMLInputElement | null>(null);
   const [folderImportText, setFolderImportText] = useState("");
+  const [groupFolderDialog, setGroupFolderDialog] = useState<{
+    folderId: string;
+    mode: "links" | "existing";
+  } | null>(null);
   const [pendingFolderAction, setPendingFolderAction] =
     useState<PendingFolderAction | null>(null);
 
@@ -801,6 +807,52 @@ export function PhoneSidebar() {
       );
     },
     [dismissLeadChats, moveChatToFolder, pushToast, t]
+  );
+
+  const addJoinedGroupToFolder = useCallback(
+    (folderId: string, groupJid: string, group: GroupDetails, accountId: string) => {
+      const store = useAppStore.getState();
+      store.ingestBridgeEvents([
+        {
+          type: "contacts.sync",
+          deviceId: accountId,
+          accountId,
+          payload: {
+            accountId,
+            source: "group-invite-accept",
+            items: [
+              {
+                jid: groupJid,
+                channelAddress: groupJid,
+                isGroup: true,
+                displayName: group.subject || groupJid,
+                subject: group.subject || "",
+                participantCount: group.participantCount,
+                groupDesc: group.desc,
+                groupOwner: group.owner,
+                groupAnnounce: group.announce,
+                groupRestrict: group.restrict,
+                groupEphemeral: group.ephemeralDuration,
+                groupJoinApproval: group.joinApprovalMode,
+              },
+            ],
+          },
+        },
+      ] as unknown as Parameters<typeof store.ingestBridgeEvents>[0]);
+      const contactId = useAppStore
+        .getState()
+        .contacts.find(
+          (contact) =>
+            contact.channelAddress === groupJid &&
+            (contact.accountId || contact.boundPhoneId) === accountId
+        )?.id;
+      if (!contactId) throw new Error(t("folderGroups.joinedSyncFailed"));
+      const chatId = useAppStore.getState().ensureChatForContact(contactId, accountId);
+      if (!chatId) throw new Error(t("folderGroups.joinedSyncFailed"));
+      useAppStore.getState().patchChat(chatId, { isGroup: true });
+      useAppStore.getState().moveChatToFolder(chatId, folderId);
+    },
+    [t]
   );
 
   const {
@@ -1452,6 +1504,12 @@ export function PhoneSidebar() {
                           text: "",
                         });
                       }}
+                      onImportGroupLinks={() =>
+                        setGroupFolderDialog({ folderId: folder.id, mode: "links" })
+                      }
+                      onSelectGroups={() =>
+                        setGroupFolderDialog({ folderId: folder.id, mode: "existing" })
+                      }
                       onRename={() => {
                         setFolderNameDraft(folder.name);
                         setFolderDialog({
@@ -1497,6 +1555,68 @@ export function PhoneSidebar() {
           </div>
         )}
       </section>
+
+      {groupFolderDialog && (() => {
+        const folder = chatFolders.find((item) => item.id === groupFolderDialog.folderId);
+        if (!folder) return null;
+        const scopedAccountId =
+          folder.scope?.type === "account"
+            ? folder.scope.accountId
+            : folder.scope?.type === "all"
+              ? null
+              : dataAccountId;
+        const folderMembers = new Set(folder.chatIds);
+        const folderGroups = chats.filter((chat) => {
+          const accountId = chat.accountId || chat.phoneId;
+          return (
+            chat.isGroup === true &&
+            !chat.localOnly &&
+            !folderMembers.has(chat.id) &&
+            (!scopedAccountId || accountId === scopedAccountId)
+          );
+        });
+        const contactsById = new Map(contacts.map((contact) => [contact.id, contact]));
+        const existingGroupChatIds: Record<string, string> = {};
+        for (const chat of chats) {
+          if (chat.isGroup !== true) continue;
+          const contact = contactsById.get(chat.contactId);
+          const jid = contact?.channelAddress;
+          if (!jid) continue;
+          const accountId = chat.accountId || chat.phoneId;
+          existingGroupChatIds[`${accountId}|${jid}`] = chat.id;
+        }
+        const initialAccountId =
+          scopedAccountId ||
+          (connectedAccountIds.includes(syncAccountId)
+            ? syncAccountId
+            : connectedAccountIds[0] || "");
+        return (
+          <FolderGroupImportDialog
+            mode={groupFolderDialog.mode}
+            folderName={folder.name}
+            groups={folderGroups}
+            accounts={waAccounts}
+            connectedAccountIds={connectedAccountIds}
+            existingGroupChatIds={existingGroupChatIds}
+            accountLabelOf={accountLabelOf}
+            initialAccountId={initialAccountId}
+            fixedAccountId={scopedAccountId || undefined}
+            onClose={() => setGroupFolderDialog(null)}
+            onMoveGroups={(chatIds) => {
+              chatIds.forEach((chatId) => moveChatToFolder(chatId, folder.id));
+              pushToast(
+                t("folderGroups.moved", { count: chatIds.length, name: folder.name }),
+                "success"
+              );
+              setGroupFolderDialog(null);
+            }}
+            onJoined={(groupJid, group, accountId) =>
+              addJoinedGroupToFolder(folder.id, groupJid, group, accountId)
+            }
+            onAlreadyJoined={(chatId) => moveChatToFolder(chatId, folder.id)}
+          />
+        );
+      })()}
 
       {folderDialog && (
         <FolderDialog

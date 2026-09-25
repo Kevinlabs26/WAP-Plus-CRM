@@ -12,7 +12,8 @@ import {
   inferMediaType,
   shouldShowBodyText,
 } from "./messageMediaUtils";
-import { extractWhatsAppInvite, GroupInviteCard } from "./GroupInviteCard";
+import { GroupInviteCard } from "./GroupInviteCard";
+import { extractWhatsAppInvite } from "@/lib/whatsappGroupInvite";
 import { VoiceBubble } from "./VoiceBubble";
 import { baileysFetchAvatar } from "@/lib/baileys";
 import { useAppStore } from "@/store/appStore";
@@ -351,7 +352,7 @@ export const MessageBubble = memo(function MessageBubble({
     !["failed", "queued", "pending"].includes(st)
       ? st === "read" || st === "played"
         ? "read"
-        : st === "delivered" || st === "server"
+        : st === "delivered"
           ? "delivered"
           : "sent"
       : null;

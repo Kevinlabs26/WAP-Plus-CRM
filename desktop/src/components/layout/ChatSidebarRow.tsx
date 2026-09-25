@@ -159,8 +159,7 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
       ? null
       : lastDeliveryStatus === "read" || lastDeliveryStatus === "played"
         ? "read"
-        : lastDeliveryStatus === "delivered" ||
-            lastDeliveryStatus === "server"
+        : lastDeliveryStatus === "delivered"
           ? "delivered"
           : "sent";
 

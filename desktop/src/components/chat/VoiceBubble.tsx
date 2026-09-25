@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Captions, Loader2, Mic, Pause, Play, UserRound } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Captions, Loader2, MessageCircle, Mic, Pause, Play, UserRound, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
+import { useAppStore } from "@/store/appStore";
 
 function formatClock(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return "0:00";
@@ -12,6 +13,75 @@ function formatClock(sec: number): string {
 }
 
 const MAX_WHATSAPP_AUDIO_SECONDS = 600;
+let sharedAudio: HTMLAudioElement | null = null;
+let sharedAudioSrc = "";
+type PlaybackMeta = {
+  chatId?: string;
+  messageId?: string;
+  accountId?: string;
+  chatName: string;
+  sentAt?: string;
+};
+type PlaybackSnapshot = PlaybackMeta & {
+  currentTime: number;
+  duration: number;
+  playing: boolean;
+};
+let sharedPlaybackMeta: PlaybackMeta | null = null;
+const playbackListeners = new Set<() => void>();
+
+function notifyPlaybackChange() {
+  playbackListeners.forEach((listener) => listener());
+}
+
+function getSharedAudio() {
+  if (!sharedAudio) {
+    sharedAudio = new Audio();
+    ["timeupdate", "loadedmetadata", "durationchange", "play", "pause", "ended"].forEach(
+      (event) => sharedAudio?.addEventListener(event, notifyPlaybackChange)
+    );
+  }
+  return sharedAudio;
+}
+
+function selectSharedAudio(src: string, meta?: PlaybackMeta) {
+  const audio = getSharedAudio();
+  if (sharedAudioSrc !== src) {
+    audio.pause();
+    sharedAudioSrc = src;
+    audio.src = src;
+  }
+  if (meta) sharedPlaybackMeta = meta;
+  notifyPlaybackChange();
+  return audio;
+}
+
+function getPlaybackSnapshot(): PlaybackSnapshot | null {
+  if (!sharedAudio || !sharedAudioSrc || !sharedPlaybackMeta || sharedAudio.ended) {
+    return null;
+  }
+  return {
+    ...sharedPlaybackMeta,
+    currentTime: sharedAudio.currentTime || 0,
+    duration: Number.isFinite(sharedAudio.duration) ? sharedAudio.duration : 0,
+    playing: !sharedAudio.paused,
+  };
+}
+
+function toggleCurrentPlayback() {
+  if (!sharedAudio) return;
+  if (sharedAudio.paused) void sharedAudio.play().catch(() => undefined);
+  else sharedAudio.pause();
+}
+
+function stopCurrentPlayback() {
+  if (sharedAudio) {
+    sharedAudio.pause();
+    sharedAudio.currentTime = 0;
+  }
+  sharedPlaybackMeta = null;
+  notifyPlaybackChange();
+}
 
 /** 伪波形条（固定种子，同一条消息形状稳定） */
 function WaveBars({
@@ -74,6 +144,10 @@ function WaveBars({
 
 export function VoiceBubble({
   src,
+  chatId,
+  messageId,
+  accountId,
+  sentAt,
   seconds,
   ptt,
   waveform,
@@ -88,6 +162,10 @@ export function VoiceBubble({
   renderAudioOnly,
 }: {
   src: string;
+  chatId?: string;
+  messageId?: string;
+  accountId?: string;
+  sentAt?: string;
   seconds?: number;
   ptt?: boolean;
   waveform?: number[];
@@ -102,7 +180,6 @@ export function VoiceBubble({
   renderAudioOnly?: boolean;
 }) {
   const { t } = useI18n();
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [cur, setCur] = useState(0);
   const knownSeconds = Math.max(0, Number(seconds) || 0);
@@ -114,10 +191,15 @@ export function VoiceBubble({
   const [showTranscript, setShowTranscript] = useState(false);
 
   useEffect(() => {
-    const a = audioRef.current;
-    if (!a) return;
-    const onTime = () => setCur(a.currentTime || 0);
-    const onMeta = () => {
+    const syncPlayback = () => {
+      const a = sharedAudio;
+      if (!a || sharedAudioSrc !== src) {
+        setPlaying(false);
+        setCur(0);
+        return;
+      }
+      setPlaying(!a.paused);
+      setCur(a.ended ? 0 : a.currentTime || 0);
       // WhatsApp's protocol duration is authoritative. The optimistic local
       // data URL can contain the original file (for example 26 minutes),
       // while WhatsApp accepts/truncates voice messages to 10 minutes.
@@ -125,25 +207,10 @@ export function VoiceBubble({
         setDur(a.duration);
       }
     };
-    const onPlay = () => setPlaying(true);
-    const onPause = () => setPlaying(false);
-    const onEnd = () => {
-      setPlaying(false);
-      setCur(0);
-    };
-    a.addEventListener("timeupdate", onTime);
-    a.addEventListener("loadedmetadata", onMeta);
-    a.addEventListener("durationchange", onMeta);
-    a.addEventListener("play", onPlay);
-    a.addEventListener("pause", onPause);
-    a.addEventListener("ended", onEnd);
+    playbackListeners.add(syncPlayback);
+    syncPlayback();
     return () => {
-      a.removeEventListener("timeupdate", onTime);
-      a.removeEventListener("loadedmetadata", onMeta);
-      a.removeEventListener("durationchange", onMeta);
-      a.removeEventListener("play", onPlay);
-      a.removeEventListener("pause", onPause);
-      a.removeEventListener("ended", onEnd);
+      playbackListeners.delete(syncPlayback);
     };
   }, [src, displaySeconds]);
 
@@ -152,15 +219,28 @@ export function VoiceBubble({
   const labelLeft = playing || cur > 0 ? formatClock(cur) : formatClock(total);
 
   const toggle = () => {
-    const a = audioRef.current;
-    if (!a) return;
+    const chat = useAppStore.getState().chats.find((item) => item.id === chatId);
+    const a = selectSharedAudio(src, {
+      chatId,
+      messageId,
+      accountId: accountId || chat?.accountId || chat?.phoneId,
+      chatName: chat?.contactName || chat?.id || t("voice.audio"),
+      sentAt,
+    });
     if (a.paused) void a.play().catch(() => undefined);
     else a.pause();
   };
 
   const seek = (e: React.MouseEvent<HTMLDivElement>) => {
-    const a = audioRef.current;
-    if (!a || !total) return;
+    if (!total) return;
+    const chat = useAppStore.getState().chats.find((item) => item.id === chatId);
+    const a = selectSharedAudio(src, {
+      chatId,
+      messageId,
+      accountId: accountId || chat?.accountId || chat?.phoneId,
+      chatName: chat?.contactName || chat?.id || t("voice.audio"),
+      sentAt,
+    });
     const rect = e.currentTarget.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
     a.currentTime = ratio * total;
@@ -221,7 +301,6 @@ export function VoiceBubble({
     <div
       className="flex flex-col items-start gap-1.5 py-0.5"
     >
-      <audio ref={audioRef} src={src} preload="metadata" className="hidden" />
       {/* 核心语音播放条：固定黄金宽度 230px，波形固定条数，永不拉伸 */}
       <div className="flex w-[274px] shrink-0 items-center gap-2 px-0.5 py-0.5">
         {!outbound && <VoiceAvatar src={avatarUrl} className="order-1" />}
@@ -349,6 +428,80 @@ export function VoiceBubble({
           {transcribing ? t("voice.transcribing") : t("voice.toText")}
         </button>
       ) : null}
+    </div>
+  );
+}
+
+export function VoicePlaybackHost() {
+  const { t } = useI18n();
+  const selectedChatId = useAppStore((state) => state.selectedChatId);
+  const activeNav = useAppStore((state) => state.activeNav);
+  const [playback, setPlayback] = useState(getPlaybackSnapshot);
+
+  useEffect(() => {
+    const syncPlayback = () => setPlayback(getPlaybackSnapshot());
+    playbackListeners.add(syncPlayback);
+    syncPlayback();
+    return () => {
+      playbackListeners.delete(syncPlayback);
+    };
+  }, []);
+
+  if (
+    !playback ||
+    (activeNav === "chats" && playback.chatId === selectedChatId)
+  ) {
+    return null;
+  }
+
+  const returnToMessage = () => {
+    if (!playback.chatId) return;
+    const state = useAppStore.getState();
+    state.setSelectedChat(playback.chatId, playback.accountId);
+    if (playback.messageId) state.setFocusMessageId(playback.messageId);
+  };
+  const currentTime = formatClock(playback.currentTime);
+  const duration = formatClock(playback.duration);
+
+  return (
+    <div className="flex shrink-0 items-center justify-center border-t border-zinc-800 bg-zinc-950/95 px-3 py-1.5">
+      <div className="flex min-w-0 max-w-3xl flex-1 items-center gap-3">
+        <button
+          type="button"
+          onClick={toggleCurrentPlayback}
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand/15 text-brand hover:bg-brand/25"
+          aria-label={playback.playing ? t("tooltip.pauseVoice") : t("tooltip.playVoice")}
+        >
+          {playback.playing ? <Pause className="h-3.5 w-3.5 fill-current" /> : <Play className="h-3.5 w-3.5 translate-x-0.5 fill-current" />}
+        </button>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12px] font-medium text-zinc-200">
+            {t("voice.playing")} · {playback.chatName}
+          </div>
+          <div className="text-[10px] tabular-nums text-zinc-500">
+            {currentTime} / {duration}{playback.sentAt ? ` · ${playback.sentAt.slice(11, 16)}` : ""}
+          </div>
+        </div>
+        {playback.chatId && (
+          <button
+            type="button"
+            onClick={returnToMessage}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-medium text-brand hover:bg-brand/10"
+          >
+            <MessageCircle className="h-3.5 w-3.5" />
+            {t("voice.returnToMessage")}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={stopCurrentPlayback}
+          className="shrink-0 rounded-md p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+          aria-label={t("voice.stopPlayback")}
+          title={t("voice.stopPlayback")}
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
     </div>
   );
 }
