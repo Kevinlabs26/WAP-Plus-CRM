@@ -2664,6 +2664,11 @@
             <sha256 value="ab2614855fba66aa8a42514dbe3d5a884315ffe1ed63f5932e710a8006245ce1" origin="https://repo.maven.apache.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-bom/1.6.4/kotlinx-coroutines-bom-1.6.4.pom" />
          </artifact>
       </component>
+      <component group="org.jetbrains.kotlinx" name="kotlinx-coroutines-bom" version="1.8.0">
+         <artifact name="kotlinx-coroutines-bom-1.8.0.pom">
+            <sha256 value="1239e9dbe1397cd5971342956b2511bc3ace7b641842e4372a088dcfa8b9ad55" origin="https://repo.maven.apache.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-bom/1.8.0/kotlinx-coroutines-bom-1.8.0.pom" />
+         </artifact>
+      </component>
       <component group="org.jetbrains.kotlinx" name="kotlinx-coroutines-bom" version="1.9.0">
          <artifact name="kotlinx-coroutines-bom-1.9.0.pom">
             <sha256 value="bea5511e9001f2c593ab5080df131b219ab5e2085cc5979ce583eacd4946fd78" origin="https://repo.maven.apache.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-bom/1.9.0/kotlinx-coroutines-bom-1.9.0.pom" />
@@ -2743,6 +2748,9 @@
          </artifact>
       </component>
       <component group="org.junit" name="junit-bom" version="5.13.1">
+         <artifact name="junit-bom-5.13.1.module">
+            <sha256 value="33c07ab9724790a6e5859ba07d69117ac530439724545a81c4179e3272c75de8" origin="https://repo.maven.apache.org/maven2/org/junit/junit-bom/5.13.1/junit-bom-5.13.1.module" />
+         </artifact>
          <artifact name="junit-bom-5.13.1.pom">
             <sha256 value="fa68451ea830572ed43ffe51d75b6a05f7a5e665a602a51f49d6be02063a65f3" origin="https://repo.maven.apache.org/maven2/org/junit/junit-bom/5.13.1/junit-bom-5.13.1.pom" />
          </artifact>
