@@ -6,6 +6,8 @@
  * 与业务解耦：调用方只传标题正文。
  */
 
+import { notificationAvatar } from "@/lib/notificationAvatar";
+
 type PluginNotification = typeof import("@tauri-apps/plugin-notification");
 type PluginOptions = import("@tauri-apps/plugin-notification").Options;
 
@@ -167,6 +169,8 @@ export type DesktopNotifyOpts = {
   onClick?: () => void;
   silent?: boolean;
   avatarUrl?: string;
+  /** Contact name for the initials fallback; omit in hidden-identity mode. */
+  avatarName?: string;
   unreadCount?: number;
 };
 
@@ -214,6 +218,7 @@ function sendWeb(opts: DesktopNotifyOpts): boolean {
       body: opts.body || "",
       tag: opts.tag || undefined,
       silent: Boolean(opts.silent),
+      icon: opts.avatarUrl,
     });
     if (opts.onClick) {
       n.onclick = () => {
@@ -241,6 +246,7 @@ export async function showDesktopNotify(
 ): Promise<boolean> {
   const ok = await ensureNotifyPermission();
   if (!ok) return false;
+  opts = { ...opts, avatarUrl: await notificationAvatar(opts.avatarUrl, opts.avatarName) };
   // 原生优先；浏览器开发环境回退 Web Notification
   const native = await sendNative(opts);
   if (native) return true;

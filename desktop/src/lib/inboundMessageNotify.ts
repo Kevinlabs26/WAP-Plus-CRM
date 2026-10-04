@@ -108,6 +108,7 @@ export function notifyInboundMessages(
       tag: handlers.privacy === "hidden" ? "crm-new-message" : `msg-${it.chatId}`,
       onClick,
       avatarUrl: handlers.privacy === "hidden" ? undefined : it.avatarUrl,
+      avatarName: handlers.privacy === "hidden" ? undefined : it.contactName || baseTitle,
       unreadCount: handlers.privacy === "hidden" ? undefined : Math.max(it.unreadCount || 0, grouped.length),
     });
   }
