@@ -143,6 +143,52 @@ export function PersonMultiAccountPanel({
   const accountTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [accountMenuPosition, setAccountMenuPosition] = useState({ left: 0, top: 0, maxHeight: 320 });
+  const [visibleAccountIds, setVisibleAccountIds] = useState<string[] | null>(null);
+  const isAccountSwitchBanner = variant === "banner" && Boolean(onSelectStartAccount) && (waAccounts?.length || 0) > 1;
+
+  useLayoutEffect(() => {
+    const strip = accountStripRef.current;
+    const more = accountMenuRef.current;
+    if (!isAccountSwitchBanner) {
+      setVisibleAccountIds(null);
+      setAccountMenuOpen(false);
+      return;
+    }
+    if (!strip || !more) return;
+    // Keep folded buttons measurable so resizing and renaming can restore them.
+    const buttons = [...strip.querySelectorAll<HTMLButtonElement>("[data-account-id]")];
+    const measure = () => {
+      if (!strip.clientWidth || !buttons.length) return;
+      const gap = parseFloat(getComputedStyle(strip).columnGap) || 0;
+      const moreWidth = more.offsetWidth + gap;
+      const available = strip.clientWidth + (more.getAttribute("aria-hidden") === "true" ? 0 : moreWidth);
+      const total = buttons.reduce((width, button) => width + button.offsetWidth, 0) + gap * (buttons.length - 1);
+      let next = buttons.map((button) => button.dataset.accountId!);
+      if (total > available + 0.5) {
+        const current = buttons.find((button) => button.dataset.accountId === focusAccountId) || buttons[0];
+        const chosen = new Set([current]);
+        let used = current.offsetWidth;
+        for (const button of buttons) {
+          if (chosen.has(button)) continue;
+          if (used + gap + button.offsetWidth <= available - moreWidth) {
+            chosen.add(button);
+            used += gap + button.offsetWidth;
+          }
+        }
+        next = buttons.filter((button) => chosen.has(button)).map((button) => button.dataset.accountId!);
+      } else {
+        setAccountMenuOpen(false);
+      }
+      setVisibleAccountIds((previous) => previous?.length === next.length && previous.every((id, index) => id === next[index]) ? previous : next);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(strip.parentElement!);
+    observer.observe(strip);
+    observer.observe(more);
+    buttons.forEach((button) => observer.observe(button));
+    return () => observer.disconnect();
+  }, [waAccounts, focusAccountId, isAccountSwitchBanner, t]);
 
   useLayoutEffect(() => {
     if (!accountMenuOpen) return;
@@ -174,7 +220,7 @@ export function PersonMultiAccountPanel({
       window.removeEventListener("resize", placeMenu);
       document.removeEventListener("scroll", onScroll, true);
     };
-  }, [accountMenuOpen, waAccounts?.length]);
+  }, [accountMenuOpen, waAccounts?.length, visibleAccountIds]);
 
   useEffect(() => {
     if (!accountMenuOpen) return;
@@ -208,7 +254,7 @@ export function PersonMultiAccountPanel({
     const observer = new ResizeObserver(showCurrent);
     observer.observe(strip);
     return () => observer.disconnect();
-  }, [focusAccountId, waAccounts?.length, variant]);
+  }, [focusAccountId, waAccounts?.length, variant, visibleAccountIds, isAccountSwitchBanner]);
 
   const messagesFromStore = useAppStore((s) => {
     if (messagesProp) return messagesProp;
@@ -317,10 +363,7 @@ export function PersonMultiAccountPanel({
   ) {
     const rowByAccount = new Map(rows.map((row) => [row.accountId, row]));
     const accounts = waAccounts || [];
-    const focusAccount = accounts.find(account => account.id === focusAccountId);
-    const visibleAccounts = accounts.slice(0, 4);
-    if (focusAccount && !visibleAccounts.includes(focusAccount)) visibleAccounts[3] = focusAccount;
-    const visibleIds = new Set(visibleAccounts.map(account => account.id));
+    const visibleIds = new Set(visibleAccountIds ?? accounts.map((account) => account.id));
     const overflowAccounts = accounts.filter(account => !visibleIds.has(account.id));
     const openAccount = (account: WaAccount) => {
       setAccountMenuOpen(false);
@@ -336,18 +379,23 @@ export function PersonMultiAccountPanel({
       const row = rowByAccount.get(account.id);
       const hasConversation = Boolean(row);
       const active = account.id === focusAccountId;
+      const folded = !compact && !visibleIds.has(account.id);
       return (
         <button
           key={account.id}
           type="button"
           title={`${labelOf(account.id, waAccounts)} · ${hasConversation ? t("multiAccount.existingChat") : t("multiAccount.startChat")}`}
           role={compact ? "menuitem" : undefined}
+          data-account-id={compact ? undefined : account.id}
+          aria-hidden={folded ? true : undefined}
+          tabIndex={folded ? -1 : undefined}
           aria-current={active ? "true" : undefined}
           aria-label={`${labelOf(account.id, waAccounts)}, ${hasConversation ? t("multiAccount.existingChat") : t("multiAccount.startChat")}`}
           onClick={() => openAccount(account)}
           className={cn(
             "inline-flex shrink-0 items-center gap-1.5 rounded-full text-[11px] transition-colors",
-            compact ? "w-full justify-start rounded-lg px-2 py-2" : "max-w-[11rem] px-2 py-1",
+            compact ? "w-full justify-start rounded-lg px-2 py-2" : "w-max max-w-[11rem] px-2 py-1",
+            folded && "absolute left-0 top-0 invisible pointer-events-none",
             active
               ? "bg-brand/15 font-medium text-brand ring-1 ring-brand/30"
               : "text-zinc-500 hover:bg-zinc-800/80 hover:text-zinc-200"
@@ -381,47 +429,53 @@ export function PersonMultiAccountPanel({
 
     return (
       <div className="shrink-0 border-t border-zinc-800/60 bg-zinc-950/90 px-3 py-1.5">
-        <div className="flex min-w-0 max-w-full items-center gap-1.5">
+        <div className="relative flex min-w-0 max-w-full items-center gap-1.5">
           <span className="mr-1 shrink-0 text-[11px] text-zinc-500">{t("multiAccount.sendAccount")}</span>
-          <div ref={accountStripRef} className="flex min-w-0 items-center gap-1.5 overflow-x-auto py-0.5">
-            {visibleAccounts.map((account) => accountButton(account))}
+          <div ref={accountStripRef} className="relative flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto py-0.5">
+            {accounts.map((account) => (
+              <div key={account.id} className={visibleIds.has(account.id) ? "contents" : "absolute left-0 top-0 h-0 w-0 overflow-hidden"}>
+                {accountButton(account)}
+              </div>
+            ))}
           </div>
-          {overflowAccounts.length > 0 && (
-            <div ref={accountMenuRef} className="relative shrink-0">
-              <button
-                type="button"
-                ref={accountTriggerRef}
-                aria-expanded={accountMenuOpen}
-                aria-haspopup="menu"
-                onClick={() => setAccountMenuOpen((open) => !open)}
-                className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-zinc-400 transition-colors hover:bg-zinc-800/80 hover:text-zinc-200"
+          <div ref={accountMenuRef} aria-hidden={overflowAccounts.length ? undefined : true} className={cn("w-max shrink-0", overflowAccounts.length ? "relative" : "absolute invisible pointer-events-none")}>
+            <button
+              type="button"
+              ref={accountTriggerRef}
+              aria-expanded={accountMenuOpen}
+              aria-haspopup="menu"
+              tabIndex={overflowAccounts.length ? undefined : -1}
+              onClick={() => setAccountMenuOpen((open) => !open)}
+              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-zinc-400 transition-colors hover:bg-zinc-800/80 hover:text-zinc-200"
+            >
+              <span className="relative tabular-nums">
+                <span aria-hidden="true" className="invisible">{t("multiAccount.moreAccounts", { count: accounts.length })}</span>
+                <span className="absolute inset-0">{t("multiAccount.moreAccounts", { count: overflowAccounts.length || accounts.length })}</span>
+              </span>
+              <ChevronDown className={cn("h-3 w-3", accountMenuOpen && "rotate-180")} />
+            </button>
+            {accountMenuOpen && overflowAccounts.length > 0 && createPortal(
+              <div
+                ref={accountPopupRef}
+                role="menu"
+                aria-label={t("multiAccount.sendAccount")}
+                className="fixed z-[10020] max-h-[min(20rem,calc(100vh_-_1rem))] w-[min(18rem,calc(100vw_-_1rem))] overflow-y-auto rounded-lg border border-zinc-700/80 bg-zinc-900 p-1 shadow-xl shadow-black/50"
+                style={accountMenuPosition}
+                onKeyDown={(event) => {
+                  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+                  const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+                  const index = items.indexOf(document.activeElement as HTMLButtonElement);
+                  const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+                    : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+                  event.preventDefault();
+                  items[next]?.focus();
+                }}
               >
-                {t("multiAccount.moreAccounts", { count: overflowAccounts.length })}
-                <ChevronDown className={cn("h-3 w-3", accountMenuOpen && "rotate-180")} />
-              </button>
-              {accountMenuOpen && createPortal(
-                <div
-                  ref={accountPopupRef}
-                  role="menu"
-                  aria-label={t("multiAccount.sendAccount")}
-                  className="fixed z-[10020] max-h-[min(20rem,calc(100vh_-_1rem))] w-[min(18rem,calc(100vw_-_1rem))] overflow-y-auto rounded-lg border border-zinc-700/80 bg-zinc-900 p-1 shadow-xl shadow-black/50"
-                  style={accountMenuPosition}
-                  onKeyDown={(event) => {
-                    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-                    const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
-                    const index = items.indexOf(document.activeElement as HTMLButtonElement);
-                    const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
-                      : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
-                    event.preventDefault();
-                    items[next]?.focus();
-                  }}
-                >
-                  {overflowAccounts.map((account) => accountButton(account, true))}
-                </div>,
-                document.body
-              )}
-            </div>
-          )}
+                {overflowAccounts.map((account) => accountButton(account, true))}
+              </div>,
+              document.body
+            )}
+          </div>
         </div>
       </div>
     );

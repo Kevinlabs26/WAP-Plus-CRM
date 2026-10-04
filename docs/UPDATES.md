@@ -15,12 +15,12 @@ WAP Plus CRM 使用 Tauri updater，通过 GitHub Release 分发 Windows 更新�
 
 ## 发布更新
 
-1. 同步递增根目录与 `desktop/package.json`、`desktop/src-tauri/tauri.conf.json`、`desktop/src-tauri/Cargo.toml` 的版本，并更新 `package-lock.json`、`desktop/src-tauri/Cargo.lock`。当前版本为 `0.1.35`，变更见 [CHANGELOG.md](../CHANGELOG.md)。
+1. 同步递增根目录与 `desktop/package.json`、`desktop/src-tauri/tauri.conf.json`、`desktop/src-tauri/Cargo.toml` 的版本，并更新 `package-lock.json`、`desktop/src-tauri/Cargo.lock`。当前版本为 `0.1.36`，变更见 [CHANGELOG.md](../CHANGELOG.md)。
 2. 提交并推送版本标签：
 
    ```bash
-   git tag v0.1.35
-   git push origin v0.1.35
+   git tag v0.1.36
+   git push origin v0.1.36
    ```
 
 3. GitHub Actions 先运行前端、sidecar、Bridge 检查和 Rust 测试，再构建签名安装包及 `latest.json`，创建 Draft Release。
