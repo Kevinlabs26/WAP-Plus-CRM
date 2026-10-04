@@ -1,5 +1,19 @@
 import { avatarInitials } from "@/lib/utils";
 
+/** Decode our PNG thumbnail locally: fetch(data:) is blocked by the production connect-src policy. */
+export function notificationImageBytes(src?: string): number[] | undefined {
+  if (!src || src.length > 684_000) return undefined;
+  const encoded = /^data:image\/png;base64,([A-Za-z0-9+/]+={0,2})$/.exec(src)?.[1];
+  if (!encoded) return undefined;
+  try {
+    const binary = atob(encoded);
+    if (binary.length > 512_000 || !binary.startsWith("\x89PNG\r\n\x1a\n")) return undefined;
+    return Array.from(binary, (character) => character.charCodeAt(0));
+  } catch {
+    return undefined;
+  }
+}
+
 /** Windows toast accepts PNG/JPEG; reuse only cached images, never fetch a remote URL. */
 export async function notificationAvatar(src?: string, name?: string): Promise<string | undefined> {
   if (typeof document === "undefined") return undefined;

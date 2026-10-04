@@ -5,7 +5,7 @@ import { build } from "esbuild";
 
 const built = await build({
   stdin: {
-    contents: `export { notificationAvatar } from './src/lib/notificationAvatar.ts';
+    contents: `export { notificationAvatar, notificationImageBytes } from './src/lib/notificationAvatar.ts';
       export { notifyInboundMessages } from './src/lib/inboundMessageNotify.ts';`,
     resolveDir: fileURLToPath(new URL("../", import.meta.url)),
   },
@@ -18,9 +18,57 @@ const built = await build({
     }));
   } }],
 });
-const { notificationAvatar, notifyInboundMessages } = await import(
+const { notificationAvatar, notificationImageBytes, notifyInboundMessages } = await import(
   "data:text/javascript;base64," + Buffer.from(built.outputFiles[0].text).toString("base64")
 );
+
+test("PNG bytes reach the native boundary even when CSP blocks every fetch", () => {
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = () => { throw new Error("Blocked by production CSP"); };
+  try {
+    assert.deepEqual(notificationImageBytes("data:image/png;base64,iVBORw0KGgo="), [137, 80, 78, 71, 13, 10, 26, 10]);
+    for (const invalid of [undefined, "https://example.com/avatar.png", "blob:example",
+      "data:image/png;base64,broken", "data:image/png;base64,AAAA",
+      "data:image/png;base64," + "A".repeat(684_000)]) {
+      assert.equal(notificationImageBytes(invalid), undefined);
+    }
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test("the full desktop notifier passes PNG bytes to Windows under a blocked-fetch policy", async () => {
+  const bundle = await build({
+    entryPoints: [fileURLToPath(new URL("../src/lib/desktopNotify.ts", import.meta.url))],
+    bundle: true, write: false, platform: "browser", format: "esm",
+    alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) },
+    plugins: [{ name: "native-notification-boundary", setup(b) {
+      b.onResolve({ filter: /^@tauri-apps\/(api\/(core|event)|plugin-notification)$/ }, args => ({ path: args.path, namespace: "mock" }));
+      b.onLoad({ filter: /.*/, namespace: "mock" }, args => ({ contents:
+        args.path.endsWith("/core") ? `export const invoke = async (command, options) => { globalThis.nativeCalls.push({command, options}); return true; };`
+        : args.path.endsWith("/event") ? `export const listen = async () => () => {};`
+        : `export const isPermissionGranted = async () => true; export const sendNotification = () => { throw Error('Unexpected fallback'); };`,
+      }));
+    } }],
+  });
+  const { showDesktopNotify } = await import("data:text/javascript;base64," + Buffer.from(bundle.outputFiles[0].text).toString("base64"));
+  const originals = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch, nativeCalls: globalThis.nativeCalls };
+  globalThis.window = { __TAURI_INTERNALS__: {} };
+  globalThis.document = { createElement: () => ({ getContext: () => ({ fillRect() {}, fillText() {} }),
+    toDataURL: () => "data:image/png;base64,iVBORw0KGgo=" }) };
+  globalThis.fetch = () => { throw Error("Blocked by production CSP"); };
+  globalThis.nativeCalls = [];
+  try {
+    assert.equal(await showDesktopNotify({ title: "Alice", avatarName: "Alice", tag: "chat-a" }), true);
+    assert.equal(globalThis.nativeCalls[0].command, "show_windows_branded_notification");
+    assert.deepEqual(globalThis.nativeCalls[0].options.avatarBytes, [137, 80, 78, 71, 13, 10, 26, 10]);
+    assert.equal(globalThis.nativeCalls[0].options.tag, "chat-a");
+    assert.equal(await showDesktopNotify({ title: "新消息" }), true);
+    assert.equal(globalThis.nativeCalls[1].options.avatarBytes, undefined);
+  } finally {
+    for (const [key, value] of Object.entries(originals)) {
+      if (value === undefined) delete globalThis[key]; else globalThis[key] = value;
+    }
+  }
+});
 
 test("notification avatars normalize cached formats, crop centrally, and fall back without remote requests", async () => {
   const originals = { document: globalThis.document, Image: globalThis.Image };

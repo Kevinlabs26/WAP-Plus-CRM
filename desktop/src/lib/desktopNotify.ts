@@ -6,7 +6,7 @@
  * 与业务解耦：调用方只传标题正文。
  */
 
-import { notificationAvatar } from "@/lib/notificationAvatar";
+import { notificationAvatar, notificationImageBytes } from "@/lib/notificationAvatar";
 
 type PluginNotification = typeof import("@tauri-apps/plugin-notification");
 type PluginOptions = import("@tauri-apps/plugin-notification").Options;
@@ -62,18 +62,6 @@ const pendingOpenByKey = new Map<string, () => void>();
 let actionListenerReady = false;
 let debugActionListenerReady = false;
 
-async function notificationImageBytes(src?: string): Promise<number[] | undefined> {
-  if (!src || (!src.startsWith("data:") && !src.startsWith("blob:"))) {
-    return undefined;
-  }
-  try {
-    const bytes = new Uint8Array(await (await fetch(src)).arrayBuffer());
-    return bytes.byteLength <= 512_000 ? Array.from(bytes) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 async function sendWindowsBranded(opts: DesktopNotifyOpts): Promise<boolean> {
   try {
     const [{ invoke }, { listen }] = await Promise.all([
@@ -94,7 +82,7 @@ async function sendWindowsBranded(opts: DesktopNotifyOpts): Promise<boolean> {
       debugActionListenerReady = true;
     }
     if (opts.onClick && opts.tag) pendingOpenByKey.set(opts.tag, opts.onClick);
-    const avatarBytes = await notificationImageBytes(opts.avatarUrl);
+    const avatarBytes = notificationImageBytes(opts.avatarUrl);
     return await invoke<boolean>("show_windows_branded_notification", {
       title: opts.title || "WAP Plus CRM",
       body: opts.body || "",
