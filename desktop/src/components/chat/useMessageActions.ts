@@ -32,31 +32,31 @@ export function useMessageActions(opts: {
           message.mediaMime || "audio/webm",
           useAppStore.getState().settings
         );
-        const patch: Partial<Message> = { transcript: result.text };
-        if (!result.fallback && result.text.trim()) {
-          const settings = useAppStore.getState().settings;
-          const myLang = resolveMyLang(settings);
-          const translated = await translateDraftText(
-            result.text,
-            myLang,
-            settings
-          );
-          if (!translated.fallback && translated.text.trim()) {
-            patch.translation = translated.text;
-            patch.translationLang = translated.targetLang;
-          }
+        if (result.fallback || result.error || !result.text.trim()) {
+          opts.pushToast(`语音转写失败：${result.error || "识别结果为空，请重试"}`, "error");
+          return;
+        }
+        const patch: Partial<Message> = { transcript: result.text.trim() };
+        const settings = useAppStore.getState().settings;
+        const myLang = resolveMyLang(settings);
+        const translated = await translateDraftText(
+          result.text,
+          myLang,
+          settings
+        );
+        if (!translated.fallback && translated.text.trim()) {
+          patch.translation = translated.text;
+          patch.translationLang = translated.targetLang;
         }
         opts.patchMessage(messageId, patch);
         opts.pushToast(
-          result.fallback
-            ? result.error
-              ? `语音转写失败：${result.error}`
-              : "已生成转写演示结果"
-            : patch.translation
-              ? "语音已转写并翻译"
-              : "语音已转成文字",
-          result.fallback ? "info" : "success"
+          patch.translation
+            ? "语音已转写并翻译"
+            : "语音已转成文字",
+          "success"
         );
+      } catch (error) {
+        opts.pushToast(error instanceof Error ? error.message : "语音转写失败", "error");
       } finally {
         setTranscribingId(null);
       }

@@ -44,3 +44,9 @@ export type FolderScope =
   | { type: "all" };
 
 export const DEFAULT_ACCOUNT_ID = "wa-default";
+
+/** 与原生会话目录约束一致，避免 Windows 路径碰撞。 */
+export function isValidAccountId(id: unknown): id is string {
+  return typeof id === "string" && /^[a-z0-9_-]{1,64}$/.test(id)
+    && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(id);
+}

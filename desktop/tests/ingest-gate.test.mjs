@@ -81,6 +81,18 @@ test("gated ingest: caps batch size and drains the rest", () => {
   assert.equal(ingested.length, 1200);
 });
 
+test("gated ingest waits for an async batch before starting the next", async () => {
+  const { window } = makeWindow(); globalThis.window = window; blurComposer();
+  const batches=[]; let release;
+  const ingest = events => { batches.push(events); return new Promise(resolve => { release = resolve; }); };
+  enqueueGatedIngest([{type:"first"}], ingest);
+  enqueueGatedIngest([{type:"second"}], ingest);
+  assert.equal(batches.length,1);
+  release(); await Promise.resolve();
+  assert.equal(batches.length,2);
+  release(); await Promise.resolve();
+});
+
 after(() => {
   globalThis.window = originalWindow;
   globalThis.document = originalDocument;

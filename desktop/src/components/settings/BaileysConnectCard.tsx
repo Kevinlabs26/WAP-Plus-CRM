@@ -248,7 +248,7 @@ export function BaileysConnectCard({
         hydrateGroups: true,
         requestHistory: true,
       });
-      ingestBridgeEvents([
+      await ingestBridgeEvents([
         {
           type: "contacts.sync",
           deviceId: aid,
@@ -268,6 +268,7 @@ export function BaileysConnectCard({
             accountId: aid,
           } as Record<string, unknown>,
         },
+      ...(result.deletionEvents || []),
       ] as Parameters<typeof ingestBridgeEvents>[0]);
       setLastSyncedAt(new Date());
       pushToast(

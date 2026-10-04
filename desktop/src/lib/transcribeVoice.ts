@@ -1,6 +1,6 @@
 /**
  * 语音转文字：复用现有 AI provider（OpenAI / Groq / Gemini / 自定义 OpenAI 兼容的 whisper 转写接口）。
- * 无 Key / 失败时回落演示占位，保证流程可走（与翻译一致）。
+ * 无 Key / 失败时返回空正文与错误；错误说明不得进入转写或消息草稿。
  */
 import type { AppSettings } from "@/store/appStore";
 import { normalizeVoiceInputLanguage } from "@/lib/voiceInputLanguage";
@@ -26,19 +26,17 @@ function hasKey(s: AppSettings): boolean {
       s.customWhisperModel.trim()
     );
   }
-  // ollama 无内置转写，统一走 mock 占位
+  // ollama 无内置转写
   return false;
 }
 
-function mockTranscript(error?: string): TranscriptResult {
-  const detail = error?.trim().slice(0, 240);
+function failedTranscript(error: string): TranscriptResult {
+  const detail = error.trim().slice(0, 240) || "语音转写失败";
   return {
-    text: detail
-      ? `【转写失败】${detail}`
-      : "【转写·演示】收到语音（未配置转写 Key，配置 OpenAI / Groq / Gemini / 自定义提供商后自动识别真实内容）",
+    text: "",
     source: "mock",
     fallback: true,
-    ...(detail ? { error: detail } : {}),
+    error: detail,
   };
 }
 
@@ -116,9 +114,25 @@ function blobToBase64(blob: Blob): Promise<string> {
 }
 
 /**
- * 把语音 dataURL 转成文字。mock / 无 Key：演示占位；失败回落演示并带 error。
+ * 把语音 dataURL 转成文字。无 Key 或失败时返回空 text 与 error。
  */
+let transcriptionInFlight = false;
+
 export async function transcribeVoice(
+  dataUrl: string,
+  mimeType: string,
+  settings: AppSettings
+): Promise<TranscriptResult> {
+  if (transcriptionInFlight) return failedTranscript("正在转写另一条语音，请完成后重试");
+  transcriptionInFlight = true;
+  try {
+    return await transcribeVoiceImpl(dataUrl, mimeType, settings);
+  } finally {
+    transcriptionInFlight = false;
+  }
+}
+
+async function transcribeVoiceImpl(
   dataUrl: string,
   mimeType: string,
   settings: AppSettings
@@ -128,8 +142,12 @@ export async function transcribeVoice(
     const { findReadyLocalModel, localTranscribe } = await import("./localSpeech");
     const ready = await findReadyLocalModel();
     if (ready) {
-      const text = await localTranscribe({ mediaUrl: dataUrl, model: ready.name });
-      if (text) return { text, source: "local", fallback: false };
+      const text = await localTranscribe({
+        mediaUrl: dataUrl,
+        model: ready.name,
+        language: normalizeVoiceInputLanguage(settings.voiceInputLang) || undefined,
+      });
+      if (text.trim()) return { text: text.trim(), source: "local", fallback: false };
     }
   } catch (e) {
     console.warn("[localSpeech] 本地转写失败，回落云端：", e);
@@ -138,7 +156,7 @@ export async function transcribeVoice(
     const provider = settings.aiProvider === "ollama"
       ? "当前选择的 Ollama 仅支持文字，不能进行云端语音转写"
       : `当前选择的 ${settings.aiProvider} 未配置可用的语音转写 Key`;
-    return mockTranscript(provider);
+    return failedTranscript(provider);
   }
   try {
     const blob = await mediaUrlToBlob(dataUrl, mimeType || "audio/webm");
@@ -151,7 +169,8 @@ export async function transcribeVoice(
         mimeType: mime,
         base64,
       });
-      return { text, source: "gemini", fallback: false };
+      if (!text.trim()) throw new Error("gemini 空转写");
+      return { text: text.trim(), source: "gemini", fallback: false };
     }
     const provider =
       settings.aiProvider === "custom"
@@ -168,9 +187,6 @@ export async function transcribeVoice(
     return { text, source: provider, fallback: false };
   } catch (e) {
     const error = e instanceof Error ? e.message : "转写失败";
-    return {
-      ...mockTranscript(error),
-      error,
-    };
+    return failedTranscript(error);
   }
 }

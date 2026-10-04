@@ -161,6 +161,18 @@ export function SettingsMessagingPanel() {
           </span>
         </label>
 
+        <label className="mt-3 block max-w-sm text-2xs text-zinc-500">
+          {t("settingsMessaging.notificationPrivacy")}
+          <select
+            value={settings.notificationPrivacy}
+            onChange={(event) => updateSettings({ notificationPrivacy: event.target.value as typeof settings.notificationPrivacy })}
+            className="ui-control mt-1 w-full px-2.5 text-[13px]"
+          >
+            <option value="full">{t("settingsMessaging.privacyFull")}</option>
+            <option value="name">{t("settingsMessaging.privacyName")}</option>
+            <option value="hidden">{t("settingsMessaging.privacyHidden")}</option>
+          </select>
+        </label>
         <div
           className={
             settings.desktopNotifyEnabled === false

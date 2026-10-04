@@ -35,6 +35,18 @@ See the [requirements](docs/REQUIREMENTS.md), [architecture](docs/ARCHITECTURE.m
 - Never commit `reasonix.toml`, `.reasonix/`, `baileys-auth/`, databases, logs, exports, real tokens, or API keys.
 - Do not include phone numbers, chat content, QR codes, login credentials, or complete logs in public issues. For security reports, see [SECURITY.md](SECURITY.md).
 
+## Backups, notifications, and accounts
+
+- Desktop automatically saves one local JSON backup per day while running and retains the latest seven. Settings → Data & Privacy lets you disable it, back up now, or restore the latest backup with confirmation. Automatic backups exclude credentials and cached attachments; keep an external copy against disk failure.
+- Unread and awaiting handling are separate. Reading does not finish a task; mark it handled in the workbench. A newer customer message reopens it, and failed or queued sends do not count as replies.
+- Failed translations keep the original draft and allow retry. Edits made while translating are retained.
+
+- Export or restore JSON backups in **Settings → Data & Privacy**, optionally including locally cached attachments. Backups exclude API keys, the Bridge token, and WhatsApp login credentials; configure keys and log in again on a new computer.
+- Restore replaces CRM data. New sends pause while incoming events are buffered and processed afterward. Restored AI replies use assisted mode, and unsent scheduled tasks require a new time confirmation.
+- Notification privacy supports full content, contact name only, or hidden content.
+- The customer account bar shows four accounts. Open **+N** to scroll through additional accounts; keyboard navigation is supported.
+- See the [change log](CHANGELOG.md) and [release instructions](docs/UPDATES.md).
+
 ## Repository layout
 
 ```text
@@ -90,7 +102,9 @@ Open http://localhost:3000 in your browser. Browser mode cannot start the Bailey
 
 ### Full Tauri shell
 
-Install [Rust](https://rustup.rs) and Windows WebView2, then run:
+Install [Rust](https://rustup.rs), Windows WebView2, and Visual Studio 2022 Build Tools with the Desktop development with C++ workload (a current MSVC v143 toolset and Windows SDK), then run:
+
+The prebuilt speech runtime requires the newer MSVC standard library; Visual Studio 2019 can fail at linking with unresolved `__std_*` symbols.
 
 ```bash
 npm install

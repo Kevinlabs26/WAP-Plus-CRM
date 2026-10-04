@@ -78,10 +78,8 @@ test("typing diagnostics record timing and counts without draft text", () => {
     watcher,
     /isComposerTypingBusy\(\) \|\| hasPendingUserInput\(\)/
   );
-  // 大联系人快照按账号节流，减少后台突发占用主线程
-  assert.match(watcher, /CONTACT_SYNC_MIN_MS = 60_000/);
-  assert.match(watcher, /event\.type !== "contacts\.sync"/);
-  assert.match(watcher, /items\.length <= CONTACT_SYNC_DELTA_MAX/);
+  // 联系人真实更新不能仅按时间或批量大小丢弃；分片仍让路给输入。
+  assert.doesNotMatch(watcher, /CONTACT_SYNC_MIN_MS|CONTACT_SYNC_DELTA_MAX/);
   // Android Bridge 直接推送路径也走打字让路队列，禁止绕过排队直接同步 ingest
   assert.match(bridgeWatcher, /enqueueGatedIngest\(\[ev\.payload\], ingestBridgeEvents\)/);
   // 重落盘/统计重算也避开打字中的主线程

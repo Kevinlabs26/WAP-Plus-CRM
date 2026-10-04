@@ -55,9 +55,15 @@ export function backfillChatPreviewFromMessages(
   const lastBody = new Map<string, string>();
   const lastDirection = new Map<string, Message["direction"]>();
   const chatsWithOutgoing = new Set<string>();
+  const pendingByChat = new Map<string, { at: string; incoming: boolean }>();
   for (const m of messages) {
     if (isConversationOutgoing(m)) chatsWithOutgoing.add(m.chatId);
     if (m.mediaType === "system" || m.systemKind) continue;
+    if (m.direction === "in" || isConversationOutgoing(m)) {
+      if (!pendingByChat.has(m.chatId) || m.sentAt >= pendingByChat.get(m.chatId)!.at) {
+        pendingByChat.set(m.chatId, { at: m.sentAt, incoming: m.direction === "in" });
+      }
+    }
     const prev = lastAt.get(m.chatId);
     if (!prev || m.sentAt >= prev) {
       lastAt.set(m.chatId, m.sentAt);
@@ -83,7 +89,9 @@ export function backfillChatPreviewFromMessages(
       (!(ch.lastMessage || "").trim() ||
         (ch.lastMessage || "").startsWith("["));
     const needDirection = direction && ch.lastMessageDirection !== direction;
-    if (!needTime && !needBody && !needDirection && !needOutgoing) return ch;
+    const pending = pendingByChat.get(ch.id);
+    const needPending = ch.replyPendingSince === undefined && pending;
+    if (!needTime && !needBody && !needDirection && !needOutgoing && !needPending) return ch;
     changed = true;
     return {
       ...ch,
@@ -91,6 +99,7 @@ export function backfillChatPreviewFromMessages(
       lastMessage: needBody ? body! : ch.lastMessage,
       lastMessageDirection: needDirection ? direction : ch.lastMessageDirection,
       hasOutgoingHistory: needOutgoing ? true : ch.hasOutgoingHistory,
+      replyPendingSince: needPending ? (pending.incoming ? pending.at : "") : ch.replyPendingSince,
     };
   });
   return changed ? next : chats;

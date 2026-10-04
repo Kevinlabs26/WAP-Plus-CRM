@@ -127,6 +127,7 @@ export async function sendImageMessage(
     return false;
   }
   deps.setSending(true);
+  const caption = asSticker ? "" : captionOverride ?? deps.getDraftReply();
   let msgId: string | null = null;
   try {
     const prepared = asSticker
@@ -137,7 +138,6 @@ export async function sendImageMessage(
     if (!dataUrl.startsWith("data:image")) {
       throw new Error(translateCurrent("runtime.imageReadFailed"));
     }
-    const caption = asSticker ? "" : captionOverride ?? deps.getDraftReply();
     msgId = deps.enqueueOutgoingMessage({
       body: asSticker ? "[贴纸]" : caption || "[图片]",
       chatId: deps.chatId,
@@ -195,6 +195,7 @@ export async function sendImageMessage(
       deps.updateMessageDelivery(msgId, {
         deliveryStatus: "failed",
         lastError: message,
+        deliveryUncertain: !!e && typeof e === "object" && "deliveryUncertain" in e && e.deliveryUncertain === true,
       });
     }
     deps.pushToast(message, "error");

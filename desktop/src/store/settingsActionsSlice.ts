@@ -1,7 +1,6 @@
 import {
   getStorageEngine,
   saveSecureSecrets,
-  waitForPendingSaves,
 } from "@/lib/storage";
 import { calcStats } from "./calcStats";
 import { importPhonesToFolder } from "./importPhonesToFolder";
@@ -10,6 +9,7 @@ import {
   exportContactsCsv as exportContactsCsvAction,
 } from "./exportDataActions";
 import type { AppState, SliceContext } from "./types";
+import { deferDuringRestore } from "./restoreGuard";
 import { persist } from "./persist";
 import type { ScheduledMessage } from "@/types/crm";
 
@@ -32,6 +32,7 @@ export function createSettingsActionsSlice({
 > {
   return {
     updateSettings: (patch) => {
+      if (deferDuringRestore(() => get().updateSettings(patch))) return;
       let changed = false;
       set((state) => {
         const previousView = state.settings.accountViewMode;
@@ -238,16 +239,16 @@ export function createSettingsActionsSlice({
       });
     },
 
-    exportBackup: async () => {
+    exportBackup: async (includeMedia = false) => {
       try {
-        persist(get, true);
-        await waitForPendingSaves();
-        await exportBackupAction(get(), get().pushToast);
+        await persist(get, true);
+        await exportBackupAction(get(), get().pushToast, includeMedia);
       } catch (error) {
         get().pushToast(
           error instanceof Error ? error.message : "导出备份失败",
           "error"
         );
+        throw error;
       }
     },
 

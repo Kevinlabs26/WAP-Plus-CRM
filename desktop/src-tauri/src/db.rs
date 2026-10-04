@@ -24,6 +24,9 @@ pub struct AppSnapshot {
     pub activities: Vec<Value>,
     #[serde(default)]
     pub settings: Value,
+    /// 会话草稿独立保存，设置增量不得覆盖或清空它们。
+    #[serde(default)]
+    pub draft_reply_by_chat_id: serde_json::Map<String, Value>,
     /// 克制群发战役（前端 PersistSlice.broadcastCampaigns）
     #[serde(default, alias = "broadcast_campaigns")]
     pub broadcast_campaigns: Vec<Value>,
@@ -33,7 +36,7 @@ pub struct AppSnapshot {
     /** 增量保存时明确删除的消息 id。 */
     #[serde(default)]
     pub deleted_message_ids: Vec<String>,
-    /** 完整备份恢复：消息表以本快照为准。 */
+    /** 完整备份恢复：消息和活动表以本快照为准。 */
     #[serde(default)]
     pub replace_messages: bool,
 }
@@ -56,6 +59,8 @@ pub struct PersistDirtyFlags {
     #[serde(default)]
     pub settings: bool,
     #[serde(default)]
+    pub drafts: bool,
+    #[serde(default)]
     pub broadcast_campaigns: bool,
 }
 
@@ -69,6 +74,7 @@ impl PersistDirtyFlags {
             follow_ups: true,
             activities: true,
             settings: true,
+            drafts: true,
             broadcast_campaigns: true,
         }
     }
@@ -346,6 +352,11 @@ fn upsert_json_table(
             skipped += 1;
         }
     }
+    if table == "contacts" {
+        tx.execute(
+            "DELETE FROM activities WHERE json_extract(json, '$.contactId') IN (SELECT id FROM contacts WHERE id NOT IN (SELECT id FROM _keep_contacts))", []
+        ).map_err(|e| e.to_string())?;
+    }
     let deleted = tx
         .execute(
             &format!("DELETE FROM {table} WHERE id NOT IN (SELECT id FROM {keep})"),
@@ -404,13 +415,45 @@ fn id_of(v: &Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+fn ack_rank(status: &str) -> u8 {
+    match status { "sent" => 1, "server" => 2, "delivered" => 3, "read" => 4, "played" => 5, _ => 0 }
+}
+
+pub fn update_message_acks(conn: &Connection, items: &[Value], account_id: &str) -> Result<(), String> {
+    if account_id.is_empty() { return Err("回执缺少账号".into()); }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    for item in items {
+        let key = item.get("id").and_then(Value::as_str).unwrap_or("");
+        let ack = item.get("ack").and_then(Value::as_str).unwrap_or("");
+        if key.is_empty() || ack_rank(ack) == 0 { continue; }
+        let rows: Vec<(String, String)> = {
+            let mut stmt = tx.prepare("SELECT id, json FROM messages WHERE (id = ?1 OR json_extract(json, '$.waMessageId') = ?1 OR json_extract(json, '$.waKey.id') = ?1) AND COALESCE(json_extract(json, '$.accountId'), json_extract(json, '$.deviceId'), '') = ?2").map_err(|e| e.to_string())?;
+            let rows = stmt.query_map(params![key, account_id], |r| Ok((r.get(0)?, r.get(1)?))).map_err(|e| e.to_string())?;
+            rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
+        };
+        for (id, json) in rows {
+            let mut message: Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+            if message.get("direction").and_then(Value::as_str) != Some("out") || ack_rank(message.get("deliveryStatus").and_then(Value::as_str).unwrap_or("")) >= ack_rank(ack) { continue; }
+            message["deliveryStatus"] = Value::String(ack.to_string());
+            let updated = serde_json::to_string(&message).map_err(|e| e.to_string())?;
+            tx.execute("UPDATE messages SET json = ?1, content_hash = ?2 WHERE id = ?3", params![updated, content_hash(&updated), id]).map_err(|e| e.to_string())?;
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())
+}
+
 pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String> {
+    // dirty=None → 全量（兼容旧前端 / force 保存）。在事务前拒绝超限，保留原数据。
+    let dirty = snap.dirty.clone().unwrap_or_else(PersistDirtyFlags::all_true);
+    let drafts_json = if dirty.drafts {
+        Some(serialize_chat_drafts(&snap.draft_reply_by_chat_id)?)
+    } else {
+        None
+    };
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let mut total_written = 0usize;
     let mut total_skipped = 0usize;
     let mut total_deleted = 0usize;
-    // dirty=None → 全量（兼容旧前端 / force 保存）
-    let dirty = snap.dirty.clone().unwrap_or_else(PersistDirtyFlags::all_true);
 
     // phones / contacts / chats / follow_ups：仅写变更 + 删缺失
     if dirty.phones {
@@ -462,7 +505,14 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
             .and_then(|x| x.as_str())
             .unwrap_or("");
         let sent_at = m.get("sentAt").and_then(|x| x.as_str()).unwrap_or("");
-        let j = serde_json::to_string(m).map_err(|e| e.to_string())?;
+        let mut message = m.clone();
+        if !snap.replace_messages && m.get("direction").and_then(Value::as_str) == Some("out") {
+            let existing: Option<String> = tx.query_row("SELECT json_extract(json, '$.deliveryStatus') FROM messages WHERE id = ?1", params![id], |r| r.get(0)).optional().map_err(|e| e.to_string())?.flatten();
+            if let Some(ack) = existing {
+                if ack_rank(&ack) > ack_rank(m.get("deliveryStatus").and_then(Value::as_str).unwrap_or("")) { message["deliveryStatus"] = Value::String(ack); }
+            }
+        }
+        let j = serde_json::to_string(&message).map_err(|e| e.to_string())?;
         let hash = content_hash(&j);
         let n = tx
             .execute(
@@ -603,12 +653,15 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
             total_skipped += 1;
         }
     }
+    // 活动只在完整恢复时替换，启动仅加载最近 2000 条。
+    if snap.replace_messages {
     total_deleted += tx
         .execute(
             "DELETE FROM activities WHERE id NOT IN (SELECT id FROM _keep_activities)",
             [],
         )
         .map_err(|e| e.to_string())?;
+    }
     } // end dirty.activities
 
     // settings / broadcastCampaigns
@@ -618,6 +671,9 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
     // 嵌入在 settings 里的现有战役——delta 保存的顶层空数组不得清库。
     let mut settings_value = snap.settings.clone();
     if let Some(obj) = settings_value.as_object_mut() {
+        for key in ["openaiKey", "groqKey", "geminiKey", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "bridgeToken"] {
+            obj.remove(key);
+        }
         if dirty.broadcast_campaigns {
             obj.insert(
                 "__broadcastCampaigns".into(),
@@ -646,6 +702,22 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
     }
     } // end dirty.settings
 
+    if let Some(drafts_json) = drafts_json {
+        let previous: Option<String> = tx
+            .query_row("SELECT value FROM settings WHERE key = 'chat_drafts'", [], |r| r.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if previous.as_deref() != Some(drafts_json.as_str()) {
+            tx.execute(
+                "INSERT OR REPLACE INTO settings(key, value) VALUES ('chat_drafts', ?1)",
+                params![drafts_json],
+            ).map_err(|e| e.to_string())?;
+            total_written += 1;
+        } else {
+            total_skipped += 1;
+        }
+    }
+
     // 仅有真实写入时才戳 last_saved_at，便于观察「空转保存」
     if total_written > 0 || total_deleted > 0 {
         tx.execute(
@@ -663,6 +735,32 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
         "db save_snapshot delta"
     );
     Ok(())
+}
+
+const CHAT_DRAFTS_MAX_ENTRIES: usize = 1000;
+const CHAT_DRAFT_MAX_UTF16: usize = 65_536;
+const CHAT_DRAFTS_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+fn serialize_chat_drafts(drafts: &serde_json::Map<String, Value>) -> Result<String, String> {
+    if drafts.len() > CHAT_DRAFTS_MAX_ENTRIES {
+        return Err("chat drafts exceed 1000 entries".into());
+    }
+    let mut raw_bytes = 0usize;
+    for (chat_id, value) in drafts {
+        let text = value.as_str().ok_or("chat draft must be a string")?;
+        if text.encode_utf16().take(CHAT_DRAFT_MAX_UTF16 + 1).count() > CHAT_DRAFT_MAX_UTF16 {
+            return Err("chat draft exceeds 65536 characters".into());
+        }
+        raw_bytes = raw_bytes.saturating_add(chat_id.len()).saturating_add(text.len());
+        if raw_bytes > CHAT_DRAFTS_MAX_BYTES {
+            return Err("chat drafts exceed 2 MiB".into());
+        }
+    }
+    let json = serde_json::to_string(drafts).map_err(|e| e.to_string())?;
+    if json.len() > CHAT_DRAFTS_MAX_BYTES {
+        return Err("chat drafts exceed 2 MiB".into());
+    }
+    Ok(json)
 }
 
 /// 冷历史：按会话倒序分页（sent_at DESC, id DESC）。before_sent_at 为空 = 取最新一页。
@@ -1008,6 +1106,22 @@ pub fn load_snapshot(conn: &Connection) -> Result<Option<AppSnapshot>, String> {
     let mut settings: Value =
         serde_json::from_str(&settings_str).unwrap_or(Value::Object(Default::default()));
 
+    let drafts_str: Option<String> = conn
+        .query_row("SELECT value FROM settings WHERE key = 'chat_drafts'", [], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let draft_reply_by_chat_id = match drafts_str {
+        Some(json) => {
+            if json.len() > CHAT_DRAFTS_MAX_BYTES {
+                return Err("chat drafts exceed 2 MiB".into());
+            }
+            let drafts = serde_json::from_str(&json).map_err(|e| format!("chat drafts: {e}"))?;
+            serialize_chat_drafts(&drafts)?;
+            drafts
+        }
+        None => Default::default(),
+    };
+
     // 群发战役：存于 settings.__broadcastCampaigns（前端 toRust 双写），读出到顶层字段
     let broadcast_campaigns = settings
         .as_object_mut()
@@ -1026,6 +1140,7 @@ pub fn load_snapshot(conn: &Connection) -> Result<Option<AppSnapshot>, String> {
         follow_ups: load_table(conn, "follow_ups")?,
         activities: load_activities_boot(conn)?,
         settings,
+        draft_reply_by_chat_id,
         broadcast_campaigns,
         dirty: None,
         deleted_message_ids: Vec::new(),
@@ -1082,10 +1197,15 @@ pub fn clear_chat_messages(conn: &Connection, chat_id: &str) -> Result<(), Strin
     tx.commit().map_err(|e| e.to_string())
 }
 
-pub fn clear_remote_messages(
+pub fn clear_remote_messages(conn: &Connection, remote_jid: &str, account_id: Option<&str>) -> Result<(), String> {
+    clear_remote_messages_before(conn, remote_jid, account_id, None)
+}
+
+pub fn clear_remote_messages_before(
     conn: &Connection,
     remote_jid: &str,
     account_id: Option<&str>,
+    before: Option<&str>,
 ) -> Result<(), String> {
     let account_id = account_id.unwrap_or("");
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
@@ -1103,9 +1223,9 @@ pub fn clear_remote_messages(
                         json_extract(json, '$.deviceId'),
                         ''
                     ) IN ('', ?2)
-                )
+                ) AND (?3 IS NULL OR sent_at IS NULL OR sent_at = '' OR julianday(sent_at) <= julianday(?3))
             )",
-            params![remote_jid, account_id],
+            params![remote_jid, account_id, before],
         )
         .map_err(|e| e.to_string())?;
     }
@@ -1121,8 +1241,8 @@ pub fn clear_remote_messages(
                  json_extract(json, '$.deviceId'),
                  ''
              ) IN ('', ?2)
-         )",
-        params![remote_jid, account_id],
+         ) AND (?3 IS NULL OR sent_at IS NULL OR sent_at = '' OR julianday(sent_at) <= julianday(?3))",
+        params![remote_jid, account_id, before],
     )
     .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
@@ -1180,17 +1300,148 @@ pub fn delete_messages_by_keys(
 
 #[allow(dead_code)]
 pub fn clear_all(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch(
-        "DELETE FROM phones; DELETE FROM contacts; DELETE FROM chats; DELETE FROM messages; DELETE FROM follow_ups; DELETE FROM activities; DELETE FROM settings;",
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    if fts_available(&tx) {
+        tx.execute("DELETE FROM messages_fts", []).map_err(|e| e.to_string())?;
+    }
+    tx.execute_batch(
+        "DELETE FROM phones; DELETE FROM contacts; DELETE FROM chats; DELETE FROM messages; DELETE FROM follow_ups; DELETE FROM activities; DELETE FROM settings; DELETE FROM meta WHERE key = 'last_saved_at';",
+    ).map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn chat_drafts_survive_reopen_settings_delta_and_individual_clear() {
+        let path = std::env::temp_dir().join(format!("bridgecrm-drafts-{}.db", uuid::Uuid::new_v4()));
+        let conn = Connection::open(&path).unwrap();
+        migrate(&conn).unwrap();
+        let drafts = json!({
+            "chat-account-a-peer": "报价 €120\n请确认。",
+            "chat-account-b-peer": "Bonjour, votre commande est prête."
+        }).as_object().unwrap().clone();
+        save_snapshot(&conn, &AppSnapshot {
+            settings: json!({"theme":"dark"}),
+            draft_reply_by_chat_id: drafts.clone(),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(load_snapshot(&conn).unwrap().unwrap().draft_reply_by_chat_id, drafts);
+
+        save_snapshot(&conn, &AppSnapshot {
+            settings: json!({"theme":"light"}),
+            dirty: Some(PersistDirtyFlags { settings: true, ..Default::default() }),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(load_snapshot(&conn).unwrap().unwrap().draft_reply_by_chat_id, drafts);
+        drop(conn);
+
+        let conn = Connection::open(&path).unwrap();
+        migrate(&conn).unwrap();
+        let mut remaining = load_snapshot(&conn).unwrap().unwrap().draft_reply_by_chat_id;
+        assert_eq!(remaining, drafts);
+        remaining.remove("chat-account-a-peer");
+        save_snapshot(&conn, &AppSnapshot {
+            draft_reply_by_chat_id: remaining.clone(),
+            dirty: Some(PersistDirtyFlags { drafts: true, ..Default::default() }),
+            ..Default::default()
+        }).unwrap();
+        let loaded = load_snapshot(&conn).unwrap().unwrap();
+        assert_eq!(loaded.draft_reply_by_chat_id, remaining);
+        assert_eq!(loaded.settings["theme"], "light");
+        clear_all(&conn).unwrap();
+        assert!(load_snapshot(&conn).unwrap().is_none());
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM settings WHERE key = 'chat_drafts'", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        drop(conn);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn chat_drafts_reject_invalid_or_oversized_input_without_changing_saved_state() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let original = json!({"chat":"keep me"}).as_object().unwrap().clone();
+        save_snapshot(&conn, &AppSnapshot {
+            settings: json!({"theme":"dark"}),
+            draft_reply_by_chat_id: original.clone(),
+            ..Default::default()
+        }).unwrap();
+
+        let too_many = (0..=CHAT_DRAFTS_MAX_ENTRIES).map(|i| (format!("chat-{i}"), json!("x"))).collect();
+        let too_large = (0..33).map(|i| (format!("chat-{i}"), json!("x".repeat(CHAT_DRAFT_MAX_UTF16)))).collect();
+        // Escaped JSON size is bounded too, even when raw UTF-8 is below 2 MiB.
+        let escaped_too_large = (0..6).map(|i| (format!("chat-{i}"), json!("\0".repeat(CHAT_DRAFT_MAX_UTF16)))).collect();
+        for drafts in [
+            json!({"chat": 42}).as_object().unwrap().clone(),
+            json!({"chat": "x".repeat(CHAT_DRAFT_MAX_UTF16 + 1)}).as_object().unwrap().clone(),
+            json!({"chat": "😀".repeat(CHAT_DRAFT_MAX_UTF16 / 2 + 1)}).as_object().unwrap().clone(),
+            too_many,
+            too_large,
+            escaped_too_large,
+        ] {
+            assert!(save_snapshot(&conn, &AppSnapshot {
+                settings: json!({"theme":"changed"}),
+                draft_reply_by_chat_id: drafts,
+                ..Default::default()
+            }).is_err());
+            let loaded = load_snapshot(&conn).unwrap().unwrap();
+            assert_eq!(loaded.draft_reply_by_chat_id, original);
+            assert_eq!(loaded.settings["theme"], "dark");
+        }
+        let allowed = json!({
+            "chat-a": "x".repeat(CHAT_DRAFT_MAX_UTF16),
+            "chat-b": "😀".repeat(CHAT_DRAFT_MAX_UTF16 / 2)
+        }).as_object().unwrap().clone();
+        save_snapshot(&conn, &AppSnapshot {
+            draft_reply_by_chat_id: allowed.clone(),
+            dirty: Some(PersistDirtyFlags { drafts: true, ..Default::default() }),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(load_snapshot(&conn).unwrap().unwrap().draft_reply_by_chat_id, allowed);
+
+        // A later SQL failure rolls back settings and drafts together.
+        conn.execute_batch("CREATE TRIGGER reject_drafts BEFORE INSERT ON settings WHEN NEW.key = 'chat_drafts' BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
+        assert!(save_snapshot(&conn, &AppSnapshot {
+            settings: json!({"theme":"changed"}),
+            draft_reply_by_chat_id: original,
+            ..Default::default()
+        }).is_err());
+        let loaded = load_snapshot(&conn).unwrap().unwrap();
+        assert_eq!(loaded.settings["theme"], "dark");
+        assert_eq!(loaded.draft_reply_by_chat_id, allowed);
+
+        for invalid in [json!([]), json!(null), json!("text")] {
+            assert!(serde_json::from_value::<AppSnapshot>(json!({
+                "phones":[], "contacts":[], "chats":[], "messages":[], "draftReplyByChatId":invalid
+            })).is_err());
+        }
+    }
+
+    #[test]
+    fn old_snapshots_default_to_empty_drafts_and_draft_only_row_is_not_app_state() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let old: AppSnapshot = serde_json::from_value(json!({
+            "phones":[], "contacts":[], "chats":[], "messages":[], "settings":{"theme":"dark"}
+        })).unwrap();
+        assert!(old.draft_reply_by_chat_id.is_empty());
+        assert!(!serde_json::from_value::<PersistDirtyFlags>(json!({"settings":true})).unwrap().drafts);
+        save_snapshot(&conn, &old).unwrap();
+        assert!(load_snapshot(&conn).unwrap().unwrap().draft_reply_by_chat_id.is_empty());
+        conn.execute("DELETE FROM settings WHERE key = 'chat_drafts'", []).unwrap();
+        assert!(load_snapshot(&conn).unwrap().unwrap().draft_reply_by_chat_id.is_empty());
+
+        clear_all(&conn).unwrap();
+        save_snapshot(&conn, &AppSnapshot {
+            draft_reply_by_chat_id: json!({"chat":"orphan"}).as_object().unwrap().clone(),
+            dirty: Some(PersistDirtyFlags { drafts: true, ..Default::default() }),
+            ..Default::default()
+        }).unwrap();
+        assert!(load_snapshot(&conn).unwrap().is_none());
+    }
 
     fn message_dirty() -> PersistDirtyFlags {
         PersistDirtyFlags {
@@ -1451,4 +1702,104 @@ mod tests {
         assert_eq!(loaded.settings["chatFolders"][0]["id"], "folder-1");
         assert_eq!(loaded.settings["chatFolders"][0]["chatIds"][0], "chat-contact-1");
     }
+    #[test]
+    fn clear_is_atomic_and_removes_search_index_and_save_timestamp() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        save_snapshot(&conn, &AppSnapshot {
+            phones: vec![json!({"id":"phone"})],
+            contacts: vec![json!({"id":"c"})],
+            chats: vec![json!({"id":"chat", "contactId":"c"})],
+            messages: vec![message("m", "chat", "peer")],
+            settings: json!({"theme":"dark"}),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        conn.execute_batch("CREATE TRIGGER reject_clear BEFORE DELETE ON messages BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
+        assert!(clear_all(&conn).is_err());
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM phones", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM messages_fts", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        conn.execute_batch("DROP TRIGGER reject_clear;").unwrap();
+        clear_all(&conn).unwrap();
+        for table in ["phones", "contacts", "chats", "messages", "messages_fts", "follow_ups", "activities", "settings"] {
+            assert_eq!(conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get::<_, i64>(0)).unwrap(), 0, "{table}");
+        }
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM meta WHERE key = 'last_saved_at'", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn hot_activity_save_preserves_cold_rows_but_restore_replaces_them() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let dirty = PersistDirtyFlags { activities: true, ..Default::default() };
+        let activities = (0..2005).map(|i| json!({"id":format!("a{i:04}"), "at":format!("2026-{i:04}")})).collect();
+        save_snapshot(&conn, &AppSnapshot { activities, dirty: Some(dirty.clone()), ..Default::default() }).unwrap();
+        let mut hot = load_activities_boot(&conn).unwrap();
+        assert_eq!(hot.len(), 2000);
+        hot.push(json!({"id":"new", "at":"2027"}));
+        save_snapshot(&conn, &AppSnapshot { activities: hot, dirty: Some(dirty.clone()), ..Default::default() }).unwrap();
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM activities", [], |r| r.get::<_, i64>(0)).unwrap(), 2006);
+        save_snapshot(&conn, &AppSnapshot { activities: vec![json!({"id":"restored"})], replace_messages: true, dirty: Some(dirty), ..Default::default() }).unwrap();
+        assert_eq!(conn.query_row("SELECT id FROM activities", [], |r| r.get::<_, String>(0)).unwrap(), "restored");
+    }
+
+    #[test]
+    fn deleted_contacts_remove_their_cold_activities() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        save_snapshot(&conn, &AppSnapshot {
+            contacts: vec![json!({"id":"c"})],
+            activities: vec![json!({"id":"a", "contactId":"c"})],
+            ..Default::default()
+        }).unwrap();
+        save_snapshot(&conn, &AppSnapshot {
+            dirty: Some(PersistDirtyFlags { contacts: true, ..Default::default() }),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM activities", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    }
+
+    #[test]
+    fn native_save_never_writes_credential_settings() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        save_snapshot(&conn, &AppSnapshot {
+            settings: json!({"customAiKey":"private", "bridgeToken":"token", "theme":"dark"}),
+            ..Default::default()
+        }).unwrap();
+        let settings = load_snapshot(&conn).unwrap().unwrap().settings;
+        assert_eq!(settings["theme"], "dark");
+        assert!(settings.get("customAiKey").is_none());
+        assert!(settings.get("bridgeToken").is_none());
+    }
+
+    #[test]
+    fn cold_acks_are_scoped_monotonic_and_survive_stale_saves() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let dirty = PersistDirtyFlags { messages: true, ..Default::default() };
+        let a = json!({"id":"a", "waMessageId":"same", "accountId":"wa-a", "direction":"out", "deliveryStatus":"sent"});
+        let b = json!({"id":"b", "waMessageId":"same", "accountId":"wa-b", "direction":"out", "deliveryStatus":"sent"});
+        save_snapshot(&conn, &AppSnapshot { messages: vec![a.clone(), b], dirty: Some(dirty.clone()), ..Default::default() }).unwrap();
+        update_message_acks(&conn, &[json!({"id":"same", "ack":"read"})], "wa-a").unwrap();
+        update_message_acks(&conn, &[json!({"id":"same", "ack":"server"})], "wa-a").unwrap();
+        save_snapshot(&conn, &AppSnapshot { messages: vec![a], dirty: Some(dirty), ..Default::default() }).unwrap();
+        assert_eq!(get_message_by_id(&conn, "a").unwrap().unwrap()["deliveryStatus"], "read");
+        assert_eq!(get_message_by_id(&conn, "b").unwrap().unwrap()["deliveryStatus"], "sent");
+    }
+
+    #[test]
+    fn replayed_clear_preserves_messages_after_the_delete_time() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        save_snapshot(&conn, &AppSnapshot {
+            messages: vec![json!({"id":"old", "accountId":"wa-a", "sentAt":"2026-10-01T00:00:00Z", "waKey":{"remoteJid":"123@s.whatsapp.net"}}),
+                json!({"id":"new", "accountId":"wa-a", "sentAt":"2026-10-02T00:00:00Z", "waKey":{"remoteJid":"123@s.whatsapp.net"}})],
+            dirty: Some(PersistDirtyFlags { messages: true, ..Default::default() }), ..Default::default()
+        }).unwrap();
+        clear_remote_messages_before(&conn, "123@s.whatsapp.net", Some("wa-a"), Some("2026-10-01T00:00:00.000Z")).unwrap();
+        assert!(get_message_by_id(&conn, "old").unwrap().is_none());
+        assert!(get_message_by_id(&conn, "new").unwrap().is_some());
+    }
+
 }

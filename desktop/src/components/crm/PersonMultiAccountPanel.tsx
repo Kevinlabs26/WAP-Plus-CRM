@@ -2,8 +2,11 @@
  * 客户多号作战条：时间线摘要 + 撞单提示。
  * 逻辑在 personThreads.ts，此处只负责展示与切换回调。
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
+  Check,
+  ChevronDown,
   GitBranch,
   Merge,
   MessageCircle,
@@ -135,21 +138,77 @@ export function PersonMultiAccountPanel({
 
   const messagesStableRef = useRef<Message[]>([]);
   const accountMenuRef = useRef<HTMLDivElement | null>(null);
+  const accountStripRef = useRef<HTMLDivElement | null>(null);
+  const accountPopupRef = useRef<HTMLDivElement | null>(null);
+  const accountTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [accountMenuPosition, setAccountMenuPosition] = useState({ left: 0, top: 0, maxHeight: 320 });
+
+  useLayoutEffect(() => {
+    if (!accountMenuOpen) return;
+    const placeMenu = () => {
+      const anchor = accountMenuRef.current?.getBoundingClientRect();
+      const menu = accountPopupRef.current?.getBoundingClientRect();
+      if (!anchor || !menu) return;
+      const pad = 8;
+      const above = Math.max(0, anchor.top - pad - 6);
+      const below = Math.max(0, window.innerHeight - anchor.bottom - pad - 6);
+      const openAbove = above >= below;
+      const maxHeight = Math.min(320, openAbove ? above : below);
+      const height = Math.min(accountPopupRef.current!.scrollHeight + 2, maxHeight);
+      setAccountMenuPosition({
+        left: Math.max(pad, Math.min(anchor.right - menu.width, window.innerWidth - menu.width - pad)),
+        top: openAbove ? anchor.top - height - 6 : anchor.bottom + 6,
+        maxHeight,
+      });
+    };
+    placeMenu();
+    accountPopupRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus({ preventScroll: true });
+    window.addEventListener("resize", placeMenu);
+    const onScroll = (event: Event) => {
+      if (accountPopupRef.current?.contains(event.target as Node)) return;
+      placeMenu();
+    };
+    document.addEventListener("scroll", onScroll, true);
+    return () => {
+      window.removeEventListener("resize", placeMenu);
+      document.removeEventListener("scroll", onScroll, true);
+    };
+  }, [accountMenuOpen, waAccounts?.length]);
 
   useEffect(() => {
     if (!accountMenuOpen) return;
-    const closeOnOutsideClick = (event: MouseEvent) => {
+    const closeOnOutsideClick = (event: PointerEvent) => {
       if (
-        accountMenuRef.current &&
-        !accountMenuRef.current.contains(event.target as Node)
+        !accountMenuRef.current?.contains(event.target as Node) &&
+        !accountPopupRef.current?.contains(event.target as Node)
       ) {
         setAccountMenuOpen(false);
       }
     };
-    document.addEventListener("mousedown", closeOnOutsideClick);
-    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setAccountMenuOpen(false);
+      accountTriggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [accountMenuOpen]);
+
+  useLayoutEffect(() => {
+    const strip = accountStripRef.current;
+    if (!strip) return;
+    const showCurrent = () => strip.querySelector<HTMLButtonElement>('[aria-current="true"]')
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    showCurrent();
+    const observer = new ResizeObserver(showCurrent);
+    observer.observe(strip);
+    return () => observer.disconnect();
+  }, [focusAccountId, waAccounts?.length, variant]);
 
   const messagesFromStore = useAppStore((s) => {
     if (messagesProp) return messagesProp;
@@ -257,9 +316,15 @@ export function PersonMultiAccountPanel({
     (waAccounts?.length || 0) > 1
   ) {
     const rowByAccount = new Map(rows.map((row) => [row.accountId, row]));
-    const visibleAccounts = (waAccounts || []).slice(0, 4);
-    const overflowAccounts = (waAccounts || []).slice(4);
+    const accounts = waAccounts || [];
+    const focusAccount = accounts.find(account => account.id === focusAccountId);
+    const visibleAccounts = accounts.slice(0, 4);
+    if (focusAccount && !visibleAccounts.includes(focusAccount)) visibleAccounts[3] = focusAccount;
+    const visibleIds = new Set(visibleAccounts.map(account => account.id));
+    const overflowAccounts = accounts.filter(account => !visibleIds.has(account.id));
     const openAccount = (account: WaAccount) => {
+      setAccountMenuOpen(false);
+      accountTriggerRef.current?.focus();
       const row = rowByAccount.get(account.id);
       if (row) {
         if (!row.active) onOpenThread(row);
@@ -276,11 +341,13 @@ export function PersonMultiAccountPanel({
           key={account.id}
           type="button"
           title={`${labelOf(account.id, waAccounts)} · ${hasConversation ? t("multiAccount.existingChat") : t("multiAccount.startChat")}`}
+          role={compact ? "menuitem" : undefined}
+          aria-current={active ? "true" : undefined}
           aria-label={`${labelOf(account.id, waAccounts)}, ${hasConversation ? t("multiAccount.existingChat") : t("multiAccount.startChat")}`}
           onClick={() => openAccount(account)}
           className={cn(
             "inline-flex shrink-0 items-center gap-1.5 rounded-full text-[11px] transition-colors",
-            compact ? "w-full justify-start px-2 py-1.5" : "max-w-[11rem] px-2 py-1",
+            compact ? "w-full justify-start rounded-lg px-2 py-2" : "max-w-[11rem] px-2 py-1",
             active
               ? "bg-brand/15 font-medium text-brand ring-1 ring-brand/30"
               : "text-zinc-500 hover:bg-zinc-800/80 hover:text-zinc-200"
@@ -301,7 +368,8 @@ export function PersonMultiAccountPanel({
               )}
             />
           </span>
-          <span className="min-w-0 truncate">{labelOf(account.id, waAccounts)}</span>
+          <span className={cn("min-w-0 truncate", compact && "flex-1 text-left")}>{labelOf(account.id, waAccounts)}</span>
+          {compact && active && <Check className="h-3 w-3 shrink-0 text-brand" />}
           {hasConversation ? (
             <MessageCircle className="h-3 w-3 shrink-0 text-brand/80" />
           ) : (
@@ -313,27 +381,44 @@ export function PersonMultiAccountPanel({
 
     return (
       <div className="shrink-0 border-t border-zinc-800/60 bg-zinc-950/90 px-3 py-1.5">
-        <div className="relative flex max-w-full items-center gap-1.5 overflow-x-auto">
+        <div className="flex min-w-0 max-w-full items-center gap-1.5">
           <span className="mr-1 shrink-0 text-[11px] text-zinc-500">{t("multiAccount.sendAccount")}</span>
-          {visibleAccounts.map((account) => accountButton(account))}
+          <div ref={accountStripRef} className="flex min-w-0 items-center gap-1.5 overflow-x-auto py-0.5">
+            {visibleAccounts.map((account) => accountButton(account))}
+          </div>
           {overflowAccounts.length > 0 && (
             <div ref={accountMenuRef} className="relative shrink-0">
               <button
                 type="button"
+                ref={accountTriggerRef}
                 aria-expanded={accountMenuOpen}
                 aria-haspopup="menu"
                 onClick={() => setAccountMenuOpen((open) => !open)}
-                className="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] text-zinc-500 transition-colors hover:bg-zinc-800/80 hover:text-zinc-200"
+                className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] text-zinc-400 transition-colors hover:bg-zinc-800/80 hover:text-zinc-200"
               >
                 {t("multiAccount.moreAccounts", { count: overflowAccounts.length })}
+                <ChevronDown className={cn("h-3 w-3", accountMenuOpen && "rotate-180")} />
               </button>
-              {accountMenuOpen && (
+              {accountMenuOpen && createPortal(
                 <div
+                  ref={accountPopupRef}
                   role="menu"
-                  className="absolute right-0 top-full z-30 mt-1 min-w-[12rem] rounded-lg border border-zinc-700/80 bg-zinc-900 p-1 shadow-xl shadow-black/30"
+                  aria-label={t("multiAccount.sendAccount")}
+                  className="fixed z-[10020] max-h-[min(20rem,calc(100vh_-_1rem))] w-[min(18rem,calc(100vw_-_1rem))] overflow-y-auto rounded-lg border border-zinc-700/80 bg-zinc-900 p-1 shadow-xl shadow-black/50"
+                  style={accountMenuPosition}
+                  onKeyDown={(event) => {
+                    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+                    const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+                    const index = items.indexOf(document.activeElement as HTMLButtonElement);
+                    const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+                      : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+                    event.preventDefault();
+                    items[next]?.focus();
+                  }}
                 >
                   {overflowAccounts.map((account) => accountButton(account, true))}
-                </div>
+                </div>,
+                document.body
               )}
             </div>
           )}

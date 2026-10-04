@@ -9,6 +9,7 @@ import {
 } from "@/lib/baileys";
 import type { Message } from "@/types/crm";
 import { translateCurrent } from "@/i18n";
+import { isDeliveryUncertain } from "@/store/outgoingRetry";
 
 type RetryMessageActionDeps = {
   id: string;
@@ -19,6 +20,8 @@ type RetryMessageActionDeps = {
   setMediaBusyId: (id: string | null) => void;
   updateMessageDelivery: AppState["updateMessageDelivery"];
   pushToast: AppState["pushToast"];
+  requestConfirm: AppState["requestConfirm"];
+  readMessage?: (id: string) => Message | undefined;
 };
 
 export async function retryMessage({
@@ -30,7 +33,26 @@ export async function retryMessage({
   setMediaBusyId,
   updateMessageDelivery,
   pushToast,
+  requestConfirm,
+  readMessage,
 }: RetryMessageActionDeps) {
+  if (!message || message.direction !== "out" || message.deliveryStatus !== "failed") return;
+  if (isDeliveryUncertain(message)) {
+    const original = message;
+    if (!requestConfirm || !await requestConfirm({
+      title: translateCurrent("runtime.verifyResendTitle"),
+      description: translateCurrent("runtime.verifyResendDescription"),
+      confirmLabel: translateCurrent("runtime.verifyResendConfirm"),
+      cancelLabel: translateCurrent("runtime.verifyResendCancel"),
+      tone: "danger",
+    })) return;
+    message = readMessage ? readMessage(id) : message;
+    // 确认期间可能已收到回执、删掉消息或改了内容，不能继续发送旧快照。
+    if (!message || message.deliveryStatus !== "failed" || message.body !== original.body
+      || message.phoneE164 !== original.phoneE164 || message.accountId !== original.accountId
+      || message.mediaUrl !== original.mediaUrl) return;
+  }
+  const sendAccountId = message.accountId || chatAccountId;
   if (message?.mediaType) {
     if (
       !isBaileys ||
@@ -50,29 +72,30 @@ export async function retryMessage({
     updateMessageDelivery(id, {
       deliveryStatus: "pending",
       lastError: undefined,
+      deliveryUncertain: false,
     });
     try {
       const target = message.phoneE164;
       const mediaUrl = message.mediaUrl;
       const type = message.mediaType.toLowerCase();
       const raw = await gatedMediaSend(
-        { phoneE164: target, accountId: chatAccountId },
+        { phoneE164: target, accountId: sendAccountId },
         () =>
           type === "image"
             ? baileysSendImage(
                 target,
                 mediaUrl,
                 message.mediaCaption || "",
-                { accountId: chatAccountId }
+                { accountId: sendAccountId }
               )
             : type === "sticker"
-              ? baileysSendSticker(target, mediaUrl, chatAccountId)
+              ? baileysSendSticker(target, mediaUrl, sendAccountId)
               : type === "gif"
                 ? baileysSendGif(
                     target,
                     mediaUrl,
                     message.mediaCaption || "",
-                    chatAccountId
+                    sendAccountId
                   )
                 : type === "document"
                   ? baileysSendDocument(
@@ -83,7 +106,7 @@ export async function retryMessage({
                         mimetype:
                           message.mediaMime || "application/octet-stream",
                         caption: message.mediaCaption,
-                        accountId: chatAccountId,
+                        accountId: sendAccountId,
                       }
                     )
                   : type === "audio"
@@ -91,7 +114,7 @@ export async function retryMessage({
                         seconds: message.mediaSeconds,
                         mimetype: message.mediaMime,
                         ptt: message.mediaPtt !== false,
-                        accountId: chatAccountId,
+                        accountId: sendAccountId,
                       })
                     : Promise.reject(new Error(translateCurrent("runtime.mediaRetryUnsupported")))
       );
@@ -104,10 +127,13 @@ export async function retryMessage({
       });
       pushToast(translateCurrent("runtime.mediaResent"), "success");
     } catch (error) {
+      const detail = error instanceof Error ? error.message : translateCurrent("runtime.mediaResendFailed");
       updateMessageDelivery(id, {
         deliveryStatus: "failed",
-        lastError:
-          error instanceof Error ? error.message : translateCurrent("runtime.mediaResendFailed"),
+        lastError: detail,
+        deliveryUncertain: (typeof error === "object" && error !== null
+          && "deliveryUncertain" in error && error.deliveryUncertain === true)
+          || isDeliveryUncertain({ direction: "out", deliveryStatus: "failed", lastError: detail }),
       });
       pushToast(
         error instanceof Error ? error.message : translateCurrent("runtime.mediaResendFailed"),
@@ -124,6 +150,7 @@ export async function retryMessage({
     nextAttemptAt: new Date().toISOString(),
     lastError: undefined,
     retryCount: 0,
+    deliveryUncertain: false,
   });
   pushToast(translateCurrent("runtime.requeued"), "info");
 }

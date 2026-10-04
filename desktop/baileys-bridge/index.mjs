@@ -1,3 +1,4 @@
+import { createDeletionJournal } from "./deletionJournal.mjs";
 import { rm } from "node:fs/promises";
 import makeWASocket, {
   Browsers,
@@ -74,6 +75,7 @@ const logger = pino({
   level: process.env.WAP_BAILEYS_LOG || (syncDebugOn ? "info" : "silent"),
 });
 const events = [];
+const deletionJournal = createDeletionJournal(authDir);
 
 /** 同步排障日志（stdout，tauri 会进 baileys-bridge-{account}.log） */
 let lastSnapLogAt = 0;
@@ -199,6 +201,12 @@ function push(type, payload) {
   const body =
     payload && typeof payload === "object" ? { ...payload } : { value: payload };
   if (!body.accountId) body.accountId = accountId;
+  const stamp = Date.now();
+  if (type === "messages.delete" || type === "chats.delete") {
+    body.deletedBefore = new Date(stamp).toISOString();
+    try { deletionJournal.record({ type, ts: stamp, deviceId: accountId, accountId, payload: body }); }
+    catch (error) { console.error("[sync] deletion journal failed", error); }
+  }
   events.push({
     seq: ++sequence,
     protocolVersion: BAILEYS_BRIDGE_PROTOCOL_VERSION,
@@ -1472,6 +1480,7 @@ function getHttpDeps() {
     get port() {
       return port;
     },
+    get deletionEvents() { return deletionJournal.snapshot(); },
     get events() {
       return events;
     },

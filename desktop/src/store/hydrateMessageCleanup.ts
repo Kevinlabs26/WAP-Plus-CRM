@@ -81,6 +81,7 @@ export function recoverInterruptedMessage(message: Message): Message {
   return {
     ...message,
     deliveryStatus: "failed",
+    deliveryUncertain: true,
     nextAttemptAt: undefined,
     lastError: "应用重启前发送结果未知，请先在 WhatsApp 核对后再手动重试",
   };

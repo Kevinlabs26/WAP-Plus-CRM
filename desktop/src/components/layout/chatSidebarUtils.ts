@@ -4,6 +4,7 @@ import { DEFAULT_ACCOUNT_ID } from "@/types/account";
 import { displayContactLabel, resolveSendTarget } from "@/lib/utils";
 import { chatInView, contactInView } from "@/store/accountScope";
 import type { LeadCandidate } from "@/lib/leadInbox";
+import { isAwaitingReply } from "@/lib/replyStatus";
 
 export type ChatSortMode =
   | "recent"
@@ -100,7 +101,7 @@ export function buildChatActivityMapsFromPreviews(
     if (c.lastMessage || c.updatedAt) {
       lastBodyByChat.set(c.id, c.lastMessage || "");
       lastMsgAtByChat.set(c.id, c.updatedAt || "");
-      if ((c.unread || 0) > 0) lastDirByChat.set(c.id, "in");
+      if (c.lastMessageDirection) lastDirByChat.set(c.id, c.lastMessageDirection);
     }
   }
   // 2) 有消息库时：用「真实最后一条」覆盖时间/正文（对齐官方按最后消息排序）
@@ -171,7 +172,7 @@ export function filterAndSortSidebarChats(opts: {
   /** 默认最近消息；置顶始终优先 */
   sortMode?: ChatSortMode;
   /** StatsBar 快捷筛选：全部 / 未读 / 今日有更新 */
-  listFilter?: "all" | "unread" | "today" | "leads";
+  listFilter?: "all" | "unread" | "awaiting" | "today" | "leads";
   leadCandidates?: ReadonlyMap<string, LeadCandidate>;
   leadSort?: "first_contact" | "last_message" | "unread";
   /** 多账号浏览范围；默认全部 */
@@ -226,6 +227,7 @@ export function filterAndSortSidebarChats(opts: {
       continue;
     if (opts.showArchived ? !chat.archived : !!chat.archived) continue;
     if (listFilter === "unread" && !(chat.unread > 0)) continue;
+    if (listFilter === "awaiting" && !isAwaitingReply(chat, lastDirByChat.get(chat.id))) continue;
     if (
       listFilter === "today" &&
       chatUpdatedLocalDay(chat.updatedAt || "") !== todayKey
@@ -286,8 +288,8 @@ export function filterAndSortSidebarChats(opts: {
     const tb = sortKeyByChatId.get(b.id) || 0;
     const unreadA = a.unread || 0;
     const unreadB = b.unread || 0;
-    const awaitA = lastDirByChat.get(a.id) === "in" ? 1 : 0;
-    const awaitB = lastDirByChat.get(b.id) === "in" ? 1 : 0;
+    const awaitA = Number(isAwaitingReply(a, lastDirByChat.get(a.id)));
+    const awaitB = Number(isAwaitingReply(b, lastDirByChat.get(b.id)));
 
     if (listFilter === "leads") {
       const leadA = leadCandidates?.get(a.id);

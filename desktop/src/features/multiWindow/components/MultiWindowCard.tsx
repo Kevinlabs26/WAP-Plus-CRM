@@ -282,6 +282,8 @@ export function MultiWindowCard({
       setMediaBusyId,
       updateMessageDelivery,
       pushToast,
+        requestConfirm: useAppStore.getState().requestConfirm,
+        readMessage: (messageId) => useAppStore.getState().messages.find((item) => item.id === messageId),
     });
   };
 

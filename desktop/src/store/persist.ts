@@ -14,7 +14,9 @@ import type {
   AppSettings,
   PersistSlice,
 } from "./types";
+import { deferDuringRestore, isDataRestoreActive } from "./restoreGuard";
 import { diffMessageRows } from "./messagePersistDelta";
+import { assertChatDraftCapacity } from "@/lib/chatDrafts";
 
 /** SQLite 增量保存，IDB 保存完整快照。UI 交互用防抖；退出前可 flushPersist。 */
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -24,6 +26,7 @@ const COMPOSER_RETRY_MS = 300;
 let statsTimer: ReturnType<typeof setTimeout> | null = null;
 let statsIdle: number | null = null;
 let lastPersistErrorAt = 0;
+let lastDraftErrorAt = 0;
 
 function reportPersistError(get: () => AppState, error: unknown) {
   console.error("[storage] save failed", error);
@@ -46,6 +49,7 @@ type PersistRefs = Pick<
   | "activities"
   | "settings"
   | "broadcastCampaigns"
+  | "draftReplyByChatId"
 >;
 
 const allDirty = (): PersistDirtyFlags => ({
@@ -57,6 +61,7 @@ const allDirty = (): PersistDirtyFlags => ({
   activities: true,
   settings: true,
   broadcastCampaigns: true,
+  drafts: true,
 });
 const noDirty = (): PersistDirtyFlags => ({
   phones: false,
@@ -67,6 +72,7 @@ const noDirty = (): PersistDirtyFlags => ({
   activities: false,
   settings: false,
   broadcastCampaigns: false,
+  drafts: false,
 });
 
 let persistedRefs: PersistRefs | null = null;
@@ -81,6 +87,7 @@ const captureRefs = (state: AppState): PersistRefs => ({
   activities: state.activities,
   settings: state.settings,
   broadcastCampaigns: state.broadcastCampaigns,
+  draftReplyByChatId: state.draftReplyByChatId,
 });
 
 function markDirty(state: AppState) {
@@ -89,7 +96,8 @@ function markDirty(state: AppState) {
     return;
   }
   for (const key of Object.keys(pendingDirty) as (keyof PersistDirtyFlags)[]) {
-    if (state[key] !== persistedRefs[key]) pendingDirty[key] = true;
+    const stateKey = key === "drafts" ? "draftReplyByChatId" : key;
+    if (state[stateKey] !== persistedRefs[stateKey]) pendingDirty[key] = true;
   }
 }
 
@@ -130,6 +138,17 @@ export function buildPersistSlice(
 } {
   const s = get();
   const sqlite = getStorageEngine() === "sqlite";
+  let drafts: AppState["draftReplyByChatId"] | undefined = s.draftReplyByChatId;
+  try { assertChatDraftCapacity(drafts || {}); }
+  catch (error) {
+    // 超限草稿留在内存，保留磁盘旧稿；不能阻断消息/联系人等其它数据保存。
+    drafts = undefined;
+    dirty = { ...(dirty || allDirty()), drafts: false };
+    if (Date.now() - lastDraftErrorAt > 10_000) {
+      lastDraftErrorAt = Date.now();
+      s.pushToast(error instanceof Error ? error.message : "草稿未保存", "error");
+    }
+  }
   // API Key 只保存在运行时和 Windows DPAPI，任何状态快照都不落明文。
   const settings = {
     ...s.settings,
@@ -160,6 +179,7 @@ export function buildPersistSlice(
     activities: s.activities.slice(0, 2000),
     settings,
     broadcastCampaigns: s.broadcastCampaigns,
+    draftReplyByChatId: drafts,
     dirty,
     deletedMessageIds,
   };
@@ -170,6 +190,13 @@ export function persist(
   immediate = false,
   debounceMs = PERSIST_DEBOUNCE_MS
 ): Promise<void> | undefined {
+  if (isDataRestoreActive()) {
+    return new Promise<void>((resolve, reject) => {
+      deferDuringRestore(() => {
+        Promise.resolve(persist(get, immediate, debounceMs)).then(resolve, reject);
+      });
+    });
+  }
   // hydrate 前禁止写盘，防止空白初始 state 覆盖本地库
   if (!get().hydrated) return;
   const state = get();
@@ -179,7 +206,8 @@ export function persist(
       clearTimeout(persistTimer);
       persistTimer = null;
     }
-    const messageDelta = persistedRefs
+    const dirty = persistedRefs ? pendingDirty : allDirty();
+    const messageDelta = dirty.messages && persistedRefs
       ? diffMessageRows(persistedRefs.messages, state.messages)
       : undefined;
     persistedRefs = captureRefs(state);
@@ -187,8 +215,8 @@ export function persist(
     const savePromise = saveAppState(
       buildPersistSlice(
         () => state,
-        allDirty(),
-        state.messages,
+        dirty,
+        messageDelta?.changedRows,
         messageDelta?.deletedIds
       )
     );
@@ -202,6 +230,7 @@ export function persist(
       return;
     }
     persistTimer = null;
+    if (deferDuringRestore(() => { void persist(get); })) return;
     if (!get().hydrated) return;
     const startedAt = performance.now();
     const current = get();
@@ -230,6 +259,15 @@ export function persist(
 /** 关键路径立即落盘（清空数据、导出前等） */
 export function flushPersist(get: () => AppState) {
   return persist(get, true) || Promise.resolve();
+}
+
+/** 连续输入也定期保存；SQLite 只写轻量草稿行，不准备消息增量。 */
+export function persistChatDrafts(get: () => AppState): Promise<void> {
+  if (!get().hydrated || isDataRestoreActive()) return Promise.resolve();
+  if (getStorageEngine() !== "sqlite") return flushPersist(get);
+  const promise = saveAppState(buildPersistSlice(get, { ...noDirty(), drafts: true }));
+  void promise.catch(error => reportPersistError(get, error));
+  return promise;
 }
 
 export function accountCreatedAtOf(settings: AppSettings, accountId: string): string | null {

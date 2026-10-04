@@ -299,3 +299,15 @@ test("generateSuggestions mock mode returns English for english cue", async () =
     "expected English suggestions"
   );
 });
+
+test("French and other business languages trigger conservative safety guards", () => {
+  for (const text of ["Je souhaite un remboursement", "Quel est le prix ?", "Mon mot de passe", "Quiero un reembolso", "Quero um reembolso", "Ich brauche eine Rückerstattung"]) assert.ok(getAutoReplyBlockReason(text), text);
+  for (const text of ["Je vous garantis la livraison demain", "Te prometo la entrega", "Eu garanto a entrega", "Ich verspreche die Lieferung"]) assert.ok(getAutoReplyOutputBlockReason(text), text);
+  assert.equal(getAutoReplyBlockReason("Bonjour, comment allez-vous ?"), null);
+});
+test("manual reply after inbound takes over before AI generation completes", () => {
+  const now = Date.now();
+  const inbound = { id: "in", direction: "in", body: "hello", sentAt: new Date(now - 2000).toISOString() };
+  const manual = { id: "manual", direction: "out", body: "hello", sentAt: new Date(now - 1000).toISOString() };
+  assert.equal(evaluateAutoReplyDecision([inbound, manual], inbound, now).kind, "manual_takeover");
+});

@@ -1,17 +1,19 @@
 import http from "node:http";
-import { json, requestBody } from "./httpUtil.mjs";
+import { json, requestBody, writeCors } from "./httpUtil.mjs";
 import { describeMessage } from "./messageDescribe.mjs";
 import {
   ensureGifMp4,
   ensureOggOpusPtt,
   MAX_WHATSAPP_AUDIO_SECONDS,
   parseDataUrl,
+  safeVideoThumbnail,
 } from "./audioConvert.mjs";
 import { tryHandleGroupRoutes } from "./groupRoutes.mjs";
 import { tryHandleGroupWriteRoutes } from "./groupWriteRoutes.mjs";
 import { tryHandleBlocklistRoutes } from "./blocklistRoutes.mjs";
 import { tryHandleCatalogRoutes } from "./catalogRoutes.mjs";
 import { buildContactVcard } from "./contactVcard.mjs";
+import { downloadRemoteMedia } from "./remoteMedia.mjs";
 
 const syncDebugOn =
   process.env.WAP_SYNC_DEBUG === "1" ||
@@ -25,6 +27,7 @@ export function createBaileysRequestHandler(getD) {
   return async (req, res) => {
     const d = typeof getD === "function" ? getD() : getD;
 
+    if (!writeCors(req, res)) return json(res, 403, { error: "origin not allowed" });
     if (req.method === "OPTIONS") return json(res, 204, {});
     if (!d.token || req.headers["x-wap-token"] !== d.token)
       return json(res, 401, { error: "unauthorized" });
@@ -118,6 +121,7 @@ export function createBaileysRequestHandler(getD) {
           baileysVersion: status.baileysVersion,
           contacts: snap.contacts,
           messages: snap.messages,
+          deletionEvents: d.deletionEvents || [],
           contactCount: snap.contacts?.length ?? 0,
           messageCount: snap.messages?.length ?? 0,
           accountId: aid,
@@ -332,7 +336,7 @@ export function createBaileysRequestHandler(getD) {
         }
       }
 if (req.method === "POST" && url.pathname === "/restart") {
-        const body = await requestBody(req).catch(() => ({}));
+        const body = await requestBody(req);
         const clearAuth = body?.clearAuth !== false; // 默认清会话出新码
         d.connection = "starting";
         d.qrDataUrl = "";
@@ -509,14 +513,14 @@ if (req.method === "POST" && url.pathname === "/restart") {
           );
         } else if (hasAudioUrl) {
           result = await d.socket.sendMessage(jid, {
-            audio: { url: String(audioUrl) },
+            audio: (await downloadRemoteMedia(audioUrl, 14_000_000)).buffer,
             mimetype: mimeIn || "audio/mpeg",
             ptt: ptt === true,
           }, quotedOpt ? { quoted: quotedOpt } : undefined);
         } else if (hasAudio || mediaType === "audio" || mediaType === "ptt") {
           const asPtt = ptt !== false; // 默认语音条
           console.log(
-            `[ptt] input audioDataUrl=${String(audioDataUrl || "").slice(0, 40)} len=${String(audioDataUrl || "").length} mime=${mimeIn || "-"} seconds=${seconds} ptt=${asPtt}`
+            `[ptt] input len=${String(audioDataUrl || "").length} mime=${mimeIn || "-"} seconds=${seconds} ptt=${asPtt}`
           );
           let buf;
           let mimetype;
@@ -564,8 +568,10 @@ if (req.method === "POST" && url.pathname === "/restart") {
             `[ptt] sent id=${result?.key?.id} type=${result?.message?.audioMessage ? "audio" : JSON.stringify(Object.keys(result?.message || {}))} seconds=${result?.message?.audioMessage?.seconds} ptt=${result?.message?.audioMessage?.ptt} mimetype=${result?.message?.audioMessage?.mimetype} len=${result?.message?.audioMessage?.fileLength}`
           );
         } else if (hasGifUrl) {
+          const video = (await downloadRemoteMedia(gifUrl, 12_000_000)).buffer;
           result = await d.socket.sendMessage(jid, {
-            video: { url: String(gifUrl) },
+            video,
+            jpegThumbnail: await safeVideoThumbnail(video),
             gifPlayback: true,
             ...(caption ? { caption } : {}),
           }, quotedOpt ? { quoted: quotedOpt } : undefined);
@@ -575,6 +581,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
             jid,
             {
               video: buf,
+              jpegThumbnail: await safeVideoThumbnail(buf),
               mimetype,
               gifPlayback: true,
               ...(caption ? { caption } : {}),
@@ -583,7 +590,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
           );
         } else if (hasStickerUrl) {
           result = await d.socket.sendMessage(jid, {
-            sticker: { url: String(stickerUrl) },
+            sticker: (await downloadRemoteMedia(stickerUrl, 2_000_000)).buffer,
           }, quotedOpt ? { quoted: quotedOpt } : undefined);
         } else if (hasSticker || mediaType === "sticker") {
           const parsed = parseDataUrl(stickerDataUrl);
@@ -598,7 +605,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
           );
         } else if (hasImageUrl) {
           result = await d.socket.sendMessage(jid, {
-            image: { url: String(imageUrl) },
+            image: (await downloadRemoteMedia(imageUrl, 8_000_000)).buffer,
             caption: caption || undefined,
           }, quotedOpt ? { quoted: quotedOpt } : undefined);
         } else if (hasImage || mediaType === "image") {
@@ -620,7 +627,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
           );
         } else if (hasFileUrl) {
           result = await d.socket.sendMessage(jid, {
-            document: { url: String(fileUrl) },
+            document: (await downloadRemoteMedia(fileUrl, 15_000_000)).buffer,
             mimetype: mimeIn || "application/octet-stream",
             fileName: String(fileName || "file").slice(0, 180),
             caption: caption || undefined,
@@ -1065,8 +1072,10 @@ if (req.method === "POST" && url.pathname === "/restart") {
 
       return json(res, 404, { error: "not found" });
     } catch (error) {
-      console.error(`[${req.method} ${req.url || ""}]`, error);
-      return json(res, 500, {
+      // SDK errors may carry customer messages, URLs and credentials in data.
+      console.error(`[${req.method}] request failed`, { status: error.status || 500, name: error.name || "Error" });
+      if (error.status === 503) res.setHeader("Retry-After", "5");
+      return json(res, [400, 413, 503].includes(error.status) ? error.status : 500, {
         error: error instanceof Error ? error.message : String(error),
       });
     }

@@ -605,6 +605,9 @@ export function applyMessagesSync(opts: {
             ? `${senderName}: ${body}`
             : body,
         lastMessageDirection: isSystemMsg ? undefined : direction,
+        replyPendingSince: !isSystemMsg && direction === "in" ? sentAt
+          : conversationOutgoing ? "" : chats[chatIndex]?.replyPendingSince,
+        replyHandledAt: chats[chatIndex]?.replyHandledAt,
         unread: (chats[chatIndex]?.unread ?? 0) + unread,
         // 仅真实聊天推进列表时间；系统事件用旧值或 sentAt 仅作新建兜底
         updatedAt: isSystemMsg

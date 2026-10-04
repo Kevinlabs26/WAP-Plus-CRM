@@ -1,13 +1,13 @@
 /**
  * 跟进到期 → 桌面通知（点击打开客户工作区）。
- * 按 followUp.id 去重，避免轮询重复轰炸。
+ * 按 followUp.id 和 dueAt 去重，避免轮询重复轰炸；改期后重新提醒。
  */
 import { showDesktopNotify } from "@/lib/desktopNotify";
 import { followUpDayKey, localDayKey } from "@/lib/todayBoard";
 import type { FollowUp } from "@/types/crm";
 
-const notified = new Map<string, number>();
-/** 同一跟进 6 小时内只提醒一次（完成/改期后 id 变或 done 则自然不再出现） */
+const notified = new Map<string, { dueAt: string; at: number }>();
+/** 同一跟进的同一到期时间，6 小时内只提醒一次。 */
 const DEDUPE_MS = 6 * 3600_000;
 
 export type FollowUpDueHandlers = {
@@ -51,8 +51,8 @@ export function notifyDueFollowUps(
 
   const today = localDayKey(now);
   const nowMs = now.getTime();
-  for (const [k, t] of notified) {
-    if (nowMs - t > DEDUPE_MS) notified.delete(k);
+  for (const [k, mark] of notified) {
+    if (nowMs - mark.at > DEDUPE_MS) notified.delete(k);
   }
 
   let due: FollowUp[] = [];
@@ -66,14 +66,14 @@ export function notifyDueFollowUps(
       if (Number.isFinite(dueMs) && dueMs > nowMs) continue;
     }
 
-    if (notified.has(f.id)) continue;
+    if (notified.get(f.id)?.dueAt === f.dueAt) continue;
     due.push(f);
   }
   if (!due.length) return 0;
 
   // 同批多条 → 合并成一条汇总通知，避免「逾期未回」一堆 toast 轰炸
   const markNotified = (list: FollowUp[]) => {
-    for (const f of list) notified.set(f.id, nowMs);
+    for (const f of list) notified.set(f.id, { dueAt: f.dueAt, at: nowMs });
   };
   if (due.length === 1) {
     const f = due[0]!;

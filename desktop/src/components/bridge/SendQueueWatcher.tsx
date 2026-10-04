@@ -11,6 +11,7 @@ import {
   isWaAccountConnected,
   resolveWaSendAccountId,
 } from "@/lib/accountConnection";
+import { canSendAutoReply } from "@/lib/aiSafety";
 import { translateCurrent } from "@/i18n";
 
 const MAX_AUTO_RETRIES = 5;
@@ -71,6 +72,13 @@ export function SendQueueWatcher() {
       if (msg.mediaType) return;
 
       const settings = state.settings;
+      if (msg.systemKind === "ai_auto_reply" && !canSendAutoReply(settings, state.messages, msg)) {
+        state.updateMessageDelivery(msg.id, {
+          deliveryStatus: "failed", retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined,
+          lastError: "自动回复已停止或上下文已更新，请人工确认",
+        });
+        return;
+      }
       const channelId = normalizeChannelId(
         msg.channelId || settings.sendChannel
       ) as ChannelId;
@@ -140,6 +148,12 @@ export function SendQueueWatcher() {
           },
           {
             channelId,
+            canSend: msg.systemKind === "ai_auto_reply" ? () => {
+              const latest = useAppStore.getState();
+              const message = latest.messages.find((item) => item.id === msg.id);
+              return !!message && message.deliveryStatus === "pending" &&
+                canSendAutoReply(latest.settings, latest.messages, message);
+            } : undefined,
             rateLimitEnabled: settings.rateLimitEnabled !== false,
             rateLimits: {
               perPhonePerMinute: settings.ratePerMinute,
@@ -179,6 +193,7 @@ export function SendQueueWatcher() {
         const wait = backoffMs(attempt, result.retryAfterMs);
         useAppStore.getState().updateMessageDelivery(msg.id, {
           deliveryStatus: canRetry ? "queued" : "failed",
+          deliveryUncertain: result.error === "baileys_delivery_unknown",
           lastError:
             result.message || result.error || translateCurrent("runtime.sendFailed"),
           ...(rateLimited ? { retryCount: Math.max(0, attempt - 1) } : {}),
@@ -196,6 +211,7 @@ export function SendQueueWatcher() {
           lastError: translateCurrent("runtime.sendUnknown", {
             reason: text.slice(0, 120),
           }),
+          deliveryUncertain: true,
           retryCount: MAX_AUTO_RETRIES,
           nextAttemptAt: undefined,
         });

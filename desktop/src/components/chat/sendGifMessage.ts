@@ -14,6 +14,7 @@ type SendGifMessageDeps = {
   isBaileys: boolean;
   chatConnected: boolean;
   chatAccountId: string | null;
+  chatId: string | null | undefined;
   channelId: ChannelId;
   selectedPhoneId: string | null;
   setSending: (sending: boolean) => void;
@@ -32,6 +33,7 @@ export async function sendGifMessage({
   isBaileys,
   chatConnected,
   chatAccountId,
+  chatId,
   channelId,
   selectedPhoneId,
   setSending,
@@ -63,6 +65,7 @@ export async function sendGifMessage({
       reader.readAsDataURL(file);
     });
     msgId = enqueueOutgoingMessage({
+      chatId,
       body: caption || "[GIF]",
       phoneE164: recipient,
       contactId: contact.id,
@@ -99,6 +102,7 @@ export async function sendGifMessage({
       updateMessageDelivery(msgId, {
         deliveryStatus: "failed",
         lastError: message,
+        deliveryUncertain: !!error && typeof error === "object" && "deliveryUncertain" in error && error.deliveryUncertain === true,
       });
     }
     pushToast(message, "error");

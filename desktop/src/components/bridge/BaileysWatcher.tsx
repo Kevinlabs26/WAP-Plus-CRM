@@ -21,13 +21,6 @@ import {
 const cursorKey = (accountId: string) =>
   `wap.baileys.eventCursor.${accountId}`;
 /**
- * 大联系人快照按账号节流：稳态下桥接每 ~10s 全量重发一遍联系人（几百条），
- * 即使数据没变也要逐条处理占主线程。60s 内只处理一次，小增量（≤10 条）正常放行。
- */
-const CONTACT_SYNC_MIN_MS = 60_000;
-const CONTACT_SYNC_DELTA_MAX = 10;
-const contactSyncThrottle = new Map<string, number>();
-/**
  * 多号并行时过勤会卡 UI。
  * 外层 tick 只负责调度；各账号有自己的最小间隔。
  */
@@ -163,15 +156,18 @@ export function BaileysWatcher() {
     // 只在消息真正交给 store 后持久化游标；应用在排队期间退出时，旧游标会让下次启动重新拉取。
     const pendingCursorByAccount = new Map<string, number>();
     const INGEST_CHUNK_SIZE = 4;
+    let ingestInFlight = false;
 
     const commitPendingCursors = () => {
-      if (!pendingCursorByAccount.size || !useAppStore.getState().hydrated) return;
+      if (!pendingCursorByAccount.size || !useAppStore.getState().hydrated ||
+          pendingEvents.length || ingestQueue.length || ingestInFlight) return;
       const cursorSnapshot = new Map(pendingCursorByAccount);
       void Promise.all([
         waitForMediaCacheWrites(),
         flushPersist(() => useAppStore.getState()),
       ])
         .then(() => {
+          if (cancelled || pendingEvents.length || ingestQueue.length || ingestInFlight) return;
           for (const [accountId, cursor] of cursorSnapshot) {
             // Newer events may have arrived while SQLite was saving; keep
             // their cursor pending until the next durable snapshot.
@@ -196,9 +192,10 @@ export function BaileysWatcher() {
       }
     };
 
-    const pumpIngestQueue = (deadline?: IdleDeadline | number) => {
+    const pumpIngestQueue = async (deadline?: IdleDeadline | number) => {
       ingestFrame = null;
       ingestIdle = null;
+      if (ingestInFlight) return;
       if (cancelled) {
         ingestQueue = [];
         return;
@@ -240,7 +237,20 @@ export function BaileysWatcher() {
         }
       }
       if (merged.length) {
-        ingest(merged);
+        ingestInFlight = true;
+        try {
+          await ingest(merged);
+        } catch (error) {
+          ingestQueue.unshift(merged);
+          ingestDelayTimer = window.setTimeout(() => {
+            ingestDelayTimer = null; scheduleIngestPump();
+          }, 1000);
+          pushToast(error instanceof Error ? error.message : "同步处理失败，正在重试", "error");
+          return;
+        } finally {
+          ingestInFlight = false;
+        }
+        if (cancelled) return;
         if (!ingestQueue.length && pendingCursorByAccount.size) {
           if (!useAppStore.getState().hydrated) {
             scheduleIngestPump();
@@ -261,6 +271,7 @@ export function BaileysWatcher() {
     const scheduleIngestPump = () => {
       if (
         cancelled ||
+        ingestInFlight ||
         ingestFrame != null ||
         ingestIdle != null ||
         ingestDelayTimer != null
@@ -286,28 +297,6 @@ export function BaileysWatcher() {
     // small enough to yield between frames so navigation and typing stay responsive.
     const queueIngestBatch = (events: BridgeEvent[]) => {
       if (!events.length || cancelled) return;
-      // 大联系人快照节流：60s 内每个账号只放行一次，减少后台突发占用主线程
-      const now = Date.now();
-      const throttled = events.filter((event) => {
-        if (event.type !== "contacts.sync") return true;
-        const payload =
-          event.payload && typeof event.payload === "object"
-            ? (event.payload as Record<string, unknown>)
-            : null;
-        const items =
-          payload && Array.isArray(payload.items) ? payload.items : [];
-        if (items.length <= CONTACT_SYNC_DELTA_MAX) return true;
-        const key = String(
-          (event as { accountId?: string }).accountId ||
-            event.deviceId ||
-            "default"
-        );
-        const last = contactSyncThrottle.get(key) || 0;
-        if (now - last < CONTACT_SYNC_MIN_MS) return false;
-        contactSyncThrottle.set(key, now);
-        return true;
-      });
-      if (!throttled.length) return;
       const chunks: BridgeEvent[][] = [];
       let smallBatch: BridgeEvent[] = [];
       const flushSmallBatch = () => {
@@ -316,7 +305,7 @@ export function BaileysWatcher() {
         smallBatch = [];
       };
 
-      for (const event of throttled) {
+      for (const event of events) {
         const payload =
           event.payload && typeof event.payload === "object"
             ? (event.payload as Record<string, unknown>)
@@ -438,7 +427,7 @@ export function BaileysWatcher() {
 
     const ingestSyncSnapshot = (
       accountId: string,
-      result: { contacts?: unknown[]; messages?: unknown[] },
+      result: { contacts?: unknown[]; messages?: unknown[]; deletionEvents?: BridgeEvent[] },
       source: string
     ) => {
       const stampItems = (items: unknown[]) =>
@@ -471,6 +460,7 @@ export function BaileysWatcher() {
           },
           accountId
         ),
+        ...(result.deletionEvents || []).map(event => tagAccount(event as unknown as Record<string, unknown>, accountId)),
       ] as BridgeEvent[]);
     };
 
@@ -493,7 +483,7 @@ export function BaileysWatcher() {
         r.lastCatchupAt = Date.now();
         const n = result.contacts?.length ?? 0;
         const m = result.messages?.length ?? 0;
-        if (n > 0 || m > 0) {
+        if (n > 0 || m > 0 || result.deletionEvents?.length) {
           ingestSyncSnapshot(accountId, result, "snapshot");
           r.lastEventAt = Date.now();
           if (!opts?.quiet) {
@@ -831,10 +821,10 @@ export function BaileysWatcher() {
               accountId,
               Math.max(pendingCursorByAccount.get(accountId) || 0, r.cursor)
             );
-          } else if (result.events.length) {
+          } else if (!pendingCursorByAccount.has(accountId) && result.events.length) {
             // Presence/status-only events do not represent durable CRM data.
             writeCursor(accountId, r.cursor);
-          } else {
+          } else if (!pendingCursorByAccount.has(accountId)) {
             writeCursor(accountId, r.cursor);
           }
         }
@@ -1060,6 +1050,8 @@ export function BaileysWatcher() {
       if (ingestDelayTimer != null) window.clearTimeout(ingestDelayTimer);
       pendingEvents = [];
       ingestQueue = [];
+      // 丢弃尚未处理的队列时，下一次挂载必须从已落盘游标重拉。
+      byAccount.current.clear();
       window.clearTimeout(first);
       window.clearInterval(id);
       if (resumeTimer) window.clearTimeout(resumeTimer);

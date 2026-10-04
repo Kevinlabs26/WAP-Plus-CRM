@@ -15,6 +15,7 @@ export type VoiceInputResult = {
   /** 最终结果来源引擎 */
   engine: "browser" | "ai";
   fallback?: boolean;
+  error?: string;
 };
 
 export type VoiceInputSession = {
@@ -83,8 +84,10 @@ function startBrowserSession(opts: {
 
   // 识别状态机：end 后需重启以支持长句；用户手动 stop 则不再重启
   let stoppedByUser = false;
+  let cancelled = false;
   let restartTimer: number | null = null;
   let errored = false;
+  let recognitionError: string | undefined;
   let finalText = "";
   let lastShown = "";
   const scheduleRestart = () => {
@@ -99,6 +102,7 @@ function startBrowserSession(opts: {
   };
 
   recognition.onresult = (e: unknown) => {
+    if (cancelled || errored) return;
     const event = e as {
       resultIndex?: number;
       results?: {
@@ -123,9 +127,11 @@ function startBrowserSession(opts: {
     if (lastShown.trim()) opts.onInterim?.(lastShown);
   };
   recognition.onerror = (e: unknown) => {
+    if (cancelled || errored) return;
     const err = (e as { error?: string }).error;
     errored = true;
-    opts.onError?.(err ? `语音识别失败（${err}）` : "语音识别失败");
+    recognitionError = err ? `语音识别失败（${err}）` : "语音识别失败";
+    opts.onError?.(recognitionError);
   };
   recognition.onend = () => scheduleRestart();
 
@@ -145,10 +151,11 @@ function startBrowserSession(opts: {
       }
       // 给浏览器一点时间 flush 最后一段 interim → final
       await new Promise((r) => window.setTimeout(r, 250));
-      const text = lastShown.trim();
-      return { text, engine: "browser" };
+      if (recognitionError) return { text: "", engine: "browser", error: recognitionError };
+      return { text: lastShown.trim(), engine: "browser" };
     },
     cancel: () => {
+      cancelled = true;
       stoppedByUser = true;
       if (restartTimer != null) window.clearTimeout(restartTimer);
       try {
@@ -172,10 +179,13 @@ async function startAiSession(opts: {
     stop: async () => {
       if (cancelled) return { text: "", engine: "ai" };
       const { dataUrl, mimeType: mime } = await recording.stop();
+      if (cancelled) return { text: "", engine: "ai" };
       const res = await transcribeVoice(dataUrl, mime, opts.settings);
-      if (!res.text.trim()) {
-        opts.onError?.(res.error || "转写为空");
-        return { text: "", engine: "ai", fallback: res.fallback };
+      if (cancelled) return { text: "", engine: "ai" };
+      if (res.fallback || res.error || !res.text.trim()) {
+        const error = res.error || "转写为空，请重试";
+        opts.onError?.(error);
+        return { text: "", engine: "ai", fallback: res.fallback, error };
       }
       return { text: res.text.trim(), engine: "ai", fallback: res.fallback };
     },

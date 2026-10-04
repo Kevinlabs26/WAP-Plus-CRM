@@ -86,6 +86,7 @@ export interface BaileysEventsResponse {
 }
 
 export interface BaileysSyncResponse {
+  deletionEvents?: { type: "messages.delete" | "chats.delete"; ts: number; deviceId: string; payload: ProtocolPayloadMap["messages.delete"] | ProtocolPayloadMap["chats.delete"] }[];
   protocolVersion: number;
   baileysVersion: string;
   contacts: ContactSyncItem[];

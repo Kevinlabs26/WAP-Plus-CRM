@@ -54,10 +54,10 @@ export function FollowUpsView({ viewMode = "list", scopedFollowUps }: Props) {
       overdue: pending.filter((f) => (f.dueAt || "").slice(0, 10) < today),
       dueToday: pending.filter((f) => (f.dueAt || "").slice(0, 10) === today),
       later: pending.filter((f) => (f.dueAt || "").slice(0, 10) > today),
-      done: followUps.filter((f) => f.done),
+      history: followUps.filter((f) => f.done),
     };
   }, [followUps, today]);
-  const { pending, overdue, dueToday, later, done } = groups;
+  const { pending, overdue, dueToday, later, history } = groups;
 
   const openChatForFollowUp = (
     f: FollowUp,
@@ -134,11 +134,11 @@ export function FollowUpsView({ viewMode = "list", scopedFollowUps }: Props) {
         {pending.length === 0 && (
           <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900/30 px-6 py-12 text-center">
             <div className="text-[15px] font-semibold text-zinc-200">
-              {done.length > 0 ? t("followUps.allDone") : t("followUps.empty")}
+              {history.length > 0 ? t("followUps.noPending") : t("followUps.empty")}
             </div>
             <p className="mx-auto mt-2 max-w-md text-[12px] leading-5 text-zinc-500">
-              {done.length > 0
-                ? t("followUps.allDoneHint")
+              {history.length > 0
+                ? t("followUps.noPendingHint")
                 : t("followUps.emptyHint")}
             </p>
             <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
@@ -150,9 +150,9 @@ export function FollowUpsView({ viewMode = "list", scopedFollowUps }: Props) {
                 {t("followUps.backToChats")}
               </button>
             </div>
-            {done.length > 0 && (
+            {history.length > 0 && (
               <p className="mt-3 text-[11px] text-zinc-600">
-                {t("followUps.completedCount", { count: done.length })}
+                {t("followUps.historyCount", { count: history.length })}
               </p>
             )}
           </div>
@@ -182,11 +182,11 @@ export function FollowUpsView({ viewMode = "list", scopedFollowUps }: Props) {
             </div>
           </div>
         )}
-        {done.length > 0 && (
+        {history.length > 0 && (
           <div className="pt-4">
-            <SectionLabel>{t("followUps.done", { count: done.length })}</SectionLabel>
+            <SectionLabel>{t("followUps.history", { count: history.length })}</SectionLabel>
             <div className={viewMode === "grid" ? "grid gap-2 md:grid-cols-2 xl:grid-cols-3" : "space-y-2"}>
-            {done.slice(0, 30).map((f) => {
+            {history.slice(0, 30).map((f) => {
               const contact = contactById.get(f.contactId);
               const title = displayContactLabel(
                 contact?.name || f.contactName,
@@ -201,9 +201,22 @@ export function FollowUpsView({ viewMode = "list", scopedFollowUps }: Props) {
                   className="flex items-center gap-2 rounded-lg border border-zinc-800/60 bg-zinc-900/20 px-3 py-2 text-[12px] text-zinc-500"
                 >
                   <span className="min-w-0 flex-1 truncate">{title}</span>
+                  <span className="shrink-0 text-2xs">
+                    {t(f.cancelled ? "followUps.statusCancelled" : "followUps.statusCompleted")}
+                  </span>
                   <span className="shrink-0 tabular-nums text-2xs">
                     {(f.dueAt || "").slice(0, 10)}
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      toggleFollowUp(f.id);
+                      pushToast(t("followUps.reopened", { title }), "success");
+                    }}
+                    className="shrink-0 rounded px-2 py-1 text-2xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                  >
+                    {t("followUps.reopen")}
+                  </button>
                 </div>
               );
             })}

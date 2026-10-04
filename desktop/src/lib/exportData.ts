@@ -1,3 +1,4 @@
+import { isValidAccountId } from "@/types/account";
 import type {
   Activity,
   ChatPreview,
@@ -187,11 +188,12 @@ export function buildExportBundle(input: {
   activities: Activity[];
   broadcastCampaigns: BroadcastCampaign[];
   settings: AppSettings;
+  includeMedia?: boolean;
 }): ExportBundleV2 {
   // 导出时剥离消息里过大的 inline media，减小文件
   const messages = input.messages.map((m) => {
     const url = m.mediaUrl || "";
-    if (url.startsWith("data:") && url.length > 8_000) {
+    if (!input.includeMedia && url.startsWith("data:") && url.length > 8_000) {
       return {
         ...m,
         mediaUrl: undefined,
@@ -232,7 +234,7 @@ export type ParsedBackup = {
 export function sanitizeMediaUrl(url: unknown): string | undefined {
   if (typeof url !== "string") return undefined;
   const u = url.trim();
-  if (!u || u.length > 3_500_000) return undefined;
+  if (!u || u.length > 24 * 1024 * 1024) return undefined;
   if (/^https:\/\//i.test(u)) return u;
   if (/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(u)) return u;
   if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(u)) return u;
@@ -326,6 +328,11 @@ function sanitizeChat(raw: unknown): ChatPreview | null {
     lastMessage: str(c.lastMessage, 2000),
     unread: Math.max(0, Math.min(99999, Number(c.unread) || 0)),
     updatedAt: str(c.updatedAt, 40) || new Date().toISOString(),
+    replyHandledAt: typeof c.replyHandledAt === "string" && Number.isFinite(Date.parse(c.replyHandledAt))
+      ? new Date(c.replyHandledAt).toISOString() : undefined,
+    replyPendingSince: c.replyPendingSince === "" ? ""
+      : typeof c.replyPendingSince === "string" && Number.isFinite(Date.parse(c.replyPendingSince))
+        ? new Date(c.replyPendingSince).toISOString() : undefined,
     phoneId: str(c.phoneId, 80) || "",
     accountId: str(c.accountId, 80) || undefined,
     archived: Boolean(c.archived) || undefined,
@@ -360,6 +367,7 @@ function sanitizeMessage(raw: unknown): Message | null {
         ? (str(m.deliveryStatus, 40) as Message["deliveryStatus"])
         : undefined,
     lastError: str(m.lastError, 400) || undefined,
+    deliveryUncertain: typeof m.deliveryUncertain === "boolean" ? m.deliveryUncertain : undefined,
     retryCount:
       typeof m.retryCount === "number" && Number.isFinite(m.retryCount)
         ? Math.max(0, Math.min(99, Math.round(m.retryCount)))
@@ -513,7 +521,8 @@ function sanitizeFollowUp(raw: unknown): FollowUp | null {
     contactName: str(f.contactName, 200),
     dueAt: str(f.dueAt, 40),
     note: str(f.note, 2000) || undefined,
-    done: Boolean(f.done),
+    done: Boolean(f.done) || f.cancelled === true,
+    cancelled: f.cancelled === true ? true : undefined,
   };
 }
 
@@ -538,6 +547,25 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
     throw new Error("备份文件格式无效");
   }
   const o = raw as Record<string, unknown>;
+  const settingsInput = o.settingsSafe ?? o.settingsPublic;
+  const accounts = settingsInput && typeof settingsInput === "object"
+    ? (settingsInput as Record<string, unknown>).waAccounts : undefined;
+  if (Array.isArray(accounts)) {
+    const ids = new Set<string>();
+    for (const account of accounts) {
+      const id = account && typeof account === "object" ? account.id : undefined;
+      if (!isValidAccountId(id) || ids.has(id)) throw new Error("备份含无效或重复的账号 ID，请先修正账号槽位");
+      ids.add(id);
+    }
+  }
+  for (const key of ["contacts", "chats", "messages"]) {
+    if (!Array.isArray(o[key])) continue;
+    for (const item of o[key] as unknown[]) {
+      if (!item || typeof item !== "object") continue;
+      const id = (item as Record<string, unknown>).accountId;
+      if (id != null && id !== "" && !isValidAccountId(id)) throw new Error("备份含无效账号归属 ID");
+    }
+  }
   const version = Number(o.version) || 1;
   const asArr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
@@ -570,6 +598,9 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
           }
         : message;
     });
+  const mediaChars = messages.reduce((sum, message) => sum +
+    (message.mediaUrl?.startsWith("data:") ? message.mediaUrl.length : 0), 0);
+  if (mediaChars > 128 * 1024 * 1024) throw new Error("备份附件总量超过 128 MB");
   const followUps = asArr(o.followUps)
     .map(sanitizeFollowUp)
     .filter((x): x is FollowUp => Boolean(x));
@@ -588,21 +619,26 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
   } else if (o.settingsPublic && typeof o.settingsPublic === "object") {
     settingsSafe = o.settingsPublic as Partial<SettingsSafeExport>;
   }
-  // 禁止备份里夹带密钥字段（即使有人改文件）。
-  // 清单必须与 persist.ts 落盘清空 / DPAPI 存储的 8 个 key 完全一致——
-  // 此前漏掉 customAiKey：手改备份塞入该字段会被静默注入设置，
-  // 之后 AI 建议/翻译会把聊天内容发往攻击者的第三方端点。
+  // 只恢复客户数据与界面偏好；端点、密钥、自动发送及保护策略沿用本机。
   if (settingsSafe) {
-    const scrub = { ...settingsSafe } as Record<string, unknown>;
-    delete scrub.openaiKey;
-    delete scrub.groqKey;
-    delete scrub.geminiKey;
-    delete scrub.deepseekKey;
-    delete scrub.qwenKey;
-    delete scrub.zhipuKey;
-    delete scrub.openrouterKey;
-    delete scrub.customAiKey;
-    settingsSafe = scrub as Partial<SettingsSafeExport>;
+    const allowed = [
+      "quickReplies", "quickReplyCustomCategories", "translateTargetLang", "myLang",
+      "voiceInputLang", "leadInbox", "chatFolders", "chatFolderClones",
+      "scheduledMessages", "waAccounts", "accountViewMode", "historySyncNote",
+      "historySyncNoteByAccountId", "internalNotesByKey", "chatBackground",
+      "salesStageLabels", "salesStageOrder", "theme",
+    ];
+    settingsSafe = Object.fromEntries(
+      allowed.filter((key) => Object.hasOwn(settingsSafe!, key))
+        .map((key) => [key, (settingsSafe as Record<string, unknown>)[key]])
+    ) as Partial<SettingsSafeExport>;
+    if (Array.isArray(settingsSafe.scheduledMessages)) {
+      settingsSafe.scheduledMessages = settingsSafe.scheduledMessages.map((task) =>
+        task && (task.status === "pending" || task.status === "queued")
+          ? { ...task, status: "failed", messageId: undefined, error: "从备份恢复：请重新确认发送时间" }
+          : task
+      );
+    }
   }
 
   return {
@@ -649,7 +685,11 @@ export function contactsToCsv(contacts: Contact[]): string {
     "nextFollowUpAt",
     "notes",
   ];
-  const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
+  // 表格软件不能把客户输入当公式；手机号按文本保留前导零。
+  const esc = (v: string, phone = false) => {
+    if (phone || /^[\s\u0000-\u001f]*[=+\-@＝＋－＠]/u.test(v) || /^[\t\r\n]/.test(v)) v = "'" + v;
+    return `"${v.replace(/"/g, '""')}"`;
+  };
   const rows = contacts.map((c) =>
     [
       c.id,
@@ -666,7 +706,7 @@ export function contactsToCsv(contacts: Contact[]): string {
       c.nextFollowUpAt ?? "",
       c.notes ?? "",
     ]
-      .map((x) => esc(String(x)))
+      .map((x, index) => esc(String(x), index === 2))
       .join(",")
   );
   return [header.join(","), ...rows].join("\n");
@@ -683,6 +723,7 @@ export function downloadText(filename: string, text: string, mime: string) {
 }
 
 export async function readJsonFile(file: File): Promise<unknown> {
+  if (file.size > 256 * 1024 * 1024) throw new Error("备份文件超过 256 MB，请拆分附件后重试");
   const text = await file.text();
   try {
     return JSON.parse(text) as unknown;

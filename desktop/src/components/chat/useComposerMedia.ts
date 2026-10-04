@@ -8,6 +8,7 @@ import type {
 
 type UseComposerMediaOptions = {
   chatKey: string;
+  sendContextKey?: string;
   readDraft: () => string;
   setDraftLocal: (text: string) => void;
   flushDraftNow: (text: string) => void;
@@ -18,6 +19,7 @@ type UseComposerMediaOptions = {
   onSendFile: (file: File, caption?: string) => boolean | Promise<boolean>;
   /** 加入附件后需要收起的弹层（附件菜单/表情面板等） */
   onStageMedia?: () => void;
+  onError: (message: string) => void;
 };
 
 // Composer may be remounted when the chat pane changes mode. Keep staged File
@@ -147,6 +149,12 @@ export function useComposerMedia(opts: UseComposerMediaOptions) {
   const pendingMediaRef = useRef<PendingMediaItem[]>([]);
   const mediaCaptionRef = useRef("");
   const activeChatKeyRef = useRef(chatKey);
+  const contextKey = opts.sendContextKey || chatKey;
+  const mediaContextRef = useRef({ key: contextKey, generation: 0 });
+  if (mediaContextRef.current.key !== contextKey) {
+    mediaContextRef.current = { key: contextKey, generation: mediaContextRef.current.generation + 1 };
+  }
+  const mediaSendLockRef = useRef(false);
   const persistTimersRef = useRef(
     new Map<string, ReturnType<typeof setTimeout>>()
   );
@@ -213,11 +221,17 @@ export function useComposerMedia(opts: UseComposerMediaOptions) {
           );
           return;
         }
-        rememberSavedMedia(chatKey, restored.items, restored.caption);
+        const draft = readDraft();
+        const caption = draft || restored.caption;
+        rememberSavedMedia(chatKey, restored.items, caption);
         pendingMediaRef.current = restored.items;
-        mediaCaptionRef.current = restored.caption;
+        mediaCaptionRef.current = caption;
         setPendingMedia(restored.items);
-        setMediaCaption(restored.caption);
+        setMediaCaption(caption);
+        if (!draft && caption) {
+          setDraftLocal(caption);
+          flushDraftNow(caption);
+        }
       });
     }
     return () => {
@@ -226,6 +240,7 @@ export function useComposerMedia(opts: UseComposerMediaOptions) {
   }, [chatKey]);
 
   useEffect(() => () => {
+    mediaContextRef.current.generation++;
     void persistMediaDraft(
       activeChatKeyRef.current,
       pendingMediaRef.current,
@@ -330,46 +345,61 @@ export function useComposerMedia(opts: UseComposerMediaOptions) {
   };
 
   const sendPendingMedia = async () => {
-    if (!pendingMedia.length || mediaSendingIndex >= 0) return;
+    if (!pendingMedia.length || mediaSendLockRef.current) return;
+    mediaSendLockRef.current = true;
+    const context = { ...mediaContextRef.current };
+    const sameContext = () => mediaContextRef.current.generation === context.generation;
+    const draftAtStart = readDraft();
     const sent = new Set<string>();
     let captionUsed = false;
-    for (let index = 0; index < pendingMedia.length; index++) {
-      const item = pendingMedia[index]!;
-      setMediaSendingIndex(index);
-      const caption =
-        !captionUsed && item.kind !== "sticker" ? mediaCaption.trim() : "";
-      const ok =
-        item.kind === "image"
-          ? await onSendImage(item.file, caption)
-          : item.kind === "audio"
-            ? await onSendAudio(item.file, caption)
-          : item.kind === "sticker"
-            ? await onSendSticker(item.file)
-            : item.kind === "gif"
-              ? await onSendGif(item.file, caption)
-              : await onSendFile(item.file, caption);
-      if (ok) {
-        sent.add(item.id);
-        if (caption) captionUsed = true;
+    try {
+      for (let index = 0; index < pendingMedia.length && sameContext(); index++) {
+        const item = pendingMedia[index]!;
+        setMediaSendingIndex(index);
+        const caption =
+          !captionUsed && item.kind !== "sticker" ? mediaCaption.trim() : "";
+        const ok =
+          item.kind === "image"
+            ? await onSendImage(item.file, caption)
+            : item.kind === "audio"
+              ? await onSendAudio(item.file, caption)
+            : item.kind === "sticker"
+              ? await onSendSticker(item.file)
+              : item.kind === "gif"
+                ? await onSendGif(item.file, caption)
+                : await onSendFile(item.file, caption);
+        if (ok) {
+          sent.add(item.id);
+          if (caption) captionUsed = true;
+        }
       }
-    }
-    pendingMedia.forEach((item) => {
-      if (sent.has(item.id) && item.previewUrl) URL.revokeObjectURL(item.previewUrl);
-    });
-    const remaining = pendingMedia.filter((item) => !sent.has(item.id));
-    pendingMediaRef.current = remaining;
-    setPendingMedia(remaining);
-    setMediaSendingIndex(-1);
-    if (!remaining.length) {
-      mediaCaptionRef.current = "";
-      setMediaCaption("");
-      saveCurrentMedia([], "");
-    } else {
-      saveCurrentMedia(remaining, mediaCaptionRef.current);
-    }
-    if (sent.size && mediaCaption.trim()) {
-      setDraftLocal("");
-      flushDraftNow("");
+    } catch (error) {
+      opts.onError(error instanceof Error ? error.message : String(error));
+    } finally {
+      pendingMedia.forEach((item) => {
+        if (sent.has(item.id) && item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      });
+      // 清理原会话已发项；保留期间新加的附件，不把 A 的列表写入 B。
+      const current = activeChatKeyRef.current === chatKey
+        ? { items: pendingMediaRef.current, caption: mediaCaptionRef.current }
+        : savedMediaByChat.get(chatKey) || { items: pendingMedia, caption: mediaCaption };
+      const remaining = current.items.filter((item) => !sent.has(item.id));
+      const caption = !remaining.length || (captionUsed && current.caption === mediaCaption) ? "" : current.caption;
+      if (remaining.length || caption) rememberSavedMedia(chatKey, remaining, caption);
+      else savedMediaByChat.delete(chatKey);
+      schedulePersist(chatKey, remaining, caption);
+      if (activeChatKeyRef.current === chatKey) {
+        pendingMediaRef.current = remaining;
+        mediaCaptionRef.current = caption;
+        setPendingMedia(remaining);
+        setMediaCaption(caption);
+      }
+      setMediaSendingIndex(-1);
+      mediaSendLockRef.current = false;
+      if (sameContext() && captionUsed && readDraft() === draftAtStart) {
+        setDraftLocal("");
+        flushDraftNow("");
+      }
     }
   };
 

@@ -5,6 +5,7 @@ function requestSync(path, deps) {
   let status = 0;
   let body = "";
   const response = {
+    setHeader() {},
     writeHead(code) {
       status = code;
     },

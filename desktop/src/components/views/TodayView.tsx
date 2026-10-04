@@ -38,8 +38,9 @@ import type { Contact, FollowUp } from "@/types/crm";
 import { FollowUpsView } from "./FollowUpsView";
 import { MultiWindowWorkspace } from "./MultiWindowWorkspace";
 import { useI18n } from "@/i18n";
+import { isAwaitingReply } from "@/lib/replyStatus";
 
-type WorkQueue = "all" | "overdue" | "today" | "unread" | "failed" | "plan";
+type WorkQueue = "all" | "overdue" | "today" | "unread" | "awaiting" | "failed" | "plan";
 type WorkViewMode = "list" | "grid";
 const WORK_VIEW_MODE_KEY = "wap.workbenchViewMode";
 
@@ -135,6 +136,14 @@ export function TodayView() {
     [followUps, today]
   );
   const unread = useMemo(() => listUnreadChats(chats, Infinity), [chats]);
+  const awaiting = useMemo(() => chats.filter((chat) => isAwaitingReply(chat))
+    .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)), [chats]);
+  const inboxTasks = useMemo(() => {
+    const ids = new Set(awaiting.map((chat) => chat.id));
+    return [...awaiting, ...unread.filter((chat) => !ids.has(chat.id))];
+  }, [awaiting, unread]);
+  const replyChats = activeQueue === "unread" ? unread : activeQueue === "all" ? inboxTasks : awaiting;
+  const markReplyHandled = useAppStore((s) => s.markReplyHandled);
   const failed = useMemo(
     () => listRecentFailedOutbound(messages, contacts, { limit: Infinity }),
     [messages, contacts]
@@ -238,6 +247,7 @@ export function TodayView() {
   const emptyAll =
     fu.actionable.length === 0 &&
     unread.length === 0 &&
+    awaiting.length === 0 &&
     failed.length === 0 &&
     attention.length === 0;
   const queueCards: Array<{
@@ -252,7 +262,7 @@ export function TodayView() {
       value:
         summary.overdueCount +
         summary.dueTodayCount +
-        summary.unreadChatCount +
+        inboxTasks.length +
         summary.failedCount +
         summary.attentionAccountCount,
       tone: "ok",
@@ -271,10 +281,11 @@ export function TodayView() {
     },
     {
       id: "unread",
-      label: t("today.pendingChats"),
+      label: t("sidebar.unreadChats"),
       value: summary.unreadChatCount,
       tone: summary.unreadChatCount ? "warn" : "ok",
     },
+    { id: "awaiting", label: t("today.awaitingReply"), value: awaiting.length, tone: awaiting.length ? "warn" : "ok" },
     {
       id: "failed",
       label: t("today.sendError"),
@@ -324,10 +335,10 @@ export function TodayView() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
-          <Button variant="secondary" className="shrink-0" onClick={() => setWorkspaceMode("multi")}>
+          <Button variant="secondary" size="xs" className="h-7 shrink-0" onClick={() => setWorkspaceMode("multi")}>
             {t("today.multiWindow")}
           </Button>
-          <Button variant="ghost" className="shrink-0" onClick={() => setActiveNav("stats")}>{t("today.viewStats")}</Button>
+          <Button variant="ghost" size="xs" className="h-7 shrink-0" onClick={() => setActiveNav("stats")}>{t("today.viewStats")}</Button>
           <div className="flex rounded-md border border-zinc-800 bg-zinc-900/50 p-0.5" aria-label={t("today.displayMode")}>
             <button
               type="button"
@@ -359,7 +370,7 @@ export function TodayView() {
         <div className="mx-auto flex max-w-7xl flex-col gap-5">
           <div className="grid gap-3 md:grid-cols-3" aria-label={t("today.priority")}>
             {([
-              { id: "unread", label: t("today.awaitingReply"), value: unread.length, hint: t("sidebar.unreadChats"), Icon: Clock, barColor: "border-l-amber-500" },
+              { id: "awaiting", label: t("today.awaitingReply"), value: awaiting.length, hint: t("reply.awaitingHint"), Icon: Clock, barColor: "border-l-amber-500" },
               { id: "today", label: t("today.followUp"), value: fu.dueToday.length, hint: `${fu.overdue.length} · ${t("today.overdue")}`, Icon: CalendarCheck, barColor: "border-l-brand" },
               { id: "failed", label: t("today.sendError"), value: failed.length, hint: t("today.failedRecent"), Icon: AlertTriangle, barColor: "border-l-rose-500" },
             ] as const).map(({ id, label, value, hint, Icon, barColor }) => (
@@ -466,12 +477,12 @@ export function TodayView() {
             </section>
           ) : null}
 
-          {(activeQueue === "all" || activeQueue === "unread") && unread.length > 0 ? (
+          {(activeQueue === "all" || activeQueue === "unread" || activeQueue === "awaiting") && replyChats.length > 0 ? (
             <section className="flex flex-col gap-2">
               <SectionLabel>
                 <span className="inline-flex items-center gap-1.5">
                   <Clock className="h-3.5 w-3.5" />
-                  {t("today.pendingChats")} · {summary.unreadChatCount}
+                  {t(activeQueue === "unread" ? "sidebar.unreadChats" : activeQueue === "all" ? "today.pendingChats" : "today.awaitingReply")} · {replyChats.length}
                 </span>
               </SectionLabel>
               <div className={cn(
@@ -479,7 +490,7 @@ export function TodayView() {
                   ? "grid gap-2 md:grid-cols-2 xl:grid-cols-3"
                   : "overflow-hidden rounded-lg border border-zinc-800/90"
               )}>
-                {unread.slice(0, visibleCount).map((c) => {
+                {replyChats.slice(0, visibleCount).map((c) => {
                   const contact = contactById.get(c.contactId);
                   const title = displayContactLabel(
                     contact?.name || c.contactName,
@@ -499,20 +510,19 @@ export function TodayView() {
                     .filter(Boolean)
                     .join(" · ");
                   return (
-                    <button
+                    <div
                       key={c.id}
-                      type="button"
                       className={cn(
                         "flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-zinc-900/80",
                         viewMode === "grid"
                           ? "rounded-lg border border-zinc-800/90 bg-zinc-900/30"
                           : "border-b border-zinc-800/80 last:border-0"
                       )}
-                      onClick={() => {
+                    >
+                      <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => {
                         setSelectedChat(c.id);
                         goToChats("all");
-                      }}
-                    >
+                      }}>
                       <Avatar
                         name={title}
                         seed={contact?.phone || c.contactId || title}
@@ -542,11 +552,13 @@ export function TodayView() {
                       <span className="shrink-0 rounded-full bg-brand/20 px-2 py-0.5 text-2xs font-semibold tabular-nums text-brand">
                         {c.unread}
                       </span>
-                    </button>
+                      </button>
+                      {isAwaitingReply(c) && <Button variant="ghost" onClick={() => markReplyHandled(c.id)}>{t("reply.markHandled")}</Button>}
+                    </div>
                   );
                 })}
               </div>
-              {summary.unreadChatCount > unread.length ? (
+              {activeQueue === "unread" && summary.unreadChatCount > unread.length ? (
                 <button
                   type="button"
                   className="text-left text-[12px] text-zinc-500 hover:text-brand"
@@ -668,7 +680,7 @@ export function TodayView() {
             </section>
           ) : null}
 
-          {((activeQueue === "all" && Math.max(fu.overdue.length, fu.dueToday.length, unread.length, failed.length) > visibleCount) ||
+          {((activeQueue === "all" && Math.max(fu.overdue.length, fu.dueToday.length, inboxTasks.length, failed.length) > visibleCount) ||
             (activeQueue !== "all" && activeQueue !== "plan" && activeQueueCount > visibleCount)) ? (
             <Button variant="secondary" onClick={() => setVisibleCount((count) => count + 30)}>
               {t("today.showMore")}

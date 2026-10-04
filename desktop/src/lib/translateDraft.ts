@@ -245,38 +245,51 @@ export function detectMessageLanguage(
   return heur.code;
 }
 
-/** 客户默认译出语：preferredLang > 国家启发式 > 最近入站消息自动检测 > 设置默认 */
-export function resolveTargetLang(
-  contact: Contact | undefined,
+export type TargetLanguage = {
+  code: Exclude<TranslateLangCode, "auto">;
+  source: "preferred" | "country" | "message" | "default";
+};
+
+/** 客户默认译出语：preferredLang > 国家启发式 > 最近入站消息自动检测 > 设置默认。 */
+export function resolveTargetLanguage(
+  contact: Pick<Contact, "preferredLang" | "country"> | undefined,
   settings: AppSettings,
   lastInboundBody?: string
-): Exclude<TranslateLangCode, "auto"> {
+): TargetLanguage {
   const pref = (contact?.preferredLang || "").toLowerCase();
   if (pref && pref !== "auto" && LANG_NAME[pref]) {
-    return pref as Exclude<TranslateLangCode, "auto">;
+    return { code: pref as TargetLanguage["code"], source: "preferred" };
   }
   const country = (contact?.country || "").toLowerCase();
-  if (/france|法国|fr\b/.test(country)) return "fr";
-  if (/spain|西班牙|es\b|mexico|墨西哥/.test(country)) return "es";
-  if (/germany|德国|de\b|austria|瑞士/.test(country)) return "de";
-  if (/brazil|brasil|葡萄牙|portugal/.test(country)) return "pt";
-  if (/russia|俄罗斯|ru\b/.test(country)) return "ru";
-  if (/japan|日本|jp\b/.test(country)) return "ja";
-  if (/korea|韩国|kr\b/.test(country)) return "ko";
-  if (/arab|saudi|uae|dubai|埃及|qatar/.test(country)) return "ar";
-  if (/china|中国|cn\b|taiwan|香港|singapore/.test(country)) return "zh";
+  if (/france|法国|fr\b/.test(country)) return { code: "fr", source: "country" };
+  if (/spain|西班牙|es\b|mexico|墨西哥/.test(country)) return { code: "es", source: "country" };
+  if (/germany|德国|de\b|austria|瑞士/.test(country)) return { code: "de", source: "country" };
+  if (/brazil|brasil|葡萄牙|portugal/.test(country)) return { code: "pt", source: "country" };
+  if (/russia|俄罗斯|ru\b/.test(country)) return { code: "ru", source: "country" };
+  if (/japan|日本|jp\b/.test(country)) return { code: "ja", source: "country" };
+  if (/korea|韩国|kr\b/.test(country)) return { code: "ko", source: "country" };
+  if (/arab|saudi|uae|dubai|埃及|qatar/.test(country)) return { code: "ar", source: "country" };
+  if (/china|中国|cn\b|taiwan|香港|singapore/.test(country)) return { code: "zh", source: "country" };
 
   // 客户最近一次用对方语言发来的消息，最可信：自动按它默认译出语，省去每个会话手选
   if (lastInboundBody) {
     const detected = detectMessageLanguage(lastInboundBody);
-    if (detected) return detected;
+    if (detected) return { code: detected, source: "message" };
   }
 
   const def = (settings.translateTargetLang || "en").toLowerCase();
   if (def && def !== "auto" && LANG_NAME[def]) {
-    return def as Exclude<TranslateLangCode, "auto">;
+    return { code: def as TargetLanguage["code"], source: "default" };
   }
-  return "en";
+  return { code: "en", source: "default" };
+}
+
+export function resolveTargetLang(
+  contact: Contact | undefined,
+  settings: AppSettings,
+  lastInboundBody?: string
+): TargetLanguage["code"] {
+  return resolveTargetLanguage(contact, settings, lastInboundBody).code;
 }
 
 /**
@@ -345,28 +358,6 @@ export function translationMatchesTarget(
 
 function hasKey(s: AppSettings) {
   return hasAiCredentials(s);
-}
-
-/** 演示用极简「翻译」：不保证质量，仅保证无 Key 也能试流程 */
-function mockTranslate(
-  text: string,
-  to: Exclude<TranslateLangCode, "auto">
-): string {
-  const t = text.trim();
-  if (to === "zh") {
-    if (/[\u4e00-\u9fff]/.test(t)) return t;
-    return `【译文·演示】${t}`;
-  }
-  if (to === "en") {
-    if (/^[\x00-\x7F]*$/.test(t) && !/[\u4e00-\u9fff]/.test(t)) {
-      // 已是拉丁文：演示前缀
-      return t.startsWith("[Demo EN]") ? t : t;
-    }
-    // 中文 → 英文演示（不真译，避免胡说业务数字）
-    return `[EN] ${t}`;
-  }
-  const tag = to.toUpperCase();
-  return `[${tag}] ${t}`;
 }
 
 function stripTranslationFences(raw: string): string {
@@ -494,7 +485,7 @@ async function googleTranslate(
 
 /**
  * 把草稿译成目标语。成功则返回纯译文（可直接进输入框）。
- * mock / 无 Key：演示译文；真 API 失败则 fallback 演示并带 error。
+ * 仅返回真实译文；请求失败或仅有演示提供商时返回空文本和错误，保留调用方原文。
  */
 export async function translateDraftText(
   text: string,
@@ -552,9 +543,8 @@ export async function translateDraftText(
       };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      const textOut = mockTranslate(src, to);
       return {
-        text: textOut,
+        text: "",
         source: "google",
         fallback: true,
         error: msg,
@@ -564,34 +554,13 @@ export async function translateDraftText(
   }
 
   if (provider === "mock" || !hasAiKey) {
-    const textOut = mockTranslate(src, to);
-    cache.set(ck, {
-      text: textOut,
-      at: Date.now(),
-      source: "mock",
-    });
     return {
-      text: textOut,
+      text: "",
       source: "mock",
-      fallback: provider !== "mock",
-      error:
-        provider !== "mock"
-          ? provider === "openai"
-            ? "未配置 OpenAI Key，已用演示翻译"
-            : provider === "groq"
-              ? "未配置 Groq Key，已用演示翻译"
-              : provider === "gemini"
-                ? "未配置 Gemini Key，已用演示翻译"
-                : provider === "deepseek"
-                  ? "未配置 DeepSeek Key，已用演示翻译"
-                  : provider === "qwen"
-                    ? "未配置通义千问 Key，已用演示翻译"
-                    : provider === "zhipu"
-                      ? "未配置智谱 Key，已用演示翻译"
-                      : provider === "openrouter"
-                        ? "未配置 OpenRouter Key，已用演示翻译"
-                        : "未配置 AI，已用演示翻译"
-          : undefined,
+      fallback: true,
+      error: provider === "mock"
+        ? "演示模式不提供真实翻译，请选择 Google 翻译或配置 AI"
+        : "未配置可用的 AI，请配置密钥或选择 Google 翻译",
       targetLang: to,
     };
   }
@@ -659,9 +628,8 @@ export async function translateDraftText(
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    const textOut = mockTranslate(src, to);
     return {
-      text: textOut,
+      text: "",
       source: "mock",
       fallback: true,
       error: msg,

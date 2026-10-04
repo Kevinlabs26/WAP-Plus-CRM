@@ -34,6 +34,7 @@ function mergeAccountRows(
   for (const r of rows || []) {
     map.set(r.accountId, {
       ...r,
+      awaitingReplyChats: r.awaitingReplyChats || 0,
       pendingReplyChats: r.pendingReplyChats || 0,
       trend7d: r.trend7d || [],
     });
@@ -43,6 +44,7 @@ function mergeAccountRows(
       map.set(id, {
         accountId: id,
         chatsToday: 0,
+        awaitingReplyChats: 0,
         pendingReplyChats: 0,
         pendingReplies: 0,
         dealsWon: 0,
@@ -54,7 +56,7 @@ function mergeAccountRows(
   }
   return [...map.values()].sort((a, b) => {
     const score = (x: AccountDashStats) =>
-      x.pendingReplyChats * 1000 + x.chatsToday * 10 + x.contacts;
+      x.awaitingReplyChats * 1000 + x.chatsToday * 10 + x.contacts;
     return score(b) - score(a) || a.accountId.localeCompare(b.accountId);
   });
 }
@@ -63,6 +65,7 @@ function emptyRow(accountId: string): AccountDashStats {
   return {
     accountId,
     chatsToday: 0,
+    awaitingReplyChats: 0,
     pendingReplyChats: 0,
     pendingReplies: 0,
     dealsWon: 0,
@@ -76,6 +79,7 @@ function sumRows(rows: AccountDashStats[]): AccountDashStats {
   const out = emptyRow("all");
   for (const r of rows) {
     out.chatsToday += r.chatsToday;
+    out.awaitingReplyChats += r.awaitingReplyChats;
     out.pendingReplyChats += r.pendingReplyChats;
     out.pendingReplies += r.pendingReplies;
     out.dealsWon += r.dealsWon;
@@ -183,7 +187,7 @@ export function StatsView() {
     setActiveNav("crm");
   };
 
-  const openScopedChats = (filter: "today" | "unread") => {
+  const openScopedChats = (filter: "today" | "awaiting") => {
     updateSettings({
       accountViewMode:
         scope === "all"
@@ -201,11 +205,11 @@ export function StatsView() {
       onClick: () => openScopedChats("today"),
     },
     {
-      label: t("stats.pendingReply"),
-      value: scoped.pendingReplyChats,
-      hint: `${scoped.pendingReplies} · ${t("stats.pendingReplyTitle")}`,
-      alert: scoped.pendingReplyChats > 0,
-      onClick: () => openScopedChats("unread"),
+      label: t("stats.awaitingReply"),
+      value: scoped.awaitingReplyChats,
+      hint: t("reply.awaitingHint"),
+      alert: scoped.awaitingReplyChats > 0,
+      onClick: () => openScopedChats("awaiting"),
     },
     {
       label: t("stats.followUp"),
@@ -481,6 +485,7 @@ export function StatsView() {
                         <th className="px-3 py-2 font-medium">{t("stats.account")}</th>
                         <th className="px-2 py-2 font-medium">{t("stats.active")}</th>
                         <th className="px-2 py-2 font-medium">{t("stats.awaitingReply")}</th>
+                        <th className="px-2 py-2 font-medium">{t("stats.pendingReply")}</th>
                         <th className="px-2 py-2 font-medium">{t("stats.followUpToday")}</th>
                         <th className="px-2 py-2 font-medium">{t("stats.deals")}</th>
                         <th className="px-3 py-2 font-medium">{t("stats.contacts")}</th>
@@ -488,7 +493,7 @@ export function StatsView() {
                     </thead>
                     <tbody>
                       {accountRows.map((row, i) => {
-                        const hot = row.pendingReplyChats > 0;
+                        const hot = row.awaitingReplyChats > 0;
                         return (
                           <tr
                             key={row.accountId}
@@ -510,6 +515,9 @@ export function StatsView() {
                                   : "text-zinc-300"
                               )}
                             >
+                              {t("stats.chatCount", { count: row.awaitingReplyChats })}
+                            </td>
+                            <td className="px-2 py-2.5 tabular-nums text-zinc-300">
                               <div>{t("stats.chatCount", { count: row.pendingReplyChats })}</div>
                               <div className="text-2xs font-normal text-zinc-600">
                                 {t("stats.unreadCount", { count: row.pendingReplies })}

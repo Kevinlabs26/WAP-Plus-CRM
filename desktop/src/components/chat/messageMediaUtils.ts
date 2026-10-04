@@ -165,6 +165,7 @@ export function estimateDataUrlBytes(url?: string): number | undefined {
 }
 
 export function triggerMediaDownload(url: string, filename: string) {
+  if (!/^(?:https?:\/\/|blob:|data:)/i.test(url)) throw new Error("不支持的媒体 URL 协议");
   const a = document.createElement("a");
   a.href = url;
   a.download = filename || "file";
@@ -238,27 +239,30 @@ export async function copyImageToClipboard(url: string): Promise<void> {
 }
 
 export async function openMediaInNewTab(url: string, mime?: string) {
+  if (!/^(?:https?:\/\/|blob:|data:)/i.test(url)) throw new Error("不支持的媒体 URL 协议");
   // http(s) 直接开；data/blob 优先 blob 新标签，避免超大 data URL 卡死
   if (url.startsWith("http://") || url.startsWith("https://")) {
     window.open(url, "_blank", "noopener,noreferrer");
     return;
   }
-  if (url.startsWith("blob:")) {
-    window.open(url, "_blank", "noopener,noreferrer");
-    return;
-  }
-  if (url.startsWith("data:")) {
+  if (url.startsWith("data:") || url.startsWith("blob:")) {
     const res = await fetch(url);
     const blob = await res.blob();
     const typed =
       mime && !blob.type
         ? new Blob([blob], { type: mime })
         : blob;
+    // HTML, SVG and other active documents must be downloaded, never opened
+    // as a blob inheriting the privileged desktop origin.
+    if (!/^(?:image\/(?:png|jpeg|gif|webp|bmp)|audio\/[\w.+-]+|video\/[\w.+-]+|application\/pdf)$/i.test(typed.type)) {
+      triggerMediaDownload(url, "attachment");
+      return;
+    }
     const obj = URL.createObjectURL(typed);
     window.open(obj, "_blank", "noopener,noreferrer");
     // 延迟 revoke，给浏览器打开时间
     window.setTimeout(() => URL.revokeObjectURL(obj), 60_000);
     return;
   }
-  window.open(url, "_blank", "noopener,noreferrer");
+  throw new Error("不支持的媒体 URL 协议");
 }

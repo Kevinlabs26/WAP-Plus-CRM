@@ -35,6 +35,8 @@ class BridgeServer(
     private val running = AtomicBoolean(false)
     private var serverSocket: ServerSocket? = null
     private val clients = CopyOnWriteArrayList<Socket>()
+    private val connections = CopyOnWriteArrayList<Socket>()
+    private val workers = BridgeWorkers()
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
@@ -45,7 +47,8 @@ class BridgeServer(
             try {
                 val client = ss.accept()
                 Log.i(TAG, "client ${client.inetAddress}")
-                Thread { handleClient(client) }.start()
+                connections.add(client)
+                if (!workers.client(client) { handleClient(client) }) connections.remove(client)
             } catch (e: Exception) {
                 if (running.get()) Log.e(TAG, "accept", e)
                 break
@@ -55,14 +58,20 @@ class BridgeServer(
 
     fun stop() {
         running.set(false)
-        clients.forEach { runCatching { it.close() } }
+        connections.forEach { runCatching { it.close() } }
+        connections.clear()
         clients.clear()
         runCatching { serverSocket?.close() }
+        workers.close()
     }
 
     fun broadcast(jsonLine: String) {
+        clients.forEach { writeResponse(it, jsonLine) }
+    }
+
+    private fun writeResponse(socket: Socket, jsonLine: String) {
         val line = if (jsonLine.endsWith("\n")) jsonLine else "$jsonLine\n"
-        clients.forEach { socket ->
+        workers.response(socket) {
             runCatching {
                 synchronized(socket) {
                     val w = PrintWriter(socket.getOutputStream(), true)
@@ -79,10 +88,10 @@ class BridgeServer(
             val writer = PrintWriter(socket.getOutputStream(), true)
             socket.soTimeout = AUTH_TIMEOUT_MS
             val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
-            val authLine = reader.readLine()
+            val authLine = BoundedInput.readLine(reader, 64 * 1024)
             val auth = authLine?.let { runCatching { JSONObject(it) }.getOrNull() }
             val providedToken = auth?.optJSONObject("payload")?.optString("token").orEmpty()
-            authenticated = auth?.optString("type") == "bridge.auth" &&
+            authenticated = authToken.isNotBlank() && auth?.optString("type") == "bridge.auth" &&
                 MessageDigest.isEqual(
                     providedToken.toByteArray(Charsets.UTF_8),
                     authToken.toByteArray(Charsets.UTF_8),
@@ -93,21 +102,17 @@ class BridgeServer(
             }
             socket.soTimeout = 0
             clients.add(socket)
-            writer.println(authAck(auth.optString("id")))
+            writer.println(authAck(auth?.optString("id").orEmpty()))
             writer.println(deviceHello())
             writer.println(deviceStatus())
             writer.println(deviceBattery())
 
             var line: String?
-            while (reader.readLine().also { line = it } != null) {
+            while (BoundedInput.readLine(reader, 16 * 1024 * 1024).also { line = it } != null) {
                 val msg = line ?: continue
                 if (msg.isNotBlank()) {
                     onMessage(msg) { response ->
-                        Thread {
-                            synchronized(socket) {
-                                writer.println(response)
-                            }
-                        }.start()
+                        writeResponse(socket, response)
                     }
                 }
             }
@@ -115,6 +120,7 @@ class BridgeServer(
             Log.w(TAG, "client closed: ${e.message}")
         } finally {
             clients.remove(socket)
+            connections.remove(socket)
             runCatching { socket.close() }
             if (authenticated && clients.isEmpty()) onClientDisconnected()
         }

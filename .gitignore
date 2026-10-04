@@ -61,6 +61,10 @@ cert.pem
 .env.development.local
 .env.test.local
 .env.production.local
+.env.*
+!.env.example
+!.env.*.example
+.audit-cache/
 .tauri/
 
 # Rust
@@ -68,6 +72,7 @@ target/
 # Keep the desktop application lockfile for reproducible builds.
 Cargo.lock
 !desktop/src-tauri/Cargo.lock
+!docs/security/native-compatibility/Cargo.lock
 
 # Android (Gradle)
 android/.gradle/
@@ -102,3 +107,11 @@ reasonix.toml.bak*
 # Local scratch scripts (dev only, not product)
 desktop/_w_mm.py
 tools/_fix_phonesidebar_mojibake.py
+
+# Local audit evidence may contain workstation paths or UI/customer data.
+# Keep the report and reproducible audit tools, not raw captures and inventories.
+docs/security/*.json
+docs/security/*.txt
+docs/security/*.png
+docs/security/*.jpg
+docs/security/*.jpeg

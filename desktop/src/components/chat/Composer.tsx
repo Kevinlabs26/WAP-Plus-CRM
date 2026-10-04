@@ -31,8 +31,9 @@ import {
 } from "@/lib/syncDebug";
 import {
   langShortLabel,
-  resolveTargetLang,
+  resolveTargetLanguage,
   translateDraftText,
+  type TargetLanguage,
 } from "@/lib/translateDraft";
 import { Textarea } from "@/components/ui/primitives";
 import { MentionPicker } from "@/components/chat/MentionPicker";
@@ -50,6 +51,7 @@ import { useComposerPresence } from "./useComposerPresence";
 import type { ComposerPresenceTarget } from "./useComposerPresence";
 import { useComposerMedia } from "./useComposerMedia";
 import { useComposerVoiceInput } from "./useComposerVoiceInput";
+import { useComposerDraftAutosave } from "./useComposerDraftAutosave";
 import { markComposerInput } from "@/lib/composerActivity";
 import { VOICE_INPUT_LANGUAGES } from "@/lib/voiceInputLanguage";
 import { getChatDraftValue } from "@/lib/chatDrafts";
@@ -73,9 +75,11 @@ export type ComposerReplyTo = {
 type Props = {
   /** 切换会话时重置本地 UI（附件菜单、翻译底稿等） */
   resetKey?: string | null;
+  sendAccountId?: string;
   /** 可选；默认走 store，避免父组件订 draft 每键重渲 */
   draftReply?: string;
   setDraftReply?: (text: string) => void;
+  draftReaderRef?: React.MutableRefObject<(() => string) | null>;
   sending: boolean;
   isBaileys: boolean;
   baileysConnected: boolean;
@@ -129,8 +133,10 @@ type Props = {
  */
 function ComposerInner({
   resetKey,
+  sendAccountId,
   draftReply: draftReplyProp,
   setDraftReply: setDraftReplyProp,
+  draftReaderRef,
   sending,
   isBaileys,
   baileysConnected,
@@ -207,8 +213,17 @@ function ComposerInner({
   const trackedMentionsRef = useRef<
     { token: string; jid: string; everyone?: boolean }[]
   >([]);
-  const [translateLang, setTranslateLang] = useState("en");
+  const [translationTarget, setTranslationTarget] = useState<TargetLanguage>(
+    () => resolveTargetLanguage(activeContact, fullSettings(), lastInboundBody)
+  );
+  const { code: translateLang, source: translateLangSource } = translationTarget;
   const [translating, setTranslating] = useState(false);
+  // 会话切换或卸载使旧请求失效，即使另一个客户有相同草稿也不能回填。
+  const translationRequestRef = useRef(0);
+  const mediaStageContextRef = useRef({ key: resetKey, version: 0 });
+  if (mediaStageContextRef.current.key !== resetKey) {
+    mediaStageContextRef.current = { key: resetKey, version: mediaStageContextRef.current.version + 1 };
+  }
   const [translateOriginal, setTranslateOriginal] = useState<string | null>(
     null
   );
@@ -343,7 +358,10 @@ function ComposerInner({
     updateHasDraft(text);
   };
 
+  if (draftReaderRef) draftReaderRef.current = readDraft;
+
   const flushDraftNow = (text: string) => {
+    cancelDraftSave();
     lastFlushedDraftRef.current = text;
     draftRef.current = text;
     const cur = useAppStore.getState().draftReply;
@@ -354,7 +372,10 @@ function ComposerInner({
   /** 程序化改草稿（表情/话术/mention/翻译）；打字路径不走这里 */
   const setDraftLocal = (text: string) => {
     applyDraftToDom(text);
+    scheduleDraftSave();
   };
+
+  const { scheduleDraftSave, cancelDraftSave } = useComposerDraftAutosave(resetKey, readDraft);
 
   const {
     pendingMedia,
@@ -367,6 +388,7 @@ function ComposerInner({
     handleComposerPaste,
   } = useComposerMedia({
     chatKey: resetKey || "default",
+    sendContextKey: `${resetKey || "default"}:${sendAccountId || ""}`,
     readDraft,
     setDraftLocal,
     flushDraftNow,
@@ -375,6 +397,7 @@ function ComposerInner({
     onSendSticker,
     onSendGif,
     onSendFile,
+    onError: (message) => pushToast(message, "error"),
     onStageMedia: () => {
       setAttachmentOpen(false);
       setEmojiOpen(false);
@@ -456,6 +479,7 @@ function ComposerInner({
             return;
           }
           if (event.payload.type !== "drop") return;
+          const dropContext = mediaStageContextRef.current.version;
           dragDepthRef.current = 0;
           setDragOver(false);
           const files = await Promise.all(
@@ -470,7 +494,7 @@ function ComposerInner({
               });
             })
           );
-          if (files.length) stageMediaRef.current(files);
+          if (dropContext === mediaStageContextRef.current.version && files.length) stageMediaRef.current(files);
         });
       } catch {
         // 浏览器开发模式没有 Tauri API，依赖上面的 HTML5 监听即可。
@@ -506,6 +530,7 @@ function ComposerInner({
     editingId,
     pushToast,
     fullSettings,
+    readDraft,
     setDraftLocal,
     flushDraftNow,
     focusTextarea: () =>
@@ -517,12 +542,15 @@ function ComposerInner({
     return useAppStore.subscribe((state, prev) => {
       if (state.draftReply === prev.draftReply) return;
       if (state.draftReply === lastFlushedDraftRef.current) return;
+      cancelDraftSave();
       lastFlushedDraftRef.current = state.draftReply;
       applyDraftToDom(state.draftReply);
     });
   }, []);
 
   useEffect(() => {
+    translationRequestRef.current++;
+    setTranslating(false);
     setAttachmentOpen(false);
     setEmojiOpen(false);
     setMentionOpen(false);
@@ -549,17 +577,20 @@ function ComposerInner({
       textareaRef.current?.focus({ preventScroll: true });
     });
     return () => {
+      translationRequestRef.current++;
+      mediaStageContextRef.current.version++;
       cancelAnimationFrame(focusFrame);
-      if (resetKey) {
-        useAppStore.getState().setChatDraft(resetKey, readDraft());
-      }
     };
   }, [resetKey]);
 
+  useEffect(() => () => {
+    if (draftReaderRef) draftReaderRef.current = null;
+  }, [draftReaderRef]);
+
 
   useEffect(() => {
-    setTranslateLang(
-      resolveTargetLang(activeContact, fullSettings(), lastInboundBody)
+    setTranslationTarget(
+      resolveTargetLanguage(activeContact, fullSettings(), lastInboundBody)
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅目标语言/联系人/最近入站消息变时重算
   }, [activeContact, settingsUi.translateTargetLang, settingsProp, lastInboundBody]);
@@ -613,36 +644,47 @@ function ComposerInner({
     return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
   }, [voiceLanguageOpen]);
 
+  const handleTranslateLangChange = (lang: string) => {
+    if (translating) return;
+    const preferredLang = lang === "auto" ? undefined : lang;
+    if (activeContact) updateContact(activeContact.id, { preferredLang });
+    setTranslationTarget(
+      resolveTargetLanguage(
+        { ...activeContact, preferredLang },
+        fullSettings(),
+        lastInboundBody
+      )
+    );
+  };
+
   const handleTranslateDraft = async () => {
     const src = readDraft().trim();
     if (!src || translating || recording) return;
+    const request = ++translationRequestRef.current;
     setTranslating(true);
     try {
       const base = translateOriginal ?? src;
-      if (!translateOriginal) setTranslateOriginal(base);
       const res = await translateDraftText(base, translateLang, fullSettings());
+      if (request !== translationRequestRef.current) return;
       if (!res.text?.trim()) {
         pushToast(res.error || t("runtime.translateFailed"), "error");
-        if (!translateOriginal) setTranslateOriginal(null);
+        return;
+      }
+      // An in-flight translation must not overwrite edits made while awaiting the service.
+      if (readDraft().trim() !== src) {
+        pushToast(t("runtime.translationDraftChanged"), "info");
         return;
       }
       const next = res.text.trim();
+      setTranslateOriginal(base);
       setDraftLocal(next);
       flushDraftNow(next);
-      if (res.fallback && res.error) {
-        pushToast(`已译（演示/回退）：${res.error.slice(0, 60)}`, "info");
-      } else if (res.source === "mock") {
-        pushToast(
-          `已译成 ${langShortLabel(res.targetLang)}（演示模式，设置里可接 API）`,
-          "success"
-        );
-      } else {
-        pushToast(`已译成 ${langShortLabel(res.targetLang)}`, "success");
-      }
+      pushToast(t("translation.done", { language: langShortLabel(res.targetLang) }), "success");
     } catch (e) {
+      if (request !== translationRequestRef.current) return;
       pushToast(e instanceof Error ? e.message : t("runtime.translateFailed"), "error");
     } finally {
-      setTranslating(false);
+      if (request === translationRequestRef.current) setTranslating(false);
     }
   };
 
@@ -1001,6 +1043,7 @@ function ComposerInner({
                 const v = e.target.value;
                 traceInputLatency(e.timeStamp, v.length);
                 draftRef.current = v;
+                scheduleDraftSave();
                 if (pendingMedia.length > 0) setMediaCaption(v);
                 scheduleTextareaResize();
                 updateHasDraft(v);
@@ -1351,15 +1394,9 @@ function ComposerInner({
           translateOriginal={translateOriginal}
           translating={translating}
           translateLang={translateLang}
-          detected={!activeContact?.preferredLang}
-          onTranslateLangChange={(lang) => {
-            setTranslateLang(lang);
-            if (activeContact) {
-              updateContact(activeContact.id, {
-                preferredLang: lang,
-              });
-            }
-          }}
+          source={translateLangSource}
+          onTranslateLangChange={handleTranslateLangChange}
+          onRestoreAuto={() => handleTranslateLangChange("auto")}
           onTranslate={() => void handleTranslateDraft()}
           onRestore={restoreTranslateOriginal}
           recording={recording}

@@ -41,6 +41,8 @@ export function mergeImportedContactChatDuplicates(
           ? bridge.lastMessage || chat.lastMessage
           : chat.lastMessage || bridge.lastMessage,
         updatedAt: bridgeIsNewer ? bridge.updatedAt : chat.updatedAt,
+        lastMessageDirection: bridgeIsNewer ? bridge.lastMessageDirection ?? chat.lastMessageDirection : chat.lastMessageDirection,
+        replyPendingSince: bridgeIsNewer ? bridge.replyPendingSince ?? chat.replyPendingSince : chat.replyPendingSince,
         unread: Math.max(chat.unread || 0, bridge.unread || 0),
         pinned: chat.pinned || bridge.pinned,
         archived: chat.archived || bridge.archived,

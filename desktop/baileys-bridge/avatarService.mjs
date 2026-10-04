@@ -1,3 +1,4 @@
+import { downloadRemoteMedia } from "./remoteMedia.mjs";
 import {
   isHumanName,
   isLidJid,
@@ -194,19 +195,14 @@ export function createAvatarService(deps) {
     // 已经是 data URL
     if (String(remoteUrl).startsWith("data:")) return remoteUrl;
     try {
-      const res = await fetch(remoteUrl, {
-        headers: {
+      const { buffer: buf, contentType } = await downloadRemoteMedia(remoteUrl, 3_500_000, {
           // WhatsApp CDN 有时校验 UA；不带 Referer 更稳
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
           Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        },
-        redirect: "follow",
       });
-      if (!res.ok) return "";
-      const buf = Buffer.from(await res.arrayBuffer());
       if (!buf.length || buf.length > 3_500_000) return "";
-      const ctype = (res.headers.get("content-type") || "image/jpeg").split(";")[0];
+      const ctype = contentType;
       const mime = ctype.startsWith("image/") ? ctype : "image/jpeg";
       return `data:${mime};base64,${buf.toString("base64")}`;
     } catch {

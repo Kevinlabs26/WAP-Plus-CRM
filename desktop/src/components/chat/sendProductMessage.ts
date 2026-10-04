@@ -68,8 +68,11 @@ export async function sendProductMessage({
     }
     pushToast(translateCurrent("runtime.productSent"), "success");
   } catch (error) {
+    const detail = error instanceof Error ? error.message : translateCurrent("runtime.productSendFailed");
+    const uncertain = typeof error === "object" && error !== null
+      && "deliveryUncertain" in error && error.deliveryUncertain === true;
     pushToast(
-      error instanceof Error ? error.message : translateCurrent("runtime.productSendFailed"),
+      uncertain ? translateCurrent("runtime.sendUnknown", { reason: detail.slice(0, 120) }) : detail,
       "error"
     );
     throw error;

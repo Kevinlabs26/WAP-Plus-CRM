@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Coffee, Settings, Search } from "lucide-react";
+import { ChevronDown, Coffee, Settings, Search } from "lucide-react";
 import { useAppStore, type NavId } from "@/store/appStore";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/primitives";
@@ -10,14 +10,13 @@ import { computeAllAccountsHealth } from "@/lib/accountHealth";
 import { syncLog } from "@/lib/syncDebug";
 import { useI18n, type TranslationKey } from "@/i18n";
 
-/**
- * 主导航（一级）：工作台处理任务，客户库管理完整资料。
- * 完整跟进计划表：工作台「计划表」· ⌘K · 侧栏摘要，不占顶栏。
- */
+/** 日常沟通入口常驻，辅助页面收进「更多」。 */
 const NAV: { id: NavId; labelKey: TranslationKey }[] = [
   { id: "today", labelKey: "nav.today" },
   { id: "chats", labelKey: "nav.chats" },
   { id: "crm", labelKey: "nav.crm" },
+];
+const MORE_NAV: { id: NavId; labelKey: TranslationKey }[] = [
   { id: "broadcast", labelKey: "nav.broadcast" },
   { id: "starred", labelKey: "nav.starred" },
   { id: "stats", labelKey: "nav.stats" },
@@ -27,6 +26,9 @@ const NAV: { id: NavId; labelKey: TranslationKey }[] = [
 
 export function TopBar() {
   const [donateOpen, setDonateOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
   const { t } = useI18n();
   const activeNav = useAppStore((s) => s.activeNav);
   const setActiveNav = useAppStore((s) => s.setActiveNav);
@@ -43,11 +45,40 @@ export function TopBar() {
   const ratePerMinute = useAppStore((s) => s.settings.ratePerMinute);
   const rateMinIntervalSec = useAppStore((s) => s.settings.rateMinIntervalSec);
   const isBaileys = sendChannel !== "android_bridge";
+  const activeMore = MORE_NAV.find((item) => item.id === activeNav);
   const navTraceRef = useRef<{
     from: NavId;
     to: NavId;
     startedAt: number;
   } | null>(null);
+
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onPointer = (event: PointerEvent) => {
+      if (!moreRef.current?.contains(event.target as Node)) setMoreOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMoreOpen(false);
+        moreButtonRef.current?.focus();
+      }
+    };
+    window.addEventListener("pointerdown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [moreOpen]);
+
+  const navigate = (id: NavId) => {
+    navTraceRef.current = { from: activeNav, to: id, startedAt: performance.now() };
+    syncLog("ui.nav", "click", { from: activeNav, to: id }, "debug");
+    setMoreOpen(false);
+    // 会话入口始终回到完整列表。
+    if (id === "chats") goToChats("all");
+    else setActiveNav(id);
+  };
 
   useEffect(() => {
     const trace = navTraceRef.current;
@@ -77,12 +108,12 @@ export function TopBar() {
       return { n: Math.min(9, overdue), tone: "bad" as const };
     }
     const fu = stats.followUpsToday || 0;
-    const unread = stats.pendingReplies || 0;
-    if (fu > 0 || unread > 0) {
-      return { n: Math.min(9, Math.max(fu, unread, 1)), tone: "warn" as const };
+    const awaiting = stats.awaitingReplyChats || 0;
+    if (fu > 0 || awaiting > 0) {
+      return { n: Math.min(9, Math.max(fu, awaiting, 1)), tone: "warn" as const };
     }
     return null;
-  }, [followUps, stats.followUpsToday, stats.pendingReplies]);
+  }, [followUps, stats.followUpsToday, stats.awaitingReplyChats]);
 
   const monitorBadge = useMemo(() => {
     if (!waAccounts.length) return null as null | { n: number; tone: "bad" | "warn" };
@@ -118,7 +149,7 @@ export function TopBar() {
   ]);
 
   return (
-    <header className="crm-topbar flex h-11 shrink-0 items-center gap-2 border-b border-zinc-800/90 bg-zinc-900 px-3 sm:gap-3">
+    <header className="crm-topbar flex min-h-11 shrink-0 flex-wrap items-center gap-2 border-b border-zinc-800/90 bg-zinc-900 px-3 py-1 md:h-11 md:flex-nowrap md:py-0 sm:gap-3">
       <div className="flex shrink-0 items-center gap-2">
         <WapPlusMark />
         <div className="whitespace-nowrap text-[13px] font-semibold tracking-tight">
@@ -132,27 +163,13 @@ export function TopBar() {
         )}
       </div>
 
-      <nav className="mx-auto hidden min-w-0 max-w-[58vw] items-center gap-1 overflow-x-auto md:flex">
+      <nav className="order-last mx-auto flex w-full min-w-0 items-center justify-center gap-1 md:order-none md:w-auto">
         {NAV.map((item) => (
           <button
             key={item.id}
             type="button"
-            onClick={() => {
-              navTraceRef.current = {
-                from: activeNav,
-                to: item.id,
-                startedAt: performance.now(),
-              };
-              syncLog(
-                "ui.nav",
-                "click",
-                { from: activeNav, to: item.id },
-                "debug"
-              );
-              // 「会话」始终进全部会话，避免停在今日活跃/待回复筛选里找不到完整列表
-              if (item.id === "chats") goToChats("all");
-              else setActiveNav(item.id);
-            }}
+            onClick={() => navigate(item.id)}
+            aria-current={activeNav === item.id ? "page" : undefined}
             className={cn(
               "relative shrink-0 whitespace-nowrap rounded-[6px] px-3 py-1.5 text-[12px] font-medium transition-colors",
               activeNav === item.id
@@ -162,21 +179,6 @@ export function TopBar() {
             title={item.id === "chats" ? t("nav.allChats") : t(item.labelKey)}
           >
             {t(item.labelKey)}
-            {item.id === "monitor" && monitorBadge && (
-              <span
-                className={cn(
-                  "absolute -right-0.5 top-0 z-10 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-0.5 text-2xs font-semibold leading-none tabular-nums text-white",
-                  monitorBadge.tone === "bad" ? "bg-rose-500" : "bg-amber-500"
-                )}
-                title={
-                  monitorBadge.tone === "bad"
-                    ? t("nav.monitorWarning")
-                    : t("nav.monitorNotice")
-                }
-              >
-                {monitorBadge.n > 9 ? "9+" : monitorBadge.n}
-              </span>
-            )}
             {item.id === "today" && todayBadge && (
               <span
                 className={cn(
@@ -194,6 +196,39 @@ export function TopBar() {
             )}
           </button>
         ))}
+        <div ref={moreRef} className="relative shrink-0">
+          <button
+            ref={moreButtonRef}
+            type="button"
+            aria-expanded={moreOpen}
+            aria-controls="topbar-more-nav"
+            onClick={() => setMoreOpen((open) => !open)}
+            className={cn(
+              "relative flex items-center gap-1 whitespace-nowrap rounded-[6px] px-3 py-1.5 text-[12px] font-medium",
+              activeMore || moreOpen ? "crm-nav-active bg-zinc-800/75 text-zinc-50" : "text-zinc-500 hover:text-zinc-200"
+            )}
+          >
+            {activeMore ? `${t("nav.more")} · ${t(activeMore.labelKey)}` : t("nav.more")}
+            <ChevronDown className="h-3 w-3" />
+            {monitorBadge && <span
+              className={cn("absolute -right-0.5 top-0 rounded-full px-1 text-2xs text-white", monitorBadge.tone === "bad" ? "bg-rose-500" : "bg-amber-500")}
+              aria-label={t(monitorBadge.tone === "bad" ? "nav.monitorWarning" : "nav.monitorNotice")}
+              title={t(monitorBadge.tone === "bad" ? "nav.monitorWarning" : "nav.monitorNotice")}
+            >{monitorBadge.n > 9 ? "9+" : monitorBadge.n}</span>}
+          </button>
+          {moreOpen && <div id="topbar-more-nav" className="absolute right-0 top-full z-50 mt-2 min-w-36 rounded-lg border border-zinc-700 bg-zinc-900 p-1 shadow-xl">
+            {MORE_NAV.map((item) => <button
+              key={item.id}
+              type="button"
+              aria-current={activeNav === item.id ? "page" : undefined}
+              onClick={() => navigate(item.id)}
+              className={cn("flex w-full items-center justify-between gap-3 rounded px-3 py-2 text-left text-xs hover:bg-zinc-800", activeNav === item.id ? "text-brand" : "text-zinc-300")}
+            >
+              {t(item.labelKey)}
+              {item.id === "monitor" && monitorBadge && <span className={monitorBadge.tone === "bad" ? "text-rose-400" : "text-amber-400"}>{monitorBadge.n > 9 ? "9+" : monitorBadge.n}</span>}
+            </button>)}
+          </div>}
+        </div>
       </nav>
 
       <div className="ml-auto flex shrink-0 items-center gap-1.5">

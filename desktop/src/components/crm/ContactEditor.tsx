@@ -1,5 +1,5 @@
 import { CalendarPlus, MessageSquare } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Contact, SalesStage } from "@/types/crm";
 import { cn, displayPhone } from "@/lib/utils";
 import { Avatar } from "@/components/ui/Avatar";
@@ -7,6 +7,9 @@ import { Button, Input, Textarea } from "@/components/ui/primitives";
 import { ActivityTimeline } from "@/components/crm/ActivityTimeline";
 import { ContactTagsNotesEditor } from "@/components/crm/ContactTagsNotesEditor";
 import { SPEECH_LANG_OPTIONS } from "@/components/chat/speakMessage";
+import { ChatFollowUpDialog } from "@/components/chat/ChatFollowUpDialog";
+import { getNextOpenFollowUp } from "@/lib/todayBoard";
+import { useAppStore } from "@/store/appStore";
 import { useI18n } from "@/i18n";
 
 type Props = {
@@ -47,6 +50,63 @@ export function ContactEditor({
   compact,
 }: Props) {
   const { t } = useI18n();
+  const followUps = useAppStore((state) => state.followUps);
+  const cancelFollowUp = useAppStore((state) => state.cancelFollowUp);
+  const nextFollowUp = getNextOpenFollowUp(followUps, contact.id);
+  const contactContext = useRef({ id: contact.id, version: 0 });
+  if (contactContext.current.id !== contact.id) {
+    contactContext.current = { id: contact.id, version: contactContext.current.version + 1 };
+  }
+  const renderVersion = contactContext.current.version;
+  const [followDialog, setFollowDialog] = useState<{
+    contactId: string;
+    version: number;
+    taskId?: string;
+    taskDueAt?: string;
+    taskNote?: string;
+    dueAt?: string;
+    note: string;
+  } | null>(null);
+  useEffect(() => setFollowDialog(null), [contact.id]);
+
+  const openFollowDialog = () => {
+    if (contactContext.current.version !== renderVersion) return;
+    const next = getNextOpenFollowUp(useAppStore.getState().followUps, contact.id);
+    setFollowDialog({
+      contactId: contact.id,
+      version: renderVersion,
+      taskId: next?.id,
+      taskDueAt: next?.dueAt,
+      taskNote: next?.note,
+      dueAt: next?.dueAt || contact.nextFollowUpAt,
+      note: next?.note || t("contact.followUpNote", { name: title }),
+    });
+  };
+
+  const saveFollowUp = (dueAt: string, note: string) => {
+    if (!followDialog || contactContext.current.id !== followDialog.contactId
+      || contactContext.current.version !== followDialog.version) return;
+    const next = getNextOpenFollowUp(useAppStore.getState().followUps, followDialog.contactId);
+    if (next?.id !== followDialog.taskId || next?.dueAt !== followDialog.taskDueAt
+      || next?.note !== followDialog.taskNote) {
+      pushToast(t("contact.followUpChanged"), "info");
+      setFollowDialog(null);
+      return;
+    }
+    const result = scheduleFollowUp(followDialog.contactId, dueAt, note || undefined);
+    if (result) {
+      pushToast(t("contact.scheduled", { name: title }), "success");
+      setFollowDialog(null);
+    }
+  };
+
+  const cancelCurrentFollowUp = () => {
+    if (contactContext.current.version !== renderVersion || !nextFollowUp) return;
+    if (cancelFollowUp(nextFollowUp.id)) {
+      setFollowDialog(null);
+      pushToast(t("contact.followUpCancelled"), "success");
+    }
+  };
   return (
     <div className={cn("space-y-3", !compact && "mx-auto max-w-lg")}>
       <div className="flex items-start justify-between gap-2">
@@ -83,23 +143,16 @@ export function ContactEditor({
           <Button
             variant="secondary"
             className="!min-h-7 gap-1 !px-2 text-2xs"
-            onClick={() => {
-              const result = scheduleFollowUp(
-                contact.id,
-                contact.nextFollowUpAt || new Date().toISOString().slice(0, 10),
-                t("contact.followUpNote", { name: title })
-              );
-              if (result) pushToast(t("contact.scheduled", { name: title }), "success");
-            }}
+            onClick={openFollowDialog}
           >
             <CalendarPlus className="h-3 w-3" />
-            {t("contact.followUp")}
+            {t(nextFollowUp ? "contact.followUpReschedule" : "contact.followUpSetReminder")}
           </Button>
           <Button
             variant="primary"
             className="!min-h-7 gap-1 !px-2 text-2xs"
             onClick={() => {
-              const result = scheduleTomorrowFollowUp(contact.id);
+              const result = scheduleTomorrowFollowUp(contact.id, nextFollowUp?.note);
               if (result) pushToast(t("contact.tomorrowSet", { name: title }), "success");
             }}
           >
@@ -274,17 +327,43 @@ export function ContactEditor({
         )}
       </div>
 
-      <label className="block text-2xs text-zinc-500">
-        {t("contact.nextFollowUp")}
-        <Input
-          type="date"
-          value={contact.nextFollowUpAt ?? ""}
-          onChange={(event) =>
-            updateContact(contact.id, { nextFollowUpAt: event.target.value })
-          }
-          className="mt-1"
+      <div className="space-y-2 rounded-lg border border-zinc-800/80 p-2.5">
+        <div className="text-2xs text-zinc-500">{t("contact.nextFollowUp")}</div>
+        {nextFollowUp ? (
+          <div className="space-y-1">
+            <time dateTime={nextFollowUp.dueAt} className="block text-[13px] tabular-nums text-zinc-200">
+              {nextFollowUp.dueAt.replace("T", " ")}
+            </time>
+            {nextFollowUp.note && <p className="whitespace-pre-wrap break-words text-2xs text-zinc-400">{nextFollowUp.note}</p>}
+          </div>
+        ) : (
+          <p className="text-2xs text-zinc-400">
+            {contact.nextFollowUpAt
+              ? t("contact.followUpRecorded", { date: contact.nextFollowUpAt.replace("T", " ") })
+              : t("contact.followUpUnset")}
+          </p>
+        )}
+        <div className="flex flex-wrap gap-1.5">
+          <Button variant="secondary" className="!min-h-7 gap-1 !px-2 text-2xs" onClick={openFollowDialog}>
+            <CalendarPlus className="h-3 w-3" />
+            {t(nextFollowUp ? "contact.followUpReschedule" : "contact.followUpSetReminder")}
+          </Button>
+          {nextFollowUp && <Button variant="ghost" className="!min-h-7 !px-2 text-2xs text-rose-300" onClick={cancelCurrentFollowUp}>
+            {t("contact.followUpCancelReminder")}
+          </Button>}
+        </div>
+      </div>
+
+      {followDialog?.contactId === contact.id && followDialog.version === renderVersion && (
+        <ChatFollowUpDialog
+          key={`${followDialog.contactId}:${followDialog.version}`}
+          contactName={title}
+          initialDueAt={followDialog.dueAt}
+          initialNote={followDialog.note}
+          onClose={() => setFollowDialog(null)}
+          onSubmit={saveFollowUp}
         />
-      </label>
+      )}
 
       <div className="border-t border-zinc-800/80 pt-3">
         <ActivityTimeline

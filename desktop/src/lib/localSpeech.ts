@@ -56,20 +56,32 @@ export async function downloadSpeechModel(
   preset: (typeof SPEECH_MODEL_PRESETS)[number],
   onProgress?: (received: number, total: number) => void,
 ): Promise<string> {
-  const resp = await fetch(preset.url);
+  const maxBytes = 512 * 1024 * 1024; // Same archive limit as Rust speech_archive.rs.
+  const resp = await fetch(preset.url, { signal: AbortSignal.timeout(15 * 60 * 1000) });
   if (!resp.ok) throw new Error(`模型下载失败：HTTP ${resp.status}`);
   const total = Number(resp.headers.get("content-length") || 0);
+  if (total > maxBytes) {
+    await resp.body?.cancel();
+    throw new Error("模型压缩包超过 512 MiB 上限");
+  }
+  if (!resp.body) throw new Error("模型下载没有响应数据流");
   let bytes: ArrayBuffer;
-  if (resp.body && onProgress) {
+  {
     const reader = resp.body.getReader();
     const chunks: Uint8Array[] = [];
     let received = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      received += value.byteLength;
-      onProgress(received, total);
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        received += value.byteLength;
+        if (received > maxBytes) throw new Error("模型压缩包超过 512 MiB 上限");
+        chunks.push(value);
+        onProgress?.(received, total);
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
     }
     bytes = new ArrayBuffer(received);
     const view = new Uint8Array(bytes);
@@ -78,9 +90,6 @@ export async function downloadSpeechModel(
       view.set(chunk, offset);
       offset += chunk.byteLength;
     }
-  } else {
-    bytes = await resp.arrayBuffer();
-    onProgress?.(bytes.byteLength, total || bytes.byteLength);
   }
   return invoke<string>("save_speech_model", bytes, {
     headers: { "x-speech-model-name": preset.id },

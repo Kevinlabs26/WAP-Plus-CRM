@@ -1,5 +1,8 @@
+import { beginDataRestore, isDataRestoreActive as getRestoreBusy } from "./restoreGuard";
+import { waitForPendingSends } from "@/channels/sendGate";
 import {
   clearAppState,
+  getStorageEngine,
   loadAppState,
   loadSecureSecrets,
   saveAppState,
@@ -29,7 +32,9 @@ import { pruneChatFolderRefs } from "./chatFolderCleanup";
 import { mergeImportedContactChatDuplicates } from "./chatDuplicateMerge";
 import { backfillChatPreviewFromMessages } from "./chatReconcile";
 import { clearTrendBuckets } from "./trendBuckets";
-import { flushPersist } from "./persist";
+import { buildPersistSlice, flushPersist, primePersistBaseline } from "./persist";
+import { cacheMediaUrl, readMediaCache, dropMediaCache } from "@/lib/mediaCache";
+import { restoreChatDrafts } from "@/lib/chatDrafts";
 
 const blankData = (settings: AppSettings = defaultSettings as AppSettings): PersistSlice => ({
   phones: [],
@@ -85,6 +90,7 @@ export function createBootSlice({
           customAiKey: legacySecrets.customAiKey || "",
           bridgeToken: legacySecrets.bridgeToken || "",
         });
+        if (!migrated && getStorageEngine() === "sqlite") throw new Error("旧密钥安全迁移失败，请重试");
         if (migrated) {
           secureSecrets = {
             openaiKey: legacySecrets.openaiKey || "",
@@ -98,6 +104,11 @@ export function createBootSlice({
             bridgeToken: legacySecrets.bridgeToken || "",
           };
         }
+      }
+      if (getStorageEngine() === "sqlite" && saved?.settings && secureSecrets &&
+          ["openaiKey", "groqKey", "geminiKey", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "bridgeToken"].some(key => (saved.settings as unknown as Record<string, unknown>)[key])) {
+        await saveAppState({ phones: [], contacts: [], chats: [], messages: [], followUps: [],
+          settings: saved.settings, broadcastCampaigns: saved.broadcastCampaigns, dirty: { settings: true } }, { force: true });
       }
       const legacyDemo = saved?.phones?.some((phone) => phone.id === "phone-fr");
       const rawChats = legacyDemo ? [] : saved?.chats ?? [];
@@ -387,6 +398,8 @@ export function createBootSlice({
         selectedContactId: null,
         selectedChatId: null,
         aiSuggestions: [],
+        draftReply: "",
+        draftReplyByChatId: restoreChatDrafts(saved?.draftReplyByChatId, chats),
         hydrated: true,
       });
       queueMicrotask(() => {
@@ -414,6 +427,7 @@ export function createBootSlice({
     },
 
     clearData: async () => {
+      if (getRestoreBusy()) throw new Error("正在恢复备份，请等待完成");
       const currentSettings = get().settings;
       const folderRefs = pruneChatFolderRefs(
         currentSettings.chatFolders || [],
@@ -447,9 +461,14 @@ export function createBootSlice({
     },
 
     importBackup: async (bundle) => {
+      let finishRestore: (() => void) | undefined;
       try {
         const raw = bundle instanceof File ? await readJsonFile(bundle) : bundle;
         const parsed = parseBackupJson(raw);
+        if (getRestoreBusy()) throw new Error("正在恢复备份，请等待完成");
+        const pendingSave = flushPersist(get);
+        finishRestore = beginDataRestore();
+        await Promise.all([pendingSave, waitForPendingSends()]);
         const currentSettings = get().settings;
         const settings = normalizeLoadedSettings({
           ...currentSettings,
@@ -461,7 +480,20 @@ export function createBootSlice({
           qwenKey: currentSettings.qwenKey,
           zhipuKey: currentSettings.zhipuKey,
           openrouterKey: currentSettings.openrouterKey,
+          customAiKey: currentSettings.customAiKey,
+          bridgeToken: currentSettings.bridgeToken,
+          aiReplyMode: "semi",
         }) as AppSettings;
+        settings.waAccounts = settings.waAccounts.map((account) => {
+          const local = currentSettings.waAccounts.find((item) => item.id === account.id);
+          return { ...account, warmupExempt: local?.warmupExempt === true,
+            createdAt: local?.createdAt || new Date().toISOString(), status: local?.status || "disconnected" };
+        });
+        settings.scheduledMessages = (settings.scheduledMessages || []).map((task) =>
+          task.status === "pending" || task.status === "queued"
+            ? { ...task, status: "failed", messageId: undefined, error: "从备份恢复：请重新确认发送时间" }
+            : task
+        );
         const slice: PersistSlice = {
           phones: parsed.phones,
           contacts: parsed.contacts,
@@ -472,44 +504,38 @@ export function createBootSlice({
           activities: parsed.activities,
           settings,
           broadcastCampaigns: normalizeCampaigns(parsed.broadcastCampaigns),
-        };
-        const previous = get();
-        const rollback = {
-          phones: previous.phones,
-          contacts: previous.contacts,
-          chats: previous.chats,
-          messages: previous.messages,
-          followUps: previous.followUps,
-          scheduledMessages: previous.scheduledMessages,
-          activities: previous.activities,
-          settings: previous.settings,
-          broadcastCampaigns: previous.broadcastCampaigns,
-          stats: previous.stats,
-          selectedPhoneId: previous.selectedPhoneId,
-          selectedContactId: previous.selectedContactId,
-          selectedChatId: previous.selectedChatId,
-          aiSuggestions: previous.aiSuggestions,
-          draftReply: previous.draftReply,
-          draftReplyByChatId: previous.draftReplyByChatId,
-          activeNav: previous.activeNav,
-        };
-        set({
-          ...slice,
-          selectedPhoneId: slice.phones[0]?.id ?? null,
-          selectedContactId: null,
-          selectedChatId: null,
-          aiSuggestions: [],
-          draftReply: "",
           draftReplyByChatId: {},
-          activeNav: "chats",
-        });
+        };
+        const previousMedia = new Map<string, string | undefined>();
         try {
+          for (const message of slice.messages) {
+            if (!message.mediaUrl?.startsWith("data:")) continue;
+            previousMedia.set(message.id, await readMediaCache(message.id, true));
+            await cacheMediaUrl(message.id, message.mediaUrl, true);
+            if (await readMediaCache(message.id, true) !== message.mediaUrl) {
+              throw new Error("附件恢复失败，请检查本地存储空间");
+            }
+          }
           await saveAppState(
-            { ...slice, replaceMessages: true },
+            { ...buildPersistSlice(() => ({ ...get(), ...slice })), activities: slice.activities, replaceMessages: true },
             { force: true }
           );
+          set({
+            ...slice,
+            selectedPhoneId: slice.phones[0]?.id ?? null,
+            selectedContactId: null,
+            selectedChatId: null,
+            aiSuggestions: [],
+            draftReply: "",
+            draftReplyByChatId: {},
+            activeNav: "chats",
+          });
+          primePersistBaseline(get);
         } catch (error) {
-          set(rollback);
+          for (const [id, url] of previousMedia) {
+            if (url) await cacheMediaUrl(id, url);
+            else await dropMediaCache(id);
+          }
           throw error;
         }
         clearTrendBuckets();
@@ -517,6 +543,8 @@ export function createBootSlice({
         return { ok: true };
       } catch (e) {
         return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+      } finally {
+        finishRestore?.();
       }
     },
   };

@@ -5,10 +5,26 @@ import { getDbInfo, getStorageEngine, resolveStorageEngine } from "@/lib/storage
 import { clearMediaCache, getMediaCacheStats, type MediaCacheStats } from "@/lib/mediaCache";
 import { findInactiveChats } from "@/lib/inactiveChatCleanup";
 import { ContactImportModal } from "./ContactImportModal";
+import { parseBackupJson, readJsonFile } from "@/lib/exportData";
 import { useI18n } from "@/i18n";
+import { invoke } from "@tauri-apps/api/core";
+import { isTauri } from "@/lib/bridge";
+import { runAutomaticBackup, type AutomaticBackupStatus } from "@/lib/automaticBackup";
 
 export function SettingsDataPanel() {
   const { t } = useI18n();
+  const automaticBackupEnabled = useAppStore((s) => s.settings.automaticBackupEnabled !== false);
+  const updateSettings = useAppStore((s) => s.updateSettings);
+  const [automaticStatus, setAutomaticStatus] = useState<AutomaticBackupStatus | null>(null);
+  const [automaticBusy, setAutomaticBusy] = useState(false);
+  useEffect(() => {
+    const refresh = () => {
+      if (isTauri()) void invoke<AutomaticBackupStatus>("crm_backup_status").then(setAutomaticStatus).catch(() => {});
+    };
+    refresh();
+    window.addEventListener("wap:automatic-backup", refresh);
+    return () => window.removeEventListener("wap:automatic-backup", refresh);
+  }, []);
   const clearData = useAppStore((state) => state.clearData);
   const exportBackup = useAppStore((state) => state.exportBackup);
   const exportContactsCsv = useAppStore((state) => state.exportContactsCsv);
@@ -17,6 +33,24 @@ export function SettingsDataPanel() {
   const requestConfirm = useAppStore((state) => state.requestConfirm);
   const [dbLabel, setDbLabel] = useState("");
   const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [includeMedia, setIncludeMedia] = useState(false);
+  const [lastBackup, setLastBackup] = useState(() => {
+    try { return localStorage.getItem("crm-last-backup") || ""; } catch { return ""; }
+  });
+  const backupBusy = useRef(false);
+  const onExport = async () => {
+    if (backupBusy.current) return;
+    backupBusy.current = true;
+    setExporting(true);
+    try {
+      await exportBackup(includeMedia);
+      const time = new Date().toISOString();
+      setLastBackup(time);
+      try { localStorage.setItem("crm-last-backup", time); } catch { /* UI 元数据不阻塞导出 */ }
+    } catch { /* store 已显示失败原因 */ }
+    finally { backupBusy.current = false; setExporting(false); }
+  };
   const [clearingMedia, setClearingMedia] = useState(false);
   const [mediaCacheStats, setMediaCacheStats] = useState<MediaCacheStats | null>(null);
   const [clearingData, setClearingData] = useState(false);
@@ -64,23 +98,30 @@ export function SettingsDataPanel() {
   };
 
   const onPickImport = async (file: File | null) => {
-    if (!file) return;
-    const ok = await requestConfirm({
-      title: t("settingsData.restoreTitle"),
-      description: t("settingsData.restoreDescription"),
-      confirmLabel: t("settingsData.restoreConfirm"),
-      cancelLabel: t("common.cancel"),
-      tone: "danger",
-    });
-    if (!ok) return;
+    if (!file || backupBusy.current) return;
+    backupBusy.current = true;
     setImporting(true);
     try {
-      const result = await importBackup(file);
+      const raw = await readJsonFile(file);
+      const preview = parseBackupJson(raw);
+      const ok = await requestConfirm({
+        title: t("settingsData.restoreTitle"),
+        description: t("settingsData.restoreDescription") + "\n" + t("settingsData.restorePreview", {
+          contacts: preview.contacts.length, messages: preview.messages.length,
+          attachments: preview.messages.filter((message) => message.mediaUrl?.startsWith("data:")).length,
+        }),
+        confirmLabel: t("settingsData.restoreConfirm"),
+        cancelLabel: t("common.cancel"),
+        tone: "danger",
+      });
+      if (!ok) return;
+      const result = await importBackup(raw);
       if (!result.ok) throw new Error(result.reason || t("settingsData.restoreFailed"));
       pushToast(t("settingsData.restoreDone"), "success");
     } catch (e) {
       pushToast(e instanceof Error ? e.message : t("settingsData.restoreFailed"), "error");
     } finally {
+      backupBusy.current = false;
       setImporting(false);
       if (fileRef.current) fileRef.current.value = "";
     }
@@ -94,6 +135,36 @@ export function SettingsDataPanel() {
           {t("settingsData.description")}
         </p>
       </header>
+
+      {isTauri() && <section className="rounded-lg border border-zinc-800 p-4 text-[12px]">
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={automaticBackupEnabled} onChange={(e) => updateSettings({ automaticBackupEnabled: e.target.checked })} />
+          {t("backup.enabled")}
+        </label>
+        <p className="mt-2 text-zinc-400">{t("backup.hint")}</p>
+        <p className="mt-2 break-all text-zinc-500">{automaticStatus?.folder}</p>
+        <p className="mt-1 text-zinc-400">{t("backup.latest")}：{automaticStatus?.latestDay || t("backup.none")}</p>
+        <div className="mt-3 flex gap-2">
+          <Button disabled={automaticBusy || importing} onClick={async () => {
+            setAutomaticBusy(true);
+            try {
+              const status = await runAutomaticBackup(useAppStore.getState, true);
+              if (!status) throw new Error(t("backup.unavailable"));
+              setAutomaticStatus(status);
+              pushToast(t("backup.saved"), "success");
+            } catch (e) { pushToast(`${t("backup.failed")}：${String(e)}`, "error"); }
+            finally { setAutomaticBusy(false); }
+          }}>{t("backup.now")}</Button>
+          <Button variant="secondary" disabled={automaticBusy || importing || !automaticStatus?.latestDay} onClick={async () => {
+            setAutomaticBusy(true);
+            try {
+              const content = await invoke<string>("crm_backup_latest");
+              await onPickImport(new File([content], "automatic-backup.json", { type: "application/json" }));
+            } catch (e) { pushToast(String(e), "error"); }
+            finally { setAutomaticBusy(false); }
+          }}>{t("backup.restoreLatest")}</Button>
+        </div>
+      </section>}
 
       <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
         <SectionLabel>{t("settingsData.privacy")}</SectionLabel>
@@ -135,14 +206,15 @@ export function SettingsDataPanel() {
           <Button
             variant="secondary"
             size="sm" className="text-2xs"
-            onClick={exportBackup}
+            disabled={exporting || importing}
+            onClick={() => void onExport()}
           >
-            {t("settingsData.exportJson")}
+            {exporting ? t("settingsData.exporting") : t("settingsData.exportJson")}
           </Button>
           <Button
             variant="secondary"
             size="sm" className="text-2xs"
-            disabled={importing}
+            disabled={importing || exporting}
             onClick={() => fileRef.current?.click()}
           >
             {importing ? t("settingsData.restoring") : t("settingsData.importJson")}
@@ -169,6 +241,14 @@ export function SettingsDataPanel() {
             onChange={(e) => void onPickImport(e.target.files?.[0] || null)}
           />
         </div>
+        <label className="mt-3 flex items-center gap-2 text-2xs text-zinc-400">
+          <input type="checkbox" checked={includeMedia} disabled={exporting || importing}
+            onChange={(event) => setIncludeMedia(event.target.checked)} />
+          {t("settingsData.includeMedia")}
+        </label>
+        {lastBackup && <p className="mt-2 text-2xs text-zinc-500">
+          {t("settingsData.lastBackup", { time: new Date(lastBackup).toLocaleString() })}
+        </p>}
         <p className="mt-2 text-2xs text-zinc-600">
           {t("settingsData.backupHint")}
         </p>
@@ -206,7 +286,7 @@ export function SettingsDataPanel() {
           variant="secondary"
           size="sm"
           className="mt-3 border-amber-900/50 text-2xs text-amber-200 hover:bg-amber-950/40"
-          disabled={releasingHistory || inactiveChats.length === 0}
+          disabled={importing || exporting || releasingHistory || inactiveChats.length === 0}
           onClick={() => {
             void (async () => {
               const ok = await requestConfirm({
@@ -255,7 +335,7 @@ export function SettingsDataPanel() {
         <Button
           variant="secondary"
           size="sm" className="mt-3 text-2xs"
-          disabled={clearingMedia}
+          disabled={importing || exporting || clearingMedia}
           onClick={() => {
             void (async () => {
               const ok = await requestConfirm({
@@ -290,7 +370,7 @@ export function SettingsDataPanel() {
         <Button
           variant="secondary"
           size="sm" className="mt-3 border-red-900/50 text-2xs text-red-300 hover:bg-red-950/40"
-          disabled={clearingData}
+          disabled={importing || exporting || clearingData}
           onClick={() => {
             void (async () => {
               const ok = await useAppStore.getState().requestConfirm({

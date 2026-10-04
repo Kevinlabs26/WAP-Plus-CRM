@@ -57,6 +57,7 @@ export async function sendFileMessage(
     return false;
   }
   deps.setSending(true);
+  const caption = captionOverride ?? deps.getDraftReply();
   let msgId: string | null = null;
   try {
     const dataUrl = await new Promise<string>((resolve, reject) => {
@@ -65,7 +66,6 @@ export async function sendFileMessage(
       reader.onerror = () => reject(new Error(translateCurrent("runtime.fileReadFailed")));
       reader.readAsDataURL(file);
     });
-    const caption = captionOverride ?? deps.getDraftReply();
     msgId = deps.enqueueOutgoingMessage({
       body: caption || `[文件] ${file.name}`,
       chatId: deps.chatId,
@@ -134,6 +134,7 @@ export async function sendFileMessage(
       deps.updateMessageDelivery(msgId, {
         deliveryStatus: "failed",
         lastError: message,
+        deliveryUncertain: !!e && typeof e === "object" && "deliveryUncertain" in e && e.deliveryUncertain === true,
       });
     }
     deps.pushToast(message, "error");

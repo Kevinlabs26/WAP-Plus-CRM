@@ -18,6 +18,7 @@ import { BootSplash } from "@/components/BootSplash";
 import { useI18n } from "@/i18n";
 import { ChatWelcome } from "@/components/chat/ChatWelcome";
 import { VoicePlaybackHost } from "@/components/chat/VoiceBubble";
+import { AutomaticBackupWatcher } from "@/components/bridge/AutomaticBackupWatcher";
 import { useAppStore } from "@/store/appStore";
 import { flushPersist, primePersistBaseline } from "@/store/persist";
 import { setBaileysAccountIdResolver } from "@/lib/baileys";
@@ -435,6 +436,7 @@ function DeferredWatchers({ interactive }: { interactive: boolean }) {
       <GroupAutoReadWatcher />
       <AiAutoReplier />
       <UpdateWatcher />
+      <AutomaticBackupWatcher />
     </Suspense>
   );
 }
@@ -582,11 +584,9 @@ export default function App() {
   useBootGraceClass(interactive);
 
   useEffect(() => {
-    let lastExitFlushAt = 0;
     const flushBeforePageExit = () => {
       // Tauri 关闭主窗口默认只是隐藏，不一定触发 pagehide；隐藏时先抢救一次快照。
-      if (Date.now() - lastExitFlushAt < 500) return;
-      lastExitFlushAt = Date.now();
+      window.dispatchEvent(new Event("wap:flush-chat-drafts"));
       const state = useAppStore.getState();
       if (state.hydrated) flushPersist(() => useAppStore.getState());
     };

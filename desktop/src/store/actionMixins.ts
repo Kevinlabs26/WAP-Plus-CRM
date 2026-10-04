@@ -1,4 +1,5 @@
 import { resolveSalesStageLabel } from "@/lib/contactWorkflow";
+import { clearFollowUpNotifyDedupe } from "@/lib/followUpDueNotify";
 import type { SliceContext } from "./types";
 import { persist, scheduleStatsRecompute } from "./persist";
 import { createChatFolderActions } from "./chatFolderActions";
@@ -25,6 +26,7 @@ export function createActionMixins({ set, get }: SliceContext) {
     recomputeStats: () => get().recomputeStats(),
     persist: () => persist(get),
     pushToast: (message, tone) => get().pushToast(message, tone),
+    clearNotification: clearFollowUpNotifyDedupe,
   });
   const activityActions = createActivityActions({
     getActivities: () => get().activities,

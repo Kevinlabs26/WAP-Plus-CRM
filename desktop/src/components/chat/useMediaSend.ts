@@ -6,6 +6,8 @@ import { sendFileMessage } from "./sendFileMessage";
 import { sendImageMessage } from "./sendImageMessage";
 import { sendGifMessage } from "./sendGifMessage";
 import { sendAudioMessage } from "./sendAudioMessage";
+import { useRef } from "react";
+import { clearSentChatDraft } from "@/lib/chatDrafts";
 
 type UseMediaSendOptions = {
   sending: boolean;
@@ -21,6 +23,7 @@ type UseMediaSendOptions = {
   chatConnected: boolean;
   setBaileysLoginOpen: AppState["setBaileysLoginOpen"];
   setDraftReply: AppState["setDraftReply"];
+  getDraft?: () => string;
   enqueueOutgoingMessage: AppState["enqueueOutgoingMessage"];
   chatId?: string | null;
   patchMessage: AppState["patchMessage"];
@@ -41,6 +44,17 @@ type UseMediaSendOptions = {
  * 媒体/文件/GIF/最近贴纸发送管线，从 ChatPanel 抽离。
  */
 export function useMediaSend(opts: UseMediaSendOptions) {
+  const latestOptsRef = useRef(opts);
+  latestOptsRef.current = opts;
+  const draftCleanup = () => {
+    const draft = opts.getDraft?.() ?? useAppStore.getState().draftReply;
+    return {
+      getDraftReply: () => draft.trim(),
+      setDraftReply: () => clearSentChatDraft(useAppStore.getState(), opts.chatId, draft,
+        latestOptsRef.current.chatId === opts.chatId
+          ? latestOptsRef.current.getDraft?.() : undefined),
+    };
+  };
   const sendFile = (file: File, captionOverride?: string) => {
     if (!opts.guardBlockedSend()) return false;
     return sendFileMessage(file, captionOverride, {
@@ -52,8 +66,7 @@ export function useMediaSend(opts: UseMediaSendOptions) {
       chatConnected: opts.chatConnected,
       setBaileysLoginOpen: opts.setBaileysLoginOpen,
       setSending: opts.setSending,
-      getDraftReply: () => useAppStore.getState().draftReply.trim(),
-      setDraftReply: opts.setDraftReply,
+      ...draftCleanup(),
       enqueueOutgoingMessage: opts.enqueueOutgoingMessage,
       chatId: opts.chatId,
       patchMessage: opts.patchMessage,
@@ -77,6 +90,7 @@ export function useMediaSend(opts: UseMediaSendOptions) {
       chatConnected: opts.chatConnected,
       setBaileysLoginOpen: opts.setBaileysLoginOpen,
       enqueueOutgoingMessage: opts.enqueueOutgoingMessage,
+      chatId: opts.chatId,
       patchMessage: opts.patchMessage,
       updateMessageDelivery: opts.updateMessageDelivery,
       channelId: opts.channelId,
@@ -101,8 +115,7 @@ export function useMediaSend(opts: UseMediaSendOptions) {
       setBaileysLoginOpen: opts.setBaileysLoginOpen,
       setSending: opts.setSending,
       toStickerDataUrl: opts.toStickerDataUrl,
-      getDraftReply: () => useAppStore.getState().draftReply.trim(),
-      setDraftReply: opts.setDraftReply,
+      ...draftCleanup(),
       enqueueOutgoingMessage: opts.enqueueOutgoingMessage,
       chatId: opts.chatId,
       patchMessage: opts.patchMessage,
@@ -141,6 +154,7 @@ export function useMediaSend(opts: UseMediaSendOptions) {
       isBaileys: opts.isBaileys,
       chatConnected: opts.chatConnected,
       chatAccountId: opts.chatAccountId,
+      chatId: opts.chatId,
       channelId: opts.channelId,
       selectedPhoneId: opts.selectedPhoneId,
       setSending: opts.setSending,

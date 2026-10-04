@@ -1,8 +1,12 @@
+mod account_id;
+mod atomic_file;
+mod crm_backup;
 mod baileys;
 mod bridge;
 mod commands;
 mod db;
 mod protocol;
+mod speech_archive;
 mod voice;
 
 use baileys::BaileysState;
@@ -123,7 +127,11 @@ pub fn run() {
             commands::db_clear_chat_messages,
             commands::db_clear_remote_messages,
             commands::db_delete_messages_by_keys,
+            commands::db_update_message_acks,
             commands::db_info,
+            crm_backup::crm_backup_status,
+            crm_backup::crm_backup_save,
+            crm_backup::crm_backup_latest,
             commands::db_load_full_history,
             commands::db_load_messages_page,
             commands::db_search_messages,

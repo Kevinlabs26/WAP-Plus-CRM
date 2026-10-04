@@ -144,7 +144,7 @@ export function BridgeWatcher() {
       if (!isTauri() || cancelled) return;
       try {
         const events = await drainBridgeEvents();
-        if (!cancelled && events.length) ingestBridgeEvents(events);
+        if (!cancelled && events.length) enqueueGatedIngest(events, ingestBridgeEvents);
       } catch {
         /* ignore */
       }

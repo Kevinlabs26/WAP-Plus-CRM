@@ -1,7 +1,7 @@
 {
   "name": "wap-plus",
   "private": true,
-  "version": "0.1.32",
+  "version": "0.1.33",
   "packageManager": "npm@10.9.8",
   "type": "module",
   "description": "WAP Plus CRM monorepo (desktop + baileys sidecar)",
@@ -21,6 +21,9 @@
     "baileys:start": "npm run start -w wap-plus-baileys",
     "baileys:build": "npm run build -w wap-plus-baileys",
     "install:all": "npm install"
+  },
+  "overrides": {
+    "@esbuild-kit/core-utils": { "esbuild": "^0.25.4" }
   },
   "engines": {
     "node": ">=20"

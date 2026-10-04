@@ -36,7 +36,7 @@ export type NavId =
   | "broadcast"
   | "starred"
   | "monitor";
-export type ChatListFilter = "all" | "unread" | "today" | "leads";
+export type ChatListFilter = "all" | "unread" | "awaiting" | "today" | "leads";
 
 export type ToastTone = "info" | "success" | "error";
 export interface ToastItem {
@@ -101,6 +101,8 @@ export interface PersistSlice {
   activities: Activity[];
   settings: AppSettings;
   broadcastCampaigns: BroadcastCampaign[];
+  /** 本机未发送草稿；旧数据缺省为空，不包含在导出备份里。 */
+  draftReplyByChatId?: Record<string, string>;
 }
 
 /** 各 slice 工厂共用的 set/get 上下文（zustand create 内部传入） */
@@ -190,6 +192,7 @@ export interface AppState extends PersistSlice {
         Message,
         | "deliveryStatus"
         | "lastError"
+        | "deliveryUncertain"
         | "retryCount"
         | "nextAttemptAt"
         | "phoneE164"
@@ -276,6 +279,7 @@ export interface AppState extends PersistSlice {
   ensureChatForContact: (contactId: string, accountId: string) => string | null;
   clearChatMessages: (chatId: string) => void;
   markChatUnreadLocal: (chatId: string, unread?: number) => void;
+  markReplyHandled: (chatId: string) => void;
   toggleMessageStarred: (id: string) => void;
   listStarredMessages: () => Message[];
   isMessageSaved: (id: string) => boolean;
@@ -313,7 +317,7 @@ export interface AppState extends PersistSlice {
   }) => Promise<boolean>;
   resolveConfirm: (ok: boolean) => void;
   setBridgeRuntime: (patch: Partial<BridgeRuntime>) => void;
-  ingestBridgeEvents: (events: BridgeEvent[]) => void;
+  ingestBridgeEvents: (events: BridgeEvent[]) => Promise<void>;
   logActivity: (
     contactId: string,
     kind: ActivityKind,
@@ -335,6 +339,8 @@ export interface AppState extends PersistSlice {
   /** 批量导入联系人：静默建联系人+会话行，返回新增数 */
   importContacts: (contacts: Omit<Contact, "id">[]) => number;
   toggleFollowUp: (id: string) => void;
+  /** 只取消指定的未完成提醒，保留历史并重新计算下一条提醒。 */
+  cancelFollowUp: (id: string) => boolean;
   addFollowUp: (f: Omit<FollowUp, "id" | "done">) => void;
   /** 一键：明天跟进（写 follow_up + contact.nextFollowUpAt） */
   scheduleTomorrowFollowUp: (
@@ -395,7 +401,7 @@ export interface AppState extends PersistSlice {
     opts?: { focusMessageId?: string; prefillDraft?: string }
   ) => void;
   recomputeStats: () => void;
-  exportBackup: () => Promise<void>;
+  exportBackup: (includeMedia?: boolean) => Promise<void>;
   exportContactsCsv: () => void;
   hydrate: () => Promise<void>;
   clearData: () => Promise<void>;

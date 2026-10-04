@@ -7,7 +7,6 @@ import { persist, scheduleStatsRecompute } from "./persist";
 import { pruneChatFolderRefs } from "./chatFolderCleanup";
 import { isRetryableOutgoing } from "./outgoingRetry";
 import { mergeMessagesByTime } from "./messageOrdering";
-import { setChatDraftValue } from "@/lib/chatDrafts";
 import { isConversationOutgoing } from "@/lib/leadInbox";
 
 export function createMessageActionsSlice({
@@ -76,6 +75,8 @@ export function createMessageActionsSlice({
                 ...c,
                 lastMessage: input.body,
                 lastMessageDirection: "out",
+                replyPendingSince: isConversationOutgoing(msg) ? ""
+                  : c.replyPendingSince ?? (c.lastMessageDirection === "in" ? c.updatedAt : ""),
                 hasOutgoingHistory:
                   c.hasOutgoingHistory || isConversationOutgoing(msg),
                 updatedAt: sentAt,
@@ -83,12 +84,6 @@ export function createMessageActionsSlice({
               }
             : c
         ),
-        draftReplyByChatId: setChatDraftValue(
-          state.draftReplyByChatId,
-          chatId,
-          ""
-        ),
-        ...(state.selectedChatId === chatId ? { draftReply: "" } : {}),
       }));
       if (contactId && (status === "sent" || status === "local")) {
         get().logActivity(
@@ -133,8 +128,9 @@ export function createMessageActionsSlice({
       if (next && isConversationOutgoing(next)) {
         set((state) => ({
           chats: state.chats.map((chat) =>
-            chat.id === next.chatId && !chat.hasOutgoingHistory
-              ? { ...chat, hasOutgoingHistory: true }
+            chat.id === next.chatId
+              ? { ...chat, hasOutgoingHistory: true,
+                  replyPendingSince: !chat.replyPendingSince || next.sentAt >= chat.replyPendingSince ? "" : chat.replyPendingSince }
               : chat
           ),
         }));
@@ -156,6 +152,7 @@ export function createMessageActionsSlice({
         persist(get);
       }
       if (next?.mediaUrl) void cacheMediaUrl(next.id, next.mediaUrl);
+      scheduleStatsRecompute(get);
     },
 
     deleteLocalMessage: (id) => {

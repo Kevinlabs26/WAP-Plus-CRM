@@ -20,6 +20,7 @@ import { useAppStore } from "@/store/appStore";
 import { useI18n } from "@/i18n";
 import { translationMatchesTarget } from "@/lib/translateDraft";
 import { SaveContactDialog } from "./SaveContactDialog";
+import { isDeliveryUncertain } from "@/store/outgoingRetry";
 
 type Props = {
   m: Message;
@@ -337,6 +338,7 @@ export const MessageBubble = memo(function MessageBubble({
     return undefined;
   }, [m.body, m.mentionedJids]);
   const st = m.deliveryStatus;
+  const uncertain = isDeliveryUncertain(m);
   const showStatus =
     m.direction === "out" &&
     st &&
@@ -425,11 +427,11 @@ export const MessageBubble = memo(function MessageBubble({
   const statusNode = showStatus ? (
     <span
       className={cn(
-        st === "failed" ? "text-rose-300/95" : "text-amber-200/90"
+        st === "failed" && !uncertain ? "text-rose-300/95" : "text-amber-200/90"
       )}
       title={localizedLastError || undefined}
     >
-      {st === "pending"
+      {uncertain ? t("messageBubble.deliveryUncertain") : st === "pending"
         ? t("messageBubble.sending")
         : st === "queued"
           ? m.lastError
@@ -456,7 +458,7 @@ export const MessageBubble = memo(function MessageBubble({
         )}
         onClick={() => onRetry(m.id)}
       >
-        {t("messageBubble.retry")}
+        {t(uncertain ? "messageBubble.verifyRetry" : "messageBubble.retry")}
       </button>
     ) : null;
 

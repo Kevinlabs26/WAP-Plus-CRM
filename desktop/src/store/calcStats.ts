@@ -8,6 +8,7 @@ import type {
   Message,
 } from "@/types/crm";
 import { readTrend7d, seedTrendFromMessages } from "./trendBuckets";
+import { isAwaitingReply } from "../lib/replyStatus.ts";
 
 function localDayKey(d = new Date()): string {
   const y = d.getFullYear();
@@ -31,6 +32,7 @@ function emptyAccountRow(accountId: string): AccountDashStats {
   return {
     accountId,
     chatsToday: 0,
+    awaitingReplyChats: 0,
     pendingReplyChats: 0,
     pendingReplies: 0,
     dealsWon: 0,
@@ -76,6 +78,7 @@ export function calcStats(
   };
 
   let chatsToday = 0;
+  let awaitingReplyChats = 0;
   let pendingReplyChats = 0;
   let pendingReplies = 0;
   for (const c of chats) {
@@ -86,6 +89,10 @@ export function calcStats(
     if (isToday(c.updatedAt || "")) {
       chatsToday += 1;
       row.chatsToday += 1;
+    }
+    if (isAwaitingReply(c)) {
+      awaitingReplyChats += 1;
+      row.awaitingReplyChats += 1;
     }
     if (c.unread > 0) {
       pendingReplyChats += 1;
@@ -150,6 +157,7 @@ export function calcStats(
 
   return {
     chatsToday,
+    awaitingReplyChats,
     pendingReplyChats,
     pendingReplies,
     dealsWon,
@@ -161,6 +169,7 @@ export function calcStats(
 
 export function emptyDashboardStats(): DashboardStats {
   return {
+    awaitingReplyChats: 0,
     chatsToday: 0,
     pendingReplyChats: 0,
     pendingReplies: 0,

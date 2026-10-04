@@ -79,6 +79,8 @@ function runFfmpeg(
 export function runFfmpegToOggOpus(inputPath, outputPath, maxSeconds) {
   const args = [
       "-y",
+      "-protocol_whitelist", "file,pipe",
+      "-format_whitelist", "wav,mov,matroska,ogg,mp3,flac,aac,aiff,amr,asf,avi,mpeg,mpegts,caf,au,w64",
       "-i",
       inputPath,
       "-vn",
@@ -119,6 +121,8 @@ async function buildWaveform(audioPath) {
     [
       "-v",
       "error",
+      "-protocol_whitelist", "file,pipe",
+      "-f", "ogg",
       "-i",
       audioPath,
       "-vn",
@@ -213,7 +217,7 @@ export async function ensureGifMp4(gifDataUrl) {
     await writeFile(inPath, parsed.buf);
     await runFfmpeg(
       [
-        "-y", "-i", inPath, "-t", "15",
+        "-y", "-protocol_whitelist", "file,pipe", "-f", "gif", "-i", inPath, "-t", "15",
         "-vf", "scale=480:480:force_original_aspect_ratio=decrease:force_divisible_by=2",
         "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
         "-pix_fmt", "yuv420p", "-movflags", "+faststart", outPath,
@@ -230,4 +234,19 @@ export async function ensureGifMp4(gifDataUrl) {
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+/** Generate thumbnails ourselves; never invoke the SDK's unguarded shell ffmpeg. */
+export async function safeVideoThumbnail(buffer) {
+  const dir = await mkdtemp(join(tmpdir(), "wap-thumb-"));
+  try {
+    const path = join(dir, "input.video");
+    await writeFile(path, buffer);
+    return await runFfmpeg([
+      "-protocol_whitelist", "file,pipe",
+      "-format_whitelist", "mov,matroska,avi,asf,flv,mpeg,mpegts,ogg,gif",
+      "-i", path, "-vf", "scale=32:32:force_original_aspect_ratio=decrease", "-frames:v", "1", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1",
+    ], { timeoutMs: 10_000, label: "视频缩略图", notFoundMessage: "未找到 ffmpeg", captureStdout: true });
+  } catch { return Buffer.alloc(0); }
+  finally { await rm(dir, { recursive: true, force: true }).catch(() => {}); }
 }

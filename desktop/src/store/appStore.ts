@@ -1,3 +1,5 @@
+import { gateConfigFromRuntime, sendRuntimeFromSettings } from "@/channels";
+import { setSendGateConfigProvider } from "@/channels/sendGate";
 import { create } from "zustand";
 import type { AppState, AppSettings, SliceContext } from "./types";
 import { calcStats } from "./calcStats";
@@ -11,6 +13,7 @@ import { createSavedMessagesSlice } from "./savedMessagesSlice";
 import { createBroadcastSlice } from "./broadcastSlice";
 import { createActionMixins } from "./actionMixins";
 import type { Message } from "@/types/crm";
+import { persist } from "./persist";
 
 export const useAppStore = create<AppState>((set, get) => {
   const ctx: SliceContext = { set, get };
@@ -88,6 +91,18 @@ export const useAppStore = create<AppState>((set, get) => {
     ...mixins.saveMessageAction,
     ...mixins.contactMergeActions,
   };
+});
+
+setSendGateConfigProvider(() => {
+  const state = useAppStore.getState();
+  return gateConfigFromRuntime(sendRuntimeFromSettings(state.settings, state.messages));
+});
+
+// 所有草稿入口（输入、AI、跨号窗口及发送清理）共用既有数据库落盘。
+useAppStore.subscribe((state, prev) => {
+  if (state.hydrated && state.draftReplyByChatId !== prev.draftReplyByChatId) {
+    persist(() => useAppStore.getState());
+  }
 });
 
 // 按 chatId 维护消息索引（多账号面板只读轮询用）。

@@ -13,7 +13,7 @@ let scheduled = false;
 
 export function enqueueGatedIngest(
   events: BridgeEvent[],
-  ingest: (events: BridgeEvent[]) => void
+  ingest: (events: BridgeEvent[]) => void | Promise<void>
 ): void {
   if (!events.length) return;
   queue.push(...events);
@@ -22,7 +22,7 @@ export function enqueueGatedIngest(
   scheduleRun(ingest);
 }
 
-function scheduleRun(ingest: (events: BridgeEvent[]) => void): void {
+function scheduleRun(ingest: (events: BridgeEvent[]) => void | Promise<void>): void {
   if (typeof window === "undefined") return;
   if (isComposerTypingBusy()) {
     // 保持 scheduled，仅顺延重试，避免期间重复排程
@@ -30,16 +30,27 @@ function scheduleRun(ingest: (events: BridgeEvent[]) => void): void {
     return;
   }
   const run = () => {
-    scheduled = false;
-    if (!queue.length) return;
+    if (!queue.length) { scheduled = false; return; }
     const batch = queue.slice(0, MAX_BATCH);
     if (batch.length < queue.length) {
       queue = queue.slice(MAX_BATCH);
     } else {
       queue = [];
     }
-    ingest(batch);
-    if (queue.length) scheduleRun(ingest);
+    const complete = () => {
+      scheduled = false;
+      if (queue.length) { scheduled = true; scheduleRun(ingest); }
+    };
+    const retry = (error: unknown) => {
+      queue.unshift(...batch);
+      console.error("[sync] ingest failed, retrying", error);
+      window.setTimeout(() => scheduleRun(ingest), 1000);
+    };
+    try {
+      const result = ingest(batch);
+      if (result && typeof result.then === "function") result.then(complete, retry);
+      else complete();
+    } catch (error) { retry(error); }
   };
   if (typeof window.requestIdleCallback === "function") {
     window.requestIdleCallback(run, { timeout: 400 });

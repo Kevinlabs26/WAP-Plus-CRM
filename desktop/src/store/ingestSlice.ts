@@ -1,3 +1,4 @@
+import { deferDuringRestore } from "./restoreGuard";
 import type { AppState, SliceContext } from "./types";
 import {
   applyMessagesAck,
@@ -36,6 +37,7 @@ import {
 } from "@/lib/mediaCache";
 import {
   clearStoredRemoteMessages,
+  updateStoredMessageAcks,
   deleteStoredMessagesByKeys,
 } from "@/lib/storage";
 import { noteMainThreadWork, syncLog } from "@/lib/syncDebug";
@@ -134,8 +136,9 @@ export function createIngestSlice({
   get,
 }: SliceContext): Pick<AppState, "ingestBridgeEvents"> {
   return {
-    ingestBridgeEvents: (events) => {
-      if (!events.length) return;
+    ingestBridgeEvents: (events) => new Promise<void>((resolve, reject) => {
+      if (!events.length) { resolve(); return; }
+      if (deferDuringRestore(() => { get().ingestBridgeEvents(events).then(resolve, reject); })) return;
       const ingestStarted = performance.now();
       for (const event of events) {
         const payload = ingestObject(event.payload) ?? {};
@@ -191,14 +194,16 @@ export function createIngestSlice({
           }
           return changed ? { peerPresenceByKey } : state;
         });
+        resolve();
         return;
       }
 
       let ingestChanged = false;
       const clearedRemoteTargets = new Map<
         string,
-        { remoteJid: string; accountId: string }
+        { remoteJid: string; accountId: string; before?: string }
       >();
+      const ackItemsByAccount = new Map<string, { id: string; ack: string }[]>();
       const deletedRemoteMessageKeys = new Map<string, Set<string>>();
       // 本批新增入站消息（用于桌面通知，set 之外触发）
       let inboundNotifies: InboundNotifyItem[] | null = null;
@@ -301,6 +306,7 @@ export function createIngestSlice({
               clearedRemoteTargets.set(`${deviceId}\0${payload.jid}`, {
                 remoteJid: payload.jid,
                 accountId: deviceId,
+                before: typeof payload.deletedBefore === "string" ? payload.deletedBefore : undefined,
               });
             }
             if (Array.isArray(payload.items)) {
@@ -333,10 +339,16 @@ export function createIngestSlice({
               messages,
               contacts,
               jids,
-              ownerAccountId || deviceId
+              ownerAccountId || deviceId,
+              typeof payload.deletedBefore === "string" ? payload.deletedBefore : undefined
             );
             chats = out.chats;
             messages = out.messages;
+            for (const jid of jids) {
+              clearedRemoteTargets.set(`${deviceId}\0${jid}`, { remoteJid: jid, accountId: deviceId,
+                before: typeof payload.deletedBefore === "string" ? payload.deletedBefore : undefined });
+              messages = applyMessagesDelete(messages, chats, { all: true, jid, deletedBefore: typeof payload.deletedBefore === "string" ? payload.deletedBefore : undefined }, { deviceId }).messages;
+            }
             if (out.clearedSelection) {
               if (
                 nextSelectedChatId &&
@@ -420,6 +432,15 @@ export function createIngestSlice({
           // 出站回执：送达 / 已读
           if (event.type === "messages.ack") {
             messages = applyMessagesAck(messages, items, undefined, deviceId);
+            const acks = ackItemsByAccount.get(deviceId) || [];
+            for (const raw of items) {
+              const item = ingestObject(raw);
+              if (!item || typeof item.id !== "string") continue;
+              const ack = typeof item.ack === "string" ? item.ack :
+                typeof item.status === "number" ? ["sent", "sent", "server", "delivered", "read", "played"][Math.min(5, Math.max(0, Math.floor(item.status)))] : "";
+              if (ack) acks.push({ id: item.id, ack });
+            }
+            ackItemsByAccount.set(deviceId, acks);
             continue;
           }
 
@@ -697,25 +718,20 @@ export function createIngestSlice({
       };
 
       // 全部块跑完后统一收尾（通知 / 统计 / 落盘），只跑一次
-      const finish = () => {
+      const finish = async () => {
+        const writes: Promise<void>[] = [];
         for (const target of clearedRemoteTargets.values()) {
-          void clearStoredRemoteMessages(target.remoteJid, target.accountId).catch((error) =>
-            get().pushToast(
-              error instanceof Error ? error.message : "聊天记录清空落盘失败",
-              "error"
-            )
-          );
+          writes.push(clearStoredRemoteMessages(target.remoteJid, target.accountId, target.before));
         }
         for (const [accountId, keys] of deletedRemoteMessageKeys) {
-          void deleteStoredMessagesByKeys([...keys], accountId).catch(
-            (error) =>
-              get().pushToast(
-                error instanceof Error ? error.message : "消息删除落盘失败",
-                "error"
-              )
-          );
+          writes.push(deleteStoredMessagesByKeys([...keys], accountId));
         }
-        if (!ingestChanged) return;
+        for (const [accountId, items] of ackItemsByAccount) {
+          writes.push(updateStoredMessageAcks(items, accountId));
+        }
+        try { if (writes.length) await Promise.all(writes); }
+        catch (error) { get().pushToast(error instanceof Error ? error.message : "同步落盘失败", "error"); throw error; }
+        if (!ingestChanged) { resolve(); return; }
         // 桌面通知（入站新消息）：复用已入库的 chats 构建静音表
         const notifyItems: InboundNotifyItem[] = inboundNotifies
           ? inboundNotifies
@@ -730,6 +746,7 @@ export function createIngestSlice({
             selectedChatId: st.selectedChatId,
             mutedUntilByChatId,
             enabled: st.settings.desktopNotifyEnabled !== false,
+            privacy: st.settings.notificationPrivacy,
             groupMessagesEnabled: st.settings.notifyGroupMessagesEnabled === true,
             openChat: ({ chatId, contactId, messageId }) => {
               const a = get();
@@ -769,30 +786,32 @@ export function createIngestSlice({
             durationMs >= 80 ? "warn" : "debug"
           );
         }
+        resolve();
       };
 
       if (slices.length <= 1) {
         runSlice(slices[0] ?? events);
-        finish();
+        void finish().catch(reject);
         return;
       }
       // 先同步跑第一块，其余块让出主线程；打字进行中则顺延
       runSlice(slices[0]);
       let sliceIdx = 1;
       const step = () => {
+        if (deferDuringRestore(step)) return;
         if (sliceIdx >= slices.length) {
-          finish();
+          void finish().catch(reject);
           return;
         }
         if (isComposerTypingBusy()) {
           window.setTimeout(step, INGEST_SLICE_RETRY_MS);
           return;
         }
-        runSlice(slices[sliceIdx]);
+        try { runSlice(slices[sliceIdx]); } catch (error) { reject(error); return; }
         sliceIdx += 1;
         window.setTimeout(step, 0);
       };
       window.setTimeout(step, 0);
-    },
+    }),
   };
 }

@@ -106,32 +106,33 @@ export function isWithinAutoReplyHours(
 }
 
 function getAutoReplyRisk(text: string): AutoReplyRisk | null {
-  const value = text.trim();
+  // ponytail: 关键词仅作为保守拦截；复杂业务承诺仍应人工确认。
+  const value = text.normalize("NFKD").replace(/\p{M}/gu, "").trim();
   if (!value) return { category: "empty", reason: "消息为空" };
 
   if (
-    /(验证码|一次性密码|密码|口令|token|otp|verification\s*code|password|credit\s*card|银行卡|信用卡)/i.test(
+    /(验证码|一次性密码|密码|口令|token|otp|verification\s*code|password|mot\s*de\s*passe|contrasena|senha|passwort|code\s*de\s*verification|credit\s*card|银行卡|信用卡)/i.test(
       value
     )
   ) {
     return { category: "sensitive", reason: "涉及账号或支付敏感信息" };
   }
   if (
-    /(退款|退货|付款|支付|转账|发票|合同|法律|律师|起诉|refund|return|payment|pay|transfer|invoice|contract|legal|lawyer|lawsuit)/i.test(
+    /(退款|退货|付款|支付|转账|发票|合同|法律|律师|起诉|refund|return|payment|pay|transfer|invoice|contract|legal|lawyer|lawsuit|rembours\w*|paiement|payer|virement|facture|contrat|juridique|avocat|reembolso|pago|pagamento|transferencia|fatura|contrato|abogado|advogado|ruckerstattung|zahlung|uberweisung|rechnung|vertrag|anwalt)/i.test(
       value
     )
   ) {
     return { category: "financial", reason: "涉及付款、合同或法律事项" };
   }
   if (
-    /(价格|多少钱|报价|费用|折扣|price|quote|cost|how\s*much|discount)/i.test(
+    /(价格|多少钱|报价|费用|折扣|price|quote|cost|how\s*much|discount|\bprix\b|devis|combien|cout|remise|precio|preco|cuanto|quanto|descuento|desconto|preis|kosten|rabatt)/i.test(
       value
     )
   ) {
     return { category: "pricing", reason: "涉及价格或商业承诺" };
   }
   if (
-    /(投诉|举报|骗子|诈骗|欺诈|生气|不满|complaint|scam|fraud|angry)/i.test(
+    /(投诉|举报|骗子|诈骗|欺诈|生气|不满|complaint|scam|fraud|angry|plainte|reclamation|arnaque|escroquerie|furieux|queja|reclamacion|estafa|fraude|reclamacao|golpe|beschwerde|betrug)/i.test(
       value
     )
   ) {
@@ -156,7 +157,7 @@ export function getAutoReplyOutputBlockReason(
     return `AI 回复${risk.reason}`;
   }
   if (
-    /(保证|承诺|一定能|肯定能|百分之百|已经安排|已确认|马上退款|按时送达|\b(?:i|we)\s+(?:guarantee|promise|confirm that|will refund|will arrive|have already arranged)\b|100%|\bdefinitely\b)/i.test(
+    /(保证|承诺|一定能|肯定能|百分之百|已经安排|已确认|马上退款|按时送达|\b(?:i|we)\s+(?:guarantee|promise|confirm that|will refund|will arrive|have already arranged)\b|100%|\bdefinitely\b|\b(?:garantis|garantissons|promets|promettons|garantizo|prometo|garanto|garantimos|garantieren|verspreche)\b)/i.test(
       text
     )
   ) {
@@ -194,7 +195,6 @@ export function getRecentManualTakeover(
       (message) =>
         message.direction === "out" &&
         !message.systemKind &&
-        message.sentAt < inbound.sentAt &&
         (!previousInbound || message.sentAt > previousInbound.sentAt)
     );
   if (!manual) return null;
@@ -262,4 +262,23 @@ export function parseAutoReplyReplay(
     });
   }
   return messages;
+}
+
+/** 发送门闸和重试队列共享复核，防止排队期间自动模式或上下文改变。 */
+export function canSendAutoReply(
+  settings: { aiReplyMode: string; aiAutoReplyManualChatIds: string[]; aiAutoReplyPolicy: unknown; aiAutoReplyPolicyByAccountId: unknown },
+  messages: readonly (AutoReplySafetyMessage & { id: string; chatId: string; accountId?: string })[],
+  reply: { id: string; chatId: string; body: string; sentAt: string; accountId?: string },
+  inboundId?: string
+): boolean {
+  if (settings.aiReplyMode !== "auto" || settings.aiAutoReplyManualChatIds.includes(reply.chatId)) return false;
+  const thread = messages.filter((item) => item.chatId === reply.chatId)
+    .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
+  const inbound = thread.filter((item) => item.direction === "in").at(-1);
+  if (!inbound || (inboundId && inbound.id !== inboundId)) return false;
+  if (thread.some((item) => item.id !== reply.id && item.sentAt >= reply.sentAt &&
+      (item.direction === "in" && !inboundId || item.direction === "out" && !item.systemKind))) return false;
+  const policy = resolveAutoReplyPolicy(settings.aiAutoReplyPolicy, settings.aiAutoReplyPolicyByAccountId, reply.accountId);
+  return evaluateAutoReplyDecision(thread, inbound, Date.now(), policy).allow &&
+    !getAutoReplyOutputBlockReason(reply.body, { allowPricing: policy.allowPricing });
 }

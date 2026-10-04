@@ -17,6 +17,7 @@ const mod = await import(moduleUrl);
     recordOutboundSend,
     resolveEffectiveLimits,
     withSendGate,
+    setSendGateConfigProvider,
   } = mod;
 
   assert.equal(
@@ -202,3 +203,25 @@ const mod = await import(moduleUrl);
   await globalASend;
 
   console.log("send-gate.test.mjs ok");
+
+  let latestConfig = { rateLimitEnabled: false, sendPausedAccountIds: [] };
+  setSendGateConfigProvider(() => latestConfig);
+  let releasePausedFirst;
+  let signalPausedFirst;
+  const pausedFirstReady = new Promise(resolve => { signalPausedFirst = resolve; });
+  const pausedFirstDone = new Promise(resolve => { releasePausedFirst = resolve; });
+  const pausedInput = { accountId: 'pause-race', phoneE164: '+12025550150' };
+  const pauseFirst = withSendGate(pausedInput, latestConfig, async () => {
+    signalPausedFirst(); await pausedFirstDone; return { ok: true };
+  });
+  await pausedFirstReady;
+  let secondActuallySent = false;
+  const pauseSecond = withSendGate(pausedInput, latestConfig, async () => {
+    secondActuallySent = true; return { ok: true };
+  });
+  latestConfig = { ...latestConfig, sendPausedAccountIds: ['pause-race'] };
+  releasePausedFirst(); await pauseFirst;
+  const pausedResult = await pauseSecond;
+  assert.equal(pausedResult.ok, false);
+  assert.equal(pausedResult.gate.error, 'send_paused');
+  assert.equal(secondActuallySent, false);

@@ -1,5 +1,6 @@
 import { json, requestBody } from "./httpUtil.mjs";
 import { parseDataUrl } from "./audioConvert.mjs";
+import { downloadRemoteMedia } from "./remoteMedia.mjs";
 
 function productPayload(product) {
   return {
@@ -88,7 +89,7 @@ export async function tryHandleCatalogRoutes(req, res, url, d) {
     const ownerJid = String(d.socket.user?.id || "").replace(/:\\d+@/, "@");
     const result = await d.socket.sendMessage(jid, {
       product: {
-        productImage: { url: imageUrl },
+        productImage: (await downloadRemoteMedia(imageUrl, 10_000_000)).buffer,
         productId: product.id,
         title: product.name,
         description: product.description || "",
@@ -142,7 +143,7 @@ export async function tryHandleCatalogRoutes(req, res, url, d) {
       fields = productFields(body);
       image = body.imageDataUrl
         ? imageBuffer(body.imageDataUrl)
-        : { url: Object.values(previous.imageUrls || {}).find(Boolean) || "" };
+        : (await downloadRemoteMedia(Object.values(previous.imageUrls || {}).find(Boolean) || "", 10_000_000)).buffer;
     } catch (error) {
       json(res, 400, { error: error instanceof Error ? error.message : String(error) });
       return true;

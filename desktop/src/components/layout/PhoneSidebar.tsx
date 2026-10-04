@@ -26,6 +26,7 @@ import { bridgeInvoke } from "@/lib/bridge";
 import {
   baileysChatModify,
   baileysMessagesRead,
+  baileysStatus,
   baileysSync,
 } from "@/lib/baileys";
 import { markChatReadRemote } from "@/lib/markChatRead";
@@ -232,6 +233,9 @@ export function PhoneSidebar() {
     () => waAccounts.filter((account) => accountIsConnected(account.id)).map((account) => account.id),
     [baileysUi.connection, liveBaileysAccountId, waAccounts]
   );
+  const canSyncBaileys = accountViewMode?.type === "all"
+    ? connectedAccountIds.length > 0 || syncAccountConnected
+    : syncAccountConnected;
 
   const [syncing, setSyncing] = useState(false);
   const [createGroupOpen, setCreateGroupOpen] = useState(false);
@@ -542,17 +546,41 @@ export function PhoneSidebar() {
       .catch((error) => pushToast(String(error), "error"));
   };
 
-  const syncConversations = async () => {
-    setSyncing(true);
+  const syncConversations = async (requestedAccountId?: string): Promise<void> => {
+    if (!requestedAccountId) setSyncing(true);
     try {
       if (isBaileys) {
+        if (!requestedAccountId && accountViewMode?.type === "all") {
+          const accountIds = [
+            ...new Set([
+              ...connectedAccountIds,
+              ...(syncAccountConnected && syncAccountId ? [syncAccountId] : []),
+            ]),
+          ];
+          if (!accountIds.length) {
+            pushToast(t("runtime.accountOffline"), "error");
+            return;
+          }
+          for (const accountId of accountIds) await syncConversations(accountId);
+          const skipped = waAccounts.filter(
+            (account) => !accountIds.includes(account.id)
+          ).length;
+          if (skipped) {
+            pushToast(t("runtime.syncSkippedOffline", { count: skipped }), "info");
+          }
+          return;
+        }
         // 同步「当前浏览」的号，而不是永远打默认 live / 某 accountId
         const viewAid =
           accountViewMode?.type === "account"
             ? accountViewMode.accountId
             : liveBaileysAccountId || activeAccountId || "";
         const syncAid =
-          viewAid || liveBaileysAccountId || activeAccountId || "";
+          requestedAccountId ||
+          viewAid ||
+          liveBaileysAccountId ||
+          activeAccountId ||
+          "";
         const beforeC = useAppStore.getState().contacts.filter(
           (c) => (c.accountId || "") === syncAid
         ).length;
@@ -574,11 +602,10 @@ export function PhoneSidebar() {
           pushToast(t("runtime.addLoginAccount"), "error");
           return;
         }
-        // 若 status 里 live+baileysUi 任一在线即可同步该号进程
+        // 本地状态可能滞后，发起同步前再确认该账号的实际连接状态。
         const slotOk =
-          accountIsConnected(syncAid) ||
-          waAccounts.find((a) => a.id === syncAid)?.status === "connected" ||
-          waAccounts.find((a) => a.id === syncAid)?.status === "connecting";
+          accountIsConnected(syncAid) &&
+          (await baileysStatus(syncAid)).connection === "connected";
         if (!slotOk) {
           syncLog(
             "ui.sync",
@@ -590,11 +617,14 @@ export function PhoneSidebar() {
             },
             "warn"
           );
-          pushToast(
-            t("runtime.accountOffline"),
-            "error"
-          );
-          setActiveNav("phones");
+          if (requestedAccountId) {
+            const account = waAccounts.find((item) => item.id === syncAid);
+            const name = account?.userName || account?.label || syncAid;
+            pushToast(t("runtime.syncAccountOffline", { name }), "info");
+          } else {
+            pushToast(t("runtime.accountOffline"), "error");
+            setActiveNav("phones");
+          }
           return;
         }
         // 空结果时多试几次（第二号历史常晚到）
@@ -634,7 +664,7 @@ export function PhoneSidebar() {
           nm: result.messages?.length ?? 0,
           note: (result as { note?: string }).note,
         });
-        ingestBridgeEvents([
+        await ingestBridgeEvents([
           {
             type: "contacts.sync",
             deviceId: syncAid,
@@ -654,6 +684,7 @@ export function PhoneSidebar() {
               accountId: syncAid,
             } as Record<string, unknown>,
           },
+        ...(result.deletionEvents || []),
         ] as Parameters<typeof ingestBridgeEvents>[0]);
         const st = useAppStore.getState();
         const afterC = st.contacts.filter(
@@ -753,9 +784,16 @@ export function PhoneSidebar() {
       ]);
       pushToast(`WhatsApp 会话同步完成 · ${items?.length ?? 0} 个`, "success");
     } catch (error) {
-      pushToast(String(error), "error");
+      const account = waAccounts.find((item) => item.id === requestedAccountId);
+      const name = account?.userName || account?.label || requestedAccountId || "";
+      pushToast(
+        requestedAccountId
+          ? t("runtime.syncAccountFailed", { name, error: String(error) })
+          : String(error),
+        "error"
+      );
     } finally {
-      setSyncing(false);
+      if (!requestedAccountId) setSyncing(false);
     }
   };
 
@@ -869,6 +907,7 @@ export function PhoneSidebar() {
   useEffect(() => {
     if (
       chatListFilter === "unread" ||
+      chatListFilter === "awaiting" ||
       chatListFilter === "today" ||
       chatListFilter === "leads"
     ) {
@@ -1347,12 +1386,10 @@ export function PhoneSidebar() {
           syncing={syncing}
           syncDisabled={
             syncing ||
-            (isBaileys
-              ? !syncAccountConnected
-              : !selectedPhoneId)
+            (isBaileys ? !canSyncBaileys : !selectedPhoneId)
           }
           syncTitle={
-            isBaileys && !syncAccountConnected
+            isBaileys && !canSyncBaileys
               ? "当前浏览账号未连接"
               : historySyncNote
                 ? `从 WhatsApp 同步会话 · ${historySyncNote}`

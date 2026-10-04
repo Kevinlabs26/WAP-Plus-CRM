@@ -5,7 +5,27 @@ import {
   resolveTargetLang,
   resolveMyLang,
   translationMatchesTarget,
+  translateDraftText,
 } from "../src/lib/translateDraft.ts";
+
+test("failed translation returns no replacement text and does not cache a demo result", async () => {
+  const originalFetch = globalThis.fetch;
+  const input = "你好，产品型号 XT-FAILED-21，价格 123 欧元";
+  try {
+    globalThis.fetch = async () => { throw new Error("offline fixture"); };
+    const failed = await translateDraftText(input, "fr", { aiProvider: "mock", translateService: "google" });
+    assert.equal(failed.text, "");
+    assert.equal(failed.fallback, true);
+    assert.match(failed.error, /offline/);
+    globalThis.fetch = async () => new Response(JSON.stringify([[['Bonjour, modèle XT-FAILED-21, prix 123 euros', input]]]), { status: 200 });
+    const retried = await translateDraftText(input, "fr", { aiProvider: "mock", translateService: "google" });
+    assert.equal(retried.fallback, false);
+    assert.match(retried.text, /Bonjour/);
+    const demo = await translateDraftText("另一个产品型号", "fr", { aiProvider: "mock", translateService: "ai" });
+    assert.equal(demo.text, "");
+    assert.equal(demo.fallback, true);
+  } finally { globalThis.fetch = originalFetch; }
+});
 
 const settings = { translateTargetLang: "en" };
 

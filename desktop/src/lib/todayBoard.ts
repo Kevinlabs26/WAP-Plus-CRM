@@ -45,6 +45,12 @@ export function followUpDayKey(dueAt: string): string {
   return (dueAt || "").slice(0, 10);
 }
 
+/** 客户的下一条正式提醒；与工作台按到期时间排序保持一致。 */
+export function getNextOpenFollowUp(followUps: FollowUp[], contactId: string): FollowUp | undefined {
+  return followUps.filter((item) => item.contactId === contactId && !item.done)
+    .sort((a, b) => a.dueAt.localeCompare(b.dueAt))[0];
+}
+
 export type TodayFollowUpBucket = {
   overdue: FollowUp[];
   dueToday: FollowUp[];

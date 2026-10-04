@@ -18,6 +18,7 @@ type QuotedMessage = {
 
 type SendTextDeps = {
   msgId: string;
+  canSend?: () => boolean;
   text: string;
   recipient: string;
   contact: Contact;
@@ -53,6 +54,7 @@ type SendTextDeps = {
 
 export async function sendTextMessage({
   msgId,
+  canSend,
   text,
   recipient,
   contact,
@@ -117,6 +119,7 @@ export async function sendTextMessage({
         // 仅覆盖调用方解析出的通道 id，避免与 settings.sendChannel 漂移。
         ...sendRuntimeFromSettings(settings, messages),
         channelId,
+        canSend,
       }
     );
 
@@ -150,11 +153,13 @@ export async function sendTextMessage({
           ));
       updateMessageDelivery(msgId, {
         deliveryStatus: queue ? "queued" : "failed",
+        deliveryUncertain: deliveryUnknown,
         lastError: result.message || result.error || translateCurrent("runtime.sendFailed"),
         nextAttemptAt: queue
           ? new Date(Date.now() + wait).toISOString()
           : undefined,
       });
+      if (queue) clearDraft();
       pushToast(
         queue
           ? result.message || translateCurrent("runtime.queueRetry")
@@ -195,6 +200,7 @@ export async function sendTextMessage({
       // 请求异常时无法确认是否已送达，只能交给人工核对后再重试。
       deliveryStatus: "failed",
       lastError: message,
+      deliveryUncertain: true,
       nextAttemptAt: undefined,
     });
     pushToast(message, "error");

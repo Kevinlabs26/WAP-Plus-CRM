@@ -1,5 +1,12 @@
 import type { Message } from "@/types/crm";
 
+/** 兼容旧快照中只有中/英/法错误提示、没有结构化标记的未知结果。 */
+export function isDeliveryUncertain(message: Pick<Message, "direction" | "deliveryStatus" | "deliveryUncertain" | "lastError">) {
+  if (message.direction !== "out" || !["failed", "queued"].includes(message.deliveryStatus || "")) return false;
+  if (message.deliveryUncertain !== undefined) return message.deliveryUncertain;
+  return /baileys_delivery_unknown|发送结果未知|send result is unknown|résultat de l[’']envoi est inconnu/i.test(message.lastError || "");
+}
+
 /** 限速/冷却是可恢复状态，不应因为自动尝试次数耗尽而变成硬失败。 */
 export function isRateLimitedMessage(message: Message) {
   const text = (message.lastError || "").toLowerCase();
@@ -17,6 +24,7 @@ export function isRateLimitedMessage(message: Message) {
 
 export function isRetryableOutgoing(message: Message, now = Date.now()) {
   if (message.direction !== "out") return false;
+  if (isDeliveryUncertain(message)) return false;
   if (message.systemKind === "broadcast_campaign") return false;
   if (message.deliveryStatus !== "queued" && message.deliveryStatus !== "failed") return false;
   if (!message.phoneE164 || !message.body) return false;

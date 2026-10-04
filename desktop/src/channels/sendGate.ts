@@ -3,6 +3,7 @@
  * 文本走 dispatchSendText；媒体等调用 assertSendGate + recordOutboundSend。
  */
 
+import { isDataRestoreActive } from "@/store/restoreGuard";
 import type { Message } from "@/types/crm";
 import { computeAccountHealth } from "@/lib/accountHealth";
 import {
@@ -104,6 +105,9 @@ export function assertSendGate(
   input: RateLimitKeyInput,
   config: SendGateConfig = {}
 ): SendGateOk | SendGateBlock {
+  if (isDataRestoreActive()) {
+    return { ok: false, error: "send_paused", reason: "正在恢复备份，请完成后再发送", queueable: false };
+  }
   const accountId = (input.accountId || "").trim();
   const paused = config.sendPausedAccountIds || [];
   if (accountId && paused.includes(accountId)) {
@@ -182,6 +186,17 @@ export function recordOutboundSend(
  * 统一「先门闸再发送再记账」。
  * 媒体 / 转发 / 任意 baileys 旁路应优先走此包装，避免漏 gate。
  */
+export async function waitForPendingSends(): Promise<void> {
+  await Promise.all([...sendGateTails.values()]);
+}
+
+let currentConfig: (() => SendGateConfig) | undefined;
+
+/** 应用启动时绑定；排队结束后读取当前保护设置。 */
+export function setSendGateConfigProvider(provider: () => SendGateConfig) {
+  currentConfig = provider;
+}
+
 export async function withSendGate<T>(
   input: RateLimitKeyInput,
   config: SendGateConfig,
@@ -199,6 +214,7 @@ export async function withSendGate<T>(
   sendGateTails.set(queueKey, current);
   await previous;
   try {
+    config = currentConfig?.() ?? config;
     const gate = assertSendGate(input, config);
     if (!gate.ok) {
       return { ok: false, gate };

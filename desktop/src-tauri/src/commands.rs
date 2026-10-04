@@ -228,7 +228,7 @@ pub fn secure_save_secrets(app: AppHandle, secrets: SecureSecrets) -> Result<(),
     {
         let raw = serde_json::to_vec(&secrets).map_err(|e| e.to_string())?;
         let encrypted = protect_secrets(&raw)?;
-        std::fs::write(secure_secrets_path(&app)?, encrypted).map_err(|e| e.to_string())
+        crate::atomic_file::write_atomic(&secure_secrets_path(&app)?, &encrypted).map_err(|e| e.to_string())
     }
     #[cfg(not(windows))]
     {
@@ -242,8 +242,11 @@ pub fn secure_load_secrets(app: AppHandle) -> Result<Option<SecureSecrets>, Stri
     #[cfg(windows)]
     {
         let path = secure_secrets_path(&app)?;
-        if !path.exists() { return Ok(None); }
-        let encrypted = std::fs::read(path).map_err(|e| e.to_string())?;
+        let encrypted = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        };
         let raw = unprotect_secrets(&encrypted)?;
         serde_json::from_slice(&raw).map(Some).map_err(|e| e.to_string())
     }
@@ -769,9 +772,20 @@ pub fn db_clear_remote_messages(
     state: State<'_, DbState>,
     remote_jid: String,
     account_id: Option<String>,
+    before: Option<String>,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::clear_remote_messages(&conn, &remote_jid, account_id.as_deref())
+    db::clear_remote_messages_before(&conn, &remote_jid, account_id.as_deref(), before.as_deref())
+}
+
+#[tauri::command(async)]
+pub fn db_update_message_acks(
+    state: State<'_, DbState>,
+    items: Vec<serde_json::Value>,
+    account_id: String,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::update_message_acks(&conn, &items, &account_id)
 }
 
 #[tauri::command(async)]

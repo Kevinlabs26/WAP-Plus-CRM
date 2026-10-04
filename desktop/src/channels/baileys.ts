@@ -99,6 +99,17 @@ export const baileysChannel: MessageChannel = {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       const lower = `${error instanceof Error ? error.name : ""} ${msg}`.toLowerCase();
+      if (typeof error === "object" && error !== null && "deliveryUncertain" in error
+        && error.deliveryUncertain === true) {
+        return {
+          ok: false,
+          delivered: false,
+          channel: "baileys",
+          status: "failed",
+          message: `发送结果未知，请先在 WhatsApp 核对后再手动重试（${msg}）`,
+          error: "baileys_delivery_unknown",
+        };
+      }
       if (
         msg.includes("尚未连接") ||
         msg.includes("未连接") ||

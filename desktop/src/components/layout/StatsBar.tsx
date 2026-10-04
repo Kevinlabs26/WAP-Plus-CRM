@@ -48,7 +48,7 @@ export function StatsBar() {
     },
     {
       id: "unread",
-      labelKey: "stats.pendingReply",
+      labelKey: "stats.unreadMessages",
       value: stats.pendingReplies,
       icon: Clock,
       active: activeNav === "chats" && chatListFilter === "unread",
@@ -60,6 +60,16 @@ export function StatsBar() {
             ? "all"
             : "unread"
         ),
+    },
+    {
+      id: "awaiting",
+      labelKey: "today.awaitingReply",
+      value: stats.awaitingReplyChats || 0,
+      icon: Clock,
+      active: activeNav === "chats" && chatListFilter === "awaiting",
+      alert: stats.awaitingReplyChats > 0,
+      titleKey: "reply.awaitingHint",
+      onClick: () => goToChats(activeNav === "chats" && chatListFilter === "awaiting" ? "all" : "awaiting"),
     },
     {
       id: "fu",

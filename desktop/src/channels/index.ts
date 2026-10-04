@@ -32,6 +32,8 @@ export type { SendGateConfig } from "./sendGate";
 
 export interface ChannelRuntimeConfig {
   channelId: ChannelId | string;
+  /** 等待发送门闸后复核可撤销的自动任务。 */
+  canSend?: () => boolean;
   rateLimitEnabled?: boolean;
   rateLimits?: Partial<SendRateLimits>;
   blockSendWhenOverheated?: boolean;
@@ -100,7 +102,9 @@ export async function dispatchSendText(
       deviceId: input.deviceId,
     },
     gateCfg,
-    () => channel.sendText(input)
+    () => config.canSend && !config.canSend()
+      ? Promise.resolve({ ok: false, delivered: false, channel: channelId, status: "failed" as const, error: "automation_cancelled", message: "自动回复已停止或上下文已更新，请人工确认" })
+      : channel.sendText(input)
   );
 
   if (!outcome.ok) {

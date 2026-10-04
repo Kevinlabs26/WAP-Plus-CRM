@@ -41,7 +41,8 @@ export function applyChatsDelete(
   messages: Message[],
   contacts: Contact[],
   jids: string[],
-  deviceId?: string
+  deviceId?: string,
+  deletedBefore?: string
 ): {
   chats: ChatPreview[];
   messages: Message[];
@@ -63,6 +64,7 @@ export function applyChatsDelete(
     if (deviceId && chat.accountId && chat.accountId !== deviceId) {
       continue;
     }
+    if (deletedBefore && Date.parse(chat.updatedAt || "") > Date.parse(deletedBefore)) continue;
     const contact = contactById.get(chat.contactId);
     for (const jid of list) {
       if (chatMatchesJid(chat, contact, jid)) {

@@ -5,6 +5,7 @@ import { resolveSendTarget } from "@/lib/utils";
 import { generateSuggestions, hasRealAiKey } from "@/lib/aiSuggest";
 import { sendTextMessage } from "@/components/chat/sendTextMessage";
 import {
+  canSendAutoReply,
   evaluateAutoReplyDecision,
   getAutoReplyOutputBlockReason,
   resolveAutoReplyPolicy,
@@ -43,6 +44,8 @@ const lastReplyAt = new Map<string, number>();
 const lastTakeoverLogByChat = new Map<string, string>();
 const lastSkipLogByChat = new Map<string, string>();
 const inFlightChats = new Set<string>();
+const pendingByChat = new Map<string, Message>();
+const cooldownTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function logAutoDecision(
   contactId: string,
@@ -65,10 +68,31 @@ function logAutoSkipOnce(
 }
 
 export async function autoReplyInbound(m: Message): Promise<void> {
-  if (!m.chatId || inFlightChats.has(m.chatId)) return;
+  if (!m.chatId) return;
+  const pending = pendingByChat.get(m.chatId);
+  if (!pending || m.sentAt >= pending.sentAt) pendingByChat.set(m.chatId, m);
+  if (inFlightChats.has(m.chatId)) return;
+  const timer = cooldownTimers.get(m.chatId);
+  if (timer) clearTimeout(timer);
+  cooldownTimers.delete(m.chatId);
   inFlightChats.add(m.chatId);
   try {
-    await autoReplyInboundOnce(m);
+    while (pendingByChat.has(m.chatId)) {
+      const next = pendingByChat.get(m.chatId)!;
+      pendingByChat.delete(m.chatId);
+      const settings = useAppStore.getState().settings;
+      const wait = (lastReplyAt.get(m.chatId) || 0) +
+        Math.max(5000, Number(settings.aiAutoReplyIntervalMs) || 30000) - Date.now();
+      if (settings.aiReplyMode === "auto" && wait > 0) {
+        pendingByChat.set(m.chatId, next);
+        cooldownTimers.set(m.chatId, setTimeout(() => { void autoReplyInbound(next); }, wait));
+        break;
+      }
+      try { await autoReplyInboundOnce(next); }
+      catch (error) {
+        if (next.contactId) logAutoDecision(next.contactId, "自动回复：未发送", error instanceof Error ? error.message : String(error));
+      }
+    }
   } finally {
     inFlightChats.delete(m.chatId);
   }
@@ -210,23 +234,45 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
     logAutoDecision(contact.id, "自动回复：未发送", "AI 没有返回有效内容");
     return;
   }
+  // 生成期间用户可能接管、关闭自动回复，或收到更新的消息。
+  const fresh = useAppStore.getState();
+  const freshThread = fresh.messages.filter((x) => x.chatId === m.chatId)
+    .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
+  const latestInbound = freshThread.filter((x) => x.direction === "in").at(-1);
+  const freshContact = fresh.contacts.find((x) => x.id === contact.id);
+  const freshChat = fresh.chats.find((x) => x.id === chat.id);
+  const originalIds = new Set(state.messages.filter((x) => x.chatId === m.chatId).map((x) => x.id));
+  if (fresh.settings.aiReplyMode !== "auto" ||
+      fresh.settings.aiAutoReplyManualChatIds.includes(m.chatId) ||
+      pendingByChat.has(m.chatId) || latestInbound?.id !== m.id ||
+      !freshContact || !freshChat || freshChat.localOnly ||
+      freshThread.some((x) => x.direction === "out" && !x.systemKind && !originalIds.has(x.id)) ||
+      fresh.settings.sendChannel !== settings.sendChannel ||
+      fresh.settings.aiProvider !== settings.aiProvider ||
+      fresh.settings.customAiBaseUrl !== settings.customAiBaseUrl ||
+      fresh.settings.ollamaUrl !== settings.ollamaUrl ||
+      (freshChat.accountId || freshContact.accountId || fresh.settings.liveBaileysAccountId || fresh.settings.activeAccountId) !== accountId) return;
+  const freshPolicy = resolveAutoReplyPolicy(fresh.settings.aiAutoReplyPolicy,
+    fresh.settings.aiAutoReplyPolicyByAccountId, accountId);
+  if (!evaluateAutoReplyDecision(freshThread, m, Date.now(), freshPolicy).allow) return;
   lastSkipLogByChat.delete(m.chatId);
   const outputBlockReason = getAutoReplyOutputBlockReason(reply, {
-    allowPricing: policy.allowPricing,
+    allowPricing: freshPolicy.allowPricing,
   });
   if (outputBlockReason) {
     logAutoDecision(contact.id, "自动回复：输出转人工", outputBlockReason);
     return;
   }
-  lastReplyAt.set(m.chatId, now);
+  lastReplyAt.set(m.chatId, Date.now());
 
   const queued = await sendAutoReplyText({
     text: reply,
-    contact,
-    chat,
+    contact: freshContact,
+    chat: freshChat,
     accountId,
     channelId,
-    phoneId: chat.phoneId,
+    phoneId: freshChat.phoneId,
+    inboundId: m.id,
   });
   logAutoDecision(
     contact.id,
@@ -238,6 +284,7 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
 /** 自动回复发送：入队 + 走标准发送管线（保留限速/过热拦截），无成功打扰 */
 export async function sendAutoReplyText(opts: {
   text: string;
+  inboundId?: string;
   contact: Contact;
   chat: ChatPreview | undefined;
   accountId?: string;
@@ -245,6 +292,8 @@ export async function sendAutoReplyText(opts: {
   phoneId?: string;
 }): Promise<boolean> {
   const state = useAppStore.getState();
+  if (state.settings.aiReplyMode !== "auto" || !opts.chat ||
+      state.settings.aiAutoReplyManualChatIds.includes(opts.chat.id)) return false;
   const isBaileys = opts.channelId === "baileys";
   const recipient = resolveSendTarget({
     phone: opts.contact.phone,
@@ -275,6 +324,15 @@ export async function sendAutoReplyText(opts: {
 
   await sendTextMessage({
     msgId,
+    canSend: () => {
+      const latest = useAppStore.getState();
+      const message = latest.messages.find((item) => item.id === msgId);
+      return !!message && message.deliveryStatus === "pending" &&
+        latest.settings.sendChannel === opts.channelId &&
+        latest.chats.some((item) => item.id === message.chatId && !item.localOnly) &&
+        latest.contacts.some((item) => item.id === message.contactId) &&
+        canSendAutoReply(latest.settings, latest.messages, message, opts.inboundId);
+    },
     text: opts.text,
     recipient,
     contact: opts.contact,
@@ -297,5 +355,6 @@ export async function sendAutoReplyText(opts: {
       if (tone === "error") useAppStore.getState().pushToast(message, "error");
     },
   });
-  return true;
+  const status = useAppStore.getState().messages.find((item) => item.id === msgId)?.deliveryStatus;
+  return !!status && status !== "failed";
 }

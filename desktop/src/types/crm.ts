@@ -114,6 +114,10 @@ export interface ChatPreview {
   lastMessage: string;
   /** 最后一条真实消息方向，用于判断是否仍等待我回复 */
   lastMessageDirection?: "in" | "out";
+  /** Local handling acknowledgement; a newer customer message reopens the task. */
+  replyHandledAt?: string;
+  /** Latest unanswered inbound timestamp; empty means a successful reply was sent. */
+  replyPendingSince?: string;
   /** 完整历史中是否有成功的我方消息；按主动联系设置决定是否排除。 */
   hasOutgoingHistory?: boolean;
   unread: number;
@@ -201,6 +205,8 @@ export interface Message {
   /** 出站投递；缺省 = 已发送（兼容旧数据） */
   deliveryStatus?: MessageDeliveryStatus;
   lastError?: string;
+  /** 请求已开始但未确认是否送达；重发需要人工核对。 */
+  deliveryUncertain?: boolean;
   retryCount?: number;
   /** ISO：队列下次可尝试时间 */
   nextAttemptAt?: string;
@@ -292,6 +298,8 @@ export interface FollowUp {
   dueAt: string;
   note?: string;
   done: boolean;
+  /** 已取消的任务保留在历史中；同时 done=true，兼容既有待办判断。 */
+  cancelled?: boolean;
 }
 
 export type ScheduledMessageStatus =
@@ -347,6 +355,8 @@ export interface AiSuggestion {
 export interface AccountDashStats {
   accountId: string;
   chatsToday: number;
+  /** 等待回复或手动处理的会话数，与未读状态独立 */
+  awaitingReplyChats: number;
   /** 有未读消息的会话数 */
   pendingReplyChats: number;
   /** 未读消息条数 */
@@ -368,6 +378,7 @@ export interface StatsTrendDay {
 }
 
 export interface DashboardStats {
+  awaitingReplyChats: number;
   chatsToday: number;
   /** 有未读消息的会话数 */
   pendingReplyChats: number;

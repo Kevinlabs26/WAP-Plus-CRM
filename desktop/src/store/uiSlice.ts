@@ -12,6 +12,7 @@ export function createUiSlice({ set, get }: SliceContext): Pick<
   | "setUiReady"
   | "setSelectedContact"
   | "setSelectedChat"
+  | "markReplyHandled"
   | "setDraftReply"
   | "setChatDraft"
   | "applyAiSuggestion"
@@ -35,6 +36,12 @@ export function createUiSlice({ set, get }: SliceContext): Pick<
   | "setBridgeRuntime"
 > {
   return {
+    markReplyHandled: (chatId) => {
+      const replyHandledAt = new Date().toISOString();
+      set((state) => ({ chats: state.chats.map((chat) => chat.id === chatId ? { ...chat, replyHandledAt } : chat) }));
+      scheduleStatsRecompute(get);
+      persist(get);
+    },
     setSelectedPhone: (id) => {
       if (get().selectedPhoneId === id) return;
       set({ selectedPhoneId: id });

@@ -23,7 +23,8 @@ export default defineConfig({
       : undefined,
     watch: { ignored: ["**/src-tauri/**"] },
   },
-  envPrefix: ["VITE_", "TAURI_"],
+  // Tauri signing secrets must never enter import.meta.env.
+  envPrefix: ["VITE_"],
   build: {
     target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome105" : "safari13",
     minify: !process.env.TAURI_ENV_DEBUG ? "esbuild" : false,

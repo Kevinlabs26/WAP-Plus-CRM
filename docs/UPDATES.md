@@ -15,16 +15,18 @@ WAP Plus CRM 使用 Tauri updater，通过 GitHub Release 分发 Windows 更新�
 
 ## 发布更新
 
-1. 修改 `desktop/src-tauri/tauri.conf.json` 的 `version`，例如从 `0.1.0` 改为 `0.1.1`。
+1. 同步递增根目录与 `desktop/package.json`、`desktop/src-tauri/tauri.conf.json`、`desktop/src-tauri/Cargo.toml` 的版本，并更新 `package-lock.json`、`desktop/src-tauri/Cargo.lock`。当前待发布版本为 `0.1.33`，变更见 [CHANGELOG.md](../CHANGELOG.md)。
 2. 提交并推送版本标签：
 
    ```bash
-   git tag v0.1.1
-   git push origin v0.1.1
+   git tag v0.1.33
+   git push origin v0.1.33
    ```
 
-3. GitHub Actions 构建安装包、签名文件和 `latest.json`，并创建一个 Draft Release。
-4. 检查产物后点击 **Publish release**。只有公开发布后，客户端才能从 GitHub 的 `latest.json` 检查到它。
+3. GitHub Actions 先运行前端、sidecar、Bridge 检查和 Rust 测试，再构建签名安装包及 `latest.json`，创建 Draft Release。
+4. 工作流运行 Windows 安装包冒烟测试，通过后自动公开发布；检查或安装失败时不会执行发布步骤。冒烟测试严格匹配当前版本，并要求无运行中 CRM 进程、无已有 CRM 数据的干净 Windows 用户环境；启动后同时检查进程存活和数据库初始化，避免缺失运行库导致误判。只有公开发布后，客户端才能检查到更新。
+
+发布前还应在有旧数据的 Windows 电脑上验收：升级并重启后账号仍可连接；旧密钥迁移后可用；备份恢复期间的新消息保留；自动更新能验证签名并完成重启。CI 安装冒烟测试不能替代这些真实数据验收。
 
 本地构建需要先设置签名私钥环境变量：
 

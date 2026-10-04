@@ -28,6 +28,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.wapplus.bridge.service.BridgeForegroundService
+import com.wapplus.bridge.BridgeApp
+import com.wapplus.bridge.net.BoundedInput
 import com.wapplus.bridge.a11y.WaAssistService
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -92,11 +94,12 @@ class MainActivity : ComponentActivity() {
     private fun consumeSharedMedia(intent: Intent?) {
         if (intent?.action != Intent.ACTION_SEND) return
         val uri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM) ?: return
+        if (uri.scheme != "content") return
         val mime = intent.type.orEmpty().ifBlank { contentResolver.getType(uri).orEmpty() }
         lifecycleScope.launch(Dispatchers.IO) {
             val bytes = runCatching {
                 contentResolver.openInputStream(uri)?.use { input ->
-                    input.readBytes().takeIf { it.size <= 8 * 1024 * 1024 }
+                    BoundedInput.readBytes(input, 8 * 1024 * 1024)
                 }
             }.getOrNull() ?: return@launch
             val dataUrl = "data:${mime.ifBlank { "audio/ogg" }};base64," +

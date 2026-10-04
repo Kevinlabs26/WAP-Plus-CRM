@@ -20,6 +20,7 @@ type Deps = {
   channelId: ChannelId;
   selectedPhoneId: string | null;
   chatAccountId: string | null;
+  chatId: string | null | undefined;
   openAndroidMediaShare: (
     file: File,
     dataUrl: string,
@@ -82,6 +83,7 @@ export async function sendAudioMessage(
     // UI for short files instead of turning them into voice bars.
     const caption = captionOverride?.trim() || "";
     msgId = deps.enqueueOutgoingMessage({
+      chatId: deps.chatId,
       body: caption || `[音频] ${file.name}`,
       phoneE164: recipient,
       contactId: contact.id,
@@ -143,6 +145,7 @@ export async function sendAudioMessage(
       deps.updateMessageDelivery(msgId, {
         deliveryStatus: "failed",
         lastError: error instanceof Error ? error.message : translateCurrent("runtime.voiceSendFailed"),
+        deliveryUncertain: !!error && typeof error === "object" && "deliveryUncertain" in error && error.deliveryUncertain === true,
       });
     }
     deps.pushToast(error instanceof Error ? error.message : translateCurrent("runtime.voiceSendFailed"), "error");

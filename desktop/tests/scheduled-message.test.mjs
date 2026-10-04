@@ -54,3 +54,9 @@ test("in-flight sends cannot be reported as successfully cancelled", () => {
   assert.equal(get().settings.scheduledMessages[0].status, "queued");
   assert.equal(get().messages[0].deliveryStatus, "pending");
 });
+
+test("invalid restored schedule dates never become pending work", () => {
+  const tasks = normalizeLoadedSettings({ scheduledMessages: [{ ...draft, id: "invalid", dueAt: "not-a-date", status: "pending" }] }).scheduledMessages;
+  assert.equal(tasks[0].status, "failed");
+  assert.match(tasks[0].error, /无效/);
+});

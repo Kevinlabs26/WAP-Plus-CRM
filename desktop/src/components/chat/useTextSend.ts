@@ -11,6 +11,7 @@ import { editMessageAction } from "./editMessageAction";
 import { queueTextMessage } from "./queueTextMessage";
 import { sendTextMessage } from "./sendTextMessage";
 import { translateCurrent } from "@/i18n";
+import { clearSentChatDraft } from "@/lib/chatDrafts";
 
 export type ComposerReplyTo = {
   id: string;
@@ -61,6 +62,8 @@ export function useTextSend(opts: UseTextSendOptions) {
   // React 的 sending 状态更新是异步的；Enter + 点击发送按钮在同一帧内
   // 可能同时进入，导致一次输入被 enqueue 两次。
   const sendLockRef = useRef(false);
+  const latestOptsRef = useRef(opts);
+  latestOptsRef.current = opts;
   const resolveMessageKey = (m: Message) =>
     resolveMessageKeyFrom(
       m,
@@ -73,6 +76,10 @@ export function useTextSend(opts: UseTextSendOptions) {
     if (!text || opts.sending || sendLockRef.current) return;
     if (!opts.guardBlockedSend()) return;
     sendLockRef.current = true;
+    const sameContext = () => latestOptsRef.current.selectedChatId === opts.selectedChatId
+      && latestOptsRef.current.chatAccountId === opts.chatAccountId;
+    const clearDraft = () => clearSentChatDraft(useAppStore.getState(), opts.selectedChatId, text,
+      latestOptsRef.current.selectedChatId === opts.selectedChatId ? latestOptsRef.current.getDraft?.() : undefined);
 
     try {
       // 编辑已发消息
@@ -89,9 +96,9 @@ export function useTextSend(opts: UseTextSendOptions) {
         text,
         setSending: opts.setSending,
         updateMessageDelivery: opts.updateMessageDelivery,
-        setDraftReply: opts.setDraftReply,
-        setEditingId: opts.setEditingId,
-        setReplyTo: opts.setReplyTo,
+        setDraftReply: () => clearDraft(),
+        setEditingId: (id) => { if (sameContext() && latestOptsRef.current.editingId === opts.editingId) opts.setEditingId(id); },
+        setReplyTo: (reply) => { if (sameContext() && latestOptsRef.current.replyTo === opts.replyTo) opts.setReplyTo(reply); },
         pushToast: opts.pushToast,
       });
         return;
@@ -175,6 +182,8 @@ export function useTextSend(opts: UseTextSendOptions) {
         });
         opts.setReplyTo(null);
       }
+      // 离线入队已交给发件队列，保持既有清理行为；在线发送仅在成功后清理。
+      if (queuedId) clearDraft();
         return;
       }
 
@@ -235,10 +244,10 @@ export function useTextSend(opts: UseTextSendOptions) {
       mentionedJid,
       updateMessageDelivery: opts.updateMessageDelivery,
       setBaileysLoginOpen: opts.setBaileysLoginOpen,
-      setReplyTo: opts.setReplyTo,
-      clearDraft: () => opts.setDraftReply(""),
+      setReplyTo: (reply) => { if (sameContext() && latestOptsRef.current.replyTo === opts.replyTo) opts.setReplyTo(reply); },
+      clearDraft,
       clearMentions: () => {
-        opts.mentionTrackerRef.current = [];
+        if (sameContext()) opts.mentionTrackerRef.current = [];
       },
       setSending: opts.setSending,
       pushToast: opts.pushToast,

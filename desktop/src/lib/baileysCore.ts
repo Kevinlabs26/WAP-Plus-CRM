@@ -108,6 +108,7 @@ export async function request<T>(
   let lastError: unknown;
   const id = resolveBaileysAccountId(accountId);
   const method = (init?.method || "GET").toUpperCase();
+  const isSendRequest = method === "POST" && /^\/(?:send|catalog\/send)(?:[/?-]|$)/.test(path);
   const signal =
     init?.signal ||
     AbortSignal.timeout(method === "GET" || method === "HEAD" ? 15_000 : 30_000);
@@ -115,8 +116,11 @@ export async function request<T>(
   // 读取可重试；POST/PUT/DELETE 只执行一次，由上层明确呈现“结果未知”。
   const maxAttempts = method === "GET" || method === "HEAD" ? 8 : 1;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let sendStarted = false;
     try {
       const runtime = await getRuntime(id);
+      signal.throwIfAborted();
+      sendStarted = isSendRequest;
       const response = await fetch(`${runtime.baseUrl}${path}`, {
         ...init,
         signal,
@@ -127,7 +131,10 @@ export async function request<T>(
           ...init?.headers,
         },
       });
-      const data = await response.json().catch(() => ({}));
+      const data = await response.json().catch((error) => {
+        if (isSendRequest && response.ok) throw error;
+        return {};
+      });
       if (!response.ok) {
         const error = new Error(
           (data as { error?: string }).error ||
@@ -136,10 +143,19 @@ export async function request<T>(
         (error as Error & { status?: number }).status = response.status;
         throw error;
       }
+      // 两个发送端点的成功契约均为 { ok: true, id?, jid? }。
+      if (isSendRequest && (!data || typeof data !== "object" || data.ok !== true)) {
+        throw new Error("Baileys 发送响应未确认成功");
+      }
       return data as T;
     } catch (error) {
-      lastError = error;
       const status = (error as { status?: number })?.status;
+      if (sendStarted && !(status && status >= 400 && status < 500)) {
+        error = Object.assign(error instanceof Error ? error : new Error(String(error)), {
+          deliveryUncertain: true,
+        });
+      }
+      lastError = error;
       // 4xx 是接口/请求本身的问题，重试只会放大 UI 卡顿；网络和 5xx 才重试。
       if (status && status >= 400 && status < 500) break;
       const errorName = (error as { name?: string })?.name || "";
@@ -166,9 +182,12 @@ export async function request<T>(
   }
   const msg = lastError instanceof Error ? lastError.message : String(lastError);
   if (msg === "Failed to fetch" || msg.includes("fetch")) {
-    throw new Error(
-      "无法连接 Baileys 后台（Failed to fetch）。请确认用 npm run tauri dev 启动，并查看本机是否拦截 127.0.0.1。"
+    const error = new Error(
+      "无法连接 Baileys 后台（Failed to fetch）。请确认用 npm run tauri dev 启动，并查看本机是否拦截 127.0.0.1。",
+      { cause: lastError }
     );
+    if (lastError && typeof lastError === "object") Object.assign(error, lastError);
+    throw error;
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }

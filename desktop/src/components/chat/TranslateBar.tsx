@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import {
   TRANSLATE_LANGS,
   langShortLabel,
+  type TargetLanguage,
 } from "@/lib/translateDraft";
 import { useI18n } from "@/i18n";
 
@@ -13,9 +14,9 @@ type Props = {
   translateOriginal: string | null;
   translating: boolean;
   translateLang: string;
-  /** 该语言是否由系统自动检测（无客户显式选择）：显示小提示，点选即锁定到客户） */
-  detected?: boolean;
+  source: TargetLanguage["source"];
   onTranslateLangChange: (lang: string) => void;
+  onRestoreAuto: () => void;
   onTranslate: () => void;
   onRestore: () => void;
   recording: boolean;
@@ -31,8 +32,9 @@ export function TranslateBar({
   translateOriginal,
   translating,
   translateLang,
-  detected,
+  source,
   onTranslateLangChange,
+  onRestoreAuto,
   onTranslate,
   onRestore,
   recording,
@@ -40,6 +42,13 @@ export function TranslateBar({
 }: Props) {
   const { t } = useI18n();
   if (!visible) return null;
+  const sourceLabels = {
+    preferred: "translation.sourcePreferred",
+    country: "translation.sourceCountry",
+    message: "translation.sourceMessage",
+    default: "translation.sourceDefault",
+  } as const;
+  const sourceLabel = t(sourceLabels[source]);
 
   return (
     <div className="order-first flex flex-wrap items-center gap-2 border-b border-zinc-800/90 bg-zinc-950/40 px-2.5 py-1.5">
@@ -49,11 +58,8 @@ export function TranslateBar({
           disabled={translating}
           onChange={(e) => onTranslateLangChange(e.target.value)}
           className="h-7 rounded-lg border border-zinc-800 bg-zinc-900 px-1.5 text-[11px] text-zinc-300 outline-none"
-          title={
-            detected
-              ? `自动检测：${langShortLabel(translateLang)} · 点选可锁定到当前客户`
-              : t("tooltip.outputLanguage")
-          }
+          title={`${t("tooltip.outputLanguage")} · ${sourceLabel}`}
+          aria-label={t("tooltip.outputLanguage")}
         >
           {TRANSLATE_LANGS.map((l) => (
             <option key={l.code} value={l.code}>
@@ -61,10 +67,16 @@ export function TranslateBar({
             </option>
           ))}
         </select>
-        {detected && (
-        <span className="text-2xs text-amber-300/80" title={t("tooltip.translationHint")}>
-            自动
-          </span>
+        <span className="text-2xs text-zinc-300">{sourceLabel}</span>
+        {source === "preferred" && (
+          <button
+            type="button"
+            disabled={translating}
+            onClick={onRestoreAuto}
+            className="inline-flex h-7 items-center rounded-lg px-2 text-[11px] text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {t("translation.restoreAuto")}
+          </button>
         )}
         <button
           type="button"
@@ -84,8 +96,8 @@ export function TranslateBar({
             <Languages className="h-3 w-3" />
           )}
           {translating
-            ? "翻译中…"
-            : `译成 ${langShortLabel(translateLang)}`}
+            ? t("translation.busy")
+            : t("translation.to", { language: langShortLabel(translateLang) })}
         </button>
         {translateOriginal != null && (
           <button
@@ -96,7 +108,7 @@ export function TranslateBar({
             title={t("tooltip.restoreOriginal")}
           >
             <Undo2 className="h-3 w-3" />
-            还原
+            {t("translation.restore")}
           </button>
         )}
       </div>
@@ -106,7 +118,7 @@ export function TranslateBar({
         </span>
       ) : (
         <span className="shrink-0 text-2xs text-zinc-600">
-          ⌘⇧T 翻译 · Enter 发送
+          {t("translation.shortcuts")}
         </span>
       )}
     </div>

@@ -105,6 +105,7 @@ export async function finishVoiceRecording(
       deps.updateMessageDelivery(msgId, {
         deliveryStatus: "failed",
         lastError: message,
+        deliveryUncertain: !!e && typeof e === "object" && "deliveryUncertain" in e && e.deliveryUncertain === true,
       });
     }
     deps.pushToast(message, "error");

@@ -291,6 +291,8 @@ export function SidebarListHeader({
             {listTab === "chats"
               ? listFilter === "unread"
                 ? t("sidebar.unreadChats")
+                : listFilter === "awaiting"
+                  ? t("today.awaitingReply")
                 : listFilter === "today"
                   ? t("sidebar.todayChats")
                   : listFilter === "leads"

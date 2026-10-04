@@ -13,7 +13,7 @@ export function ToastHost() {
 
   return (
     <>
-      <div className="pointer-events-none fixed left-1/2 top-4 z-[200] flex w-[min(22rem,calc(100vw-2.5rem))] -translate-x-1/2 flex-col items-center gap-2">
+      <div className="pointer-events-none fixed bottom-5 left-5 z-[200] flex w-[min(22rem,calc(100vw-2.5rem))] flex-col items-start gap-2">
         {toasts.filter((t) => !t.title).map((t) => (
           <div
             key={t.id}

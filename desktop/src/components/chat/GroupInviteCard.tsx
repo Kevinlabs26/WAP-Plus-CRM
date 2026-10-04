@@ -109,7 +109,7 @@ export function GroupInviteCard({
         if (!opened) {
           try {
             const synced = await baileysSync(owner, { hydrateGroups: true });
-            store.ingestBridgeEvents([
+            await store.ingestBridgeEvents([
               {
                 type: "contacts.sync",
                 deviceId: owner,
@@ -125,6 +125,7 @@ export function GroupInviteCard({
                   accountId: owner,
                 },
               },
+            ...(synced.deletionEvents || []),
             ] as unknown as Parameters<typeof store.ingestBridgeEvents>[0]);
             const contactId = useAppStore
               .getState()

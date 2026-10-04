@@ -24,6 +24,7 @@ type Handlers = {
   mutedUntilByChatId: Record<string, number | null | undefined>;
   /** 总开关 */
   enabled: boolean;
+  privacy?: "full" | "name" | "hidden";
   /** 群组消息是否单独弹系统通知 */
   groupMessagesEnabled: boolean;
   openChat: (opts: {
@@ -84,14 +85,14 @@ export function notifyInboundMessages(
 
   for (const grouped of pending.values()) {
     const it = grouped[grouped.length - 1]!;
-    const baseTitle = it.isGroup
+    const baseTitle = handlers.privacy === "hidden" ? "新消息" : it.isGroup
       ? it.contactName || "群聊"
       : it.contactName || "新消息";
     const title =
       grouped.length > 1 ? `${baseTitle} · ${grouped.length} 条新消息` : baseTitle;
-    const preview = previewBody(it.body);
+    const preview = handlers.privacy && handlers.privacy !== "full" ? "收到新消息" : previewBody(it.body);
     const body =
-      it.isGroup && it.senderName ? `${it.senderName}：${preview}` : preview;
+      (!handlers.privacy || handlers.privacy === "full") && it.isGroup && it.senderName ? `${it.senderName}：${preview}` : preview;
     const onClick = () => {
       handlers.openChat({
         chatId: it.chatId,
@@ -104,10 +105,10 @@ export function notifyInboundMessages(
     void showDesktopNotify({
       title,
       body,
-      tag: `msg-${it.chatId}`,
+      tag: handlers.privacy === "hidden" ? "crm-new-message" : `msg-${it.chatId}`,
       onClick,
-      avatarUrl: it.avatarUrl,
-      unreadCount: Math.max(it.unreadCount || 0, grouped.length),
+      avatarUrl: handlers.privacy === "hidden" ? undefined : it.avatarUrl,
+      unreadCount: handlers.privacy === "hidden" ? undefined : Math.max(it.unreadCount || 0, grouped.length),
     });
   }
 }

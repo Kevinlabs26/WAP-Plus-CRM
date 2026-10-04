@@ -31,14 +31,16 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     buildFeatures {
         compose = true
     }
 
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
 }
 
 dependencies {
@@ -55,4 +57,24 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+}
+
+dependencyLocking {
+    lockAllConfigurations()
+}
+
+// AGP's device-test tools have their own classpaths, separate from buildscript and APK dependencies.
+configurations.matching { it.name.startsWith("_internal-unified-test-platform-") }.configureEach {
+    resolutionStrategy.eachDependency {
+        val safeVersion = when {
+            requested.group == "io.netty" && requested.version?.startsWith("4.1.") == true -> "4.1.137.Final"
+            requested.group == "com.google.protobuf" -> "3.25.5"
+            requested.group == "commons-io" -> "2.15.1"
+            else -> null
+        }
+        if (safeVersion != null) {
+            useVersion(safeVersion)
+            because("Fix advisories in AGP device-test tools")
+        }
+    }
 }

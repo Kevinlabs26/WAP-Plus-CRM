@@ -190,6 +190,8 @@ export function ChatPanel() {
   const chats = useAppStore.getState().chats;
   const contacts = useAppStore.getState().contacts;
   const setDraftReply = useAppStore((s) => s.setDraftReply);
+  const composerDraftReaderRef = useRef<(() => string) | null>(null);
+  const readComposerDraft = () => composerDraftReaderRef.current?.() ?? useAppStore.getState().draftReply;
   const enqueueOutgoingMessage = useAppStore((s) => s.enqueueOutgoingMessage);
   const updateMessageDelivery = useAppStore((s) => s.updateMessageDelivery);
   const patchMessage = useAppStore((s) => s.patchMessage);
@@ -1179,6 +1181,7 @@ export function ChatPanel() {
     chatConnected,
     chatAccountId,
     setDraftReply,
+    getDraft: readComposerDraft,
     replyTo,
     setReplyTo,
     pushToast,
@@ -1210,10 +1213,11 @@ export function ChatPanel() {
     setBaileysLoginOpen,
   });
 
+  const retryMessagesRef = useRef(chatMessages);
+  retryMessagesRef.current = chatMessages;
   const retryMessage = async (id: string) => {
-    const message =
-      chatMessages.find((item) => item.id === id) ||
-      useAppStore.getState().messages.find((item) => item.id === id);
+    const liveMessage = useAppStore.getState().messages.find((item) => item.id === id);
+    const message = liveMessage || chatMessages.find((item) => item.id === id);
     return retryMessageAction({
       id,
       message,
@@ -1223,6 +1227,9 @@ export function ChatPanel() {
       setMediaBusyId,
       updateMessageDelivery,
       pushToast,
+      requestConfirm,
+      readMessage: (messageId) => useAppStore.getState().messages.find((item) => item.id === messageId)
+        || (!liveMessage ? retryMessagesRef.current.find((item) => item.id === messageId) : undefined),
     });
   };
 
@@ -1404,6 +1411,8 @@ export function ChatPanel() {
     chatConnected,
     setBaileysLoginOpen,
     setDraftReply,
+    getDraft: readComposerDraft,
+    chatId: selectedChatId,
     enqueueOutgoingMessage,
     patchMessage,
     updateMessageDelivery,
@@ -1804,6 +1813,8 @@ export function ChatPanel() {
           </form>
         ) : <Composer
           resetKey={selectedChatId}
+          sendAccountId={chatAccountId}
+          draftReaderRef={composerDraftReaderRef}
           setDraftReply={setDraftReply}
           sending={sending}
           isBaileys={isBaileys}

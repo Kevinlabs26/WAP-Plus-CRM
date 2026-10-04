@@ -271,6 +271,7 @@ export interface GroupJoinRequestPayload {
 }
 
 export interface MessagesDeletePayload {
+  deletedBefore?: string;
   items?: {
     id: string;
     remoteJid?: string;
@@ -283,6 +284,7 @@ export interface MessagesDeletePayload {
 }
 
 export interface ChatsDeletePayload {
+  deletedBefore?: string;
   jids: string[];
   source?: string;
 }

@@ -20,8 +20,9 @@ async function sendBroadcastMedia(opts: {
   campaign: BroadcastCampaign;
   item: BroadcastItem;
   channelId: string;
+  chatId: string;
 }): Promise<string | null> {
-  const { state, campaign, item, channelId } = opts;
+  const { state, campaign, item, channelId, chatId } = opts;
   const media = campaign.media || [];
   if (!media.length) return "战役没有媒体";
   const isBaileys = normalizeChannelId(channelId) === "baileys";
@@ -73,6 +74,7 @@ async function sendBroadcastMedia(opts: {
     getDraftReply: () => "",
     setDraftReply: () => {},
     enqueueOutgoingMessage: state.enqueueOutgoingMessage,
+    chatId,
     patchMessage: state.patchMessage,
     updateMessageDelivery: state.updateMessageDelivery,
     channelId: normalizeChannelId(channelId),
@@ -215,6 +217,7 @@ export function CampaignRunner() {
             campaign,
             item,
             channelId,
+            chatId,
           });
           result = mediaErr === null
             ? { ok: true, delivered: true, status: "sent", message: "已发送" }

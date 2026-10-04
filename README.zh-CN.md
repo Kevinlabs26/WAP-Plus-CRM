@@ -35,6 +35,17 @@ WAP Plus CRM 用于在电脑上管理客户、会话、AI 辅助和销售跟进�
 - 不要提交 `reasonix.toml`、`.reasonix/`、`baileys-auth/`、数据库、日志、导出文件、真实 Token 或 API Key。
 - 公开提交问题时，不要粘贴手机号、聊天内容、二维码、登录凭证或完整日志。安全问题请参考 [SECURITY.md](SECURITY.md)。
 
+## 备份、通知与多账号
+
+- 在 **设置 → 数据与隐私** 导出或恢复 JSON 备份，可选择包含本地缓存附件。备份不包含 API 密钥、Bridge Token 或 WhatsApp 登录凭证；换电脑需重新配置和登录。
+- 恢复会替换 CRM 数据；恢复期间暂停新发送、暂存收到的事件，结束后继续处理。恢复后的 AI 回复使用辅助模式，未发送定时任务需要重新确认时间。
+- 可选择显示完整通知、仅联系人名称或隐藏内容。
+- 桌面端每天自动保存一份本地 JSON 备份，保留最近七份；设置 → 数据与隐私可关闭、立即备份或恢复最近备份。应用关闭期间不会运行；自动备份不包含密钥、登录凭据及缓存附件，同盘备份不能防硬盘损坏，重要数据仍需另存。
+- 未读与待处理分开：阅读客户消息不代表已回复；工作台可标记已处理，客户之后发来更新消息会重新进入待处理列表。发送排队或失败不算成功回复。
+- 翻译服务失败时保留原文并显示错误，可以重试；翻译期间修改的草稿也不会被旧结果覆盖。
+- 客户账号栏显示四个账号，其余通过 **+N 个** 菜单查看和切换；菜单支持滚动与键盘操作。
+- 本次变更见 [更新记录](CHANGELOG.md)，发布步骤见 [自动更新说明](docs/UPDATES.md)。
+
 ## 仓库结构
 
 ```text
@@ -90,7 +101,9 @@ npm run dev
 
 ### 完整 Tauri 桌面壳
 
-先安装 [Rust](https://rustup.rs) 和 Windows WebView2，然后运行：
+先安装 [Rust](https://rustup.rs)、Windows WebView2，以及 Visual Studio 2022 Build Tools 的“使用 C++ 的桌面开发”组件（较新的 MSVC v143 工具集和 Windows SDK），然后运行：
+
+预编译语音运行库需要较新的 MSVC 标准库；使用 Visual Studio 2019 可能在链接时出现 `__std_*` 符号无法解析。
 
 ```bash
 npm install
@@ -109,7 +122,7 @@ npm run release:win
 
 ### 桌面端自动更新
 
-自动更新需要先配置 GitHub 仓库地址和 Tauri 签名密钥。完整步骤见[自动更新发布说明](docs/UPDATES.md)。每次发布时递增 `desktop/src-tauri/tauri.conf.json` 的版本号并推送 `v*` 标签；GitHub Actions 会生成签名安装包和 `latest.json`。Draft Release 发布后，已安装的桌面端才会检测到更新。
+自动更新需要先配置 GitHub 仓库地址和 Tauri 签名密钥。完整步骤见[自动更新发布说明](docs/UPDATES.md)。每次发布时递增 `desktop/src-tauri/tauri.conf.json` 的版本号并推送 `v*` 标签；GitHub Actions 会生成签名安装包和 `latest.json`。工作流通过安装包冒烟检查并公开发布后，已安装的桌面端才会检测到更新。
 
 ### Android Bridge
 

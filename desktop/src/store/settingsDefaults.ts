@@ -161,6 +161,7 @@ export interface SettingsShape {
    */
   translateService: "auto" | "google" | "ai";
   autoConnectBridge: boolean;
+  automaticBackupEnabled: boolean;
   sendChannel: "baileys" | "android_bridge";
   /** 是否启用分钟/小时/间隔限速；手动暂停与过热拦截独立 */
   rateLimitEnabled: boolean;
@@ -233,6 +234,7 @@ export interface SettingsShape {
   personPrimaryAccountByKey: Record<string, string>;
   /** 系统通知总开关（新消息 / 跟进到期 / 入群申请 都受此控制） */
   desktopNotifyEnabled: boolean;
+  notificationPrivacy: "full" | "name" | "hidden";
   /** 跟进到期是否单独弹系统通知 */
   notifyFollowUpEnabled: boolean;
   /** 群组消息是否单独弹系统通知 */
@@ -310,6 +312,7 @@ export const defaultSettings: SettingsShape = {
   aiSystemPrompt: "",
   aiSystemPromptByAccountId: {},
   translateService: "auto",
+  automaticBackupEnabled: true,
   autoConnectBridge: true,
   sendChannel: "baileys",
   rateLimitEnabled: true,
@@ -345,6 +348,7 @@ export const defaultSettings: SettingsShape = {
   globalMinGapSec: 2,
   personPrimaryAccountByKey: {},
   desktopNotifyEnabled: true,
+  notificationPrivacy: "full",
   notifyFollowUpEnabled: true,
   notifyGroupMessagesEnabled: false,
   notifyGroupJoinEnabled: false,
@@ -446,6 +450,8 @@ export function normalizeLoadedSettings(
       .filter((r) => r.title || r.body || r.media)
       .slice(0, 40);
   }
+  merged.notificationPrivacy = merged.notificationPrivacy === "name" || merged.notificationPrivacy === "hidden"
+    ? merged.notificationPrivacy : "full";
   merged.theme = merged.theme === "light" ? "light" : "dark";
   merged.uiLanguage =
     merged.uiLanguage === "en" || merged.uiLanguage === "fr"
@@ -517,6 +523,7 @@ export function normalizeLoadedSettings(
           deviceId: value.deviceId ? String(value.deviceId) : null,
           accountId: value.accountId ? String(value.accountId) : undefined,
           status:
+            !Number.isFinite(Date.parse(String(value.dueAt || ""))) ? "failed" :
             value.status === "queued" ||
             value.status === "sent" ||
             value.status === "failed" ||
@@ -524,7 +531,9 @@ export function normalizeLoadedSettings(
               ? value.status
               : "pending",
           messageId: value.messageId ? String(value.messageId) : undefined,
-          error: value.error ? String(value.error).slice(0, 240) : undefined,
+          error: !Number.isFinite(Date.parse(String(value.dueAt || "")))
+            ? "无效的定时发送时间"
+            : value.error ? String(value.error).slice(0, 240) : undefined,
           createdAt: String(value.createdAt || new Date().toISOString()),
         } satisfies ScheduledMessage;
       })

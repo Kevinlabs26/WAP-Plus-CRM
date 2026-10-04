@@ -118,13 +118,20 @@ export function isDataUrl(url: string | undefined | null): url is string {
 /** 大 data URL 落盘前转存 IDB，返回要保留的（小 URL 或 undefined） */
 export async function cacheMediaUrl(
   messageId: string,
-  url: string | undefined | null
+  url: string | undefined | null,
+  strict = false
 ): Promise<void> {
   if (!messageId || !isDataUrl(url)) return;
   if (url.length > MEDIA_CACHE_MAX_ITEM_CHARS) return;
   try {
     await runMediaMutation(async () => {
       const index = await loadMediaIndex();
+      if (strict) {
+        const total = Object.values(index).reduce((sum, entry) => sum + Math.max(0, entry.chars || 0), 0);
+        if (total - (index[messageId]?.chars || 0) + url.length > MEDIA_CACHE_MAX_CHARS) {
+          throw new Error("附件缓存空间不足，恢复已停止，请先导出并清理缓存");
+        }
+      }
       await idbSet(mediaCacheKey(messageId), url);
       index[messageId] = { chars: url.length, cachedAt: Date.now() };
       for (const id of selectMediaCacheEvictions(index)) {
@@ -133,19 +140,22 @@ export async function cacheMediaUrl(
       }
       await idbSet(MEDIA_INDEX_KEY, index);
     });
-  } catch {
+  } catch (error) {
+    if (strict) throw error;
     /* 缓存失败不阻塞发送 */
   }
 }
 
 /** 从 IDB 回填：有则返回缓存的 data URL */
 export async function readMediaCache(
-  messageId: string
+  messageId: string,
+  strict = false
 ): Promise<string | undefined> {
   if (!messageId) return undefined;
   try {
-    return (await idbGet<string>(mediaCacheKey(messageId))) || undefined;
-  } catch {
+    return (await idbGet<string>(mediaCacheKey(messageId), strict)) || undefined;
+  } catch (error) {
+    if (strict) throw error;
     return undefined;
   }
 }

@@ -72,6 +72,7 @@ const CrmBoardCardInner = ({
         onClick={() => (selectMode ? onToggleSelect(c) : onClick(c))}
         className={cn(
           "crm-kanban-card group relative flex w-full select-none items-start gap-1.5 rounded-lg border p-2 text-left transition-all shadow-2xs",
+          !selectMode && "pb-10",
           selectMode
             ? checked
               ? "cursor-pointer border-brand/50 bg-brand/15"

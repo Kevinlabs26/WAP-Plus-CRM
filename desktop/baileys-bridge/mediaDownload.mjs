@@ -1,4 +1,30 @@
-import { downloadMediaMessage } from "baileys";
+import { downloadMediaMessage, extractMessageContent, getContentType } from "baileys";
+import { readBoundedStream } from "./httpUtil.mjs";
+import { downloadRemoteMedia, validateRemoteMediaUrl } from "./remoteMedia.mjs";
+
+export async function downloadSafeMediaMessage(message, maxBytes) {
+  const content = extractMessageContent(message.message);
+  const type = getContentType(content);
+  const media = content?.[type];
+  if (!media || typeof media !== "object") throw new Error("invalid media message");
+  const path = media.directPath || media.thumbnailDirectPath;
+  const host = media.url ? validateRemoteMediaUrl(media.url).host : "mmg.whatsapp.net";
+  if (!/(?:^|\.)(?:whatsapp\.net|whatsapp\.com|fbcdn\.net)$/.test(host)) {
+    throw new Error("media host is not a WhatsApp CDN");
+  }
+  if (path && (typeof path !== "string" || !path.startsWith("/") || path.startsWith("//"))) {
+    throw new Error("invalid media direct path");
+  }
+  const remote = path ? `https://${host}${path}` : media.url;
+  const { buffer } = await downloadRemoteMedia(remote, maxBytes + 16_384);
+  // The SDK only decrypts bounded in-memory ciphertext. It never fetches
+  // attacker-controlled URLs (including a newly reuploaded URL) itself.
+  return downloadMediaMessage({
+    ...message,
+    message: { [type]: { ...media, directPath: undefined, thumbnailDirectPath: undefined,
+      url: `data:application/octet-stream;base64,${buffer.toString("base64")}` } },
+  }, "stream", {});
+}
 
 /**
  * 带并发限制 + 排队的媒体下载 → data URL。
@@ -8,6 +34,7 @@ import { downloadMediaMessage } from "baileys";
 export function createMediaDownloader(deps) {
   let mediaDownloadInFlight = 0;
   const MEDIA_DOWNLOAD_MAX = 3;
+  const MEDIA_DOWNLOAD_QUEUE_MAX = 64;
   /** @type {Array<{ run: () => Promise<any>, resolve: (v: any) => void }>} */
   const waitQueue = [];
 
@@ -35,6 +62,9 @@ export function createMediaDownloader(deps) {
    * @param {{ force?: boolean }} opts
    */
   function schedule(work, opts = {}) {
+    if (waitQueue.length >= MEDIA_DOWNLOAD_QUEUE_MAX) {
+      return Promise.reject(Object.assign(new Error("媒体下载繁忙，请稍后重试"), { status: 503 }));
+    }
     const force = Boolean(opts.force);
     return new Promise((resolve) => {
       // 手动重试优先，但仍然经过同一个并发队列，避免同时发起大量
@@ -55,16 +85,6 @@ export function createMediaDownloader(deps) {
     return schedule(async () => {
       try {
         const socket = deps.getSocket?.();
-        const buf = await downloadMediaMessage(
-          waMessage,
-          "buffer",
-          {},
-          {
-            logger: deps.logger,
-            reuploadRequest: socket?.updateMediaMessage,
-          }
-        );
-        if (!buf || !Buffer.isBuffer(buf)) return "";
         const max = force
           ? mediaType === "document"
             ? 16_000_000
@@ -76,13 +96,14 @@ export function createMediaDownloader(deps) {
             : mediaType === "video" || mediaType === "gif"
               ? 6_000_000
               : 3_000_000;
-        if (buf.length > max) {
-          deps.logger?.debug?.(
-            { len: buf.length, max, mediaType },
-            "media too large skipped"
-          );
-          return "";
+        let stream;
+        try { stream = await downloadSafeMediaMessage(waMessage, max); }
+        catch (error) {
+          if (![404, 410].includes(error.status) || !socket?.updateMediaMessage) throw error;
+          stream = await downloadSafeMediaMessage(await socket.updateMediaMessage(waMessage), max);
         }
+        const buf = await readBoundedStream(stream, max);
+        if (!buf.length) return "";
         const mime =
           (mimetype || "").split(";")[0] ||
           (mediaType === "image" || mediaType === "sticker"

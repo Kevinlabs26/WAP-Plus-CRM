@@ -49,7 +49,15 @@ export function ScheduledMessageWatcher() {
 
         const now = Date.now();
         for (const task of useAppStore.getState().settings.scheduledMessages || []) {
-          if (task.status !== "pending" || Date.parse(task.dueAt) > now) continue;
+          if (task.status !== "pending") continue;
+          const dueAt = Date.parse(task.dueAt);
+          if (!Number.isFinite(dueAt)) {
+            useAppStore.getState().updateScheduledMessage(task.id, {
+              status: "failed", error: "无效的定时发送时间",
+            });
+            continue;
+          }
+          if (dueAt > now) continue;
           const latest = useAppStore.getState();
           const chat = latest.chats.find((item) => item.id === task.chatId);
           const contact = latest.contacts.find((item) => item.id === task.contactId);

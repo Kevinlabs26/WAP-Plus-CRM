@@ -1,4 +1,5 @@
 import type { ChatPreview, Contact, Message } from "@/types/crm";
+import { isAwaitingReply } from "@/lib/replyStatus";
 
 export function filterCandidateChats(
   chats: ChatPreview[],
@@ -31,7 +32,7 @@ export function buildPendingChatIds(
     candidateChats
       .filter((chat) => {
         const direction = chat.lastMessageDirection || lastMessageDirectionByChatId.get(chat.id);
-        return direction === "in" || (!direction && chat.unread > 0);
+        return isAwaitingReply(chat, direction);
       })
       .map((chat) => chat.id)
   );

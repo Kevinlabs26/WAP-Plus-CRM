@@ -79,6 +79,7 @@ export async function resolveStorageEngine(): Promise<StorageEngine> {
 
 /** 前端 PersistSlice 形状（与 store 对齐） */
 export type PersistDirtyFlags = {
+  drafts?: boolean;
   phones?: boolean;
   contacts?: boolean;
   chats?: boolean;
@@ -101,6 +102,7 @@ export interface PersistedAppState {
   settings: unknown;
   /** 克制群发战役（与 store 对齐；SQLite 经 settings 旁路键或顶层字段） */
   broadcastCampaigns?: unknown[];
+  draftReplyByChatId?: Record<string, string>;
   /** 表级脏标记：SQLite save 可跳过未脏表 */
   dirty?: PersistDirtyFlags;
   /** SQLite 增量保存时需要真正删除的消息。 */
@@ -121,10 +123,20 @@ interface RustSnapshot {
   settings: unknown;
   broadcastCampaigns?: unknown[];
   broadcast_campaigns?: unknown[];
+  draftReplyByChatId?: Record<string, string>;
   deletedMessageIds?: string[];
   deleted_message_ids?: string[];
   replaceMessages?: boolean;
   replace_messages?: boolean;
+}
+
+const SECRET_SETTING_KEYS = ["openaiKey", "groqKey", "geminiKey", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "bridgeToken"];
+
+function publicSettings(settings: unknown): unknown {
+  if (!settings || typeof settings !== "object") return settings;
+  const copy = { ...(settings as Record<string, unknown>) };
+  for (const key of SECRET_SETTING_KEYS) delete copy[key];
+  return copy;
 }
 
 function toRust(data: PersistedAppState): Record<string, unknown> {
@@ -134,7 +146,7 @@ function toRust(data: PersistedAppState): Record<string, unknown> {
   const includeSettings = !d || d.settings || d.broadcastCampaigns;
   const settingsObj =
     includeSettings && data.settings && typeof data.settings === "object"
-      ? { ...(data.settings as Record<string, unknown>) }
+      ? { ...(publicSettings(data.settings) as Record<string, unknown>) }
       : {};
   if (includeSettings && data.broadcastCampaigns) {
     settingsObj.__broadcastCampaigns = data.broadcastCampaigns;
@@ -151,6 +163,7 @@ function toRust(data: PersistedAppState): Record<string, unknown> {
     broadcastCampaigns: include("broadcastCampaigns")
       ? data.broadcastCampaigns ?? []
       : [],
+    draftReplyByChatId: include("drafts") ? data.draftReplyByChatId ?? {} : {},
     deletedMessageIds: data.deletedMessageIds ?? [],
     replaceMessages: data.replaceMessages === true,
     dirty: d
@@ -167,6 +180,7 @@ function toRust(data: PersistedAppState): Record<string, unknown> {
           // settings.__broadcastCampaigns 里嵌入的真实群发战役（数据丢失）。
           // 战役改动仍会通过下一行的 settings 正向传染完整重写设置。
           broadcastCampaigns: !!d.broadcastCampaigns,
+          drafts: !!d.drafts,
         }
       : undefined,
   };
@@ -206,6 +220,7 @@ function fromRust(snap: RustSnapshot): PersistedAppState {
     activities: snap.activities ?? [],
     settings: settingsClean,
     broadcastCampaigns: (fromTop ?? fromSettings ?? []) as unknown[],
+    draftReplyByChatId: snap.draftReplyByChatId ?? {},
   };
 }
 
@@ -228,6 +243,15 @@ export async function loadAppState<T = PersistedAppState>(): Promise<T | null> {
     // SQLite 空：尝试从 IDB 迁移一次
     const fromIdb = await idbLoad<PersistedAppState>();
     if (fromIdb && (fromIdb.contacts?.length || fromIdb.phones?.length)) {
+      const legacySettings = fromIdb.settings as Record<string, unknown> | undefined;
+      if (legacySettings && SECRET_SETTING_KEYS.some(key => legacySettings[key])) {
+        // 先确保旧密钥已安全保存，再清除旧明文副本并迁移客户数据。
+        const existingSecrets = await loadSecureSecrets();
+        if (!existingSecrets && !await saveSecureSecrets(Object.fromEntries(
+          SECRET_SETTING_KEYS.map(key => [key, typeof legacySettings[key] === "string" ? legacySettings[key] : ""])
+        ) as SecureSecrets)) throw new Error("旧密钥安全迁移失败，请重试");
+        await idbSave({ ...fromIdb, settings: publicSettings(fromIdb.settings) });
+      }
       const saved = await tryInvokeOk("db_save", {
         snapshot: toRust(fromIdb),
       });
@@ -284,112 +308,76 @@ async function saveAppStateNow(
   const incoming = stateWeight(data);
 
   if (!opts?.force) {
-    try {
-      // 有缓存：O(1) 防护；无缓存才读盘一次并写入缓存
-      let prevW = lastSavedWeight;
-      let prevMsg = lastSavedMsgCount;
-      let prevChat = lastSavedChatCount;
-      let prevContact = lastSavedContactCount;
+    // 有缓存：O(1) 防护；无缓存才读盘一次并写入缓存
+    let prevW = lastSavedWeight;
+    let prevMsg = lastSavedMsgCount;
+    let prevChat = lastSavedChatCount;
+    let prevContact = lastSavedContactCount;
 
-      if (prevW <= 0) {
-        const existing =
-          eng === "sqlite"
-            ? await tryInvoke<RustSnapshot | null>("db_load")
-            : await idbLoad<PersistedAppState>();
-        const prev = existing
-          ? eng === "sqlite"
-            ? fromRust(existing as RustSnapshot)
-            : (existing as PersistedAppState)
-          : null;
-        if (prev) {
-          rememberSavedWeight(prev);
-          prevW = lastSavedWeight;
-          prevMsg = lastSavedMsgCount;
-          prevChat = lastSavedChatCount;
-          prevContact = lastSavedContactCount;
-        }
+    if (prevW <= 0) {
+      const existing =
+        eng === "sqlite"
+          ? await (await import("@tauri-apps/api/core")).invoke<RustSnapshot | null>("db_load")
+          : await idbLoad<PersistedAppState>();
+      const prev = existing
+        ? eng === "sqlite"
+          ? fromRust(existing as RustSnapshot)
+          : (existing as PersistedAppState)
+        : null;
+      if (prev) {
+        rememberSavedWeight(prev);
+        prevW = lastSavedWeight;
+        prevMsg = lastSavedMsgCount;
+        prevChat = lastSavedChatCount;
+        prevContact = lastSavedContactCount;
       }
+    }
 
-      if (incoming === 0 && prevW > 0) {
-        console.warn(
-          "[storage] blocked empty saveAppState that would wipe CRM data"
-        );
-        // 仅 settings：仍需读盘合并（极少路径）
-        try {
-          const existing =
-            eng === "sqlite"
-              ? await tryInvoke<RustSnapshot | null>("db_load")
-              : await idbLoad<PersistedAppState>();
-          const prev = existing
-            ? eng === "sqlite"
-              ? fromRust(existing as RustSnapshot)
-              : (existing as PersistedAppState)
-            : null;
-          if (data.settings && prev) {
-            const merged: PersistedAppState = {
-              ...prev,
-              settings: data.settings,
-            };
-            if (eng === "sqlite") {
-              const ok = await tryInvokeOk("db_save", {
-                snapshot: toRust(merged),
-              });
-              if (!ok) throw new Error("SQLite 设置保存失败");
-            } else {
-              await idbSave(merged);
-            }
-            rememberSavedWeight(merged);
-          }
-        } catch {
-          /* ignore */
-        }
-        return;
-      }
+    if (incoming === 0 && prevW > 0) {
+      throw new Error("已拦截空状态保存，防止覆盖本地 CRM 数据");
+    }
 
-      const msgCrash =
-        (data.messageCount ?? data.messages?.length ?? 0) === 0 && prevMsg > 10 &&
-        !(eng === "sqlite" && !data.replaceMessages && data.deletedMessageIds?.length);
-      const chatCrash =
-        (data.chats?.length || 0) === 0 && prevChat > 5;
-      const contactCrash =
-        (data.contacts?.length || 0) === 0 && prevContact > 5;
-      if (
-        prevW >= 20 &&
-        incoming < Math.max(5, Math.floor(prevW * 0.1)) &&
-        (msgCrash || chatCrash || contactCrash)
-      ) {
-        console.warn("[storage] blocked suspicious wipe save", {
-          incoming,
-          prevW,
-          msgCrash,
-          chatCrash,
-          contactCrash,
-        });
-        return;
-      }
-    } catch {
-      /* ignore guard errors */
+    const msgCrash =
+      (data.messageCount ?? data.messages?.length ?? 0) === 0 && prevMsg > 10 &&
+      !(eng === "sqlite" && !data.replaceMessages && data.deletedMessageIds?.length);
+    const chatCrash =
+      (data.chats?.length || 0) === 0 && prevChat > 5;
+    const contactCrash =
+      (data.contacts?.length || 0) === 0 && prevContact > 5;
+    if (
+      prevW >= 20 &&
+      incoming < Math.max(5, Math.floor(prevW * 0.1)) &&
+      (msgCrash || chatCrash || contactCrash)
+    ) {
+      console.warn("[storage] blocked suspicious wipe save", {
+        incoming,
+        prevW,
+        msgCrash,
+        chatCrash,
+        contactCrash,
+      });
+      throw new Error("已拦截异常缩减的状态保存，防止覆盖本地 CRM 数据");
     }
   }
 
-if (eng === "sqlite") {
+  if (eng === "sqlite") {
     const messages = data.messages ?? [];
     // 消息量过大时单次 IPC/事务会卡死（138K 条 ≈ 百 MB + 全量 FTS）。
     // 分块 upsert（仅普通保存；备份恢复 replace 语义保持单次全量）。
     const MESSAGE_CHUNK = 1500;
-    if (messages.length > MESSAGE_CHUNK && !data.replaceMessages) {
-      const head: PersistedAppState = {
-        ...data,
-        messages: [],
-        replaceMessages: false,
-      };
-      if (!(await tryInvokeOk("db_save", { snapshot: toRust(head) }))) {
-        throw new Error("SQLite 数据保存失败");
-      }
+    if (
+      messages.length > MESSAGE_CHUNK &&
+      !data.replaceMessages &&
+      (!data.dirty || data.dirty.messages)
+    ) {
+      // 其他表和删除只随末块保存，最后按会话表清掉孤立消息。
       for (let i = 0; i < messages.length; i += MESSAGE_CHUNK) {
+        const last = i + MESSAGE_CHUNK >= messages.length;
         const part: PersistedAppState = {
           ...data,
           messages: messages.slice(i, i + MESSAGE_CHUNK),
+          dirty: last ? data.dirty : { messages: true },
+          deletedMessageIds: last ? data.deletedMessageIds : [],
           replaceMessages: false,
         };
         if (!(await tryInvokeOk("db_save", { snapshot: toRust(part) }))) {
@@ -405,7 +393,8 @@ if (eng === "sqlite") {
     return;
   }
 
-  await idbSave(data);
+  const drafts = data.draftReplyByChatId ?? (await idbLoad<PersistedAppState>())?.draftReplyByChatId ?? {};
+  await idbSave({ ...data, draftReplyByChatId: drafts, settings: publicSettings(data.settings) });
   rememberSavedWeight(data);
 }
 
@@ -422,7 +411,9 @@ export type SecureSecrets = {
 };
 
 export async function loadSecureSecrets(): Promise<SecureSecrets | null> {
-  const secrets = await tryInvoke<{
+  if (!isTauri()) return null;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const secrets = await invoke<{
     openai_key?: string;
     groq_key?: string;
     gemini_key?: string;
@@ -432,7 +423,7 @@ export async function loadSecureSecrets(): Promise<SecureSecrets | null> {
     openrouter_key?: string;
     custom_ai_key?: string;
     bridge_token?: string;
-  }>("secure_load_secrets");
+  } | null>("secure_load_secrets");
   return secrets
     ? {
         openaiKey: secrets.openai_key || "",
@@ -482,7 +473,8 @@ export function waitForPendingSaves(): Promise<void> {
 async function clearAppStateNow(): Promise<void> {
   const eng = await resolveStorageEngine();
   if (eng === "sqlite") {
-    await tryInvoke("db_clear");
+    const ok = await tryInvokeOk("db_clear");
+    if (!ok) throw new Error("SQLite 数据清空失败");
   }
   await idbClear();
   // 应用数据清空应包含下载媒体和未发送附件草稿，避免重置后磁盘仍留旧文件。
@@ -515,7 +507,8 @@ export function clearStoredChatMessages(chatId: string): Promise<void> {
 /** WhatsApp 远端“清空聊天”按 JID 清掉未加载进内存的冷历史。 */
 export function clearStoredRemoteMessages(
   remoteJid: string,
-  accountId?: string
+  accountId?: string,
+  before?: string
 ): Promise<void> {
   const run = saveQueue.then(async () => {
     const eng = await resolveStorageEngine();
@@ -523,8 +516,21 @@ export function clearStoredRemoteMessages(
     const ok = await tryInvokeOk("db_clear_remote_messages", {
       remoteJid,
       accountId: accountId || null,
+      before: before || null,
     });
     if (!ok) throw new Error("SQLite 远端聊天记录清空失败");
+  });
+  saveQueue = run.catch(() => undefined);
+  return run;
+}
+
+/** 回执同时更新冷历史；与快照保存共用队列。 */
+export function updateStoredMessageAcks(items: { id: string; ack: string }[], accountId: string): Promise<void> {
+  if (!items.length) return Promise.resolve();
+  const run = saveQueue.then(async () => {
+    if (await resolveStorageEngine() !== "sqlite") return;
+    const ok = await tryInvokeOk("db_update_message_acks", { items, accountId });
+    if (!ok) throw new Error("SQLite 消息回执更新失败");
   });
   saveQueue = run.catch(() => undefined);
   return run;
@@ -567,7 +573,12 @@ export type FullHistoryResult = {
 export async function loadFullHistory(): Promise<FullHistoryResult | null> {
   const eng = await resolveStorageEngine();
   if (eng !== "sqlite") return null;
-  return tryInvoke<FullHistoryResult>("db_load_full_history");
+  const { invoke } = await import("@tauri-apps/api/core");
+  const result = await invoke<FullHistoryResult>("db_load_full_history");
+  if (!result || !Array.isArray(result.messages) || !Array.isArray(result.activities)) {
+    throw new Error("无法读取完整历史，已停止导出备份");
+  }
+  return result;
 }
 
 export type MessagesPageResult = {

@@ -13,6 +13,7 @@ export type MessagesDeletePayload = {
   all?: boolean;
   jid?: string;
   source?: string;
+  deletedBefore?: string;
 };
 
 export function applyMessagesDelete(
@@ -37,7 +38,8 @@ export function applyMessagesDelete(
       // 只做精确相等匹配：子串匹配会让 999@lid 连坐 1999@lid；
       // 且必须与落盘侧 clearStoredRemoteMessages 的精确删除口径一致，
       // 否则内存多删/少删都会造成重启后消息「复活」或残留。
-      const hit = !!remote && remote === jid;
+      const hit = !!remote && remote === jid &&
+        (!payload.deletedBefore || !m.sentAt || Date.parse(m.sentAt) <= Date.parse(payload.deletedBefore));
       if (hit) dropChatIds.add(m.chatId);
       return !hit;
     });

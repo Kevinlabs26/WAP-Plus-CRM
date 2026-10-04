@@ -46,23 +46,6 @@ pub struct BaileysRuntime {
     pub account_id: String,
 }
 
-fn sanitize_account_id(raw: &str) -> String {
-    let s = raw.trim();
-    if s.is_empty() {
-        return "wa-default".into();
-    }
-    s.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .take(64)
-        .collect()
-}
-
 fn resolve_baileys_bin() -> Result<(Command, String), String> {
     let dev_script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../baileys-bridge/index.mjs");
 
@@ -180,7 +163,7 @@ fn wait_http_ready(port: u16, token: &str, child: &mut Child) -> Result<(), Stri
 }
 
 fn spawn_account(app: &AppHandle, account_id: &str) -> Result<BaileysProcess, String> {
-    let account_id = sanitize_account_id(account_id);
+    let account_id = crate::account_id::validate_account_id(account_id)?;
     let port = TcpListener::bind("127.0.0.1:0")
         .and_then(|listener| listener.local_addr())
         .map_err(|e| format!("无法分配 Baileys 端口：{e}"))?
@@ -293,7 +276,7 @@ fn spawn_account(app: &AppHandle, account_id: &str) -> Result<BaileysProcess, St
 
 impl BaileysState {
     pub fn runtime_for(&self, app: &AppHandle, account_id: &str) -> Result<BaileysRuntime, String> {
-        let key = sanitize_account_id(account_id);
+        let key = crate::account_id::validate_account_id(account_id)?;
         {
             let mut guard = self.registry.lock().map_err(|e| e.to_string())?;
             loop {
@@ -341,7 +324,7 @@ impl BaileysState {
     }
 
     pub fn stop_account(&self, account_id: &str) -> Result<(), String> {
-        let key = sanitize_account_id(account_id);
+        let key = crate::account_id::validate_account_id(account_id)?;
         let mut guard = self.registry.lock().map_err(|e| e.to_string())?;
         while guard.starting.contains(&key) {
             guard = self.ready.wait(guard).map_err(|e| e.to_string())?;

@@ -1,4 +1,16 @@
 import type { Contact, FollowUp } from "@/types/crm";
+import { getNextOpenFollowUp } from "../lib/todayBoard.ts";
+
+function isValidDueAt(value: string) {
+  const match = /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2}))?$/.exec(value);
+  if (!match || Number(value.slice(0, 4)) < 1) return false;
+  const day = new Date(`${match[1]}T00:00:00Z`);
+  if (!Number.isFinite(day.getTime()) || day.toISOString().slice(0, 10) !== match[1]) return false;
+  if (!match[2]) return true;
+  const time = new Date(value);
+  return Number.isFinite(time.getTime()) && time.getHours() === Number(match[2])
+    && time.getMinutes() === Number(match[3]) && time.getDate() === day.getUTCDate();
+}
 
 type FollowUpState = {
   contacts: Contact[];
@@ -18,6 +30,7 @@ type FollowUpDeps = {
   recomputeStats: () => void;
   persist: () => void;
   pushToast: (message: string, tone?: "info" | "success" | "error") => void;
+  clearNotification?: (id: string) => void;
 };
 
 export function createFollowUpActions({
@@ -27,6 +40,7 @@ export function createFollowUpActions({
   recomputeStats,
   persist,
   pushToast,
+  clearNotification,
 }: FollowUpDeps) {
   const finish = () => {
     recomputeStats();
@@ -42,33 +56,23 @@ export function createFollowUpActions({
     if (!contact) return null;
 
     const dueAt = String(dueAtRaw || "").trim();
-    if (!/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(dueAt)) {
+    if (!isValidDueAt(dueAt)) {
       pushToast("跟进时间格式无效", "error");
       return null;
     }
 
-    const finalNote = (note && note.trim()) || `跟进 · ${contact.name}`;
-    const existing = getState().followUps.find(
-      (item) => !item.done && item.contactId === contactId
-    );
-
-    if (existing) {
-      setState((state) => ({
-        followUps: state.followUps.map((item) =>
+    const existing = getNextOpenFollowUp(getState().followUps, contactId);
+    const finalNote = note?.trim() || existing?.note || `跟进 · ${contact.name}`;
+    setState((state) => {
+      const followUps = existing
+        ? state.followUps.map((item) =>
           item.id === existing.id
             ? { ...item, dueAt, note: finalNote, contactName: contact.name }
             : item
-        ),
-        contacts: state.contacts.map((item) =>
-          item.id === contactId ? { ...item, nextFollowUpAt: dueAt } : item
-        ),
-      }));
-      logActivity(contactId, "改期跟进", `${dueAt} · ${finalNote}`);
-    } else {
-      setState((state) => ({
-        followUps: [
+        )
+        : [
           {
-            id: `f-${Date.now()}`,
+            id: `f-${crypto.randomUUID()}`,
             contactId,
             contactName: contact.name,
             dueAt,
@@ -76,13 +80,17 @@ export function createFollowUpActions({
             done: false,
           },
           ...state.followUps,
-        ],
+        ];
+      return {
+        followUps,
         contacts: state.contacts.map((item) =>
-          item.id === contactId ? { ...item, nextFollowUpAt: dueAt } : item
+          item.id === contactId
+            ? { ...item, nextFollowUpAt: getNextOpenFollowUp(followUps, contactId)?.dueAt }
+            : item
         ),
-      }));
-      logActivity(contactId, "创建跟进", `${dueAt} · ${finalNote}`);
-    }
+      };
+    });
+    logActivity(contactId, existing ? "改期跟进" : "创建跟进", `${dueAt} · ${finalNote}`);
 
     finish();
     return { dueAt };
@@ -94,7 +102,7 @@ export function createFollowUpActions({
     note?: string
   ) => {
     const dueAt = String(dueAtRaw || "").trim();
-    if (!/^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2})?$/.test(dueAt)) {
+    if (!isValidDueAt(dueAt)) {
       pushToast("跟进时间格式无效", "error");
       return 0;
     }
@@ -148,12 +156,9 @@ export function createFollowUpActions({
       if (!followUp) return;
       setState((state) => {
         const followUps = state.followUps.map((item) =>
-          item.id === id ? { ...item, done: !item.done } : item
+          item.id === id ? { ...item, done: !item.done, cancelled: undefined } : item
         );
-        const nextDueAt = followUps
-          .filter((item) => item.contactId === followUp.contactId && !item.done)
-          .map((item) => item.dueAt)
-          .sort()[0];
+        const nextDueAt = getNextOpenFollowUp(followUps, followUp.contactId)?.dueAt;
         return {
           followUps,
           contacts: state.contacts.map((contact) =>
@@ -168,7 +173,28 @@ export function createFollowUpActions({
         followUp.done ? "重新打开跟进" : "完成跟进",
         followUp.note
       );
+      clearNotification?.(id);
       finish();
+    },
+
+    cancelFollowUp(id: string) {
+      const followUp = getState().followUps.find((item) => item.id === id);
+      if (!followUp || followUp.done) return false;
+      setState((state) => {
+        const followUps = state.followUps.map((item) =>
+          item.id === id ? { ...item, done: true, cancelled: true } : item
+        );
+        return {
+          followUps,
+          contacts: state.contacts.map((contact) => contact.id === followUp.contactId
+            ? { ...contact, nextFollowUpAt: getNextOpenFollowUp(followUps, contact.id)?.dueAt }
+            : contact),
+        };
+      });
+      logActivity(followUp.contactId, "取消跟进", `${followUp.dueAt} · ${followUp.note || ""}`);
+      clearNotification?.(id);
+      finish();
+      return true;
     },
 
     addFollowUp(input: Omit<FollowUp, "id" | "done">) {
