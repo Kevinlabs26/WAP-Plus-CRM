@@ -844,8 +844,7 @@ export function normalizeLoadedSettings(
         scope,
       };
     })
-    .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, "zh"))
-    .slice(0, 80);
+    .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, "zh"));
 
   const folderIds = new Set(merged.chatFolders.map((f) => f.id));
   const primaryByChat = new Map<string, string>();
