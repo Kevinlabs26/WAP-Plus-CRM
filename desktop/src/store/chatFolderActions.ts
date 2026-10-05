@@ -28,10 +28,6 @@ export function createChatFolderActions({
         return null;
       }
       const folders = getSettings().chatFolders || [];
-      if (folders.length >= 40) {
-        pushToast(t("folder.toastLimit"), "info");
-        return null;
-      }
       const id = `folder-${Date.now().toString(36)}`;
       const nextSort =
         folders.reduce((max, folder) => Math.max(max, folder.sort || 0), -1) + 1;

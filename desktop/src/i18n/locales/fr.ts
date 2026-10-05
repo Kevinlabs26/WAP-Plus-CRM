@@ -354,7 +354,6 @@ export default {
   "folder.clearMembers": "Vider les membres",
   "folder.delete": "Supprimer le groupe",
   "folder.toastNameRequired": "Saisissez un nom de groupe",
-  "folder.toastLimit": "40 groupes maximum",
   "folder.toastNestedLimit": "Les sous-groupes ne peuvent avoir qu’un niveau",
   "folder.toastCreated": "Groupe « {name} » créé",
   "folder.toastDeleted": "Groupe supprimé ; discussions déplacées vers Non classés",

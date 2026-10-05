@@ -354,7 +354,6 @@ export default {
   "folder.clearMembers": "Clear group members",
   "folder.delete": "Delete group",
   "folder.toastNameRequired": "Enter a group name",
-  "folder.toastLimit": "Up to 40 groups are supported",
   "folder.toastNestedLimit": "Sub-groups can only be nested one level",
   "folder.toastCreated": "Created group “{name}”",
   "folder.toastDeleted": "Group deleted; chats returned to Ungrouped",

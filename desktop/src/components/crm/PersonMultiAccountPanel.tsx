@@ -428,8 +428,8 @@ export function PersonMultiAccountPanel({
     };
 
     return (
-      <div className="shrink-0 border-t border-zinc-800/60 bg-zinc-950/90 px-3 py-1.5">
-        <div className="relative flex min-w-0 max-w-full items-center gap-1.5">
+      <div className="w-full shrink-0 border-t border-zinc-800/60 bg-zinc-950/90 px-3 py-1.5">
+        <div className="relative flex w-full min-w-0 max-w-full items-center gap-1.5">
           <span className="mr-1 shrink-0 text-[11px] text-zinc-500">{t("multiAccount.sendAccount")}</span>
           <div ref={accountStripRef} className="relative flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto py-0.5">
             {accounts.map((account) => (

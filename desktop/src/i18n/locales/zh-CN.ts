@@ -354,7 +354,6 @@ export default {
   "folder.clearMembers": "清空分组成员",
   "folder.delete": "删除分组",
   "folder.toastNameRequired": "请输入分组名称",
-  "folder.toastLimit": "最多 40 个分组",
   "folder.toastNestedLimit": "子分组最多嵌套一层",
   "folder.toastCreated": "已创建分组「{name}」",
   "folder.toastDeleted": "已删除分组（会话回到未分组）",
