@@ -4973,10 +4973,12 @@ dependencies = [
 
 [[package]]
 name = "wap-plus-crm"
-version = "0.1.37"
+version = "0.1.38"
 dependencies = [
+ "base64 0.22.1",
  "bzip2",
  "chrono",
+ "png 0.18.1",
  "rusqlite",
  "serde",
  "serde_json",
@@ -4995,6 +4997,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "windows-registry",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

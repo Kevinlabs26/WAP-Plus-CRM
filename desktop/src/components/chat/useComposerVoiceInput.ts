@@ -87,7 +87,11 @@ export function useComposerVoiceInput(opts: UseComposerVoiceInputOptions) {
           setDraftLocal(text);
           focusTextarea();
         },
-        onError: (message) => { if (request === voiceRequestRef.current) showVoiceError(message); },
+        onError: (message) => {
+          if (request !== voiceRequestRef.current) return;
+          showVoiceError(message);
+          cancelVoiceInput(false);
+        },
       });
       if (request !== voiceRequestRef.current) { session.cancel(); return; }
       voiceInputSessionRef.current = session;

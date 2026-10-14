@@ -1299,6 +1299,9 @@ async function connectInternal(opts = {}) {
         if (shouldClear) {
           connection = "logged_out";
           qrDataUrl = "";
+          // 桌面端重新扫码会先停止整个旧进程；不能在旧消息缓存上创建新身份。
+          clearTimeout(reconnectTimer);
+          return;
         } else {
           connection = "reconnecting";
           // 重连中不要亮旧码
@@ -1455,6 +1458,7 @@ function statusPayload() {
   // 有登录身份且正在重连：前端应显示「重连中」而不是「扫码」
   const me = user?.id || user?.name || null;
   return {
+    accountId,
     protocolVersion: BAILEYS_BRIDGE_PROTOCOL_VERSION,
     baileysVersion: BAILEYS_LIBRARY_VERSION,
     connection,
@@ -1464,7 +1468,7 @@ function statusPayload() {
     hasQr: connection === "qr" && Boolean(qrDataUrl),
     reconnectAttempts,
     lastDisconnectAt,
-    signedIn: Boolean(me) || connection === "connected" || connection === "reconnecting",
+    signedIn: connection !== "logged_out" && (Boolean(me) || connection === "connected" || connection === "reconnecting"),
     presenceEventCount,
     lastPresenceDebug,
     eventCursor: sequence,

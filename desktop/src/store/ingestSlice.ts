@@ -47,6 +47,7 @@ import { persist, scheduleStatsRecompute } from "./persist";
 import { notifyInboundMessages, type InboundNotifyItem } from "@/lib/inboundMessageNotify";
 import { emitLiveInboundMessages } from "@/lib/aiAutoReply";
 import { needsFullMessageReconcile } from "./messageReconcilePolicy";
+import { isConversationMessage } from "@/lib/chatActivity";
 
 /**
  * 单次同步 set() 的 item 预算：超出则切块、块间让出主线程，避免一次 ingest
@@ -431,7 +432,14 @@ export function createIngestSlice({
           }
           // 出站回执：送达 / 已读
           if (event.type === "messages.ack") {
-            messages = applyMessagesAck(messages, items, undefined, deviceId);
+            const activeChats = new Set<string>();
+            messages = applyMessagesAck(messages, items, undefined, deviceId, message => {
+              if (isConversationMessage(message)) activeChats.add(message.chatId);
+            });
+            if (activeChats.size) {
+              chats = chats.map(chat => activeChats.has(chat.id) && !chat.hasMessageHistory
+                ? { ...chat, hasMessageHistory: true } : chat);
+            }
             const acks = ackItemsByAccount.get(deviceId) || [];
             for (const raw of items) {
               const item = ingestObject(raw);
@@ -455,6 +463,7 @@ export function createIngestSlice({
               items,
               payload,
               deviceId,
+              accountPhoneE164: state.settings.waAccounts.find(a => a.id === ownerAccountId)?.historyPhoneE164,
               selfName,
               eventTs: typeof event.ts === "number" ? event.ts : undefined,
               sourceMessages: messageIndexSource,

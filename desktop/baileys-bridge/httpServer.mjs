@@ -31,8 +31,18 @@ export function createBaileysRequestHandler(getD) {
     if (req.method === "OPTIONS") return json(res, 204, {});
     if (!d.token || req.headers["x-wap-token"] !== d.token)
       return json(res, 401, { error: "unauthorized" });
+    if (req.headers["x-wap-account-id"] && d.accountId && req.headers["x-wap-account-id"] !== d.accountId)
+      return json(res, 409, { error: "account mismatch" });
     try {
       const url = new URL(req.url, `http://127.0.0.1:${d.port}`);
+      const expected = req.headers["x-wap-expected-phone"];
+      if (expected && !["/status", "/restart", "/logout", "/pairing-code"].includes(url.pathname)) {
+        const ownId = d.statusPayload().user?.id;
+        const phone = ownId ? `+${ownId.split("@")[0].split(":")[0]}` : undefined;
+        if (phone !== expected) {
+          return json(res, 409, { error: "登录号码与历史记录所属号码不一致，已阻止同步和发送" });
+        }
+      }
       if (req.method === "GET" && url.pathname === "/status")
         return json(res, 200, d.statusPayload());
       if (req.method === "GET" && url.pathname === "/events") {
@@ -48,6 +58,7 @@ export function createBaileysRequestHandler(getD) {
             }
           : undefined;
         return json(res, 200, {
+          accountId: d.accountId,
           protocolVersion: status.protocolVersion,
           baileysVersion: status.baileysVersion,
           events: d.events.filter((event) => event.seq > after),
@@ -762,8 +773,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
         d.connection = "logged_out";
         d.qrDataUrl = "";
         d.lastError = "";
-        // 退出后自动准备新码
-        void d.connect({ clearAuth: true }).catch(() => {});
+        // 桌面端随后停止旧进程并重置此账号，避免旧缓存进入下一次登录。
         return json(res, 200, { ok: true });
       }
 

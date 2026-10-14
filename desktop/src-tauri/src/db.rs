@@ -973,21 +973,37 @@ fn load_chats_with_history(conn: &Connection) -> Result<Vec<Value>, String> {
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT DISTINCT chat_id FROM messages
-            WHERE COALESCE(chat_id, '') != ''
-              AND json_extract(json, '$.direction') = 'out'
-              AND COALESCE(json_extract(json, '$.mediaType'), '') != 'system'
-              AND COALESCE(json_extract(json, '$.deliveryStatus'), 'sent')
-                  NOT IN ('pending', 'queued', 'failed')
+            SELECT m.chat_id,
+                   MAX(CASE WHEN json_extract(m.json, '$.direction') = 'out' THEN 1 ELSE 0 END)
+            FROM messages m JOIN chats c ON c.id = m.chat_id
+            WHERE COALESCE(m.chat_id, '') != ''
+              AND json_extract(m.json, '$.direction') IN ('in', 'out')
+              AND COALESCE(json_extract(m.json, '$.mediaType'), '') != 'system'
+              AND COALESCE(json_extract(m.json, '$.systemKind'), '') = ''
+              AND (json_extract(m.json, '$.direction') = 'in'
+                   OR COALESCE(json_extract(m.json, '$.deliveryStatus'), 'sent')
+                      NOT IN ('pending', 'queued', 'failed'))
+              AND (COALESCE(NULLIF(json_extract(m.json, '$.accountId'), ''),
+                            NULLIF(json_extract(m.json, '$.deviceId'), ''), '') = ''
+                   OR COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''),
+                               NULLIF(json_extract(c.json, '$.phoneId'), ''), '') = ''
+                   OR COALESCE(NULLIF(json_extract(m.json, '$.accountId'), ''),
+                               NULLIF(json_extract(m.json, '$.deviceId'), ''), '') =
+                      COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''),
+                               NULLIF(json_extract(c.json, '$.phoneId'), ''), ''))
+            GROUP BY m.chat_id
             "#,
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([], |row| row.get::<_, String>(0))
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)))
         .map_err(|e| e.to_string())?;
     let mut outgoing_chat_ids = HashSet::new();
+    let mut active_chat_ids = HashSet::new();
     for row in rows {
-        outgoing_chat_ids.insert(row.map_err(|e| e.to_string())?);
+        let (id, outgoing) = row.map_err(|e| e.to_string())?;
+        if outgoing { outgoing_chat_ids.insert(id.clone()); }
+        active_chat_ids.insert(id);
     }
     for chat in &mut chats {
         let Some(object) = chat.as_object_mut() else {
@@ -1000,6 +1016,9 @@ fn load_chats_with_history(conn: &Connection) -> Result<Vec<Value>, String> {
         if has_outgoing {
             object.insert("hasOutgoingHistory".into(), Value::Bool(true));
         }
+        let has_history = object.get("id").and_then(Value::as_str)
+            .is_some_and(|id| active_chat_ids.contains(id));
+        object.insert("hasMessageHistory".into(), Value::Bool(has_history));
     }
     Ok(chats)
 }
@@ -1313,6 +1332,32 @@ pub fn clear_all(conn: &Connection) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chat_activity_requires_real_messages_from_the_chat_account() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        for id in ["real", "preview", "system", "wrong-owner", "pending", "failed", "cold"] {
+            let chat = serde_json::json!({"id": id, "accountId": "wa-a", "lastMessage": "stale preview", "hasMessageHistory": true});
+            conn.execute("INSERT INTO chats(id, json) VALUES (?1, ?2)", params![id, chat.to_string()]).unwrap();
+        }
+        for (id, direction, owner, media, delivery) in [
+            ("real", "in", "wa-a", "", ""),
+            ("system", "in", "wa-a", "system", ""),
+            ("wrong-owner", "in", "wa-b", "", ""),
+            ("pending", "out", "wa-a", "", "pending"),
+            ("failed", "out", "wa-a", "", "failed"),
+            ("cold", "out", "wa-a", "", "sent"),
+        ] {
+            let msg = serde_json::json!({"id": id, "chatId": id, "direction": direction, "deviceId": owner, "mediaType": media, "deliveryStatus": delivery});
+            conn.execute("INSERT INTO messages(id, chat_id, json) VALUES (?1, ?1, ?2)", params![id, msg.to_string()]).unwrap();
+        }
+        let chats = load_chats_with_history(&conn).unwrap();
+        for chat in chats {
+            let id = chat["id"].as_str().unwrap();
+            assert_eq!(chat["hasMessageHistory"], id == "real" || id == "cold", "{id}");
+        }
+    }
     use serde_json::json;
 
     #[test]

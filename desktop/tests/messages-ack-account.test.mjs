@@ -35,3 +35,13 @@ test("delivery ack only updates the source account", () => {
   assert.equal(result[0].deliveryStatus, "read");
   assert.equal(result[1].deliveryStatus, "sent");
 });
+
+test("confirmed pending sends report activity only for the source account", () => {
+  const touched = [];
+  const messages = [
+    {id: "a", accountId: "wa-a", chatId: "chat-a", direction: "out", deliveryStatus: "pending", waMessageId: "shared"},
+    {id: "b", deviceId: "wa-b", chatId: "chat-b", direction: "out", deliveryStatus: "pending", waMessageId: "shared"},
+  ];
+  applyMessagesAck(messages, [{id: "shared", ack: "server"}], undefined, "wa-a", m => touched.push(m.chatId));
+  assert.deepEqual(touched, ["chat-a"]);
+});

@@ -12,6 +12,8 @@ export type BaileysStatus = BaileysBridgeStatus;
 
 /** 每账号一个 runtime（多 session） */
 const runtimeByAccount = new Map<string, Promise<Runtime>>();
+const resetByAccount = new Map<string, Promise<void>>();
+const sessionEpochByAccount = new Map<string, number>();
 
 function assertProtocol(value: { protocolVersion?: number }) {
   if (value.protocolVersion !== BAILEYS_BRIDGE_PROTOCOL_VERSION) {
@@ -27,6 +29,19 @@ function sleep(ms: number) {
 
 /** 由 App 启动时注入，避免 baileys ↔ appStore 循环依赖 */
 let accountIdResolver: (() => string) | null = null;
+let sessionResolver: (id: string) => { sessionAccountId: string; phoneE164?: string } = id => ({ sessionAccountId: id });
+let loginObserver: ((id: string, status: BaileysStatus, sessionPhones: ReadonlyMap<string, string>) => void) | undefined;
+const sessionSignatures = new Map<string, string>();
+const observedSessionPhones = new Map<string, string>();
+
+export function setBaileysSessionResolver(
+  resolver: typeof sessionResolver,
+  observer?: typeof loginObserver
+) {
+  sessionResolver = resolver;
+  loginObserver = observer;
+  observedSessionPhones.clear();
+}
 
 export function setBaileysAccountIdResolver(fn: () => string) {
   accountIdResolver = fn;
@@ -50,6 +65,7 @@ async function getRuntime(accountId?: string | null): Promise<Runtime> {
     throw new Error("请使用桌面壳（npm run tauri dev）。浏览器无法启动 Baileys 后台。");
   }
   const id = resolveBaileysAccountId(accountId);
+  await resetByAccount.get(id);
   let p = runtimeByAccount.get(id);
   if (!p) {
     p = (async () => {
@@ -74,10 +90,14 @@ async function getRuntime(accountId?: string | null): Promise<Runtime> {
           `Baileys runtime 缺少 baseUrl/token：${JSON.stringify(runtime)}`
         );
       }
+      const runtimeAccountId = anyRt.accountId || anyRt.account_id || id;
+      if (runtimeAccountId !== id) {
+        throw Object.assign(new Error("Baileys 后台账号与请求账号不一致，已阻止连接"), { status: 409 });
+      }
       return {
         baseUrl,
         token,
-        accountId: anyRt.accountId || anyRt.account_id || id,
+        accountId: runtimeAccountId,
       };
     })().catch((e) => {
       runtimeByAccount.delete(id);
@@ -96,8 +116,34 @@ export function invalidateBaileysRuntime(accountId?: string | null) {
 
 export async function baileysStopAccount(accountId: string) {
   if (!isTauri()) return;
-  invalidateBaileysRuntime(accountId);
-  await bridgeInvoke("baileys_stop_account", { accountId });
+  sessionEpochByAccount.set(accountId, (sessionEpochByAccount.get(accountId) || 0) + 1);
+  const sessionId = sessionResolver(accountId).sessionAccountId;
+  invalidateBaileysRuntime(sessionId);
+  await bridgeInvoke("baileys_stop_account", { accountId: sessionId });
+}
+
+export function baileysSessionEpoch(accountId: string): number {
+  const identity = sessionResolver(accountId);
+  const signature = `${identity.sessionAccountId}:${identity.phoneE164 || ""}`;
+  const previous = sessionSignatures.get(accountId);
+  if (previous !== undefined && previous !== signature) {
+    sessionEpochByAccount.set(accountId, (sessionEpochByAccount.get(accountId) || 0) + 1);
+  }
+  sessionSignatures.set(accountId, signature);
+  return sessionEpochByAccount.get(accountId) || 0;
+}
+
+export async function baileysResetAccount(accountId?: string | null) {
+  const logicalId = resolveBaileysAccountId(accountId);
+  const id = sessionResolver(logicalId).sessionAccountId;
+  const pending = resetByAccount.get(id);
+  if (pending) return pending;
+  sessionEpochByAccount.set(logicalId, baileysSessionEpoch(logicalId) + 1);
+  invalidateBaileysRuntime(id);
+  const reset = bridgeInvoke<void>("baileys_reset_account", { accountId: id })
+    .finally(() => resetByAccount.delete(id));
+  resetByAccount.set(id, reset);
+  return reset;
 }
 
 export async function request<T>(
@@ -107,6 +153,9 @@ export async function request<T>(
 ): Promise<T> {
   let lastError: unknown;
   const id = resolveBaileysAccountId(accountId);
+  const identity = sessionResolver(id);
+  const sessionId = identity.sessionAccountId;
+  const requestEpoch = baileysSessionEpoch(id);
   const method = (init?.method || "GET").toUpperCase();
   const isSendRequest = method === "POST" && /^\/(?:send|catalog\/send)(?:[/?-]|$)/.test(path);
   const signal =
@@ -118,7 +167,15 @@ export async function request<T>(
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let sendStarted = false;
     try {
-      const runtime = await getRuntime(id);
+      await resetByAccount.get(sessionId);
+      const epoch = baileysSessionEpoch(id);
+      if (epoch !== requestEpoch || sessionResolver(id).sessionAccountId !== sessionId) {
+        throw Object.assign(new Error("账号登录位置已切换，请重试"), { status: 409 });
+      }
+      const runtime = await getRuntime(sessionId);
+      if (epoch !== baileysSessionEpoch(id)) {
+        throw Object.assign(new Error("账号会话已重置，请重试"), { status: 409 });
+      }
       signal.throwIfAborted();
       sendStarted = isSendRequest;
       const response = await fetch(`${runtime.baseUrl}${path}`, {
@@ -127,7 +184,8 @@ export async function request<T>(
         headers: {
           "Content-Type": "application/json",
           "X-Wap-Token": runtime.token,
-          "X-Wap-Account-Id": id,
+          "X-Wap-Account-Id": sessionId,
+          ...(identity.phoneE164 ? { "X-Wap-Expected-Phone": identity.phoneE164 } : {}),
           ...init?.headers,
         },
       });
@@ -135,6 +193,11 @@ export async function request<T>(
         if (isSendRequest && response.ok) throw error;
         return {};
       });
+      if (epoch !== baileysSessionEpoch(id)) {
+        throw Object.assign(new Error("账号会话已重置，已丢弃旧会话响应"), {
+          status: 409, deliveryUncertain: sendStarted || undefined,
+        });
+      }
       if (!response.ok) {
         const error = new Error(
           (data as { error?: string }).error ||
@@ -143,9 +206,21 @@ export async function request<T>(
         (error as Error & { status?: number }).status = response.status;
         throw error;
       }
+      if (data?.accountId && data.accountId !== sessionId) {
+        throw Object.assign(new Error("Baileys 返回了其他账号的数据，已阻止同步"), {
+          status: 409, deliveryUncertain: sendStarted || undefined,
+        });
+      }
       // 两个发送端点的成功契约均为 { ok: true, id?, jid? }。
       if (isSendRequest && (!data || typeof data !== "object" || data.ok !== true)) {
         throw new Error("Baileys 发送响应未确认成功");
+      }
+      if (data?.accountId) data.accountId = id;
+      for (const key of ["events", "deletionEvents"]) {
+        if (Array.isArray(data?.[key])) data[key] = data[key].map((event: Record<string, unknown>) => ({
+          ...event, accountId: id, deviceId: id,
+          payload: { ...(event.payload as Record<string, unknown>), accountId: id },
+        }));
       }
       return data as T;
     } catch (error) {
@@ -167,7 +242,7 @@ export async function request<T>(
       ) {
         break;
       }
-      invalidateBaileysRuntime(id);
+      invalidateBaileysRuntime(sessionId);
       const msg = error instanceof Error ? error.message : String(error);
       if (
         msg.includes("桌面壳") ||
@@ -199,6 +274,21 @@ export const baileysStatus = async (accountId?: string | null) => {
     accountId
   );
   assertProtocol(status);
+  const id = resolveBaileysAccountId(accountId);
+  const epoch = baileysSessionEpoch(id);
+  const sessionId = sessionResolver(id).sessionAccountId;
+  const digits = status.user?.id?.split("@")[0]?.split(":")[0];
+  if (digits && /^\d{7,15}$/.test(digits) && status.connection !== "qr" && status.connection !== "logged_out") {
+    observedSessionPhones.set(sessionId, `+${digits}`);
+  } else observedSessionPhones.delete(sessionId);
+  loginObserver?.(id, status, observedSessionPhones);
+  if (epoch !== baileysSessionEpoch(id)) {
+    throw Object.assign(new Error("号码已切换到对应的历史记录，请等待连接刷新"), { status: 409 });
+  }
+  const expected = sessionResolver(id).phoneE164;
+  if (expected && digits && expected !== `+${digits}`) {
+    throw Object.assign(new Error(`此记录属于 ${expected}，当前登录号码不一致，已停止同步和发送。请使用对应号码或新增账号。`), { status: 409 });
+  }
   return status;
 };
 

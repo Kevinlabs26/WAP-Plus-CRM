@@ -163,10 +163,15 @@ test('cancelling an AI service suppresses late failure callbacks, and switching 
   } finally { f.unmount(); }
 });
 
-function browserFixture() {
+function browserFixture(onStart) {
   const originalWindow = globalThis.window; let recognition;
   globalThis.window = { setTimeout: fn => { queueMicrotask(fn); return 1; }, clearTimeout() {},
-    SpeechRecognition: class { constructor() { recognition = this; } start() {} stop() {} abort() {} } };
+    SpeechRecognition: class {
+      constructor() { recognition = this; this.starts = 0; this.aborts = 0; }
+      start() { this.starts++; onStart?.(this); }
+      stop() {}
+      abort() { this.aborts++; }
+    } };
   const f = fixture('browser');
   return { f, get recognition() { return recognition; }, cleanup() { f.unmount(); globalThis.window = originalWindow; },
     interim(text) { recognition.onresult({ resultIndex: 0, results: [{ isFinal: false, 0: { transcript: text } }] }); } };
@@ -178,8 +183,58 @@ test('browser recognition failure restores the original draft and reports once d
     await b.f.render().handleToggleVoiceInput(); b.interim('临时识别'); assert.equal(b.f.draft, '临时识别');
     b.recognition.onerror({ error: 'network' }); b.recognition.onerror({ error: 'network' });
     assert.equal(b.f.draft, '原有报价草稿');
+    assert.equal(b.f.render().voiceInputOpen, false);
+    assert.equal(b.f.render().voiceInputBusy, false);
+    assert.equal(b.f.render().voiceInputEngineLabel, '');
+    assert.ok(b.recognition.aborts > 0);
+    assert.match(b.f.toasts[0][0], /语音服务连接失败.*AI 转写/);
     await b.f.render().handleFinishVoiceInput();
     assert.equal(b.f.draft, '原有报价草稿'); assert.equal(b.f.toasts.length, 1); assert.equal(b.f.toasts[0][1], 'error');
+    const failed = b.recognition;
+    await b.f.render().handleToggleVoiceInput();
+    assert.notEqual(b.recognition, failed);
+    assert.equal(b.f.render().voiceInputOpen, true);
+    failed.onerror({ error: 'network' });
+    assert.equal(b.f.render().voiceInputOpen, true);
+    b.interim('重新识别');
+    await b.f.render().handleFinishVoiceInput();
+    assert.equal(b.f.draft, '重新识别'); assert.equal(b.f.toasts.length, 1);
+  } finally { b.cleanup(); }
+});
+
+test('an error during browser startup cannot leave a failed session listening', async () => {
+  const b = browserFixture(recognition => recognition.onerror({ error: 'network' }));
+  try {
+    await b.f.render().handleToggleVoiceInput();
+    assert.equal(b.f.render().voiceInputOpen, false);
+    assert.equal(b.f.render().voiceInputBusy, false);
+    assert.equal(b.f.render().voiceInputEngineLabel, '');
+    assert.equal(b.f.draft, '原有报价草稿'); assert.equal(b.f.toasts.length, 1);
+    assert.ok(b.recognition.aborts > 0);
+  } finally { b.cleanup(); }
+});
+
+test('a pending browser restart does not run after an error', async () => {
+  const b = browserFixture();
+  try {
+    await b.f.render().handleToggleVoiceInput();
+    b.recognition.onend();
+    b.recognition.onerror({ error: 'network' });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(b.recognition.starts, 1);
+    assert.equal(b.f.render().voiceInputOpen, false); assert.equal(b.f.toasts.length, 1);
+  } finally { b.cleanup(); }
+});
+
+test('a failed browser restart closes the listening state and restores the draft', async () => {
+  const b = browserFixture(recognition => { if (recognition.starts > 1) throw new Error('restart unavailable'); });
+  try {
+    await b.f.render().handleToggleVoiceInput(); b.interim('临时识别'); b.recognition.onend();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(b.f.render().voiceInputOpen, false);
+    assert.equal(b.f.render().voiceInputBusy, false);
+    assert.equal(b.f.draft, '原有报价草稿'); assert.equal(b.f.toasts.length, 1);
+    assert.match(b.f.toasts[0][0], /已中断/);
   } finally { b.cleanup(); }
 });
 

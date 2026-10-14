@@ -316,6 +316,23 @@ pub fn read_dropped_file(path: String) -> Result<DroppedFile, String> {
     })
 }
 
+#[tauri::command]
+pub fn clipboard_write_image(app: AppHandle, png_base64: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let window = app
+            .get_webview_window("main")
+            .ok_or_else(|| "主窗口不可用".to_string())?;
+        let hwnd = window.hwnd().map_err(|e| format!("获取窗口句柄失败：{e}"))?;
+        crate::clipboard::write_png(hwnd.0, &png_base64)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, png_base64);
+        Err("当前平台暂不支持原生图片剪贴板".into())
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct AdbDevice {
     pub serial: String,

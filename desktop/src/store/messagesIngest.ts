@@ -39,6 +39,7 @@ function sameWaveform(a?: number[], b?: number[]): boolean {
 function shallowMessageSame(a: Message, b: Message): boolean {
   return (
     a.id === b.id &&
+    a.accountPhoneE164 === b.accountPhoneE164 &&
     a.body === b.body &&
     a.mediaType === b.mediaType &&
     a.mediaUrl === b.mediaUrl &&
@@ -98,6 +99,7 @@ export function applyMessagesSync(opts: {
   items: unknown[];
   payload: Record<string, unknown>;
   deviceId: string;
+  accountPhoneE164?: string;
   selfName: string;
   eventTs?: number;
   /** 复制 messages 前的原数组，用于跨同步分块复用索引。 */
@@ -341,6 +343,7 @@ export function applyMessagesSync(opts: {
           messages[localIdx] = {
             ...prev,
             waMessageId: waId || prev.waMessageId,
+            accountPhoneE164: opts.accountPhoneE164 || prev.accountPhoneE164,
             sentAt: prev.sentAt || sentAt,
             // 回声只保证至少 sent，不降级已 delivered/read
             deliveryStatus:
@@ -358,9 +361,12 @@ export function applyMessagesSync(opts: {
           const chatIndex = findChatIdx(keepChatId);
           if (chatIndex >= 0) {
             const prevChat = chats[chatIndex];
+            if (!prevChat.hasMessageHistory && mediaType !== "system" && !systemKind) {
+              chats[chatIndex] = { ...prevChat, hasMessageHistory: true };
+            }
             if (!prevChat.updatedAt || sentAt >= prevChat.updatedAt) {
               chats[chatIndex] = {
-                ...prevChat,
+                ...chats[chatIndex],
                 lastMessage: body,
                 updatedAt: sentAt,
                 unread: 0,
@@ -419,6 +425,10 @@ export function applyMessagesSync(opts: {
           !item.key &&
           (dupIn.mediaUrl || !string(item.mediaUrl ?? item.mediaDataUrl, 20))
         ) {
+          if (opts.accountPhoneE164 && !dupIn.accountPhoneE164 &&
+              (dupIn.waMessageId === waId || dupIn.waKey?.id === waId || dupIn.id === waId)) {
+            messages[messages.indexOf(dupIn)] = { ...dupIn, accountPhoneE164: opts.accountPhoneE164 };
+          }
           continue;
         }
       }
@@ -438,6 +448,7 @@ export function applyMessagesSync(opts: {
         const prev = messages[existingIdx];
         const next = {
           ...prev,
+          accountPhoneE164: opts.accountPhoneE164 || prev.accountPhoneE164,
           body: body || prev.body,
           mediaType: mediaType || prev.mediaType,
           mediaUrl: mediaUrl || prev.mediaUrl,
@@ -486,6 +497,12 @@ export function applyMessagesSync(opts: {
         }
         if (waId) ensureMsgIndex().set(waId, existingIdx);
         if (waKey?.id) ensureMsgIndex().set(waKey.id, existingIdx);
+        if (mediaType !== "system" && !systemKind) {
+          const chatIndex = findChatIdx(chatId);
+          if (chatIndex >= 0 && !chats[chatIndex].hasMessageHistory) {
+            chats[chatIndex] = { ...chats[chatIndex], hasMessageHistory: true };
+          }
+        }
         continue;
       }
 
@@ -495,6 +512,7 @@ export function applyMessagesSync(opts: {
         chatId,
         accountId: deviceId,
         direction,
+        accountPhoneE164: opts.accountPhoneE164,
         body,
         sentAt,
         deliveryStatus: direction === "out" ? "sent" : undefined,
@@ -618,6 +636,7 @@ export function applyMessagesSync(opts: {
         isGroup,
         hasOutgoingHistory:
           chats[chatIndex]?.hasOutgoingHistory || conversationOutgoing,
+        hasMessageHistory: chats[chatIndex]?.hasMessageHistory || !isSystemMsg,
       };
       if (chatIndex >= 0) {
         const prev = chats[chatIndex];
@@ -663,6 +682,7 @@ export function applyMessagesSync(opts: {
               isGroup: isGroup || prev.isGroup,
               hasOutgoingHistory:
                 prev.hasOutgoingHistory || conversationOutgoing,
+              hasMessageHistory: prev.hasMessageHistory || !isSystemMsg,
             };
       } else {
         chats.push(chat);

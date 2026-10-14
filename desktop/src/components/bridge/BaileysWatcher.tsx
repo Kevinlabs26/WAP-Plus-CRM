@@ -3,6 +3,7 @@ import {
   baileysEvents,
   baileysFetchAvatar,
   baileysLabels,
+  baileysSessionEpoch,
   baileysStatus,
   baileysSync,
 } from "@/lib/baileys";
@@ -13,6 +14,7 @@ import { useAppStore } from "@/store/appStore";
 import { flushPersist, persist } from "@/store/persist";
 import { useI18n } from "@/i18n";
 import { waitForMediaCacheWrites } from "@/lib/mediaCache";
+import { resolveAccountIdentity } from "@/lib/accountIdentity";
 import type { BridgeEvent } from "@/lib/bridge";
 import {
   extractAccountHumanName,
@@ -92,6 +94,7 @@ function scheduleAccountsPersist() {
 }
 
 type AcctRuntime = {
+  sessionEpoch: number;
   cursor: number;
   prevConnected: boolean;
   syncing: boolean;
@@ -108,6 +111,7 @@ type AcctRuntime = {
 
 function emptyRt(): AcctRuntime {
   return {
+    sessionEpoch: 0,
     cursor: 0,
     prevConnected: false,
     syncing: false,
@@ -162,6 +166,7 @@ export function BaileysWatcher() {
       if (!pendingCursorByAccount.size || !useAppStore.getState().hydrated ||
           pendingEvents.length || ingestQueue.length || ingestInFlight) return;
       const cursorSnapshot = new Map(pendingCursorByAccount);
+      const epochs = new Map([...cursorSnapshot.keys()].map(id => [id, baileysSessionEpoch(id)]));
       void Promise.all([
         waitForMediaCacheWrites(),
         flushPersist(() => useAppStore.getState()),
@@ -171,7 +176,8 @@ export function BaileysWatcher() {
           for (const [accountId, cursor] of cursorSnapshot) {
             // Newer events may have arrived while SQLite was saving; keep
             // their cursor pending until the next durable snapshot.
-            if (pendingCursorByAccount.get(accountId) === cursor) {
+            if (epochs.get(accountId) === baileysSessionEpoch(accountId) &&
+                pendingCursorByAccount.get(accountId) === cursor) {
               writeCursor(accountId, cursor);
               pendingCursorByAccount.delete(accountId);
             }
@@ -236,6 +242,14 @@ export function BaileysWatcher() {
           break;
         }
       }
+      merged = merged.filter((event) => {
+        const epoch = (event as BridgeEvent & { sessionEpoch?: number }).sessionEpoch;
+        const id = event.deviceId || "";
+        if (epoch === undefined || epoch === baileysSessionEpoch(id)) return true;
+        pendingCursorByAccount.delete(id);
+        writeCursor(id, 0);
+        return false;
+      });
       if (merged.length) {
         ingestInFlight = true;
         try {
@@ -401,8 +415,15 @@ export function BaileysWatcher() {
 
     const rt = (accountId: string) => {
       let r = byAccount.current.get(accountId);
+      const epoch = baileysSessionEpoch(accountId);
+      if (r && r.sessionEpoch !== epoch) {
+        r = undefined;
+        pendingCursorByAccount.delete(accountId);
+        writeCursor(accountId, 0);
+      }
       if (!r) {
         r = emptyRt();
+        r.sessionEpoch = epoch;
         r.cursor = readCursor(accountId);
         byAccount.current.set(accountId, r);
       }
@@ -421,6 +442,7 @@ export function BaileysWatcher() {
         ...ev,
         deviceId: accountId,
         accountId,
+        sessionEpoch: baileysSessionEpoch(accountId),
         payload,
       } as T;
     };
@@ -472,13 +494,14 @@ export function BaileysWatcher() {
       const r = rt(accountId);
       if (r.syncing || cancelled) return;
       r.syncing = true;
+      const epoch = baileysSessionEpoch(accountId);
       try {
         await new Promise((res) =>
           window.setTimeout(res, opts?.quiet ? 400 : 1500)
         );
-        if (cancelled) return;
+        if (cancelled || epoch !== baileysSessionEpoch(accountId)) return;
         const result = await baileysSync(accountId);
-        if (cancelled) return;
+        if (cancelled || epoch !== baileysSessionEpoch(accountId)) return;
         // 空快照也算一次完整尝试；历史数据会通过 events 主动到达，禁止首分钟循环 /sync。
         r.lastCatchupAt = Date.now();
         const n = result.contacts?.length ?? 0;
@@ -555,6 +578,7 @@ export function BaileysWatcher() {
     ) => {
       const r = rt(accountId);
       const raw = status.connection;
+      const epoch = baileysSessionEpoch(accountId);
       const now = Date.now();
       const stickyMs = 90_000;
       const recentlyConnected = now - r.lastConfirmedConnectedAt < stickyMs;
@@ -603,21 +627,13 @@ export function BaileysWatcher() {
                     : raw === "error"
                       ? "error"
                       : prev.status;
-          // 出码/登出：清掉继承名；已连接：status 优先，否则保留本槽旧名
-          const nextName = statusHumanName
-            ? statusHumanName
-            : needScan || raw === "starting" || raw === "qr"
-              ? undefined
-              : extractAccountHumanName(prev.userName) ||
-                prev.userName ||
-                statusPhoneE164 ||
-                undefined;
-          const nextPhoneE164 = prev.phoneE164 || statusPhoneE164 || undefined;
-          // 出码/登出清掉头像；已连接保留
-          const nextAvatar =
-            needScan || raw === "logged_out"
-              ? undefined
-              : prev.avatarUrl;
+          const identity = resolveAccountIdentity(prev, {
+            connection: raw as Parameters<typeof resolveAccountIdentity>[1]["connection"],
+            user: status.user,
+          });
+          const nextName = identity.userName;
+          const nextPhoneE164 = identity.phoneE164;
+          const nextAvatar = identity.avatarUrl;
           if (
             prev.status !== nextStatus ||
             prev.userName !== nextName ||
@@ -651,13 +667,13 @@ export function BaileysWatcher() {
             }
           }
           // 已连接：无头像则拉本人头像（self=1；节流避免每轮 status 狂打 /avatar）
-          if (connectedNow && !prev.avatarUrl && !needScan) {
+          if (connectedNow && !nextAvatar && !needScan) {
             const w = window as unknown as {
               __wapSelfAvatarAt?: Record<string, number>;
             };
             const stamp = w.__wapSelfAvatarAt || (w.__wapSelfAvatarAt = {});
             const lastAt = stamp[accountId] || 0;
-            if (Date.now() - lastAt > 45_000) {
+            if (identity.changed || Date.now() - lastAt > 45_000) {
               stamp[accountId] = Date.now();
               const bare =
                 typeof status.user?.id === "string"
@@ -676,24 +692,14 @@ export function BaileysWatcher() {
                   const cur = useAppStore.getState();
                   const list = cur.settings.waAccounts || [];
                   const at = list.findIndex((a) => a.id === accountId);
-                  if (at < 0 || list[at]?.avatarUrl === url) return;
+                  if (cancelled || epoch !== baileysSessionEpoch(accountId) || at < 0 || list[at]?.status !== "connected" ||
+                      list[at]?.phoneE164 !== nextPhoneE164 || list[at]?.avatarUrl === url) return;
                   const patched = list.map((a, i) =>
                     i === at
                       ? {
                           ...a,
                           avatarUrl: url,
-                          phoneE164:
-                            a.phoneE164 ||
-                            (typeof status.user?.id === "string"
-                              ? (() => {
-                                  const d = status
-                                    .user!.id!.split("@")[0]
-                                    ?.split(":")[0];
-                                  return d && /^\d{7,15}$/.test(d)
-                                    ? `+${d}`
-                                    : a.phoneE164;
-                                })()
-                              : a.phoneE164),
+                          phoneE164: nextPhoneE164,
                           updatedAt: new Date().toISOString(),
                         }
                       : a
@@ -794,6 +800,7 @@ export function BaileysWatcher() {
       r.pollInFlight = true;
       r.lastPollAt = now;
       const startedAt = performance.now();
+      const epoch = baileysSessionEpoch(accountId);
       let eventCount = 0;
       try {
         const isLive = accountId === liveId();
@@ -801,11 +808,12 @@ export function BaileysWatcher() {
         const pullStatus =
           isLive || !r.prevConnected || Math.floor(now / 8000) % 2 === 0;
 
-        const result = await baileysEvents(r.cursor, accountId);
         const status = pullStatus
           ? await baileysStatus(accountId)
           : null;
-        if (cancelled) return;
+        if (cancelled || epoch !== baileysSessionEpoch(accountId)) return;
+        const result = await baileysEvents(r.cursor, accountId);
+        if (cancelled || epoch !== baileysSessionEpoch(accountId)) return;
 
         r.failStreak = 0;
         if (isLive) toastedFail.current = false;
@@ -981,7 +989,6 @@ export function BaileysWatcher() {
     let backgroundRotate = 0;
     const pollAll = async (force = false) => {
       if (tickInFlight) return;
-      if (typeof document !== "undefined" && document.hidden) return;
       if (!force && Date.now() - resumedAt < 1200) return;
       // 输入尚未开放时不轮询（DeferredWatchers 也应未挂载；双保险）
       if (!useAppStore.getState().uiReady) return;

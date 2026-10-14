@@ -120,6 +120,8 @@ export interface ChatPreview {
   replyPendingSince?: string;
   /** 完整历史中是否有成功的我方消息；按主动联系设置决定是否排除。 */
   hasOutgoingHistory?: boolean;
+  /** 完整消息库中是否有此账号的真实往来；预览文案不作为证明。 */
+  hasMessageHistory?: boolean;
   unread: number;
   updatedAt: string;
   phoneId: string;
@@ -202,6 +204,8 @@ export interface Message {
   sentAt: string;
   /** 归属 WhatsApp 账号槽（多号隔离；缺省时从 chat.accountId 推断） */
   accountId?: string;
+  /** 同步/发送时绑定的本机号码，保留历史归属证据。 */
+  accountPhoneE164?: string;
   /** 出站投递；缺省 = 已发送（兼容旧数据） */
   deliveryStatus?: MessageDeliveryStatus;
   lastError?: string;

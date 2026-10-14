@@ -4,6 +4,7 @@
 import { buildPersonKey } from "@/lib/utils";
 import { isWaAccountConnected } from "@/lib/accountConnection";
 import { accountIdsInSameBucket } from "@/store/accountScope";
+import { chatHasMessageHistory, isConversationMessage } from "./chatActivity";
 import type { WaAccount } from "@/types/account";
 import type { ChatPreview, Contact, Message } from "@/types/crm";
 
@@ -34,12 +35,6 @@ export type PersonCollision = {
   /** 窗口（小时） */
   windowHours: number;
 };
-
-function chatPreviewHasActivity(
-  chat: Pick<ChatPreview, "lastMessage" | "unread"> | null | undefined
-): boolean {
-  return Boolean((chat?.lastMessage || "").trim() || (chat?.unread || 0) > 0);
-}
 
 export function resolvePersonKeyForContact(
   contact?: Pick<
@@ -113,14 +108,15 @@ function lastMessageInThread(
   let best: Message | undefined;
   for (const m of messages) {
     // 系统事件 / 群变更广播不算「真实往来」
-    if (m.mediaType === "system" || m.systemKind) continue;
+    if (!isConversationMessage(m)) continue;
     const hit =
       (chatId && m.chatId === chatId) ||
       m.contactId === contactId ||
       m.chatId === `bridge-chat-${contactId}`;
     if (!hit) continue;
     // 同联系人跨号：消息必须归属当前账号，否则会把 A 号的消息算成 B 号的往来
-    if (accountId && m.accountId && m.accountId !== accountId) continue;
+    const owner = m.accountId || m.deviceId;
+    if (accountId && owner && owner !== accountId) continue;
     if (!best || m.sentAt >= best.sentAt) best = m;
   }
   return best;
@@ -155,7 +151,7 @@ export function buildPersonThreadRows(opts: {
           chat?.id,
           accountId
         );
-        const hasActivity = Boolean(last) || chatPreviewHasActivity(chat);
+        const hasActivity = Boolean(last) || chatHasMessageHistory(chat);
         return {
           contactId: c.id,
           chatId,
@@ -196,7 +192,7 @@ export function buildPersonThreadRows(opts: {
       ) || opts.chats.find((ch) => ch.contactId === c.id);
     const chatId = chat?.id || `bridge-chat-${c.id}`;
     const last = lastMessageInThread(opts.messages, c.id, chat?.id, owner);
-    const hasActivity = Boolean(last) || chatPreviewHasActivity(chat);
+    const hasActivity = Boolean(last) || chatHasMessageHistory(chat);
     const active = opts.focusAccountId
       ? owner === opts.focusAccountId
       : c.id === opts.selectedContactId || chat?.id === opts.selectedChatId;

@@ -88,7 +88,8 @@ export function applyMessagesAck(
   messages: Message[],
   items: unknown[],
   indexFactory?: MessageIdIndexFactory,
-  accountId?: string
+  accountId?: string,
+  onAck?: (message: Message) => void
 ): Message[] {
   if (!items.length) return messages;
 
@@ -113,7 +114,8 @@ export function applyMessagesAck(
     if (idx == null) continue;
     // 已被本批改过则读 next
     const prev = (copied ? next[idx] : messages[idx]) as Message;
-    if (accountId && prev.accountId && prev.accountId !== accountId) continue;
+    const owner = prev.accountId || prev.deviceId;
+    if (accountId && owner && owner !== accountId) continue;
     if (prev.direction !== "out") continue;
     // 同等级重复 ack 不重建对象（避免击穿消息缓存导致气泡闪烁）
     if (deliveryAckRank(ack) <= deliveryAckRank(prev.deliveryStatus)) continue;
@@ -125,6 +127,7 @@ export function applyMessagesAck(
       ...prev,
       deliveryStatus: ack,
     };
+    onAck?.(next[idx]);
   }
   return next;
 }

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+
+// Account phone fixture is in NANPA's fictional 202-555-0100–0199 range.
 import { isAwaitingReply } from '../src/lib/replyStatus.ts';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
@@ -22,13 +24,14 @@ const { createUiSlice, createMessageActionsSlice } = await import('data:text/jav
 test('actual store actions keep a read/queued/failed chat pending until successful delivery or manual handling', () => {
   let state = { chats: [{ id: 'chat', contactId: 'contact', lastMessageDirection: 'in', updatedAt: '2026-10-03T10:00:00Z', unread: 1 }],
     contacts: [], messages: [], selectedChatId: 'chat', selectedContactId: null, draftReplyByChatId: {}, unreadHoldUntilByChatId: {},
-    settings: {}, recomputeStats() {}, logActivity() {} };
+    settings: {waAccounts:[{id:'wa-a',historyPhoneE164:'+12025550101',sessionAccountId:'wa-slot-b'}]}, recomputeStats() {}, logActivity() {} };
   const ctx = { get: () => state, set: patch => { state = { ...state, ...(typeof patch === 'function' ? patch(state) : patch) }; } };
   Object.assign(state, createUiSlice(ctx), createMessageActionsSlice(ctx));
   state.setSelectedChat('chat');
   assert.equal(state.chats[0].unread, 0);
   assert.equal(isAwaitingReply(state.chats[0]), true);
-  const id = state.enqueueOutgoingMessage({ chatId: 'chat', body: 'reply', deliveryStatus: 'queued' });
+  const id = state.enqueueOutgoingMessage({ chatId: 'chat', accountId:'wa-a', body: 'reply', deliveryStatus: 'queued' });
+  assert.equal(state.messages[0].accountPhoneE164,'+12025550101');
   assert.equal(isAwaitingReply(state.chats[0]), true);
   state.updateMessageDelivery(id, { deliveryStatus: 'failed' });
   assert.equal(isAwaitingReply(state.chats[0]), true);

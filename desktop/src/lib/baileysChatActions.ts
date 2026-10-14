@@ -3,12 +3,16 @@ import type {
   BaileysMediaResponse,
   BaileysOkResponse,
 } from "@shared/baileysProtocol";
-import { request } from "./baileysCore";
+import { baileysResetAccount, request, resolveBaileysAccountId } from "./baileysCore";
 
 export type ChatModifyAction = BaileysChatModifyAction;
 
-export const baileysLogout = (accountId?: string | null) =>
-  request<BaileysOkResponse>("/logout", { method: "POST" }, accountId);
+export async function baileysLogout(accountId?: string | null) {
+  const id = resolveBaileysAccountId(accountId);
+  const result = await request<BaileysOkResponse>("/logout", { method: "POST" }, id);
+  await baileysResetAccount(id);
+  return result;
+}
 
 export const baileysChatModify = (
   action: ChatModifyAction,
@@ -163,18 +167,24 @@ export const baileysDownloadMedia = (
   }, opts?.accountId);
 
 /** 清空会话并重新要二维码（按钮「重新获取二维码」必须走这里） */
-export const baileysRestart = (
+export const baileysRestart = async (
   clearAuth = true,
   accountId?: string | null
-) =>
-  request<{ ok: boolean; message?: string; connection?: string }>(
+) => {
+  const id = resolveBaileysAccountId(accountId);
+  if (clearAuth) {
+    await baileysResetAccount(id);
+    return { ok: true };
+  }
+  return request<{ ok: boolean; message?: string; connection?: string }>(
     "/restart",
     {
       method: "POST",
       body: JSON.stringify({ clearAuth }),
     },
-    accountId
+    id
   );
+};
 
 /** 拉联系人/群成员头像；quality=image 为高清（点开级） */
 export async function baileysFetchAvatar(

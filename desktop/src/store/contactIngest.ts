@@ -137,6 +137,8 @@ export function ensureIngestContact(
           const kc = chats[keepChatIdx];
           chats[keepChatIdx] = {
             ...kc,
+            hasMessageHistory: kc.hasMessageHistory === true || dropChat.hasMessageHistory === true
+              ? true : kc.hasMessageHistory ?? dropChat.hasMessageHistory,
             lastMessage:
               (dropChat.updatedAt || "") >= (kc.updatedAt || "")
                 ? dropChat.lastMessage || kc.lastMessage
@@ -369,6 +371,7 @@ export function applyContactsSync(
         contactId: contact.id,
         contactName: contact.name,
         lastMessage: meaningfulPreview ? lastFromSync.trim() : "",
+        hasMessageHistory: false,
         unread: 0,
         updatedAt,
         phoneId: deviceId,

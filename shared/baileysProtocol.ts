@@ -31,6 +31,7 @@ export interface BaileysUser {
 }
 
 export interface BaileysBridgeStatus {
+  accountId?: string;
   protocolVersion: number;
   baileysVersion: string;
   connection: BaileysConnectionState;

@@ -5,7 +5,7 @@ const ALLOWED_ORIGINS = new Set([
 ]);
 const CORS_HEADERS = {
   "Access-Control-Allow-Headers":
-    "Content-Type, X-Wap-Token, X-Wap-Account-Id, Authorization",
+    "Content-Type, X-Wap-Token, X-Wap-Account-Id, X-Wap-Expected-Phone, Authorization",
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
   "Access-Control-Max-Age": "86400",
 };

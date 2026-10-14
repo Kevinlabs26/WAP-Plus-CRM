@@ -18,6 +18,7 @@ import {
 } from "@/lib/accountLabels";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { BaileysPrivacyPanel } from "./BaileysPrivacyPanel";
+import { resolveAccountIdentity } from "@/lib/accountIdentity";
 
 type Props = {
   className?: string;
@@ -84,12 +85,16 @@ export function BaileysConnectCard({
     (s) => s.settings.liveBaileysAccountId || s.settings.activeAccountId
   );
   const slotAccountId = accountIdProp || fallbackSlotId;
+  const currentSlotRef = useRef(slotAccountId);
+  currentSlotRef.current = slotAccountId;
+  const statusGeneration = useRef(0);
   const popupAutoStartKey = `wap-baileys-popup-autostart:${slotAccountId || "default"}`;
   const busy = busyAction !== null;
   const statusUserId = status?.user?.id || "";
   const accountPhone = displayPhone(`+${statusUserId.split(":")[0].split("@")[0] || ""}`);
 
   const applyStatus = (next: BaileysStatus) => {
+    if (currentSlotRef.current !== slotAccountId) return;
     const slotStatus =
       next.connection === "connected"
         ? "connected"
@@ -104,11 +109,16 @@ export function BaileysConnectCard({
       const settings = useAppStore.getState().settings;
       const accounts = settings.waAccounts || [];
       const index = accounts.findIndex((account) => account.id === slotAccountId);
-      if (index >= 0 && accounts[index]?.status !== slotStatus) {
+      const identity = index >= 0 ? resolveAccountIdentity(accounts[index], next) : null;
+      if (index >= 0 && identity && (accounts[index]?.status !== slotStatus ||
+          accounts[index]?.phoneE164 !== identity.phoneE164 ||
+          accounts[index]?.userName !== identity.userName ||
+          accounts[index]?.avatarUrl !== identity.avatarUrl)) {
         updateSettings({
           waAccounts: accounts.map((account, accountIndex) =>
             accountIndex === index
-              ? { ...account, status: slotStatus, updatedAt: new Date().toISOString() }
+              ? { ...account, phoneE164: identity.phoneE164, userName: identity.userName,
+                  avatarUrl: identity.avatarUrl, status: slotStatus, updatedAt: new Date().toISOString() }
               : account
           ),
         });
@@ -189,6 +199,7 @@ export function BaileysConnectCard({
       return;
     }
     setBusyAction("qr");
+    statusGeneration.current++;
     setHint(t("baileysConnect.generatingNewQr"));
     setError("");
     setStatus((s) =>
@@ -201,6 +212,7 @@ export function BaileysConnectCard({
       const deadline = Date.now() + 45_000;
       while (Date.now() < deadline) {
         await new Promise((r) => window.setTimeout(r, 800));
+        if (currentSlotRef.current !== slotAccountId) return;
         const next = await baileysStatus(slotAccountId);
         applyStatus(next);
         if (next.qrDataUrl || next.connection === "connected") break;
@@ -302,6 +314,11 @@ export function BaileysConnectCard({
     // 账号列表为空时不要自动查询默认 runtime；否则删除最后一个账号后会重新启动旧会话。
     // 用户主动点击「获取二维码」仍会走 requestNewQr，允许创建新账号。
     if (!slotAccountId && !autoStart) return;
+    setStatus(undefined);
+    setError("");
+    setHint("");
+    setPairingCode("");
+    setLastSyncedAt(undefined);
     let cancelled = false;
     const tick = async () => {
       if (!tauri) {
@@ -313,8 +330,9 @@ export function BaileysConnectCard({
         return;
       }
       try {
+        const generation = statusGeneration.current;
         const next = await baileysStatus(slotAccountId);
-        if (!cancelled) applyStatus(next);
+        if (!cancelled && generation === statusGeneration.current) applyStatus(next);
       } catch (reason) {
         if (!cancelled)
           setError(reason instanceof Error ? reason.message : String(reason));
@@ -343,6 +361,8 @@ export function BaileysConnectCard({
         if (cancelled) return;
         applyStatus(cur);
         if (cur.connection === "connected") return;
+        // 网络错误不等于凭据失效；自动开登录窗不能清掉仍有效的会话。
+        if (cur.signedIn) return;
         // 重连中：等 bridge 自己恢复，不要 restart 清掉登录
         if (
           cur.connection === "reconnecting" ||
@@ -370,7 +390,7 @@ export function BaileysConnectCard({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoStart, tauri]);
+  }, [autoStart, tauri, slotAccountId]);
 
   // 禁止：状态一变就 baileysRestart(true) —— 会把已登录会话清掉并导致顶栏闪烁
 

@@ -65,6 +65,7 @@ export function createMessageActionsSlice({
         channelId: input.channelId,
         deviceId: input.deviceId,
         accountId,
+        accountPhoneE164: state.settings.waAccounts?.find(a => a.id === accountId)?.historyPhoneE164,
         systemKind: input.systemKind,
       };
       set((state) => ({
@@ -79,6 +80,7 @@ export function createMessageActionsSlice({
                   : c.replyPendingSince ?? (c.lastMessageDirection === "in" ? c.updatedAt : ""),
                 hasOutgoingHistory:
                   c.hasOutgoingHistory || isConversationOutgoing(msg),
+                hasMessageHistory: c.hasMessageHistory || isConversationOutgoing(msg),
                 updatedAt: sentAt,
                 unread: 0,
               }
@@ -129,7 +131,7 @@ export function createMessageActionsSlice({
         set((state) => ({
           chats: state.chats.map((chat) =>
             chat.id === next.chatId
-              ? { ...chat, hasOutgoingHistory: true,
+              ? { ...chat, hasOutgoingHistory: true, hasMessageHistory: true,
                   replyPendingSince: !chat.replyPendingSince || next.sentAt >= chat.replyPendingSince ? "" : chat.replyPendingSince }
               : chat
           ),

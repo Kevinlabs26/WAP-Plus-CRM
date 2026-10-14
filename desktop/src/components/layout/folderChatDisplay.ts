@@ -1,8 +1,5 @@
 import type { ChatPreview, Contact } from "@/types/crm";
-
-function chatPreviewHasActivity(chat: ChatPreview): boolean {
-  return Boolean((chat.lastMessage || "").trim() || (chat.unread || 0) > 0);
-}
+import { chatHasMessageHistory } from "../../lib/chatActivity.ts";
 
 export type FolderDisplayChat = {
   chat: ChatPreview;
@@ -38,18 +35,18 @@ export function collapseAllAccountFolderChats(
         chat,
         unread: chat.unread || 0,
         activeAccountIds: new Set(
-          chatPreviewHasActivity(chat) ? [accountId] : []
+          chatHasMessageHistory(chat) ? [accountId] : []
         ),
         memberChatIds: [chat.id],
       });
       continue;
     }
     current.unread += chat.unread || 0;
-    if (chatPreviewHasActivity(chat)) current.activeAccountIds.add(accountId);
+    if (chatHasMessageHistory(chat)) current.activeAccountIds.add(accountId);
     current.memberChatIds.push(chat.id);
     if (
-      (chatPreviewHasActivity(chat) && !chatPreviewHasActivity(current.chat)) ||
-      (chatPreviewHasActivity(chat) === chatPreviewHasActivity(current.chat) &&
+      (chatHasMessageHistory(chat) && !chatHasMessageHistory(current.chat)) ||
+      (chatHasMessageHistory(chat) === chatHasMessageHistory(current.chat) &&
         (chat.updatedAt || "") > (current.chat.updatedAt || ""))
     ) {
       current.chat = chat;

@@ -19,6 +19,10 @@ export interface WaAccount {
   userName?: string;
   /** 本机号 E.164（若可得） */
   phoneE164?: string;
+  /** 历史记录所属号码；退出、重新扫码也不能覆盖。 */
+  historyPhoneE164?: string;
+  /** 登录目录与历史账号分离，换位置登录时只切换此映射。 */
+  sessionAccountId?: string;
   /** 本账号头像（Baileys profile pic，可能为 data URL） */
   avatarUrl?: string;
   status: WaAccountStatus;

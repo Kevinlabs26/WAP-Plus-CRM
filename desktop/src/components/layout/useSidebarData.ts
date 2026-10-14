@@ -26,6 +26,7 @@ import {
   type LeadCandidate,
 } from "@/lib/leadInbox";
 import { normalizeLocale } from "@/i18n";
+import { hideEmptySiblingChats } from "@/lib/chatActivity";
 
 const EMPTY_WA: WaAccount[] = [];
 const EMPTY_FOLDERS: ChatFolder[] = [];
@@ -250,7 +251,7 @@ export function useSidebarData({
     [allFilteredChats, groupFilter, messagesByChatId]
   );
 
-  const { chats: filteredChats, hiddenCount: hiddenGroupCount } = useMemo(
+  const { chats: groupFilteredChats, hiddenCount: hiddenGroupCount } = useMemo(
     () =>
       filterGroupChats(
         allFilteredChats,
@@ -260,6 +261,10 @@ export function useSidebarData({
         mentionedChatIds
       ),
     [allFilteredChats, contactById, groupFilter, query, mentionedChatIds]
+  );
+  const filteredChats = useMemo(
+    () => hideEmptySiblingChats(groupFilteredChats, chats, contactById),
+    [groupFilteredChats, chats, contactById]
   );
 
   const getGroupFilterCounts = useCallback(() => {

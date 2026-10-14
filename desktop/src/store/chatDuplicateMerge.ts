@@ -50,6 +50,8 @@ export function mergeImportedContactChatDuplicates(
         isGroup: chat.isGroup || bridge.isGroup,
         hasOutgoingHistory:
           chat.hasOutgoingHistory || bridge.hasOutgoingHistory,
+        hasMessageHistory: chat.hasMessageHistory === true || bridge.hasMessageHistory === true
+          ? true : chat.hasMessageHistory ?? bridge.hasMessageHistory,
       };
     });
   const nextMessages = messages.map((message) => {

@@ -1,5 +1,6 @@
 import type { ChatPreview, Contact, Message } from "@/types/crm";
 import { isConversationOutgoing } from "@/lib/leadInbox";
+import { isConversationMessage } from "@/lib/chatActivity";
 import { isInternalContactName } from "./contactIngestHelpers";
 
 /**
@@ -55,8 +56,14 @@ export function backfillChatPreviewFromMessages(
   const lastBody = new Map<string, string>();
   const lastDirection = new Map<string, Message["direction"]>();
   const chatsWithOutgoing = new Set<string>();
+  const chatsWithHistory = new Set<string>();
+  const ownerByChat = new Map(chats.map((chat) => [chat.id, chat.accountId || chat.phoneId]));
   const pendingByChat = new Map<string, { at: string; incoming: boolean }>();
   for (const m of messages) {
+    const owner = m.accountId || m.deviceId;
+    const chatOwner = ownerByChat.get(m.chatId);
+    if (owner && chatOwner && owner !== chatOwner) continue;
+    if (isConversationMessage(m)) chatsWithHistory.add(m.chatId);
     if (isConversationOutgoing(m)) chatsWithOutgoing.add(m.chatId);
     if (m.mediaType === "system" || m.systemKind) continue;
     if (m.direction === "in" || isConversationOutgoing(m)) {
@@ -75,6 +82,7 @@ export function backfillChatPreviewFromMessages(
   let changed = false;
   const next = chats.map((ch) => {
     const needOutgoing = chatsWithOutgoing.has(ch.id) && !ch.hasOutgoingHistory;
+    const needHistory = chatsWithHistory.has(ch.id) && !ch.hasMessageHistory;
     const at = lastAt.get(ch.id);
     if (!at) {
       if (!needOutgoing) return ch;
@@ -91,7 +99,7 @@ export function backfillChatPreviewFromMessages(
     const needDirection = direction && ch.lastMessageDirection !== direction;
     const pending = pendingByChat.get(ch.id);
     const needPending = ch.replyPendingSince === undefined && pending;
-    if (!needTime && !needBody && !needDirection && !needOutgoing && !needPending) return ch;
+    if (!needTime && !needBody && !needDirection && !needOutgoing && !needPending && !needHistory) return ch;
     changed = true;
     return {
       ...ch,
@@ -99,6 +107,7 @@ export function backfillChatPreviewFromMessages(
       lastMessage: needBody ? body! : ch.lastMessage,
       lastMessageDirection: needDirection ? direction : ch.lastMessageDirection,
       hasOutgoingHistory: needOutgoing ? true : ch.hasOutgoingHistory,
+      hasMessageHistory: needHistory ? true : ch.hasMessageHistory,
       replyPendingSince: needPending ? (pending.incoming ? pending.at : "") : ch.replyPendingSince,
     };
   });

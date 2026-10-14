@@ -57,7 +57,7 @@ export function BaileysLoginModal() {
           </Button>
         </div>
         <div className="p-3">
-          <BaileysConnectCard accountId={accountId} autoStart compact />
+          <BaileysConnectCard key={accountId} accountId={accountId} autoStart compact />
           <button
             type="button"
             className="mt-3 w-full rounded-lg border border-zinc-800 py-2 text-center text-2xs text-zinc-500 hover:border-zinc-700 hover:text-zinc-300"

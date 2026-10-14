@@ -21,7 +21,8 @@ import { VoicePlaybackHost } from "@/components/chat/VoiceBubble";
 import { AutomaticBackupWatcher } from "@/components/bridge/AutomaticBackupWatcher";
 import { useAppStore } from "@/store/appStore";
 import { flushPersist, primePersistBaseline } from "@/store/persist";
-import { setBaileysAccountIdResolver } from "@/lib/baileys";
+import { setBaileysAccountIdResolver, setBaileysSessionResolver } from "@/lib/baileys";
+import { reconcileAccountLogin } from "@/lib/accountIdentity";
 import {
   getRecentMainThreadWork,
   installSyncDebugGlobals,
@@ -683,6 +684,16 @@ export default function App() {
     setBaileysAccountIdResolver(() => {
       const s = useAppStore.getState().settings;
       return s.liveBaileysAccountId || s.activeAccountId || "wa-default";
+    });
+    setBaileysSessionResolver(id => {
+      const account = useAppStore.getState().settings.waAccounts.find(a => a.id === id);
+      return { sessionAccountId: account?.sessionAccountId || id,
+        phoneE164: account?.historyPhoneE164 || account?.phoneE164 };
+    }, (id, status, sessionPhones) => {
+      const store = useAppStore.getState();
+      const accounts = store.settings.waAccounts;
+      const next = reconcileAccountLogin(accounts, id, status, sessionPhones);
+      if (next !== accounts) store.updateSettings({ waAccounts: next });
     });
     setUiReady(false);
 

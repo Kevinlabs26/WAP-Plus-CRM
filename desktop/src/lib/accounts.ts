@@ -3,6 +3,7 @@ import {
   type AccountViewMode,
   type FolderScope,
   type WaAccount,
+  isValidAccountId,
 } from "@/types/account";
 
 /** 技术默认 id（兼容旧数据）；展示名绝不用「主账号」 */
@@ -80,6 +81,9 @@ export function ensureAccounts(list: unknown): WaAccount[] {
       phoneE164: raw?.phoneE164
         ? String(raw.phoneE164).slice(0, 24)
         : undefined,
+      historyPhoneE164: /^\+\d{7,15}$/.test(raw?.historyPhoneE164 || raw?.phoneE164 || "")
+        ? raw?.historyPhoneE164 || raw?.phoneE164 : undefined,
+      sessionAccountId: isValidAccountId(raw?.sessionAccountId) ? raw.sessionAccountId : undefined,
       avatarUrl: avatarUrl || undefined,
       status: normalizeStatus(raw?.status),
       color: raw?.color ? String(raw.color).slice(0, 24) : "brand",

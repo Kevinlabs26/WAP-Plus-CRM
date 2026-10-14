@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const mocks = {
   react: "export const useRef = current => ({current}); export const useEffect = fn => { globalThis.syncCleanup = fn(); };",
   "@/store/appStore": "export const useAppStore = selector => selector(globalThis.syncState); useAppStore.getState = () => globalThis.syncState; useAppStore.setState = patch => Object.assign(globalThis.syncState, typeof patch === 'function' ? patch(globalThis.syncState) : patch);",
-  "@/lib/baileys": "export const baileysEvents = async () => globalThis.syncResponses.shift() || {cursor: 11, events: []}; export const baileysStatus = async () => ({connection:'starting'}); export const baileysSync = async () => ({contacts:[],messages:[]}); export const baileysLabels = async () => ({labels:[]}); export const baileysFetchAvatar = async () => null;",
+  "@/lib/baileys": "export const baileysSessionEpoch = () => globalThis.syncEpoch || 0; export const baileysEvents = async () => globalThis.syncResponses.shift() || {cursor: 11, events: []}; export const baileysStatus = async () => ({connection:'starting'}); export const baileysSync = async () => ({contacts:[],messages:[]}); export const baileysLabels = async () => ({labels:[]}); export const baileysFetchAvatar = async () => null;",
   "@/store/persist": "export const persist = () => {}; export const flushPersist = () => new Promise(resolve => {globalThis.syncSaveResolve = resolve;});",
   "@/lib/mediaCache": "export const waitForMediaCacheWrites = async () => {};",
   "@/lib/composerActivity": "export const isComposerTypingBusy = () => false;",
@@ -17,6 +17,7 @@ const result = await build({ entryPoints: [fileURLToPath(new URL('../src/compone
 const { BaileysWatcher } = await import('data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'));
 const settle = async () => { for(let i=0;i<30;i++) await Promise.resolve(); };
 test('checkpoint waits for every ingest and save; changed contact batches and empty polls cannot skip data', async () => {
+  globalThis.syncEpoch = 0;
   const timers=[], frames=[], handlers=new Map(), cursors=new Map(), received=[], errors=[];
   globalThis.window = { setTimeout(fn,ms){timers.push({fn,ms});return timers.length;}, clearTimeout(){},setInterval(){return 1;},clearInterval(){},addEventListener(k,fn){handlers.set(k,fn);},removeEventListener(){} };
   globalThis.document = {hidden:false, addEventListener(){},removeEventListener(){}};
@@ -45,4 +46,30 @@ test('checkpoint waits for every ingest and save; changed contact batches and em
     globalThis.syncSaveResolve(); await settle();
     assert.equal(cursors.get('wap.baileys.eventCursor.wa-a'),'11');
   } finally { globalThis.syncCleanup(); }
+});
+
+test('queued events from a reset session are discarded and cannot advance the new cursor', async () => {
+  const timers = [], frames = [], cursors = new Map(), received = [];
+  globalThis.syncEpoch = 0;
+  globalThis.window = {setTimeout(fn, ms) {timers.push({fn, ms}); return timers.length;},
+    clearTimeout() {}, setInterval() {return 1;}, clearInterval() {}, addEventListener() {}, removeEventListener() {}};
+  globalThis.document = {hidden: false, addEventListener() {}, removeEventListener() {}};
+  globalThis.requestAnimationFrame = fn => {frames.push(fn); return frames.length;};
+  globalThis.cancelAnimationFrame = () => {};
+  globalThis.sessionStorage = {getItem: k => cursors.get(k) || null, setItem: (k, v) => cursors.set(k, v)};
+  globalThis.syncState = {hydrated: true, uiReady: true, activeNav: 'chats',
+    settings: {sendChannel: 'baileys', waAccounts: [{id: 'wa-a', status: 'connected'}], activeAccountId: 'wa-a', liveBaileysAccountId: 'wa-a'},
+    phones: [], contacts: [], chats: [], messages: [], baileysUi: {},
+    ingestBridgeEvents: async events => received.push(events), pushToast() {}, setBaileysUi() {},
+    setBaileysLoginOpen() {}, syncWhatsAppLabels() {}, updateSettings(patch) {Object.assign(this.settings, patch);} };
+  globalThis.syncResponses = [{cursor: 10, events: [{type: 'messages.sync', deviceId: 'wa-a', payload: {items: [{body: 'old account'}]}}]}];
+  BaileysWatcher();
+  try {
+    timers.find(t => t.ms === 1500).fn(); await settle();
+    timers.find(t => t.ms === 40).fn();
+    globalThis.syncEpoch = 1;
+    frames.shift()(); await settle();
+    assert.deepEqual(received, []);
+    assert.equal(cursors.get('wap.baileys.eventCursor.wa-a'), '0');
+  } finally {globalThis.syncCleanup();}
 });

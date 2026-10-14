@@ -3,6 +3,8 @@ mod atomic_file;
 mod crm_backup;
 mod baileys;
 mod bridge;
+#[cfg(windows)]
+mod clipboard;
 mod commands;
 mod db;
 mod protocol;
@@ -27,9 +29,49 @@ pub(crate) fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn configure_webview2_speech_compatibility() {
+    const FEATURE: &str = "msSpeechRecognitionServiceUseCetoService";
+    const ENV: &str = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS";
+
+    // Recent WebView2 Runtime builds can return SpeechRecognition's `network`
+    // error when the Ceto speech endpoint rejects the connection. Keep using
+    // the previous speech service until the WebView2 regression is resolved.
+    let existing = std::env::var(ENV).unwrap_or_default();
+    let mut args = Vec::new();
+    let mut disabled_features = Vec::new();
+    let mut first_disable_arg = None;
+    for arg in existing.split_whitespace() {
+        if let Some(features) = arg.strip_prefix("--disable-features=") {
+            if first_disable_arg.is_none() {
+                first_disable_arg = Some(args.len());
+            }
+            disabled_features.extend(
+                features
+                    .split(',')
+                    .filter(|feature| !feature.is_empty())
+                    .map(str::to_owned),
+            );
+        } else {
+            args.push(arg.to_owned());
+        }
+    }
+
+    if !disabled_features.iter().any(|feature| feature == FEATURE) {
+        disabled_features.push(FEATURE.to_owned());
+    }
+    let disable_arg = format!("--disable-features={}", disabled_features.join(","));
+    let insert_at = first_disable_arg.unwrap_or(args.len()).min(args.len());
+    args.insert(insert_at, disable_arg);
+    std::env::set_var(ENV, args.join(" "));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt::init();
+
+    #[cfg(target_os = "windows")]
+    configure_webview2_speech_compatibility();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -99,6 +141,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             baileys::baileys_runtime,
             baileys::baileys_stop_account,
+            baileys::baileys_reset_account,
             baileys::baileys_stop_all,
             baileys::baileys_cancel_update,
             commands::list_adb_devices,
@@ -120,6 +163,7 @@ pub fn run() {
             commands::type_and_send,
             commands::get_app_info,
             commands::read_dropped_file,
+            commands::clipboard_write_image,
             commands::show_windows_branded_notification,
             commands::db_load,
             commands::db_save,

@@ -336,6 +336,26 @@ impl BaileysState {
         Ok(())
     }
 
+    pub fn reset_account(&self, auth_root: &std::path::Path, account_id: &str) -> Result<(), String> {
+        let key = crate::account_id::validate_account_id(account_id)?;
+        let mut guard = self.registry.lock().map_err(|e| e.to_string())?;
+        while guard.starting.contains(&key) {
+            guard = self.ready.wait(guard).map_err(|e| e.to_string())?;
+        }
+        if guard.update_started {
+            return Err("Baileys 已停止，正在安装应用更新".into());
+        }
+        // 保持注册表锁直到清理完成，阻止轮询在旧凭据被移除前启动另一进程。
+        if let Some(process) = guard.processes.get_mut(&key) {
+            if process.child.try_wait().map_err(|e| e.to_string())?.is_none() {
+                process.child.kill().map_err(|e| e.to_string())?;
+            }
+            process.child.wait().map_err(|e| e.to_string())?;
+        }
+        guard.processes.remove(&key);
+        remove_account_auth(auth_root, &key)
+    }
+
     pub fn stop_all(&self) -> Result<(), String> {
         let mut guard = self.registry.lock().map_err(|e| e.to_string())?;
         guard.update_started = true;
@@ -376,6 +396,35 @@ pub fn baileys_stop_account(
     state.stop_account(&account_id)
 }
 
+fn remove_account_auth(auth_root: &std::path::Path, account_id: &str) -> Result<(), String> {
+    let key = crate::account_id::validate_account_id(account_id)?;
+    let target = auth_root.join(&key);
+    if target.exists() {
+        let root = auth_root.canonicalize().map_err(|e| e.to_string())?;
+        let resolved = target.canonicalize().map_err(|e| e.to_string())?;
+        if resolved != root.join(&key) {
+            return Err("会话目录不在指定账号目录内，拒绝清理".into());
+        }
+        std::fs::remove_dir_all(resolved).map_err(|e| format!("无法清理账号会话：{e}"))?;
+    }
+    // 新默认槽不能再次迁入旧版单目录凭据；标记使启动时的空目录迁移跳过它。
+    if key == "wa-default" && auth_root.join("creds.json").is_file() {
+        std::fs::create_dir_all(&target).map_err(|e| e.to_string())?;
+        std::fs::write(target.join(".explicit-reset"), "").map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn baileys_reset_account(
+    app: AppHandle,
+    state: tauri::State<'_, BaileysState>,
+    account_id: String,
+) -> Result<(), String> {
+    let auth_root = app.path().app_data_dir().map_err(|e| e.to_string())?.join("baileys-auth");
+    state.reset_account(&auth_root, &account_id)
+}
+
 #[tauri::command]
 pub fn baileys_stop_all(state: tauri::State<'_, BaileysState>) -> Result<(), String> {
     state.stop_all()
@@ -393,5 +442,62 @@ impl Drop for BaileysState {
                 let _ = process.child.kill();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resets_only_the_requested_auth_directory_and_preserves_crm() {
+        let root = std::env::temp_dir().join(format!("wap-session-reset-{}", uuid::Uuid::new_v4()));
+        let auth = root.join("baileys-auth");
+        std::fs::create_dir_all(auth.join("wa-a")).unwrap();
+        std::fs::create_dir_all(auth.join("wa-b")).unwrap();
+        std::fs::write(auth.join("wa-a/creds.json"), "old-a").unwrap();
+        std::fs::write(auth.join("wa-b/creds.json"), "keep-b").unwrap();
+        std::fs::write(root.join("wap-plus.db"), "keep history").unwrap();
+        let state = BaileysState::default();
+        assert!(state.reset_account(&auth, "../wa-a").is_err());
+        assert!(auth.join("wa-a/creds.json").exists());
+        state.reset_account(&auth, "wa-a").unwrap();
+        assert!(!auth.join("wa-a").exists());
+        assert_eq!(std::fs::read_to_string(auth.join("wa-b/creds.json")).unwrap(), "keep-b");
+        assert_eq!(std::fs::read_to_string(root.join("wap-plus.db")).unwrap(), "keep history");
+        state.reset_account(&auth, "wa-a").unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resetting_default_does_not_restore_legacy_credentials() {
+        let root = std::env::temp_dir().join(format!("wap-session-legacy-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("creds.json"), "old default account").unwrap();
+        remove_account_auth(&root, "wa-default").unwrap();
+        assert!(!root.join("wa-default/creds.json").exists());
+        assert!(std::fs::read_dir(root.join("wa-default")).unwrap().next().is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reset_stops_the_old_process_before_creating_a_new_session() {
+        use std::os::windows::process::CommandExt;
+        let root = std::env::temp_dir().join(format!("wap-session-process-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("wa-a")).unwrap();
+        let child = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 60"])
+            .creation_flags(0x0800_0000).stdout(Stdio::null()).stderr(Stdio::null())
+            .spawn().unwrap();
+        let state = BaileysState::default();
+        state.registry.lock().unwrap().processes.insert("wa-a".into(), BaileysProcess {
+            child,
+            runtime: BaileysRuntime { account_id: "wa-a".into(), base_url: "http://127.0.0.1:1".into(), token: "test".into() },
+        });
+        state.reset_account(&root, "wa-a").unwrap();
+        assert!(state.registry.lock().unwrap().processes.is_empty());
+        assert!(!root.join("wa-a").exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -90,13 +90,23 @@ function startBrowserSession(opts: {
   let recognitionError: string | undefined;
   let finalText = "";
   let lastShown = "";
+  const fail = (message: string) => {
+    if (cancelled || errored) return;
+    errored = true;
+    recognitionError = message;
+    if (restartTimer != null) window.clearTimeout(restartTimer);
+    try { recognition.abort(); } catch { /* Already stopped. */ }
+    opts.onError?.(message);
+  };
   const scheduleRestart = () => {
     if (stoppedByUser || errored) return;
     restartTimer = window.setTimeout(() => {
+      restartTimer = null;
+      if (stoppedByUser || errored) return;
       try {
         recognition.start();
       } catch {
-        /* 重启失败即结束 */
+        fail("浏览器语音识别已中断，请重试");
       }
     }, 120);
   };
@@ -129,9 +139,9 @@ function startBrowserSession(opts: {
   recognition.onerror = (e: unknown) => {
     if (cancelled || errored) return;
     const err = (e as { error?: string }).error;
-    errored = true;
-    recognitionError = err ? `语音识别失败（${err}）` : "语音识别失败";
-    opts.onError?.(recognitionError);
+    fail(err === "network"
+      ? "浏览器语音服务连接失败（network），可在设置 → 发送与跟进中选择 AI 转写"
+      : err ? `语音识别失败（${err}）` : "语音识别失败");
   };
   recognition.onend = () => scheduleRestart();
 
