@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 
 type FolderHeaderRowProps = {
+  folderId: string;
   name: string;
   collapsed: boolean;
   depth: number;
@@ -26,7 +27,6 @@ type FolderHeaderRowProps = {
   dropActive: boolean;
   folderDropActive: boolean;
   dragging: boolean;
-  onRegisterRef: (element: HTMLDivElement | null) => void;
   onToggle: () => void;
   onStartDrag: (event: React.PointerEvent) => void;
   onCreateChild: () => void;
@@ -40,6 +40,7 @@ type FolderHeaderRowProps = {
 };
 
 export function FolderHeaderRow({
+  folderId,
   name,
   collapsed,
   depth,
@@ -48,7 +49,6 @@ export function FolderHeaderRow({
   dropActive,
   folderDropActive,
   dragging,
-  onRegisterRef,
   onToggle,
   onStartDrag,
   onCreateChild,
@@ -97,12 +97,13 @@ export function FolderHeaderRow({
   return (
     <div className={cn("mb-0.5 px-1", depth > 0 && "ml-3")}>
       <div
+        data-chat-folder-drop={folderId}
+        data-folder-reorder-target={folderId}
         className={cn(
           "group/folder flex items-center gap-0.5 rounded-md px-1 py-1.5 transition-colors hover:bg-zinc-900/80",
           dropActive && "bg-brand/10 ring-1 ring-brand/40",
           folderDropActive && "bg-brand/15 ring-1 ring-brand/60"
         )}
-        ref={onRegisterRef}
         onContextMenu={(event) => {
           event.preventDefault();
           openMenu(event.clientX, event.clientY);
@@ -139,7 +140,7 @@ export function FolderHeaderRow({
           title={t("folder.dragOrder")}
           aria-label={t("folder.dragOrder")}
           className={cn(
-            "cursor-grab rounded p-1 text-zinc-600 opacity-0 hover:bg-zinc-800 hover:text-zinc-200 group-hover/folder:opacity-100 active:cursor-grabbing",
+            "touch-none cursor-grab rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 active:cursor-grabbing",
             dragging && "opacity-100 text-brand"
           )}
           onPointerDown={(event) => {

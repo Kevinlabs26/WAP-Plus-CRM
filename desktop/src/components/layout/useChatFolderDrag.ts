@@ -1,245 +1,168 @@
-import { useEffect, useRef, useState } from "react";
-import { useAppStore } from "@/store/appStore";
-import { useShallow } from "zustand/react/shallow";
-import type { ChatFolder } from "@/store/appStore";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useAppStore, type ChatFolder } from "@/store/appStore";
+import { useI18n } from "@/i18n";
 
-export type ChatPointerDragState = {
-  chatId: string;
-  chatIds: string[];
+type PointerDrag = {
+  pointerId: number;
+  startX: number;
+  startY: number;
   x: number;
   y: number;
   active: boolean;
-};
+  scroller: HTMLElement | null;
+} & ({ kind: "chat"; chatId: string; chatIds: string[] } | { kind: "folder"; folderId: string });
 
-type UseChatFolderDragArgs = {
-  chatFolders: ChatFolder[];
-  primaryFolderIdOf: (chatId: string) => string | null;
-};
-
-/**
- * 侧栏会话/文件夹拖放：HTML5 DnD 在 WebView 里 dataTransfer.types
- * 常为空导致 drop 被拦（禁止图标），改用 pointer 自实现，鼠标/触控都稳定。
- */
-export function useChatFolderDrag({
-  chatFolders,
-  primaryFolderIdOf,
-}: UseChatFolderDragArgs) {
-  const { moveChatToFolder, reorderChatFolder, pushToast } = useAppStore(
-    useShallow((s) => ({
-      moveChatToFolder: s.moveChatToFolder,
-      reorderChatFolder: s.reorderChatFolder,
-      pushToast: s.pushToast,
-    }))
-  );
-
-  const [dragChatId, setDragChatId] = useState<string | null>(null);
+export function useChatFolderDrag({ chatFolders }: { chatFolders: ChatFolder[] }) {
+  const { t } = useI18n();
+  const translateRef = useRef(t);
+  translateRef.current = t;
+  const session = useRef<PointerDrag | null>(null);
+  const suppressClick = useRef(false);
+  const [drag, setDrag] = useState<PointerDrag | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
-  const [dragFolderId, setDragFolderId] = useState<string | null>(null);
   const [folderDropTarget, setFolderDropTarget] = useState<string | null>(null);
 
-  const folderDragRef = useRef<{
-    folderId: string;
-    x: number;
-    y: number;
-    active: boolean;
-  } | null>(null);
-
-  const pointerDragRef = useRef<ChatPointerDragState | null>(null);
-  const [pointerDrag, setPointerDrag] = useState<ChatPointerDragState | null>(
-    null
-  );
-  pointerDragRef.current = pointerDrag;
-
-  const folderRowRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
-
-  const folderAtPoint = (x: number, y: number): string | null => {
-    for (const [id, el] of folderRowRefs.current) {
-      if (!el) continue;
-      const r = el.getBoundingClientRect();
-      if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return id;
-    }
-    return null;
-  };
-
   useEffect(() => {
-    if (!pointerDrag) return;
-    const onMove = (e: PointerEvent) => {
-      const cur = pointerDragRef.current;
-      if (!cur) return;
-      const dx = e.clientX - cur.x;
-      const dy = e.clientY - cur.y;
-      if (!cur.active && Math.hypot(dx, dy) < 6) return;
-      if (!cur.active) {
-        const activeDrag = { ...cur, active: true };
-        pointerDragRef.current = activeDrag;
-        setPointerDrag(activeDrag);
-        setDragChatId(cur.chatId);
-      }
-      const target = folderAtPoint(e.clientX, e.clientY);
-      setDropTarget(target);
-      e.preventDefault();
+    let frame = 0;
+    let lastFrame = 0;
+    const atPoint = (cur: PointerDrag) => document.elementFromPoint(cur.x, cur.y)
+      ?.closest<HTMLElement>(cur.kind === "chat" ? "[data-chat-folder-drop]" : "[data-folder-reorder-target]");
+    const folderTarget = (cur: PointerDrag, element: HTMLElement | null | undefined) => {
+      if (cur.kind !== "folder") return null;
+      const folders = useAppStore.getState().settings.chatFolders || [];
+      const source = folders.find(f => f.id === cur.folderId);
+      const target = folders.find(f => f.id === element?.dataset.folderReorderTarget);
+      return source && target && source.id !== target.id && source.parentId === target.parentId
+        && source.scope?.type === target.scope?.type
+        && (source.scope?.type !== "account" || (target.scope?.type === "account" && source.scope.accountId === target.scope.accountId))
+        ? target : null;
     };
-    const onUp = (e: PointerEvent) => {
-      const cur = pointerDragRef.current;
-      if (!cur) return;
-      pointerDragRef.current = null;
-      setPointerDrag(null);
+    const updateTarget = (cur: PointerDrag) => {
+      const element = atPoint(cur);
+      if (cur.kind === "chat") setDropTarget(element?.dataset.chatFolderDrop || null);
+      else setFolderDropTarget(folderTarget(cur, element)?.id || null);
+    };
+    const reset = () => {
+      session.current = null;
+      setDrag(null);
       setDropTarget(null);
-      setDragChatId(null);
-      if (!cur.active) return;
-      const target = folderAtPoint(e.clientX, e.clientY);
-      if (target) {
-        const currentFolderIds = new Set(cur.chatIds.map(primaryFolderIdOf));
-        const next = target === "__ungrouped" ? null : target;
-        if (![...currentFolderIds].every((folderId) => (folderId || null) === next)) {
-          cur.chatIds.forEach((chatId) => moveChatToFolder(chatId, next));
-          if (next) {
-            const name = chatFolders.find((f) => f.id === next)?.name || "分组";
-            pushToast(`已移动到「${name}」`, "success");
-          } else {
-            pushToast("已移出分组", "info");
-          }
+      setFolderDropTarget(null);
+      window.cancelAnimationFrame(frame);
+      frame = 0;
+      lastFrame = 0;
+    };
+    const cancel = () => { reset(); suppressClick.current = false; };
+    const scroll = (now: number) => {
+      const cur = session.current;
+      if (!cur?.active) return;
+      const scroller = cur.scroller;
+      if (scroller?.isConnected) {
+        const rect = scroller.getBoundingClientRect();
+        if (cur.x >= rect.left && cur.x <= rect.right && cur.y >= rect.top && cur.y <= rect.bottom) {
+          const edge = Math.min(48, rect.height / 3);
+          const speed = cur.y < rect.top + edge ? -(rect.top + edge - cur.y) / edge
+            : cur.y > rect.bottom - edge ? (cur.y - rect.bottom + edge) / edge : 0;
+          scroller.scrollTop += speed * Math.min(32, lastFrame ? now - lastFrame : 16) * 0.6;
         }
       }
+      lastFrame = now;
+      updateTarget(cur);
+      frame = window.requestAnimationFrame(scroll);
     };
-    const cancel = () => {
-      pointerDragRef.current = null;
-      setPointerDrag(null);
-      setDropTarget(null);
-      setDragChatId(null);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") cancel();
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", cancel);
-    window.addEventListener("blur", cancel);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", cancel);
-      window.removeEventListener("blur", cancel);
-      window.removeEventListener("keydown", onKey);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pointerDrag]);
-
-  const startChatPointerDrag = (
-    e: ReactPointerEvent,
-    chatId: string,
-    memberChatIds?: string[]
-  ) => {
-    if (e.button !== 0) return;
-    const pending = {
-      chatId,
-      chatIds: memberChatIds?.length ? memberChatIds : [chatId],
-      x: e.clientX,
-      y: e.clientY,
-      active: false,
-    };
-    pointerDragRef.current = pending;
-    setPointerDrag(pending);
-  };
-
-  const startFolderPointerDrag = (
-    e: ReactPointerEvent,
-    folderId: string
-  ) => {
-    if (e.button !== 0) return;
-    folderDragRef.current = {
-      folderId,
-      x: e.clientX,
-      y: e.clientY,
-      active: false,
-    };
-    setDragFolderId(folderId);
-  };
-
-  useEffect(() => {
-    if (!dragFolderId) return;
     const onMove = (e: PointerEvent) => {
-      const cur = folderDragRef.current;
-      if (!cur) return;
-      if (
-        !cur.active &&
-        Math.hypot(e.clientX - cur.x, e.clientY - cur.y) < 6
-      )
-        return;
-      cur.active = true;
-      const target = folderAtPoint(e.clientX, e.clientY);
-      const source = chatFolders.find((f) => f.id === cur.folderId);
-      const targetFolder = target
-        ? chatFolders.find((f) => f.id === target)
-        : undefined;
-      setFolderDropTarget(
-        source &&
-          targetFolder &&
-          source.id !== targetFolder.id &&
-          source.parentId === targetFolder.parentId
-          ? targetFolder.id
-          : null
-      );
+      const cur = session.current;
+      if (!cur || e.pointerId !== cur.pointerId) return;
+      if (e.buttons === 0) { cancel(); return; }
+      cur.x = e.clientX;
+      cur.y = e.clientY;
+      if (!cur.active) {
+        if (Math.hypot(cur.x - cur.startX, cur.y - cur.startY) < 6) return;
+        cur.active = true;
+        suppressClick.current = true;
+        setDrag({ ...cur });
+        frame = window.requestAnimationFrame(scroll);
+      }
+      updateTarget(cur);
       e.preventDefault();
     };
     const onUp = (e: PointerEvent) => {
-      const cur = folderDragRef.current;
-      folderDragRef.current = null;
-      setDragFolderId(null);
-      setFolderDropTarget(null);
-      if (!cur?.active) return;
-      const target = folderAtPoint(e.clientX, e.clientY);
-      const source = chatFolders.find((f) => f.id === cur.folderId);
-      const targetFolder = target
-        ? chatFolders.find((f) => f.id === target)
-        : undefined;
-      if (
-        source &&
-        targetFolder &&
-        source.id !== targetFolder.id &&
-        source.parentId === targetFolder.parentId
-      ) {
-        const rect = folderRowRefs.current
-          .get(targetFolder.id)
-          ?.getBoundingClientRect();
-        reorderChatFolder(
-          cur.folderId,
-          targetFolder.id,
-          !!rect && e.clientY > rect.top + rect.height / 2
-        );
+      const cur = session.current;
+      if (!cur || e.pointerId !== cur.pointerId) return;
+      cur.x = e.clientX;
+      cur.y = e.clientY;
+      const element = atPoint(cur);
+      reset();
+      if (!cur.active) return;
+      const store = useAppStore.getState();
+      const t = translateRef.current;
+      if (cur.kind === "folder") {
+        const target = folderTarget(cur, element);
+        if (target && element) {
+          const rect = element.getBoundingClientRect();
+          store.reorderChatFolder(cur.folderId, target.id, cur.y > rect.top + rect.height / 2);
+        }
+        return;
       }
+      const id = element?.dataset.chatFolderDrop;
+      const folder = store.settings.chatFolders?.find(f => f.id === id);
+      const knownChats = new Set(store.chats.map(chat => chat.id));
+      if (!id || (id !== "__ungrouped" && !folder) || cur.chatIds.some(id => !knownChats.has(id))) {
+        store.pushToast(t("folder.dropMissed"), "info");
+        return;
+      }
+      const next = id === "__ungrouped" ? null : id;
+      const moved = cur.chatIds.filter(chatId => {
+        const current = store.settings.chatFolders?.find(f => f.chatIds.includes(chatId));
+        return (current?.id || null) !== next;
+      });
+      if (!moved.length) { store.pushToast(t("folder.dropUnchanged"), "info"); return; }
+      moved.forEach(chatId => store.moveChatToFolder(chatId, next));
+      store.pushToast(next ? t("folder.dropMoved", { name: folder!.name }) : t("folder.dropRemoved"), "success");
     };
-    const cancel = () => {
-      folderDragRef.current = null;
-      setDragFolderId(null);
-      setFolderDropTarget(null);
+    const onDown = (e: PointerEvent) => { if (e.isPrimary !== false) cancel(); };
+    const onClick = (e: MouseEvent) => {
+      if (!suppressClick.current || e.detail === 0) return;
+      suppressClick.current = false;
+      e.preventDefault();
+      e.stopImmediatePropagation();
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") cancel();
-    };
-    window.addEventListener("pointermove", onMove);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") cancel(); };
+    const onPointerCancel = (e: PointerEvent) => { if (e.pointerId === session.current?.pointerId) cancel(); };
+    window.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("pointermove", onMove, { passive: false });
     window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("pointercancel", onPointerCancel);
     window.addEventListener("blur", cancel);
     window.addEventListener("keydown", onKey);
+    window.addEventListener("click", onClick, true);
     return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("pointercancel", onPointerCancel);
       window.removeEventListener("blur", cancel);
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("click", onClick, true);
     };
-  }, [chatFolders, dragFolderId, reorderChatFolder]);
+  }, []);
 
+  const start = (e: ReactPointerEvent, item: { kind: "chat"; chatId: string; chatIds: string[] } | { kind: "folder"; folderId: string }) => {
+    if (e.button !== 0 || e.isPrimary === false) return;
+    session.current = { ...item, pointerId: e.pointerId, startX: e.clientX, startY: e.clientY,
+      x: e.clientX, y: e.clientY, active: false,
+      scroller: e.currentTarget.closest<HTMLElement>(".sidebar-chat-scroll") };
+  };
+  const targetName = chatFolders.find(f => f.id === dropTarget)?.name;
   return {
-    dragChatId,
+    dragChatId: drag?.kind === "chat" ? drag.chatId : null,
+    dragFolderId: drag?.kind === "folder" ? drag.folderId : null,
     dropTarget,
-    dragFolderId,
     folderDropTarget,
-    folderRowRefs,
-    startChatPointerDrag,
-    startFolderPointerDrag,
+    dragHint: drag?.kind === "chat" ? dropTarget === "__ungrouped" ? t("folder.moveOut")
+      : targetName ? t("folder.dropInto", { name: targetName }) : t("folder.dragHelp") : null,
+    startChatPointerDrag: (e: ReactPointerEvent, chatId: string, memberChatIds?: string[]) =>
+      start(e, { kind: "chat", chatId, chatIds: [...new Set(memberChatIds?.length ? memberChatIds : [chatId])] }),
+    startFolderPointerDrag: (e: ReactPointerEvent, folderId: string) => start(e, { kind: "folder", folderId }),
   };
 }

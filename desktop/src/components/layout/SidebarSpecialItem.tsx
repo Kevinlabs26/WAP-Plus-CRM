@@ -14,7 +14,7 @@ export type SidebarSpecialItem =
   | { kind: "hint"; text: string }
   | { kind: "archive_toggle"; showArchived: boolean; archivedCount: number }
   | { kind: "new_folder"; isAllAccountsView: boolean }
-  | { kind: "folder_empty"; folderId: string; dragging: boolean }
+  | { kind: "folder_empty"; folderId: string; dragging: boolean; dropActive: boolean }
   | {
       kind: "lead_date_header";
       groupId: string;
@@ -34,7 +34,6 @@ export type SidebarSpecialItem =
 
 type Props = {
   item: SidebarSpecialItem;
-  onRegisterUngroupedRef?: (element: HTMLDivElement | null) => void;
   onToggleArchived: () => void;
   onCreateFolder: () => void;
   onToggleUngrouped: () => void;
@@ -48,7 +47,6 @@ type Props = {
 
 export function SidebarSpecialItem({
   item,
-  onRegisterUngroupedRef,
   onToggleArchived,
   onCreateFolder,
   onToggleUngrouped,
@@ -93,7 +91,7 @@ export function SidebarSpecialItem({
 
   if (item.kind === "folder_empty") {
     return (
-      <div className="ml-2 px-2 py-1.5 text-2xs text-zinc-600">
+      <div data-chat-folder-drop={item.folderId} className={cn("ml-2 rounded-md px-2 py-3 text-2xs text-zinc-500", item.dropActive && "bg-brand/10 ring-1 ring-inset ring-brand/40")}>
         {item.dragging
           ? item.folderId === "__ungrouped"
             ? t("folder.moveOut")
@@ -143,7 +141,7 @@ export function SidebarSpecialItem({
   if (item.kind === "ungrouped_header") {
     return (
       <div
-        ref={onRegisterUngroupedRef}
+        data-chat-folder-drop="__ungrouped"
         className="mb-0.5 mt-1 px-1"
       >
         <button

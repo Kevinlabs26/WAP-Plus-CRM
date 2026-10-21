@@ -62,7 +62,6 @@ export type ChatSidebarRowProps = {
   dataAccountId?: string;
   cloneId?: string;
   isDragging?: boolean;
-  dragDisabled?: boolean;
   onOpen: (contactId: string, chatId: string) => void;
   onOpenMenu: (
     e: React.MouseEvent | React.PointerEvent,
@@ -92,7 +91,6 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
   memberChatIds,
   cloneId,
   isDragging,
-  dragDisabled,
   onOpen,
   onOpenMenu,
   onDragStart,
@@ -168,19 +166,19 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
       className={cn(
         "group/chat relative list-none",
         isDragging && "opacity-45",
-        dragDisabled
+        cloneId
           ? "cursor-default select-none"
           : "cursor-grab select-none active:cursor-grabbing"
       )}
       title={
-        accountCount && accountCount > 1
-          ? t("tooltip.accountCountDrag", { count: accountCount })
-          : cloneId
-            ? t("tooltip.cloneNoDrag")
+        cloneId
+          ? t("tooltip.cloneNoDrag")
+          : accountCount && accountCount > 1
+            ? t("tooltip.accountCountDrag", { count: accountCount })
             : t("tooltip.dragMove")
       }
       onPointerDown={(e) => {
-        if (cloneId || dragDisabled) return;
+        if (cloneId) return;
         onDragStart?.(e, chat.id, memberChatIds);
       }}
     >

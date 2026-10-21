@@ -897,10 +897,10 @@ export function PhoneSidebar() {
     dropTarget,
     dragFolderId,
     folderDropTarget,
-    folderRowRefs,
+    dragHint,
     startChatPointerDrag,
     startFolderPointerDrag,
-  } = useChatFolderDrag({ chatFolders, primaryFolderIdOf });
+  } = useChatFolderDrag({ chatFolders });
 
   // StatsBar「今日活跃 / 待回复」跳转时强制回到会话列表
   useEffect(() => {
@@ -1314,7 +1314,6 @@ export function PhoneSidebar() {
         memberChatIds={opts?.memberChatIds}
         cloneId={opts?.cloneId}
         isDragging={dragChatId === chat.id}
-        dragDisabled={(opts?.accountCount || 0) > 1}
         onOpen={onOpenContactStable}
         onOpenMenu={onOpenMenuRow}
         onDragStart={onDragStartStable}
@@ -1323,7 +1322,7 @@ export function PhoneSidebar() {
   };
 
   return (
-    <aside className="crm-sidebar flex w-72 shrink-0 flex-col border-r border-zinc-800/90 bg-zinc-950">
+    <aside className="crm-sidebar relative flex w-72 shrink-0 flex-col border-r border-zinc-800/90 bg-zinc-950">
       {!isBaileys && (
         <PhoneListSection
           phones={phones}
@@ -1428,7 +1427,7 @@ export function PhoneSidebar() {
               defaultItemHeight={56}
               increaseViewportBy={{ top: 120, bottom: 120 }}
               components={SIDEBAR_VIRTUOSO_COMPONENTS}
-              scrollSeekConfiguration={SIDEBAR_SCROLL_SEEK}
+              scrollSeekConfiguration={dragChatId || dragFolderId ? undefined : SIDEBAR_SCROLL_SEEK}
               itemContent={(_index, it) => {
                 if (
                   it.kind === "hint" ||
@@ -1449,7 +1448,7 @@ export function PhoneSidebar() {
                             : it.kind === "new_folder"
                               ? { ...it, isAllAccountsView }
                               : it.kind === "folder_empty"
-                              ? { ...it, dragging: Boolean(dragChatId) }
+                              ? { ...it, dragging: Boolean(dragChatId), dropActive: dropTarget === it.folderId }
                               : it.kind === "lead_date_header"
                                 ? it
                               : it.kind === "ungrouped_header"
@@ -1467,9 +1466,6 @@ export function PhoneSidebar() {
                                     }
                       }
                       onToggleArchived={() => setShowArchived((v) => !v)}
-                      onRegisterUngroupedRef={(element) => {
-                        folderRowRefs.current.set("__ungrouped", element);
-                      }}
                       onCreateFolder={() => {
                         setFolderNameDraft("");
                         setPendingFolderAction(null);
@@ -1505,6 +1501,7 @@ export function PhoneSidebar() {
                   return (
                     <FolderHeaderRow
                       name={it.name}
+                      folderId={folder.id}
                       collapsed={it.collapsed}
                       depth={it.depth}
                       total={it.total}
@@ -1512,9 +1509,6 @@ export function PhoneSidebar() {
                       dropActive={dropTarget === folder.id}
                       folderDropActive={folderDropTarget === folder.id}
                       dragging={dragFolderId === folder.id}
-                      onRegisterRef={(element) => {
-                        folderRowRefs.current.set(folder.id, element);
-                      }}
                       onToggle={() => toggleChatFolderCollapsed(folder.id)}
                       onStartDrag={(event) =>
                         startFolderPointerDrag(event, folder.id)
@@ -1570,9 +1564,11 @@ export function PhoneSidebar() {
                 const inFolder = typeof it.folderId === "string";
                 return (
                   <div
+                    data-chat-folder-drop={inFolder ? it.folderId : it.folderId === null ? "__ungrouped" : undefined}
                     className={cn(
                       "pl-1 pr-0",
-                      inFolder && it.folderDepth === 1 && "ml-3"
+                      inFolder && it.folderDepth === 1 && "ml-3",
+                      dropTarget && dropTarget === (it.folderId === null ? "__ungrouped" : it.folderId) && "rounded-md bg-brand/10 ring-1 ring-inset ring-brand/40"
                     )}
                   >
                     {renderChatRow(it.chat, {
@@ -1587,6 +1583,12 @@ export function PhoneSidebar() {
           </div>
         )}
       </section>
+
+      {dragHint && (
+        <div role="status" className="pointer-events-none absolute bottom-3 left-3 right-3 z-50 rounded-lg border border-brand/40 bg-zinc-900 px-3 py-2 text-[13px] text-brand shadow-lg">
+          {dragHint}
+        </div>
+      )}
 
       {groupFolderDialog && (() => {
         const folder = chatFolders.find((item) => item.id === groupFolderDialog.folderId);
