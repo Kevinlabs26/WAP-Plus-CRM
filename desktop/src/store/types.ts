@@ -333,7 +333,7 @@ export interface AppState extends PersistSlice {
     patch: Partial<Contact>,
     opts?: { activityTitle?: string; mergeTags?: string[] }
   ) => number;
-  /** 手动合并联系人：keep 保留、drop 吸收（迁移 chats/messages/followUps/activities） */
+  /** 以 keep 为主统一客户资料；各账号联系人和会话独立保留。 */
   mergeContacts: (keepId: string, dropIds: string[]) => boolean;
   addContact: (c: Omit<Contact, "id">) => void;
   /** 批量导入联系人：静默建联系人+会话行，返回新增数 */

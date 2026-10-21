@@ -13,6 +13,7 @@ const mocks = {
   './bridge': 'export const isTauri = () => true;',
   '@/lib/storage': 'export const loadFullHistory = async () => globalThis.backupHistoryRead ? globalThis.backupHistoryRead() : globalThis.backupHistory;',
   '@/lib/mediaCache': 'export const readMediaCache = async () => null; export const waitForMediaCacheWrites = async () => {};',
+  '../store/persist': 'export const flushPersist = async get => { await globalThis.backupFlush?.(get()); };',
 };
 const built = await build({
   stdin: { contents: `export { runAutomaticBackup } from './src/lib/automaticBackup.ts';
@@ -32,6 +33,22 @@ const { runAutomaticBackup, defaultSettings, parseBackupJson, beginDataRestore }
 const stateFixture = () => ({ hydrated: true, phones: [], contacts: [], chats: [], messages: [], followUps: [],
   activities: [], broadcastCampaigns: [], settings: { ...defaultSettings } });
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+
+test('automatic backup saves deletions before reading disk history and aborts on save failure', async () => {
+  const state = stateFixture();
+  let disk = [{ id: 'deleted', chatId: 'chat', direction: 'in', body: 'old', sentAt: '2026-10-01T00:00:00Z' }];
+  globalThis.backupStatus = { latestDay: null };
+  globalThis.backupHistoryRead = async () => ({ messages: disk, activities: [] });
+  globalThis.backupFlush = async snapshot => { assert.equal(snapshot, state); disk = []; };
+  try {
+    await runAutomaticBackup(() => state, true);
+    assert.deepEqual(JSON.parse(globalThis.backupContent).messages, []);
+    delete globalThis.backupContent;
+    globalThis.backupFlush = async () => { throw new Error('save failed'); };
+    await assert.rejects(runAutomaticBackup(() => state, true), /save failed/);
+    assert.equal(globalThis.backupContent, undefined);
+  } finally { delete globalThis.backupFlush; delete globalThis.backupHistoryRead; delete globalThis.backupStatus; }
+});
 
 test('backup write failure releases its lock and a later attempt succeeds', async () => {
   const state = stateFixture(), status = { folder: 'fixture', latestDay: null };

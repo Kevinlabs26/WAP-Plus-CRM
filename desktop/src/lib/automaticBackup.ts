@@ -3,6 +3,7 @@ import { isTauri } from "./bridge";
 import { createBackupBundle } from "../store/exportDataActions";
 import { getDataRestoreGeneration, isDataRestoreActive } from "../store/restoreGuard";
 import type { AppState } from "../store/types";
+import { flushPersist } from "../store/persist";
 
 export interface AutomaticBackupStatus { folder: string; latestDay: string | null }
 let running = false;
@@ -20,7 +21,11 @@ export async function runAutomaticBackup(get: () => AppState, force = false): Pr
     const now = new Date();
     const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     if (!force && status.latestDay === day) return status;
-    const { bundle } = await createBackupBundle(get());
+    if (isDataRestoreActive() || getDataRestoreGeneration() !== restoreGeneration) return null;
+    const state = get();
+    await flushPersist(() => state);
+    if (isDataRestoreActive() || getDataRestoreGeneration() !== restoreGeneration) return null;
+    const { bundle } = await createBackupBundle(state);
     if (isDataRestoreActive() || getDataRestoreGeneration() !== restoreGeneration) return null;
     const content = JSON.stringify(bundle);
     if (new Blob([content]).size > 256 * 1024 * 1024) throw new Error("备份超过 256 MiB，请使用手动导出");

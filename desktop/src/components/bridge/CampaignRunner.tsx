@@ -13,18 +13,30 @@ import { sendImageMessage } from "../chat/sendImageMessage";
 import { sendFileMessage } from "../chat/sendFileMessage";
 import { openAndroidMediaShare as openAndroidMediaShareAction } from "../chat/openAndroidMediaShare";
 import { isWaAccountConnected } from "@/lib/accountConnection";
+import { dataUrlToBlob } from "@/lib/mediaBlob";
+import { isDeliveryUncertain } from "@/store/outgoingRetry";
 
-/** 按 mediaMode 给条目挑一份媒体并发送（双通道）；返回 null=成功，字符串=失败原因 */
+type CampaignSendResult = {
+  ok: boolean;
+  status?: string;
+  message?: string;
+  error?: string;
+  retryAfterMs?: number;
+  raw?: unknown;
+};
+
+/** 媒体与文本共用任务状态检查及“结果未知”处理。 */
 async function sendBroadcastMedia(opts: {
   state: AppState;
   campaign: BroadcastCampaign;
   item: BroadcastItem;
   channelId: string;
   chatId: string;
-}): Promise<string | null> {
+  canSend: () => boolean;
+}): Promise<CampaignSendResult> {
   const { state, campaign, item, channelId, chatId } = opts;
   const media = campaign.media || [];
-  if (!media.length) return "战役没有媒体";
+  if (!media.length) return { ok: false, message: "战役没有媒体" };
   const isBaileys = normalizeChannelId(channelId) === "baileys";
 
   let picked = media[0];
@@ -36,21 +48,22 @@ async function sendBroadcastMedia(opts: {
       picked = media[Math.max(0, idx) % media.length];
     }
   }
-  if (!picked) return "媒体选择失败";
+  if (!picked) return { ok: false, message: "媒体选择失败" };
 
   const dataUrl = await readMediaCache(picked.id);
-  if (!dataUrl) return "媒体缓存已失效，请重建战役";
+  if (!dataUrl) return { ok: false, message: "媒体缓存已失效，请重建战役" };
   let file: File;
   try {
-    const blob = await (await fetch(dataUrl)).blob();
+    const blob = dataUrlToBlob(dataUrl, picked.mime, 14 * 1024 * 1024);
     file = new File([blob], picked.fileName || "broadcast-media", {
       type: picked.mime || "application/octet-stream",
     });
   } catch {
-    return "读取媒体失败";
+    return { ok: false, message: "读取媒体失败" };
   }
 
   const deps = {
+    canSend: opts.canSend,
     sending: false,
     stickToBottom: () => {},
     resolveRecipient: () => ({
@@ -73,7 +86,11 @@ async function sendBroadcastMedia(opts: {
     toStickerDataUrl: async () => "",
     getDraftReply: () => "",
     setDraftReply: () => {},
-    enqueueOutgoingMessage: state.enqueueOutgoingMessage,
+    enqueueOutgoingMessage: (input: Parameters<AppState["enqueueOutgoingMessage"]>[0]) => {
+      const id = state.enqueueOutgoingMessage({ ...input, systemKind: "broadcast_campaign" });
+      if (id) state.patchBroadcastItem(campaign.id, item.id, { messageId: id });
+      return id;
+    },
     chatId,
     patchMessage: state.patchMessage,
     updateMessageDelivery: state.updateMessageDelivery,
@@ -101,9 +118,17 @@ async function sendBroadcastMedia(opts: {
       picked.kind === "image"
         ? await sendImageMessage(file, false, caption, deps)
         : await sendFileMessage(file, caption, deps);
-    return ok ? null : "媒体发送失败";
-  } catch {
-    return "媒体发送异常";
+    const latest = useAppStore.getState();
+    const messageId = latest.broadcastCampaigns.find(c => c.id === campaign.id)?.items.find(i => i.id === item.id)?.messageId;
+    const message = latest.messages.find(m => m.id === messageId);
+    if (ok) return { ok: true, status: message?.deliveryStatus === "local" ? "local" : "sent" };
+    return { ok: false, message: message?.lastError || "媒体发送失败",
+      error: message && isDeliveryUncertain(message) ? "baileys_delivery_unknown"
+        : !opts.canSend() ? "automation_cancelled" : "send_failed" };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "媒体发送异常",
+      error: error && typeof error === "object" && "deliveryUncertain" in error && error.deliveryUncertain
+        ? "baileys_delivery_unknown" : "send_failed" };
   }
 }
 
@@ -174,6 +199,13 @@ export function CampaignRunner() {
         }
 
         const hasMedia = !!(campaign.media && campaign.media.length > 0);
+        const canSend = () => {
+          const latest = useAppStore.getState();
+          const current = latest.broadcastCampaigns.find(c => c.id === campaign.id);
+          return !cancelled && current?.status === "running" &&
+            current.items.some(i => i.id === item.id && i.status === "sending") &&
+            normalizeChannelId(latest.settings.sendChannel) === channelId;
+        };
 
         // 复用已有气泡（限速/暂停后再试），避免重复出站行；仅文本路径需要
         let msgId = hasMedia ? null : (item.messageId || null);
@@ -181,6 +213,7 @@ export function CampaignRunner() {
           state.updateMessageDelivery(msgId, {
             deliveryStatus: "pending",
             lastError: undefined,
+            deliveryUncertain: false,
           });
         } else if (!hasMedia) {
           msgId = state.enqueueOutgoingMessage({
@@ -202,32 +235,17 @@ export function CampaignRunner() {
           }
         }
 
-        let result: {
-          ok: boolean;
-          delivered?: boolean;
-          status?: string;
-          message?: string;
-          error?: string;
-          retryAfterMs?: number;
-          raw?: unknown;
-        };
+        let result: CampaignSendResult;
         if (hasMedia) {
-          const mediaErr = await sendBroadcastMedia({
+          result = await sendBroadcastMedia({
             state,
             campaign,
             item,
             channelId,
             chatId,
+            canSend,
           });
-          result = mediaErr === null
-            ? { ok: true, delivered: true, status: "sent", message: "已发送" }
-            : {
-                ok: false,
-                delivered: false,
-                status: "failed",
-                error: "send_failed",
-                message: mediaErr || "媒体发送失败",
-              };
+          msgId = useAppStore.getState().broadcastCampaigns.find(c => c.id === campaign.id)?.items.find(i => i.id === item.id)?.messageId || null;
         } else {
           result = await dispatchSendText(
             {
@@ -240,6 +258,7 @@ export function CampaignRunner() {
             },
             {
               channelId,
+              canSend,
               rateLimitEnabled: settings.rateLimitEnabled !== false,
               rateLimits: {
                 perPhonePerMinute: settings.ratePerMinute,
@@ -274,7 +293,7 @@ export function CampaignRunner() {
 
         // 取消只能阻止尚未发送的条目；在途请求成功则照实记 sent，
         // 失败则收口为 skipped，不能重新回到 pending。
-        if (latest.status === "cancelled" && !result.ok) {
+        if (latest.status === "cancelled" && !result.ok && result.error !== "baileys_delivery_unknown") {
           if (msgId) {
             useAppStore.getState().updateMessageDelivery(msgId, {
               deliveryStatus: "local",
@@ -298,6 +317,7 @@ export function CampaignRunner() {
             useAppStore.getState().updateMessageDelivery(msgId, {
               deliveryStatus: result.status === "local" ? "local" : "sent",
               lastError: undefined,
+              deliveryUncertain: false,
               ...(waId ? { waMessageId: waId } : {}),
             });
           }
@@ -310,6 +330,7 @@ export function CampaignRunner() {
         } else {
           const err = result.error || "";
           const hard =
+            err === "automation_cancelled" ||
             err === "overheated" ||
             err === "send_paused" ||
             err === "baileys_not_connected" ||
@@ -338,15 +359,16 @@ export function CampaignRunner() {
           }
 
           if (hard) {
-            // failed + systemKind=broadcast → 队列跳过；战役暂停后由用户继续再发
+            // 未知结果留在失败项，只能经人工核对重试；普通暂停项可继续。
             if (msgId) {
               useAppStore.getState().updateMessageDelivery(msgId, {
                 deliveryStatus: "failed",
                 lastError: result.message || err || "发送失败",
+                deliveryUncertain: err === "baileys_delivery_unknown",
               });
             }
             useAppStore.getState().patchBroadcastItem(campaign.id, item.id, {
-              status: "pending",
+              status: err === "baileys_delivery_unknown" ? "failed" : "pending",
               error: result.message || err,
             });
             useAppStore.getState().pauseBroadcastCampaign(campaign.id);

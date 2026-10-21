@@ -1,5 +1,6 @@
 import { saveStickerFavorites } from "@/lib/stickerFavorites";
 import type { AppState } from "@/store/appStore";
+import { mediaUrlToBlob } from "@/lib/mediaBlob";
 
 type StickerFavoriteActionsDeps = {
   favoriteStickers: string[];
@@ -25,7 +26,7 @@ export function createStickerFavoriteActions({
       const dataUrl = source.startsWith("data:image/webp;base64,")
         ? source
         : await toStickerDataUrl(
-            new File([await (await fetch(source)).blob()], "favorite.webp", {
+            new File([await mediaUrlToBlob(source)], "favorite.webp", {
               type: "image/webp",
             })
           );

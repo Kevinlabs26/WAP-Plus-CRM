@@ -14,6 +14,11 @@ test("dataUrlToBlob decodes percent-encoded payloads", async () => {
   assert.equal(await blob.text(), "hello world");
 });
 
+test("media callers enforce their own byte limit without changing the default audio limit", async () => {
+  assert.equal((await dataUrlToBlob("data:image/webp;base64,SGVsbG8=", "image/webp", 5).text()), "Hello");
+  assert.throws(() => dataUrlToBlob("data:image/webp;base64,SGVsbG8=", "image/webp", 4), /大小上限/);
+});
+
 test("audio reads reject oversized headers and actual streams, and cancel the reader", async () => {
   const originalFetch = globalThis.fetch;
   try {

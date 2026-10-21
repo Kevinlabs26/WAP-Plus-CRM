@@ -67,6 +67,7 @@ async function prepareImageForSend(file: File): Promise<{
 }
 
 type SendImageMessageDeps = {
+  canSend?: () => boolean;
   sending: boolean;
   stickToBottom: () => void;
   resolveRecipient: () => {
@@ -164,11 +165,13 @@ export async function sendImageMessage(
               ? baileysSendSticker(recipient, dataUrl, deps.chatAccountId)
               : baileysSendImage(recipient, dataUrl, caption, {
                   accountId: deps.chatAccountId,
-                })
+                }),
+          deps.canSend
         )
       : await gatedMediaSend(
           { phoneE164: recipient, accountId: deps.chatAccountId },
-          () => deps.openAndroidMediaShare(sendFile, dataUrl, caption, recipient)
+          () => deps.openAndroidMediaShare(sendFile, dataUrl, caption, recipient),
+          deps.canSend
         );
     if (msgId) {
       deps.updateMessageDelivery(msgId, {

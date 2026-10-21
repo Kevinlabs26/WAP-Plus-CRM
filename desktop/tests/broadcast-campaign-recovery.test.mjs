@@ -38,4 +38,6 @@ const { normalizeCampaigns } = await import(
   assert.equal(campaign.status, "paused");
   assert.equal(campaign.items[0].status, "failed");
   assert.match(campaign.items[0].error, /结果未知/);
+  const [legacy] = normalizeCampaigns([{ ...campaign, items: [{ ...campaign.items[0], status: "pending", error: "发送结果未知，请核对" }] }]);
+  assert.equal(legacy.items[0].status, "failed", "legacy unknown results cannot reenter the ordinary resume queue");
 console.log("broadcast-campaign-recovery.test.mjs ok");

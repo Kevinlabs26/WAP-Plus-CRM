@@ -6,9 +6,7 @@ import { filterMessagesForAccount } from "@/lib/personThreads";
 import { syncLog } from "@/lib/syncDebug";
 import { mergeMessagesByTime } from "@/store/messageOrdering";
 import type { Message } from "@/types/crm";
-
-export type HistoryCursor = { beforeSentAt: string; beforeId: string };
-export type HistoryPage = { cursor: HistoryCursor | null; hasMore: boolean };
+import { loadChatHistoryPage, type HistoryCursor, type HistoryPage } from "@/lib/chatHistory";
 
 export function useChatHistory(chatId: string | null, accountId: string, liveAccountId?: string) {
   const requestedHistory = useRef(new Set<string>());
@@ -82,25 +80,13 @@ export function useChatHistory(chatId: string | null, accountId: string, liveAcc
   }, [chatId, accountId, liveAccountId, mergeDiskPage]);
 
   return useCallback(async (targetChatId: string, initialCursor: HistoryCursor | null): Promise<HistoryPage> => {
-    let cursor = initialCursor;
     const count = () => filterMessagesForAccount(
       useAppStore.getState().messages.filter((message) => message.chatId === targetChatId), accountId, liveAccountId
     ).length;
-    const before = count();
-    while (true) {
-      const page = await loadMessagesPage({ chatId: targetChatId, ...cursor, limit: 80 });
-      const items = (page?.items || []) as Message[];
-      if (!items.length) return { cursor, hasMore: false };
-      const oldest = items[0];
-      const nextCursor = { beforeSentAt: oldest.sentAt, beforeId: oldest.id };
-      if (cursor && cursor.beforeSentAt === nextCursor.beforeSentAt && cursor.beforeId === nextCursor.beforeId) {
-        throw new Error("聊天历史分页游标未前进，请重试");
-      }
-      cursor = nextCursor;
+    return loadChatHistoryPage(targetChatId, initialCursor, (items) => {
+      const before = count();
       mergeDiskPage(targetChatId, items);
-      const hasMore = items.length >= (page?.limit || 80);
-      // 整页可能已在内存中或只属于另一账号，仍需沿磁盘游标继续读取。
-      if (count() > before || !hasMore) return { cursor, hasMore };
-    }
+      return count() - before;
+    });
   }, [accountId, liveAccountId, mergeDiskPage]);
 }

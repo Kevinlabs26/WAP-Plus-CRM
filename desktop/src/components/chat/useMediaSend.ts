@@ -8,6 +8,7 @@ import { sendGifMessage } from "./sendGifMessage";
 import { sendAudioMessage } from "./sendAudioMessage";
 import { useRef } from "react";
 import { clearSentChatDraft } from "@/lib/chatDrafts";
+import { dataUrlToBlob } from "@/lib/mediaBlob";
 
 type UseMediaSendOptions = {
   sending: boolean;
@@ -129,7 +130,7 @@ export function useMediaSend(opts: UseMediaSendOptions) {
 
   const sendRecentSticker = async (dataUrl: string) => {
     try {
-      const blob = await (await fetch(dataUrl)).blob();
+      const blob = dataUrlToBlob(dataUrl, "image/webp", 6 * 1024 * 1024);
       await sendImage(
         new File([blob], "recent-sticker.webp", { type: "image/webp" }),
         true

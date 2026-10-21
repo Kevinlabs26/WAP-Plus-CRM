@@ -39,6 +39,7 @@ export function normalizeCampaigns(raw: unknown): BroadcastCampaign[] {
         const item = it as Partial<BroadcastItem>;
         const iid = String(item.id || "").trim();
         if (!iid) continue;
+        const unknown = /发送结果未知|baileys_delivery_unknown/.test(String(item.error || ""));
         items.push({
           id: iid,
           contactId: String(item.contactId || ""),
@@ -47,7 +48,7 @@ export function normalizeCampaigns(raw: unknown): BroadcastCampaign[] {
           bodyRendered: String(item.bodyRendered || ""),
           // 应用退出时仍为 sending 的结果无法确认，不能静默重发。
           status:
-            item.status === "sending"
+            item.status === "sending" || (item.status === "pending" && unknown)
               ? "failed"
               : item.status === "sent" ||
                   item.status === "failed" ||

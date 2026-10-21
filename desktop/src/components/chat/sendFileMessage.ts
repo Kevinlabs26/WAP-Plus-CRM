@@ -7,6 +7,7 @@ import { translateCurrent } from "@/i18n";
 type SendResult = object;
 
 type SendFileMessageDeps = {
+  canSend?: () => boolean;
   sending: boolean;
   stickToBottom: () => void;
   resolveRecipient: () => {
@@ -93,11 +94,13 @@ export async function sendFileMessage(
               mimetype: file.type || "application/octet-stream",
               caption,
               accountId: deps.chatAccountId,
-            })
+            }),
+          deps.canSend
         )
       : await gatedMediaSend(
           { phoneE164: recipient, accountId: deps.chatAccountId },
-          () => deps.openAndroidMediaShare(file, dataUrl, caption, recipient)
+          () => deps.openAndroidMediaShare(file, dataUrl, caption, recipient),
+          deps.canSend
         );
     if (msgId) {
       if (!deps.isBaileys) {

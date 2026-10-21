@@ -13,7 +13,7 @@ import {
   type VirtuosoHandle,
 } from "react-virtuoso";
 import type { Message } from "@/types/crm";
-import type { HistoryPage, HistoryCursor } from "./useChatHistory";
+import type { HistoryPage, HistoryCursor } from "@/lib/chatHistory";
 import type { SenderPresentation } from "@/lib/groupSenderDisplay";
 import { EmptyState } from "@/components/ui/primitives";
 import { syncLog } from "@/lib/syncDebug";
