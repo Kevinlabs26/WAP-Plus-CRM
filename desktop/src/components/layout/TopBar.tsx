@@ -15,9 +15,9 @@ const NAV: { id: NavId; labelKey: TranslationKey }[] = [
   { id: "today", labelKey: "nav.today" },
   { id: "chats", labelKey: "nav.chats" },
   { id: "crm", labelKey: "nav.crm" },
+  { id: "broadcast", labelKey: "nav.broadcast" },
 ];
 const MORE_NAV: { id: NavId; labelKey: TranslationKey }[] = [
-  { id: "broadcast", labelKey: "nav.broadcast" },
   { id: "starred", labelKey: "nav.starred" },
   { id: "stats", labelKey: "nav.stats" },
   { id: "monitor", labelKey: "nav.monitor" },
@@ -171,7 +171,7 @@ export function TopBar() {
             onClick={() => navigate(item.id)}
             aria-current={activeNav === item.id ? "page" : undefined}
             className={cn(
-              "relative shrink-0 whitespace-nowrap rounded-[6px] px-3 py-1.5 text-[12px] font-medium transition-colors",
+              "relative shrink-0 whitespace-nowrap rounded-[6px] px-3 py-1.5 text-[13px] font-medium transition-colors",
               activeNav === item.id
                 ? "crm-nav-active bg-zinc-800/75 text-zinc-50"
                 : "text-zinc-500 hover:text-zinc-200"
@@ -227,6 +227,12 @@ export function TopBar() {
               {t(item.labelKey)}
               {item.id === "monitor" && monitorBadge && <span className={monitorBadge.tone === "bad" ? "text-rose-400" : "text-amber-400"}>{monitorBadge.n > 9 ? "9+" : monitorBadge.n}</span>}
             </button>)}
+            <div className="my-1 border-t border-zinc-800" />
+            <button type="button" title={t("nav.supportTitle")}
+              onClick={() => { setMoreOpen(false); setDonateOpen(true); }}
+              className="flex min-h-9 w-full items-center gap-2 rounded px-3 py-2 text-left text-[13px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">
+              <Coffee className="h-4 w-4" />{t("nav.support")}
+            </button>
           </div>}
         </div>
       </nav>
@@ -246,18 +252,9 @@ export function TopBar() {
           <Search className="h-3.5 w-3.5" />
           <span className="hidden text-[12px] md:inline">{t("nav.search")}</span>
           <kbd className="hidden rounded border border-zinc-700 bg-zinc-950 px-1 font-mono text-2xs text-zinc-600 lg:inline">
-            ⌘K
+            Ctrl+K
           </kbd>
         </button>
-        <Button
-          variant="ghost"
-          className="!min-h-8 gap-1 !px-2 text-zinc-400 hover:text-rose-300"
-          title={t("nav.supportTitle")}
-          onClick={() => setDonateOpen(true)}
-        >
-          <Coffee className="h-4 w-4" />
-          <span className="hidden text-[12px] md:inline">{t("nav.support")}</span>
-        </Button>
         <Button
           variant="ghost"
           className="!min-h-8 w-8 !px-0"

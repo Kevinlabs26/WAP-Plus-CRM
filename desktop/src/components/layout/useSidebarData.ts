@@ -4,7 +4,6 @@ import { useShallow } from "zustand/react/shallow";
 import type { ChatPreview, Contact } from "@/types/crm";
 import type { WaAccount } from "@/types/account";
 import {
-  CHAT_SORT_OPTIONS,
   countGroupChats,
   filterAndSortSidebarChats,
   filterSidebarContacts,
@@ -363,9 +362,6 @@ export function useSidebarData({
         : dataAccountId;
     return `${folder.name} · ${accountLabelOf(aid)}`;
   };
-  const chatSortLabel =
-    CHAT_SORT_OPTIONS.find((o) => o.id === chatSort)?.label || "最近消息";
-
   const primaryFolderIdOf = (chatId: string) => {
     const f = chatFolders.find((x) => x.chatIds.includes(chatId));
     return f?.id ?? null;
@@ -436,7 +432,6 @@ export function useSidebarData({
     accountShortOf,
     folderDisplayName,
     leadCount: leadCandidates.size,
-    chatSortLabel,
     primaryFolderIdOf,
     sidebarItems,
     chatListFilter,

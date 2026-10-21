@@ -15,6 +15,7 @@ export function ConfirmHost() {
 
   useEffect(() => {
     if (!dialog) return;
+    const previous = document.activeElement;
     const focusBtn =
       dialog.tone === "danger" ? cancelRef.current : confirmRef.current;
     focusBtn?.focus();
@@ -31,7 +32,10 @@ export function ConfirmHost() {
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
+    };
   }, [dialog, resolveConfirm]);
 
   if (!dialog) return null;

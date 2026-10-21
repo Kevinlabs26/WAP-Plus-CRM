@@ -8,6 +8,7 @@ import { formatAccountDisplay } from "@/lib/accountLabels";
 import { AccountHealthCard } from "./AccountHealthCard";
 import { SectionLabel } from "@/components/ui/primitives";
 import { useI18n } from "@/i18n";
+import { resolveWaAccountConnection } from "@/lib/accountConnection";
 
 export function AccountHealthPanel({
   compact,
@@ -17,6 +18,7 @@ export function AccountHealthPanel({
   const { t } = useI18n();
   const messages = useAppStore((s) => s.messages);
   const settings = useAppStore((s) => s.settings);
+  const connection = useAppStore((s) => s.baileysUi.connection);
   const accounts = settings.waAccounts || [];
 
   const items = useMemo(
@@ -68,6 +70,7 @@ export function AccountHealthPanel({
           <AccountHealthCard
             key={h.accountId}
             health={h}
+            connection={resolveWaAccountConnection(accounts, h.accountId, settings.liveBaileysAccountId, connection)}
             title={title}
             compact={compact}
           />

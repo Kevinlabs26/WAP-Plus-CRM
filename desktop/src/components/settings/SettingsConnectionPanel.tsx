@@ -13,12 +13,8 @@ export function SettingsConnectionPanel() {
     <div className="mx-auto max-w-3xl space-y-6">
       <header>
         <h3 className="text-lg font-semibold text-zinc-100">{t("settingsConnection.title")}</h3>
-        <p className="mt-1 text-[11px] text-zinc-500">{t("settingsConnection.description")}</p>
+        <p className="mt-1 text-[13px] text-zinc-500">{t("settingsConnection.description")}</p>
       </header>
-
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
-        <AccountHealthPanel />
-      </section>
 
       <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
         <SectionLabel>{t("settingsConnection.channel")}</SectionLabel>
@@ -40,7 +36,7 @@ export function SettingsConnectionPanel() {
           <div className="mt-3"><BaileysConnectCard /></div>
         ) : (
           <div className="mt-3 space-y-3">
-            <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2.5 text-[11px] leading-relaxed text-amber-100/90">
+            <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2.5 text-[12px] leading-relaxed text-amber-100/90">
               <p className="font-medium text-amber-200">{t("settingsConnection.bridgeWarning")}</p>
               <ul className="mt-1.5 list-inside list-disc space-y-0.5 text-amber-100/75">
                 <li>
@@ -96,6 +92,11 @@ export function SettingsConnectionPanel() {
         </label>
         <p className="mt-1 text-2xs text-zinc-600">{t("settingsConnection.autoConnectHint")}</p>
       </section>
+      {settings.sendChannel !== "android_bridge" && (
+        <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+          <AccountHealthPanel />
+        </section>
+      )}
     </div>
   );
 }

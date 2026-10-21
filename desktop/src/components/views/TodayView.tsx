@@ -78,6 +78,10 @@ export function TodayView() {
   const setActiveNav = useAppStore((s) => s.setActiveNav);
   const setSelectedChat = useAppStore((s) => s.setSelectedChat);
   const pushToast = useAppStore((s) => s.pushToast);
+  const setBaileysLoginOpen = useAppStore((s) => s.setBaileysLoginOpen);
+  const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
+  const sendChannel = useAppStore((s) => s.settings.sendChannel);
+  const bridgeConnected = useAppStore((s) => s.bridge.connected);
 
   useEffect(() => {
     const openFolder = (folderId: string) => {
@@ -116,6 +120,8 @@ export function TodayView() {
   const liveConnection = useAppStore((s) => s.baileysUi.connection);
   const scopedAccounts = waAccounts.filter((a) => !scopeId || a.id === scopeId);
   const connectedCount = scopedAccounts.filter((a) => isWaAccountConnected(waAccounts, a.id, liveAccountId, liveConnection)).length;
+  const connected = sendChannel === "android_bridge" ? bridgeConnected
+    : connectedCount > 0 || (!scopeId && scopedAccounts.length === 0 && liveConnection === "connected");
 
   const contactById = useMemo(() => {
     const m = new Map<string, Contact>();
@@ -294,7 +300,7 @@ export function TodayView() {
     },
     {
       id: "plan",
-      label: t("today.queue"),
+      label: t("today.followUpPlan"),
       value: followUps.filter((item) => !item.done).length,
       tone: "ok",
     },
@@ -327,11 +333,11 @@ export function TodayView() {
 
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-zinc-950">
-      <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-zinc-800/90 px-4">
+      <div className="flex min-h-16 shrink-0 items-center justify-between gap-3 border-b border-zinc-800/90 px-4">
         <div className="min-w-0">
-          <div className="text-[13px] font-semibold">{t("today.title")}</div>
+          <h1 className="text-lg font-semibold">{t("today.title")}</h1>
           <div className="text-2xs text-zinc-500">
-            {today} · {scopeId ? waAccounts.find((a) => a.id === scopeId)?.label || t("today.currentAccount") : t("today.allAccounts")} · {t("today.connected")} {connectedCount}/{scopedAccounts.length}
+            {today} · {scopeId ? waAccounts.find((a) => a.id === scopeId)?.label || t("today.currentAccount") : t("today.allAccounts")} · {sendChannel === "android_bridge" ? t(connected ? "welcome.connected" : "welcome.disconnected") : `${t("today.connected")} ${connectedCount}/${scopedAccounts.length}`}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -368,27 +374,8 @@ export function TodayView() {
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         <div className="mx-auto flex max-w-7xl flex-col gap-5">
-          <div className="grid gap-3 md:grid-cols-3" aria-label={t("today.priority")}>
-            {([
-              { id: "awaiting", label: t("today.awaitingReply"), value: awaiting.length, hint: t("reply.awaitingHint"), Icon: Clock, barColor: "border-l-amber-500" },
-              { id: "today", label: t("today.followUp"), value: fu.dueToday.length, hint: `${fu.overdue.length} · ${t("today.overdue")}`, Icon: CalendarCheck, barColor: "border-l-brand" },
-              { id: "failed", label: t("today.sendError"), value: failed.length, hint: t("today.failedRecent"), Icon: AlertTriangle, barColor: "border-l-rose-500" },
-            ] as const).map(({ id, label, value, hint, Icon, barColor }) => (
-              <button key={id} type="button" onClick={() => setActiveQueue(id)}
-                aria-pressed={activeQueue === id}
-                className={cn("today-kpi-card relative rounded-xl border border-l-4 p-4 text-left transition-all shadow-2xs hover:shadow-xs",
-                  barColor,
-                  activeQueue === id ? "border-brand/60 bg-brand/10" : "border-zinc-800 bg-zinc-900/30")}>
-                <div className="flex min-w-0 items-start justify-between gap-2 text-[13px] font-medium text-zinc-200">
-                  {label}<Icon className={cn("h-4 w-4", id === "failed" && value ? "text-rose-400" : "text-brand")} />
-                </div>
-                <div className="my-2 text-3xl font-semibold tabular-nums text-zinc-100">{value}</div>
-                <div className="break-words text-[11px] text-zinc-500">{hint}</div>
-              </button>
-            ))}
-          </div>
           <div
-            className="sticky top-0 z-20 -mx-1 grid grid-cols-2 gap-1.5 bg-zinc-950/95 px-1 py-2 backdrop-blur sm:grid-cols-3 xl:grid-cols-6"
+            className="sticky top-0 z-20 -mx-1 flex flex-wrap gap-2 bg-zinc-950/95 px-1 py-2 backdrop-blur"
             role="tablist"
             aria-label={t("today.queue")}
           >
@@ -400,16 +387,17 @@ export function TodayView() {
                 aria-selected={activeQueue === c.id}
                 onClick={() => setActiveQueue(c.id)}
                 className={cn(
-                  "flex min-h-10 items-center justify-between gap-2 rounded-md border px-2.5 py-2 text-left transition-colors enabled:hover:border-zinc-600 enabled:hover:bg-zinc-900/70 disabled:cursor-default",
-                  activeQueue === c.id && "ring-1 ring-brand/70",
-                  c.tone === "bad"
+                  "inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 py-2 text-left transition-colors hover:bg-zinc-900",
+                  activeQueue === c.id
+                    ? "border-brand/50 bg-brand/10"
+                    : c.tone === "bad"
                     ? "border-rose-500/30 bg-rose-500/5"
                     : c.tone === "warn"
                       ? "border-amber-500/25 bg-amber-500/5"
                       : "border-zinc-800 bg-zinc-900/40"
                 )}
               >
-                <div className="truncate text-[11px] text-zinc-400">{c.label}</div>
+                <div className="truncate text-[12px] text-zinc-400">{c.label}</div>
                 <div className="shrink-0 text-[13px] font-semibold tabular-nums text-zinc-100">
                   {c.value}
                 </div>
@@ -419,19 +407,23 @@ export function TodayView() {
 
           {emptyAll && activeQueue !== "plan" ? (
             <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-zinc-800/80 bg-zinc-900/30 px-6 py-16 text-center">
-              <CheckCircle2 className="h-8 w-8 text-emerald-500/80" />
+              {connected ? <CheckCircle2 className="h-8 w-8 text-emerald-500/80" /> : <Radio className="h-8 w-8 text-zinc-400" />}
               <div className="text-[14px] font-medium text-zinc-200">
-                {t("today.emptyTitle")}
+                {t(connected ? "today.emptyTitle" : "today.connectTitle")}
               </div>
               <div className="max-w-sm text-[12px] text-zinc-500">
-                {t("today.emptyDescription")}
+                {t(connected ? "today.emptyDescription" : "today.connectDescription")}
               </div>
               <Button
                 className="mt-2"
-                variant="secondary"
-                onClick={() => goToChats("all")}
+                variant={connected ? "secondary" : "primary"}
+                onClick={() => {
+                  if (connected) goToChats("all");
+                  else if (sendChannel === "android_bridge") setSettingsOpen(true, "connection");
+                  else setBaileysLoginOpen(true);
+                }}
               >
-                {t("today.openChats")}
+                {t(connected ? "today.openChats" : "welcome.connectWhatsApp")}
               </Button>
             </div>
           ) : null}
@@ -531,7 +523,7 @@ export function TodayView() {
                       />
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="truncate text-[13px] font-medium">
+                          <span className="truncate text-[14px] font-medium">
                             {title}
                           </span>
                           {contact?.stage ? (
@@ -541,11 +533,11 @@ export function TodayView() {
                           ) : null}
                         </div>
                         {meta ? (
-                          <div className="truncate text-[11px] text-zinc-600">
+                          <div className="truncate text-[12px] text-zinc-600">
                             {meta}
                           </div>
                         ) : null}
-                        <div className="truncate text-[12px] text-zinc-500">
+                        <div className="truncate text-[13px] text-zinc-500">
                           {c.lastMessage || t("today.unreadFallback")}
                         </div>
                       </div>
@@ -619,14 +611,14 @@ export function TodayView() {
                       />
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
-                          <span className="truncate text-[13px] font-medium">
+                          <span className="truncate text-[14px] font-medium">
                             {title}
                           </span>
                           <span className="shrink-0 text-2xs tabular-nums text-zinc-600">
                             {(m.sentAt || "").slice(0, 16).replace("T", " ")}
                           </span>
                         </div>
-                        <div className="truncate text-[12px] text-zinc-500">
+                        <div className="truncate text-[13px] text-zinc-500">
                           {m.lastError ||
                             m.body ||
                             m.mediaType ||

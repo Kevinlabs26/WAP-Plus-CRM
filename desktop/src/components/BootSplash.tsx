@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Lock } from "lucide-react";
+import { HardDrive } from "lucide-react";
 import { WapPlusMark } from "@/components/brand/WapPlusMark";
 import { useI18n } from "@/i18n";
 
@@ -75,7 +75,7 @@ export function BootSplash({
         </div>
 
         <div className="mb-1 text-[22px] font-semibold tracking-tight text-zinc-50">
-          Bridge<span className="text-brand">CRM</span>
+          WAP Plus<span className="text-brand"> CRM</span>
         </div>
         <div className="mb-8 text-[12px] tracking-wide text-zinc-500">
           {t("boot.subtitle")}
@@ -91,12 +91,12 @@ export function BootSplash({
           </div>
         </div>
 
-        <div className="min-h-[1.25rem] text-center text-[11px] text-zinc-500">
+        <div className="min-h-[1.25rem] text-center text-[12px] text-zinc-500">
           {loadingLabel}
         </div>
 
-        <div className="mt-10 flex items-center gap-1.5 text-[11px] text-zinc-600">
-          <Lock className="h-3 w-3 shrink-0" strokeWidth={2} />
+        <div className="mt-10 flex items-center gap-1.5 text-[12px] text-zinc-600">
+          <HardDrive className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
           <span>{t("boot.localStorage")}</span>
         </div>
       </div>

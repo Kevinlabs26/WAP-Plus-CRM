@@ -210,7 +210,7 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex w-full items-center justify-between gap-1.5">
-            <span className="flex min-w-0 items-center gap-1 truncate text-[13px] font-semibold text-zinc-100">
+            <span className="flex min-w-0 items-center gap-1 truncate text-[14px] font-semibold text-zinc-100">
               {chat.pinned && (
                 <Pin className="h-3 w-3 shrink-0 text-brand" />
               )}
@@ -238,7 +238,7 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
               {tickKind && <Ticks kind={tickKind} />}
               <span
                 className={cn(
-                  "min-w-0 flex-1 truncate text-2xs",
+                  "min-w-0 flex-1 truncate text-[13px]",
                   typingLine ? "font-medium text-brand" : "text-zinc-500"
                 )}
               >

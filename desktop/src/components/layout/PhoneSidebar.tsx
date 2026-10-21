@@ -815,7 +815,6 @@ export function PhoneSidebar() {
     accountLabelOf,
     accountShortOf,
     folderDisplayName,
-    chatSortLabel,
     leadCount,
     primaryFolderIdOf,
     sidebarItems,
@@ -1324,7 +1323,7 @@ export function PhoneSidebar() {
   };
 
   return (
-    <aside className="crm-sidebar flex w-64 shrink-0 flex-col border-r border-zinc-800/90 bg-zinc-950">
+    <aside className="crm-sidebar flex w-72 shrink-0 flex-col border-r border-zinc-800/90 bg-zinc-950">
       {!isBaileys && (
         <PhoneListSection
           phones={phones}
@@ -1341,9 +1340,6 @@ export function PhoneSidebar() {
           contactsCount={filteredContacts.length}
           filteredCount={filteredChats.length}
           groupFilter={groupFilter}
-          onToggleHideGroups={() =>
-            changeGroupFilter(groupFilter === "all" ? "hidden" : "all")
-          }
           onGroupFilterChange={changeGroupFilter}
           getGroupFilterCounts={getGroupFilterCounts}
           onMarkAllGroupsRead={() => void markAllGroupsRead()}
@@ -1372,7 +1368,6 @@ export function PhoneSidebar() {
           sortOpen={chatSortOpen}
           onToggleSort={() => setChatSortOpen((v) => !v)}
           sortRef={chatSortRef}
-          sortLabel={chatSortLabel}
           sortMode={chatSort}
           onSortChange={(mode) => {
             setChatSort(mode);
@@ -1430,7 +1425,7 @@ export function PhoneSidebar() {
               className="sidebar-chat-scroll h-full"
               data={sidebarItems}
               computeItemKey={(_i, it) => it.id}
-              defaultItemHeight={44}
+              defaultItemHeight={56}
               increaseViewportBy={{ top: 120, bottom: 120 }}
               components={SIDEBAR_VIRTUOSO_COMPONENTS}
               scrollSeekConfiguration={SIDEBAR_SCROLL_SEEK}

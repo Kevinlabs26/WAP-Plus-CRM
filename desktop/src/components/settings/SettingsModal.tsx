@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import { useAppStore } from "@/store/appStore";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { Button } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
 import { SettingsConnectionPanel } from "./SettingsConnectionPanel";
 import { SettingsMessagingPanel } from "./SettingsMessagingPanel";
@@ -27,7 +26,7 @@ import { SettingsAppearancePanel } from "./SettingsAppearancePanel";
 import { SettingsLocalSpeechPanel } from "./SettingsLocalSpeechPanel";
 import { SettingsScheduledMessagesPanel } from "./SettingsScheduledMessagesPanel";
 import { SettingsUpdatePanel } from "./SettingsUpdatePanel";
-import { memo, useState, type ComponentType } from "react";
+import { memo, useEffect, useRef, useState, type ComponentType } from "react";
 
 const CATEGORIES = [
   { id: "connection", labelKey: "settings.connection", descriptionKey: "settings.connectionDesc", icon: Radio },
@@ -80,6 +79,21 @@ export function SettingsModal() {
   const category = useAppStore((state) => state.settingsCategory) as CategoryId;
   const setCategory = useAppStore((state) => state.setSettingsCategory);
   const [visited, setVisited] = useState(() => new Set<CategoryId>([category]));
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const contentRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement;
+    closeRef.current?.focus();
+    return () => {
+      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (contentRef.current) contentRef.current.scrollTop = 0;
+  }, [category]);
 
   const selectCategory = (next: CategoryId) => {
     setVisited((current) => {
@@ -98,22 +112,45 @@ export function SettingsModal() {
     >
       <div
         className="flex min-h-0 flex-none flex-col overflow-hidden rounded-2xl border border-zinc-700/90 bg-zinc-900 shadow-2xl"
-        style={{ width: "min(92vw, 1152px)", height: "min(82vh, 780px)" }}
+        style={{ width: "min(94vw, 1152px)", height: "min(88vh, 820px)" }}
         role="dialog"
         aria-modal="true"
         aria-label={t("settings.title")}
         onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          // Nested dialogs handle their own keys; global confirmations live outside this panel.
+          if (event.defaultPrevented || (event.target as HTMLElement).closest('[role="dialog"], [role="alertdialog"]') !== event.currentTarget) return;
+          if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            setOpen(false);
+          } else if (event.key === "Tab") {
+            const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(
+              'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]'
+            )).filter(element => element.tabIndex >= 0 && element.getClientRects().length > 0);
+            const first = controls[0], last = controls.at(-1);
+            if (event.shiftKey && document.activeElement === first) {
+              event.preventDefault();
+              last?.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault();
+              first?.focus();
+            }
+          }
+        }}
       >
         <header className="flex h-14 shrink-0 items-center justify-between border-b border-zinc-800 px-6">
           <h2 className="text-[17px] font-semibold leading-none text-zinc-100">{t("settings.title")}</h2>
-          <Button
-            variant="ghost"
-            className="w-9 !px-0"
+          <button
+            ref={closeRef}
+            type="button"
+            className="ui-btn-ghost h-9 w-9 !px-0"
             onClick={() => setOpen(false)}
             title={t("settings.close")}
+            aria-label={t("settings.close")}
           >
             <X className="h-4 w-4" />
-          </Button>
+          </button>
         </header>
 
         <div className="flex min-h-0 flex-1">
@@ -126,6 +163,7 @@ export function SettingsModal() {
                     key={item.id}
                     type="button"
                     onClick={() => selectCategory(item.id)}
+                    aria-current={category === item.id ? "page" : undefined}
                     className={cn(
                       "flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
                       category === item.id
@@ -135,8 +173,8 @@ export function SettingsModal() {
                   >
                     <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", category === item.id && "text-brand")} />
                     <span className="min-w-0">
-                      <span className="block break-words text-[12px] font-medium">{t(item.labelKey as TranslationKey)}</span>
-                      <span className="mt-0.5 block break-words text-2xs leading-3 text-zinc-600">{t(item.descriptionKey as TranslationKey)}</span>
+                      <span className="block break-words text-[13px] font-medium">{t(item.labelKey as TranslationKey)}</span>
+                      <span className="mt-0.5 block break-words text-2xs leading-4 text-zinc-600">{t(item.descriptionKey as TranslationKey)}</span>
                     </span>
                   </button>
                 );
@@ -144,7 +182,7 @@ export function SettingsModal() {
             </div>
           </nav>
 
-          <main className="min-w-0 flex-1 overflow-y-auto p-6">
+          <main ref={contentRef} className="min-w-0 flex-1 overflow-y-auto p-6">
             {CATEGORIES.map((item) =>
               visited.has(item.id) ? (
                 <KeepAlivePanel

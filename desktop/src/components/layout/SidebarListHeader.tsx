@@ -1,8 +1,10 @@
 import {
   ArrowUpDown,
+  Bookmark,
   Check,
   ChevronDown,
   MessageCircle,
+  MoreHorizontal,
   RefreshCw,
   Search,
   UserPlus,
@@ -16,7 +18,6 @@ import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { isSyncDebugEnabled, syncLog } from "@/lib/syncDebug";
 import { cn } from "@/lib/utils";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { Avatar } from "@/components/ui/Avatar";
 import { SectionLabel } from "@/components/ui/primitives";
 import type { ChatListFilter } from "@/store/appStore";
 import {
@@ -59,7 +60,6 @@ type Props = {
   contactsCount: number;
   filteredCount: number;
   groupFilter: GroupChatFilter;
-  onToggleHideGroups: () => void;
   onGroupFilterChange: (mode: GroupChatFilter) => void;
   getGroupFilterCounts: () => GroupChatCounts;
   /** 一键已读所有群聊 */
@@ -81,7 +81,6 @@ type Props = {
   sortOpen: boolean;
   onToggleSort: () => void;
   sortRef: MutableRefObject<HTMLDivElement | null>;
-  sortLabel: string;
   sortMode: ChatSortMode;
   onSortChange: (mode: ChatSortMode) => void;
   syncing: boolean;
@@ -97,7 +96,6 @@ export function SidebarListHeader({
   contactsCount,
   filteredCount,
   groupFilter,
-  onToggleHideGroups,
   onGroupFilterChange,
   getGroupFilterCounts,
   onMarkAllGroupsRead,
@@ -131,15 +129,33 @@ export function SidebarListHeader({
   const [groupFilterCounts, setGroupFilterCounts] =
     useState<GroupChatCounts | null>(null);
   const groupFilterRef = useRef<HTMLDivElement | null>(null);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsRef = useRef<HTMLDivElement | null>(null);
+  const actions: {
+    label: string;
+    Icon: typeof UsersRound;
+    run: () => void;
+    disabled?: boolean;
+    title?: string;
+  }[] = [
+    ...(isBaileys ? [{ label: t("sidebar.newGroup"), Icon: UsersRound, run: onCreateGroup }] : []),
+    { label: t("sidebar.batchSaveContacts"), Icon: UserPlus, run: onBatchSaveContacts },
+    ...(listTab === "chats" ? [{ label: t("leadInbox.settings"), Icon: Settings2, run: onOpenLeadSettings }] : []),
+    { label: syncing ? t("sidebar.syncing") : t("sidebar.syncChats"), Icon: RefreshCw, run: onSync, disabled: syncDisabled, title: syncTitle },
+  ];
 
   useEffect(() => {
-    if (!groupFilterOpen) return;
+    if (!groupFilterOpen && !actionsOpen) return;
     const close = (event: Event) => {
-      if (groupFilterRef.current?.contains(event.target as Node)) return;
-      setGroupFilterOpen(false);
+      if (!groupFilterRef.current?.contains(event.target as Node)) setGroupFilterOpen(false);
+      if (!actionsRef.current?.contains(event.target as Node)) setActionsOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setGroupFilterOpen(false);
+      if (event.key !== "Escape") return;
+      const ref = actionsOpen ? actionsRef : groupFilterRef;
+      setGroupFilterOpen(false);
+      setActionsOpen(false);
+      ref.current?.querySelector<HTMLButtonElement>("button")?.focus();
     };
     document.addEventListener("pointerdown", close);
     document.addEventListener("keydown", closeOnEscape);
@@ -147,11 +163,11 @@ export function SidebarListHeader({
       document.removeEventListener("pointerdown", close);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [groupFilterOpen]);
+  }, [groupFilterOpen, actionsOpen]);
 
   return (
-    <>
-      <div className="mb-2 grid grid-cols-2 rounded-lg bg-zinc-900 p-0.5 text-2xs">
+    <div className="shrink-0">
+      <div className="mb-3 grid grid-cols-2 rounded-lg bg-zinc-900 p-1 text-[13px]">
         <button
           type="button"
           onClick={() => onTabChange("chats")}
@@ -179,90 +195,67 @@ export function SidebarListHeader({
           {t("sidebar.contacts")} · {contactsCount}
         </button>
       </div>
-      <button
-        type="button"
-        onClick={onOpenSaved}
-        className={cn(
-          "sidebar-saved-card mb-2 flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left text-[13px] font-semibold transition-all shadow-2xs",
-          savedActive && "sidebar-saved-card-active"
-        )}
-      >
-        <Avatar
-          name={t("sidebar.saved")}
-          seed="saved-messages"
-          size="sm"
-          variant="saved"
-        />
-        <span className="min-w-0 flex-1 truncate font-semibold text-zinc-900 dark:text-zinc-100">{t("sidebar.saved")}</span>
-        <span className="shrink-0 text-[11px] font-medium text-zinc-500 dark:text-zinc-400">{t("sidebar.savedLocal")}</span>
-      </button>
-      {listTab === "chats" && (
-        <div className="mb-2 flex items-center gap-1">
-          <button
-            type="button"
-            onClick={onOpenLeads}
-            className={cn(
-              "flex min-w-0 flex-1 items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left text-[12px] transition-colors",
-              leadActive
-                ? "border-brand/40 bg-brand/10 text-brand"
-                : "border-zinc-800/80 bg-zinc-900/45 text-zinc-400 hover:border-brand/30 hover:text-zinc-200",
-              !leadEnabled && "opacity-60"
-            )}
-          >
-            <UserRoundPlus className="h-3.5 w-3.5 shrink-0" />
-            <span className="min-w-0 flex-1 truncate">{t("leadInbox.title")}</span>
-            {leadCount > 0 && (
-              <span className="inline-flex min-w-4 items-center justify-center rounded-full bg-brand/20 px-1 text-[10px] font-semibold tabular-nums text-brand">
-                {leadCount}
-              </span>
-            )}
-          </button>
-          <button
-            type="button"
-            onClick={onOpenLeadSettings}
-            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-zinc-800/80 bg-zinc-900/45 text-zinc-500 hover:border-brand/30 hover:text-zinc-200"
-            title={t("leadInbox.settings")}
-            aria-label={t("leadInbox.settings")}
-          >
-            <Settings2 className="h-3.5 w-3.5" />
-          </button>
+      <div className="mb-2 flex items-center gap-1.5">
+        <div className="relative min-w-0 flex-1">
+          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+          <input
+            value={filter}
+            onChange={(event) => {
+              const value = event.target.value;
+              const startedAt = isSyncDebugEnabled() ? performance.now() : 0;
+              onFilterChange(value);
+              if (startedAt) {
+                requestAnimationFrame(() => {
+                  const durationMs = Math.round(performance.now() - startedAt);
+                  syncLog(
+                    "ui.sidebar",
+                    "search rendered",
+                    { queryLength: value.length, durationMs },
+                    durationMs >= 50 ? "warn" : "debug"
+                  );
+                });
+              }
+            }}
+            placeholder={t("sidebar.searchPlaceholder")}
+            aria-label={t("sidebar.searchPlaceholder")}
+            className="ui-control h-9 w-full pl-7 pr-2 text-[13px]"
+          />
         </div>
-      )}
-      <div className="relative mb-2">
-        <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-600" />
-        <input
-          value={filter}
-          onChange={(event) => {
-            const value = event.target.value;
-            const startedAt = isSyncDebugEnabled() ? performance.now() : 0;
-            onFilterChange(value);
-            if (startedAt) {
-              requestAnimationFrame(() => {
-                const durationMs = Math.round(performance.now() - startedAt);
-                syncLog(
-                  "ui.sidebar",
-                  "search rendered",
-                  { queryLength: value.length, durationMs },
-                  durationMs >= 50 ? "warn" : "debug"
-                );
-              });
-            }
-          }}
-          placeholder={t("sidebar.searchPlaceholder")}
-          className={cn(
-            "ui-control h-8 w-full pl-7 text-xs",
-            isBaileys ? "pr-9" : "pr-2"
-          )}
-        />
-        {isBaileys && (
-          <button
-            type="button"
-            onClick={onCreateGroup}
-            className="absolute right-1 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
-            title={t("sidebar.newGroup")}
-            aria-label={t("sidebar.newGroup")}
-          >
-            <UsersRound className="h-3.5 w-3.5" />
+        <div className="relative shrink-0" ref={actionsRef}>
+          <button type="button" aria-label={t("sidebar.actions")} title={t("sidebar.actions")}
+            aria-expanded={actionsOpen} aria-controls="sidebar-actions"
+            onClick={() => { setGroupFilterOpen(false); setActionsOpen(open => !open); }}
+            className="ui-btn-secondary h-9 w-9 !px-0">
+            <MoreHorizontal className="h-4 w-4" />
+          </button>
+          {actionsOpen && <div id="sidebar-actions" role="group" aria-label={t("sidebar.actions")}
+            className="absolute right-0 top-[calc(100%+6px)] z-50 w-64 rounded-lg border border-zinc-700 bg-zinc-900 p-1 shadow-xl shadow-black/30">
+            {actions.map(({ label, Icon, run, disabled, title }) => (
+              <button key={label} type="button" disabled={disabled} title={title}
+                onClick={() => { setActionsOpen(false); run(); }}
+                className="flex min-h-9 w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] text-zinc-200 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-45">
+                <Icon className={cn("h-4 w-4 shrink-0", Icon === RefreshCw && syncing && "animate-spin")} />
+                {label}
+              </button>
+            ))}
+          </div>}
+        </div>
+      </div>
+      <div className="mb-3 grid grid-cols-2 gap-1.5">
+        <button type="button" onClick={onOpenSaved} title={`${t("sidebar.saved")} · ${t("sidebar.savedLocal")}`} aria-pressed={savedActive}
+          className={cn("flex min-h-8 min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] leading-5",
+            savedActive ? "bg-brand/10 font-medium text-brand" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100")}>
+          <Bookmark className="h-4 w-4 shrink-0" />
+          <span className="min-w-0 break-words">{t("sidebar.saved")}</span>
+        </button>
+        {listTab === "chats" && (
+          <button type="button" onClick={onOpenLeads} aria-pressed={leadActive}
+            title={!leadEnabled ? t("leadInbox.settings") : t("leadInbox.title")}
+            className={cn("flex min-h-8 min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] leading-5",
+              leadActive ? "bg-brand/10 font-medium text-brand" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100")}>
+            <UserRoundPlus className="h-4 w-4 shrink-0" />
+            <span className="min-w-0 flex-1 break-words">{t("leadInbox.title")}</span>
+            {leadCount > 0 && <span className="text-2xs font-semibold tabular-nums text-brand">{leadCount}</span>}
           </button>
         )}
       </div>
@@ -285,7 +278,7 @@ export function SidebarListHeader({
           </button>
         </div>
       )}
-      <div className="mb-2 space-y-1.5">
+      <div className="mb-2 space-y-2">
         {!(listTab === "chats" && !filter && groupFilter === "hidden") && (
           <SectionLabel className="!mb-0 block">
             {listTab === "chats"
@@ -303,46 +296,32 @@ export function SidebarListHeader({
               : t("sidebar.contacts")}
           </SectionLabel>
         )}
-        <div className="flex items-center justify-end gap-0.5">
+        <div className="flex items-center justify-between gap-1.5">
           {listTab === "chats" && (
-            <div className="relative" ref={groupFilterRef}>
+            <div className="relative min-w-0 flex-1" ref={groupFilterRef}>
               <button
                 type="button"
                 aria-pressed={groupFilter !== "all"}
                 aria-haspopup="menu"
                 aria-expanded={groupFilterOpen}
-                aria-label={groupFilter === "all" ? t("sidebar.hideGroups") : t("sidebar.showGroups")}
-                title={t("sidebar.groupFilterTitle")}
+                aria-label={t("sidebar.groupFilterTitle")}
+                title={`${t("sidebar.groupFilterTitle")} · ${t(GROUP_FILTER_LABELS[groupFilter])}`}
                 onClick={() => {
-                  setGroupFilterOpen(false);
-                  onToggleHideGroups();
+                  if (!groupFilterOpen) setGroupFilterCounts(getGroupFilterCounts());
+                  setActionsOpen(false);
+                  setGroupFilterOpen(open => !open);
                 }}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  if (!groupFilterOpen) {
-                    setGroupFilterCounts(getGroupFilterCounts());
-                  }
-                  setGroupFilterOpen((open) => !open);
-                }}
-                className={cn(
-                  "relative inline-flex h-6 w-6 items-center justify-center rounded-md border transition-colors",
-                  groupFilter !== "all"
-                    ? "border-brand/40 bg-brand/10 text-brand"
-                    : "border-zinc-800/80 bg-zinc-900/70 text-zinc-500 hover:border-zinc-700 hover:text-zinc-200"
-                )}
+                className={cn("inline-flex min-h-8 max-w-full items-center gap-1.5 rounded-md border px-2 text-[12px]",
+                  groupFilter !== "all" ? "border-brand/40 bg-brand/10 text-brand" : "border-zinc-800 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100")}
               >
-                <UsersRound className="h-3.5 w-3.5" />
-                {groupFilter === "hidden" && (
-                  <span className="absolute h-px w-4 -rotate-45 bg-current" />
-                )}
-                {groupFilter !== "all" && groupFilter !== "hidden" && (
-                  <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-brand" />
-                )}
+                <UsersRound className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{t(GROUP_FILTER_LABELS[groupFilter])}</span>
+                <ChevronDown className="h-3 w-3 shrink-0" />
               </button>
               {groupFilterOpen && (
                 <div
                   role="menu"
-                  className="absolute left-0 top-[calc(100%+4px)] z-50 w-44 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/50"
+                  className="absolute left-0 top-[calc(100%+4px)] z-50 w-64 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/50"
                 >
                   <p className="px-2.5 pb-1 pt-1.5 text-2xs text-zinc-500">
                     {t("sidebar.groupFilterTitle")}
@@ -404,23 +383,16 @@ export function SidebarListHeader({
               )}
             </div>
           )}
-          <button
-            type="button"
-            onClick={onBatchSaveContacts}
-            className="relative inline-flex h-6 w-6 items-center justify-center rounded-md border border-zinc-800/80 bg-zinc-900/70 text-zinc-500 transition-colors hover:border-zinc-700 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-30"
-            title={t("sidebar.batchSaveTitle")}
-            aria-label={t("sidebar.batchSaveContacts")}
-          >
-            <UserPlus className="h-3.5 w-3.5" />
-          </button>
           {listTab === "chats" && (
-            <div className="relative" ref={sortRef}>
+            <div className="relative min-w-0 flex-1" ref={sortRef}>
               <button
                 type="button"
-                title={t("sidebar.sortTitle")}
+                title={t("sidebar.sortPinnedHint", { label: localizedSortLabel })}
+                aria-label={t("sidebar.sortTitle")}
+                aria-expanded={sortOpen}
                 onClick={onToggleSort}
                 className={cn(
-                  "inline-flex max-w-[8.5rem] items-center gap-1 rounded-md border px-1.5 py-0.5 text-2xs transition-colors",
+                  "inline-flex min-h-8 max-w-full items-center gap-1 rounded-md border px-2 text-[12px] transition-colors",
                   sortOpen
                     ? "border-brand/40 bg-zinc-900 text-zinc-100"
                     : "border-zinc-800/80 bg-zinc-900/70 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
@@ -464,23 +436,8 @@ export function SidebarListHeader({
               )}
             </div>
           )}
-          <button
-            type="button"
-            disabled={syncDisabled}
-            onClick={onSync}
-            aria-label={syncing ? t("sidebar.syncing") : t("sidebar.syncChats")}
-            title={syncTitle}
-            className="inline-flex h-6 w-6 items-center justify-center rounded text-zinc-500 hover:bg-zinc-900 hover:text-brand disabled:opacity-40"
-          >
-            <RefreshCw className={cn("h-3 w-3", syncing && "animate-spin")} />
-          </button>
         </div>
       </div>
-      {listTab === "chats" && sortMode !== "recent" && (
-        <p className="mb-1.5 px-0.5 text-2xs leading-3 text-zinc-600">
-          {t("sidebar.sortPinnedHint", { label: localizedSortLabel })}
-        </p>
-      )}
-    </>
+    </div>
   );
 }

@@ -35,15 +35,31 @@ const LEVEL = {
 
 export function AccountHealthCard({
   health,
+  connection,
   title,
   compact,
 }: {
   health: AccountHealth;
+  connection: string;
   title?: string;
   compact?: boolean;
 }) {
   const { t } = useI18n();
-  const meta = LEVEL[health.level];
+  const hasActivity = health.sentLastDay > 0;
+  const assessed = connection === "connected" && hasActivity;
+  const inactiveLabel = connection === "connected"
+    ? "health.noActivity"
+    : connection === "qr"
+      ? "account.waitingQr"
+      : connection === "starting" || connection === "reconnecting"
+        ? "account.reconnecting"
+        : connection === "connecting"
+          ? "account.connecting"
+          : "account.disconnected";
+  const meta = assessed ? LEVEL[health.level] : {
+    border: "border-zinc-800", bg: "bg-zinc-900/50", text: "text-zinc-300",
+    contrast: "", Icon: Activity, label: inactiveLabel,
+  } as const;
   const Icon = meta.Icon;
   const text = localizeAccountHealth(health, t);
   return (
@@ -58,17 +74,20 @@ export function AccountHealthCard({
         <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", meta.text, meta.contrast)} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
-            <span className={cn("text-[12px] font-medium", meta.text, meta.contrast)}>
+            <span className={cn("text-[13px] font-medium", meta.text, meta.contrast)}>
               {title || t("health.title")} · {t(meta.label)}
             </span>
-            <span className="tabular-nums text-[11px] text-zinc-400">
+            {assessed && <span className="tabular-nums text-[12px] text-zinc-400">
               {health.score}
-            </span>
+            </span>}
           </div>
-          <p className="mt-0.5 text-[11px] leading-4 text-zinc-400">
-            {text.summary}
+          <p className="mt-0.5 text-[12px] leading-5 text-zinc-400">
+            {assessed ? text.summary : t("health.recentCounts", { hour: health.sentLastHour, day: health.sentLastDay })}
           </p>
-          {!compact && text.hints.length > 0 && (
+          {!assessed && <p className="mt-1 text-2xs leading-5 text-zinc-500">
+            {t(connection === "connected" ? "health.noActivityHint" : "health.offlineHint")}
+          </p>}
+          {!compact && hasActivity && text.hints.length > 0 && (
             <ul className="mt-1.5 space-y-0.5">
               {text.hints.map((h) => (
                 <li

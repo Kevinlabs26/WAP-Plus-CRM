@@ -22,7 +22,7 @@ export function Button({
         variant === "primary" && "ui-btn-primary",
         variant === "secondary" && "ui-btn-secondary",
         variant === "ghost" && "ui-btn-ghost",
-        size === "sm" && "min-h-8 px-2.5 text-[12px]",
+        size === "sm" && "min-h-8 px-2.5 text-[13px]",
         size === "xs" && "min-h-7 px-2 text-2xs",
         className
       )}
@@ -41,8 +41,8 @@ export const Input = React.forwardRef<
     <input
       ref={ref}
       className={cn(
-        "ui-control w-full px-2.5 text-[13px]",
-        size === "sm" && "min-h-8 !px-2 text-[12px]",
+        "ui-control w-full px-2.5 text-[14px]",
+        size === "sm" && "min-h-8 !px-2 text-[13px]",
         className
       )}
       {...props}
@@ -58,7 +58,7 @@ export const Textarea = React.forwardRef<
     <textarea
       ref={ref}
       className={cn(
-        "ui-control w-full resize-none px-2.5 py-2 text-[13px]",
+        "ui-control w-full resize-none px-2.5 py-2 text-[14px]",
         className
       )}
       {...props}
@@ -115,9 +115,9 @@ export function EmptyState({
 }) {
   return (
     <div className="ui-empty">
-      <div className="text-[13px] font-medium text-zinc-300">{title}</div>
+      <div className="text-[16px] font-semibold text-zinc-200">{title}</div>
       {description && (
-        <p className="max-w-xs text-[12px] leading-relaxed text-zinc-500">
+        <p className="max-w-md text-[13px] leading-relaxed text-zinc-500">
           {description}
         </p>
       )}

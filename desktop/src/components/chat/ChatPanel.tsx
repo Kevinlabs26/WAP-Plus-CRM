@@ -1682,7 +1682,7 @@ export function ChatPanel() {
               value={savedDraft}
               onChange={(event) => setSavedDraft(event.target.value)}
               placeholder={t("chat.selfDraft")}
-              className="h-9 min-w-0 flex-1 rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-[12px] text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-brand/60"
+              className="h-9 min-w-0 flex-1 rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-[14px] text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-brand/60"
               aria-label={t("tooltip.selfMessage")}
             />
             <Button

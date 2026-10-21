@@ -11,7 +11,7 @@
   --app-border-strong: #303239;
   --app-text: #f1f2f4;
   --app-muted: #989ba3;
-  --app-faint: #62656d;
+  --app-faint: #858994;
   --app-brand: #25d366;
   --brand-rgb: 37 211 102;
   --brand-foreground: #08301f;
@@ -25,9 +25,9 @@
   --zinc-100: 228 229 232;
   --zinc-200: 207 209 214;
   --zinc-300: 181 184 192;
-  --zinc-400: 152 155 163;
-  --zinc-500: 119 123 132;
-  --zinc-600: 98 101 109;
+  --zinc-400: 171 175 183;
+  --zinc-500: 152 155 163;
+  --zinc-600: 133 137 148;
   --zinc-700: 48 50 57;
   --zinc-800: 36 38 43;
   --zinc-900: 17 18 22;
@@ -262,7 +262,7 @@ body {
   overflow: hidden;
   background: var(--app-bg);
   color: var(--app-text);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.45;
   /* 减少整页重绘时的次像素抖动 */
   text-rendering: optimizeSpeed;
@@ -348,7 +348,7 @@ select {
     @apply border-r border-zinc-800/90 bg-zinc-950;
   }
   .ui-section-label {
-    @apply text-[11px] font-medium tracking-wide text-zinc-500;
+    @apply text-[12px] font-medium tracking-wide text-zinc-400;
   }
   .ui-row {
     @apply flex w-full items-center gap-2 rounded-md px-2.5 text-left;
@@ -374,7 +374,7 @@ select {
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--app-brand) 25%, transparent);
   }
   .ui-btn {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-45;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md text-[14px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-45;
     min-height: var(--control-h);
   }
   .ui-btn-primary {

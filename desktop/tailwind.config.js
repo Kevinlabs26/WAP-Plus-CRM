@@ -45,8 +45,8 @@ export default {
         ...Object.fromEntries(HUE_SCALES.map((h) => [h, varScale(h)])),
       },
       fontSize: {
-        "2xs": ["11px", { lineHeight: "1.35" }],
-        ui: ["13px", { lineHeight: "1.45" }],
+        "2xs": ["12px", { lineHeight: "1.4" }],
+        ui: ["14px", { lineHeight: "1.5" }],
       },
       spacing: {
         row: "36px",

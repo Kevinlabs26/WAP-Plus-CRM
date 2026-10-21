@@ -630,10 +630,9 @@ export function CrmView() {
 
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-zinc-950">
-      {/* 顶栏工具 */}
-      <div className="flex h-11 shrink-0 items-center gap-3 border-b border-zinc-800/90 px-3">
+      <div className="flex min-h-16 shrink-0 flex-wrap items-center gap-3 px-4 py-3">
         <div className="min-w-0">
-          <div className="text-[13px] font-semibold">{t("crm.title")}</div>
+          <h1 className="text-lg font-semibold">{t("crm.title")}</h1>
           <div className="text-2xs text-zinc-500">
             {q || quickFilter !== "all"
               ? t("crm.contactCount", { shown: filtered.length, total: peopleContacts.length })
@@ -641,17 +640,59 @@ export function CrmView() {
           </div>
         </div>
 
-        <div className="relative ml-2 max-w-xs flex-1">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          <Button
+            variant="secondary"
+            className="!min-h-8 gap-1 !px-2.5 text-[13px]"
+            title={t("crm.importTitle")}
+            onClick={() => setImportOpen(true)}
+          >
+            <FilePlus2 className="h-3.5 w-3.5" />
+            {t("crm.import")}
+          </Button>
+          {selectMode ? (
+            <Button
+              variant="secondary"
+              className="!min-h-8 gap-1 !px-2.5 text-[13px]"
+              onClick={exitSelectMode}
+            >
+              <X className="h-3.5 w-3.5" />
+              {t("crm.exitSelect", { count: selectedIds.size })}
+            </Button>
+          ) : (
+            <Button
+              variant="secondary"
+              className="!min-h-8 gap-1 !px-2.5 text-[13px]"
+              onClick={() => setSelectMode(true)}
+            >
+              <CheckSquare className="h-3.5 w-3.5" />
+              {t("crm.select")}
+            </Button>
+          )}
+          <Button
+            variant="primary"
+            className="!min-h-8 gap-1 !px-2.5 text-[13px]"
+            onClick={() => setShowAdd((v) => !v)}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            {t("crm.newContact")}
+          </Button>
+        </div>
+      </div>
+
+      <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-zinc-800/90 px-4 pb-3">
+        <div className="relative min-w-[16rem] max-w-md flex-1">
           <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
           <Input
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder={t("crm.search")}
+            aria-label={t("crm.search")}
             className="pl-7"
           />
         </div>
 
-        <div className="hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto lg:flex">
+        <div className="flex min-w-0 flex-1 basis-80 flex-wrap items-center gap-1" role="group" aria-label={t("crm.filters")}>
           {(
             [
               { id: "all", label: t("crm.all") },
@@ -681,8 +722,9 @@ export function CrmView() {
               key={item.id}
               type="button"
               onClick={() => changeQuickFilter(item.id)}
+              aria-pressed={quickFilter === item.id}
               className={cn(
-                "inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 text-2xs transition-colors",
+                "inline-flex min-h-8 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 text-2xs transition-colors",
                 quickFilter === item.id
                   ? "bg-zinc-800 text-zinc-100 ring-1 ring-zinc-700"
                   : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300"
@@ -707,38 +749,11 @@ export function CrmView() {
           ))}
         </div>
 
-        <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          <Button
-            variant="secondary"
-            className="!min-h-8 gap-1 !px-2.5 text-2xs"
-            title={t("crm.importTitle")}
-            onClick={() => setImportOpen(true)}
-          >
-            <FilePlus2 className="h-3.5 w-3.5" />
-            {t("crm.import")}
-          </Button>
-          {selectMode ? (
-            <Button
-              variant="secondary"
-              className="!min-h-8 gap-1 !px-2.5 text-2xs"
-              onClick={exitSelectMode}
-            >
-              <X className="h-3.5 w-3.5" />
-              {t("crm.exitSelect", { count: selectedIds.size })}
-            </Button>
-          ) : (
-            <Button
-              variant="secondary"
-              className="!min-h-8 gap-1 !px-2.5 text-2xs"
-              onClick={() => setSelectMode(true)}
-            >
-              <CheckSquare className="h-3.5 w-3.5" />
-              {t("crm.select")}
-            </Button>
-          )}
+        <div className="ml-auto flex shrink-0 items-center gap-2" role="group" aria-label={t("today.displayMode")}>
           <div className="flex rounded-md border border-zinc-800 bg-zinc-900/50 p-0.5">
             <button
               type="button"
+              aria-pressed={mode === "board"}
               onClick={() => changeMode("board")}
               className={cn(
                 "inline-flex h-7 items-center gap-1 rounded px-2 text-2xs",
@@ -752,6 +767,7 @@ export function CrmView() {
             </button>
             <button
               type="button"
+              aria-pressed={mode === "list"}
               onClick={() => changeMode("list")}
               className={cn(
                 "inline-flex h-7 items-center gap-1 rounded px-2 text-2xs",
@@ -774,14 +790,6 @@ export function CrmView() {
           >
             <Plus className="h-3.5 w-3.5" />
             {t("crm.newStage")}
-          </Button>
-          <Button
-            variant="primary"
-            className="!min-h-8 gap-1 !px-2.5 text-2xs"
-            onClick={() => setShowAdd((v) => !v)}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            {t("crm.newContact")}
           </Button>
         </div>
       </div>
@@ -895,7 +903,14 @@ export function CrmView() {
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* 主区：看板或列表 */}
         <div className="min-w-0 flex-1 overflow-hidden">
-          {mode === "board" ? (
+          {peopleContacts.length === 0 && !addingStage ? (
+            <div className="flex h-full items-center justify-center">
+              <EmptyState title={t("crm.emptyTitle")} description={t("crm.emptyDescription")}
+                action={!showAdd ? <Button variant="primary" className="mt-3" onClick={() => setShowAdd(true)}>
+                  <Plus className="h-4 w-4" />{t("crm.firstContact")}
+                </Button> : undefined} />
+            </div>
+          ) : mode === "board" ? (
             <div className="flex h-full gap-2 overflow-x-auto p-3">
               {stages.map((stage) => (
                 <div
