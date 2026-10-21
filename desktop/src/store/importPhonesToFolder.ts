@@ -9,7 +9,7 @@ type ImportDeps = {
   selectedPhoneId: () => string | null;
   addContact: (contact: Omit<Contact, "id">) => void;
   prependChat: (chat: ChatPreview) => void;
-  moveChatToFolder: (chatId: string, folderId: string) => void;
+  moveChatToFolder: (chatId: string, folderId: string, options?: { removeClones?: boolean }) => void;
   recomputeStats: () => void;
   persist: (immediate?: boolean) => void;
   pushToast: (message: string, tone?: "info" | "success" | "error") => void;
@@ -99,12 +99,17 @@ export function importPhonesToFolder(
       continue;
     }
 
+    // 一个联系人可能同时有导入占位行和真实聊天，甚至有多个账号的会话。
+    // 必须移动全部匹配行，否则旧文件夹仍会抢占同号码合并后的显示归属。
+    const movedChatIds = new Set<string>();
     for (const contact of contacts) {
-      let chat = deps
-        .getChats()
-        .find((item) => item.contactId === contact.id);
-      if (!chat) {
-        chat = {
+      let chats = deps.getChats().filter((item) =>
+        item.contactId === contact.id &&
+        (!folderAccountId ||
+          (item.accountId || item.phoneId || contact.accountId || contact.boundPhoneId || "") === folderAccountId)
+      );
+      if (!chats.length) {
+        const chat: ChatPreview = {
           id: `bridge-chat-${contact.id}`,
           contactId: contact.id,
           contactName: contact.name || phonePlus,
@@ -119,8 +124,13 @@ export function importPhonesToFolder(
             "baileys",
         };
         deps.prependChat(chat);
+        chats = [chat];
       }
-      deps.moveChatToFolder(chat.id, folderId);
+      for (const chat of chats) {
+        if (movedChatIds.has(chat.id)) continue;
+        movedChatIds.add(chat.id);
+        deps.moveChatToFolder(chat.id, folderId, { removeClones: true });
+      }
     }
   }
 

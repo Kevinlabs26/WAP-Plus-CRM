@@ -39,6 +39,7 @@ import {
   clearStoredRemoteMessages,
   updateStoredMessageAcks,
   deleteStoredMessagesByKeys,
+  registerChatMessageReplacements,
 } from "@/lib/storage";
 import { noteMainThreadWork, syncLog } from "@/lib/syncDebug";
 import { isComposerTypingBusy } from "@/lib/composerActivity";
@@ -200,6 +201,7 @@ export function createIngestSlice({
       }
 
       let ingestChanged = false;
+      let mergedChatHistory = false;
       const clearedRemoteTargets = new Map<
         string,
         { remoteJid: string; accountId: string; before?: string }
@@ -241,6 +243,7 @@ export function createIngestSlice({
           messages,
           nextSelectedChatId,
           nextSelectedContactId,
+          _chatReplacements: new Map<string, string>(),
         };
 
         for (const event of sliceEvents) {
@@ -587,12 +590,23 @@ export function createIngestSlice({
           blocklistAccountId;
 
         let settingsPatch: Record<string, unknown> | null = null;
+        const chatReplacements = contactBag._chatReplacements;
         if (mergedLocalChats?.changed) {
+          for (const [oldId, targetId] of chatReplacements) {
+            chatReplacements.set(oldId, mergedLocalChats.replacements.get(targetId) || targetId);
+          }
+          for (const [oldId, targetId] of mergedLocalChats.replacements) {
+            chatReplacements.set(oldId, targetId);
+          }
+        }
+        if (chatReplacements.size) {
+          registerChatMessageReplacements(chatReplacements, chats);
+          mergedChatHistory = true;
           const folderRefs = pruneChatFolderRefs(
             state.settings.chatFolders || [],
             state.settings.chatFolderClones || [],
             new Set(chats.map((chat) => chat.id)),
-            mergedLocalChats.replacements
+            chatReplacements
           );
           if (folderRefs.changed) {
             settingsPatch = {
@@ -757,16 +771,20 @@ export function createIngestSlice({
             enabled: st.settings.desktopNotifyEnabled !== false,
             privacy: st.settings.notificationPrivacy,
             groupMessagesEnabled: st.settings.notifyGroupMessagesEnabled === true,
-            openChat: ({ chatId, contactId, messageId }) => {
+            openChat: ({ chatId, contactId, messageId, accountId }) => {
               const a = get();
-              a.setActiveNav("chats");
-              if (contactId) {
+              const message = a.messages.find((item) => item.id === messageId);
+              const target = a.chats.find((item) => item.id === (message?.chatId || chatId));
+              if (target) {
+                a.setSelectedChat(target.id, message?.accountId || message?.deviceId || accountId);
+                a.setFocusMessageId(message?.id || messageId || null);
+                a.setCrmPanelCollapsed(false);
+              } else if (contactId) {
                 a.openContactWorkspace(contactId, {
                   focusMessageId: messageId || undefined,
                 });
-              } else if (chatId) {
-                a.setSelectedChat(chatId);
               }
+              a.setActiveNav("chats");
             },
           });
         }
@@ -780,7 +798,8 @@ export function createIngestSlice({
           event.type === "messages.ack" ||
           event.type === "chats.delete"
         );
-        if (hasDurableMessageChange) persist(get, false, 6000);
+        if (mergedChatHistory) await persist(get, true);
+        else if (hasDurableMessageChange) persist(get, false, 6000);
         const messageItems = events.reduce((count, event) => {
           const payload = ingestObject(event.payload) ?? {};
           return count + (Array.isArray(payload.items) ? payload.items.length : 0);

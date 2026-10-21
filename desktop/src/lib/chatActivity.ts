@@ -14,7 +14,8 @@ export function chatHasMessageHistory(chat?: Pick<ChatPreview, "hasMessageHistor
 export function hideEmptySiblingChats(
   visibleChats: ChatPreview[],
   allChats: ChatPreview[],
-  contactById: ReadonlyMap<string, Contact>
+  contactById: ReadonlyMap<string, Contact>,
+  folderChatIds?: ReadonlySet<string>
 ) {
   const activeAccountsByPhone = new Map<string, Set<string>>();
   for (const chat of allChats) {
@@ -28,7 +29,8 @@ export function hideEmptySiblingChats(
     accounts.add(accountId);
   }
   return visibleChats.filter((chat) => {
-    if (chatHasMessageHistory(chat)) return true;
+    // 文件夹依赖原会话 ID；跨号首次聊天后仍需保留这个归属入口。
+    if (chatHasMessageHistory(chat) || folderChatIds?.has(chat.id)) return true;
     const contact = contactById.get(chat.contactId);
     const digits = (contact?.phone || "").replace(/\D/g, "");
     if (contact?.isGroup || digits.length < 7) return true;

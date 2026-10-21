@@ -7,6 +7,7 @@ import {
   loadSecureSecrets,
   saveAppState,
   saveSecureSecrets,
+  registerChatMessageReplacements,
 } from "@/lib/storage";
 import { parseBackupJson, readJsonFile } from "@/lib/exportData";
 import { buildPersonKey, looksLikeMessageAsName } from "@/lib/utils";
@@ -385,6 +386,7 @@ export function createBootSlice({
         settings: settingsNorm,
         broadcastCampaigns: normalizeCampaigns(saved?.broadcastCampaigns),
       };
+      if (mergedLocalChats.changed) registerChatMessageReplacements(mergedLocalChats.replacements, chats);
       markHydrate("ready");
       // 启动/刷新：不自动打开某个会话（对齐官方 WA 空白欢迎页）
       // stats 延后一帧算，避免 hydrate set 与大列表首渲同帧
@@ -420,7 +422,8 @@ export function createBootSlice({
         phonesChanged || recoveredPending > 0
       ) {
         // 启动写盘再拖后一点，别和首屏抢
-        window.setTimeout(() => {
+        if (mergedLocalChats.changed) await flushPersist(get);
+        else window.setTimeout(() => {
           flushPersist(get);
         }, 2500);
       }

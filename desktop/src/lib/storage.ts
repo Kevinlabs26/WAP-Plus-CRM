@@ -109,6 +109,27 @@ export interface PersistedAppState {
   deletedMessageIds?: string[];
   /** 备份恢复等完整快照：消息表以本次快照为准。 */
   replaceMessages?: boolean;
+  chatMessageRemaps?: ChatMessageRemap[];
+}
+
+type ChatMessageRemap = { fromChatId: string; toChatId: string; contactId: string; accountId: string };
+const pendingChatMessageRemaps = new Map<string, ChatMessageRemap>();
+
+/** 会话合并必须同时迁移尚未加载的磁盘历史，且与会话快照同事务保存。 */
+export function registerChatMessageReplacements(
+  replacements: ReadonlyMap<string, string>,
+  chats: readonly { id: string; contactId: string; accountId?: string; phoneId?: string }[]
+): void {
+  const byId = new Map(chats.map((chat) => [chat.id, chat]));
+  for (const [fromChatId, toChatId] of replacements) {
+    const target = byId.get(toChatId);
+    if (!target || fromChatId === toChatId) continue;
+    const remap = { fromChatId, toChatId, contactId: target.contactId, accountId: target.accountId || target.phoneId || "" };
+    for (const [source, pending] of pendingChatMessageRemaps) {
+      if (pending.toChatId === fromChatId) pendingChatMessageRemaps.set(source, { ...remap, fromChatId: source });
+    }
+    pendingChatMessageRemaps.set(fromChatId, remap);
+  }
 }
 
 /** Rust AppSnapshot 使用 followUps 字段名 follow_ups */
@@ -166,6 +187,7 @@ function toRust(data: PersistedAppState): Record<string, unknown> {
     draftReplyByChatId: include("drafts") ? data.draftReplyByChatId ?? {} : {},
     deletedMessageIds: data.deletedMessageIds ?? [],
     replaceMessages: data.replaceMessages === true,
+    chatMessageRemaps: data.chatMessageRemaps ?? [],
     dirty: d
       ? {
           phones: !!d.phones,
@@ -378,6 +400,7 @@ async function saveAppStateNow(
           messages: messages.slice(i, i + MESSAGE_CHUNK),
           dirty: last ? data.dirty : { messages: true },
           deletedMessageIds: last ? data.deletedMessageIds : [],
+          chatMessageRemaps: last ? data.chatMessageRemaps : [],
           replaceMessages: false,
         };
         if (!(await tryInvokeOk("db_save", { snapshot: toRust(part) }))) {
@@ -461,7 +484,15 @@ export function saveAppState(
   data: PersistedAppState,
   opts?: { force?: boolean }
 ): Promise<void> {
-  const run = saveQueue.then(() => saveAppStateNow(data, opts));
+  const chatIds = new Set(data.chats.map((chat) => (chat as { id?: string }).id));
+  const remaps = data.replaceMessages || (data.dirty && !data.dirty.chats) ? [] : [...pendingChatMessageRemaps.values()]
+    .filter((remap) => chatIds.has(remap.toChatId) && !chatIds.has(remap.fromChatId));
+  const run = saveQueue.then(() => saveAppStateNow(remaps.length ? { ...data, chatMessageRemaps: remaps } : data, opts)).then(() => {
+    if (data.replaceMessages) pendingChatMessageRemaps.clear();
+    for (const remap of remaps) {
+      if (pendingChatMessageRemaps.get(remap.fromChatId) === remap) pendingChatMessageRemaps.delete(remap.fromChatId);
+    }
+  });
   saveQueue = run.catch(() => undefined);
   return run;
 }
@@ -484,6 +515,7 @@ async function clearAppStateNow(): Promise<void> {
   lastSavedMsgCount = 0;
   lastSavedChatCount = 0;
   lastSavedContactCount = 0;
+  pendingChatMessageRemaps.clear();
 }
 
 export function clearAppState(): Promise<void> {
@@ -598,12 +630,18 @@ export async function loadMessagesPage(opts: {
 }): Promise<MessagesPageResult | null> {
   const eng = await resolveStorageEngine();
   if (eng !== "sqlite") return null;
-  return tryInvoke<MessagesPageResult>("db_load_messages_page", {
+  await saveQueue;
+  if ([...pendingChatMessageRemaps.values()].some((remap) => remap.toChatId === opts.chatId)) {
+    throw new Error("会话历史合并尚未保存，请稍后重试");
+  }
+  const page = await tryInvoke<MessagesPageResult>("db_load_messages_page", {
     chatId: opts.chatId,
     beforeSentAt: opts.beforeSentAt ?? null,
     beforeId: opts.beforeId ?? null,
     limit: opts.limit ?? 80,
   });
+  if (!page?.ok || !Array.isArray(page.items)) throw new Error("本地聊天历史读取失败，请重试");
+  return page;
 }
 
 export type SearchMessagesResult = {

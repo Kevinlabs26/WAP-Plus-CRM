@@ -13,6 +13,7 @@ import {
   type VirtuosoHandle,
 } from "react-virtuoso";
 import type { Message } from "@/types/crm";
+import type { HistoryPage, HistoryCursor } from "./useChatHistory";
 import type { SenderPresentation } from "@/lib/groupSenderDisplay";
 import { EmptyState } from "@/components/ui/primitives";
 import { syncLog } from "@/lib/syncDebug";
@@ -45,7 +46,7 @@ type Props = {
   onLoadOlderFromDisk?: (
     chatId: string,
     cursor: { beforeSentAt: string; beforeId: string } | null
-  ) => Promise<number> | number;
+  ) => Promise<HistoryPage>;
   onOpenMenu: (
     e: React.MouseEvent | React.PointerEvent,
     messageId: string,
@@ -107,6 +108,7 @@ const MessageListInner = forwardRef<MessageListHandle, Props>(
       loading: false,
       exhausted: false,
       requestedCursors: new Set<string>(),
+      cursor: null as HistoryCursor | null,
     });
     const autoMediaRef = useRef(new Set<string>());
     const anchorRef = useRef<MessageVirtualAnchor>({
@@ -122,6 +124,7 @@ const MessageListInner = forwardRef<MessageListHandle, Props>(
         loading: false,
         exhausted: false,
         requestedCursors: new Set<string>(),
+        cursor: null,
       };
     }
 
@@ -151,10 +154,12 @@ const MessageListInner = forwardRef<MessageListHandle, Props>(
       ) {
         return;
       }
-      const oldest = messages[0];
-      const cursor = oldest
+      const oldest = messages.reduce<Message | undefined>((oldest, message) =>
+        !oldest || message.sentAt < oldest.sentAt || (message.sentAt === oldest.sentAt && message.id < oldest.id)
+          ? message : oldest, undefined);
+      const cursor = history.cursor || (oldest
         ? { beforeSentAt: oldest.sentAt, beforeId: oldest.id }
-        : null;
+        : null);
       const cursorKey = cursor
         ? `${cursor.beforeSentAt}\u0000${cursor.beforeId}`
         : "start";
@@ -163,8 +168,10 @@ const MessageListInner = forwardRef<MessageListHandle, Props>(
       history.requestedCursors.add(cursorKey);
       history.loading = true;
       void Promise.resolve(onLoadOlderFromDisk(chatId, cursor))
-        .then((added) => {
-          if (!added && historyRef.current === history) history.exhausted = true;
+        .then((page) => {
+          if (historyRef.current !== history) return;
+          history.cursor = page.cursor;
+          history.exhausted = !page.hasMore;
         })
         .catch((error) => {
           history.requestedCursors.delete(cursorKey);

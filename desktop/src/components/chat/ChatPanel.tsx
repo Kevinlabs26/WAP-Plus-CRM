@@ -51,7 +51,6 @@ import type {
 } from "@/types/crm";
 import {
   baileysChatModify,
-  baileysFetchMessageHistory,
   baileysSync,
   baileysPresence,
   baileysSendContact,
@@ -61,7 +60,6 @@ import { Button } from "@/components/ui/primitives";
 import { type ChannelId } from "@/channels";
 import { gatedMediaSend } from "@/channels/mediaGate";
 
-import { loadMessagesPage } from "@/lib/storage";
 import { syncLog } from "@/lib/syncDebug";
 import { Composer } from "./Composer";
 import { ChatSearchBar } from "./ChatSearchBar";
@@ -104,7 +102,7 @@ import {
   messagePlainText,
   useEventCallback,
 } from "./chatPanelHelpers";
-import { mergeMessagesByTime } from "@/store/messageOrdering";
+import { useChatHistory } from "./useChatHistory";
 import { resolveMessageKeyFrom } from "./resolveMessageKey";
 import { findLatestEditableOutgoingMessage } from "./latestEditableMessage";
 import { ChatPanelHeader } from "./ChatPanelHeader";import { ChatPanelMessageMenu } from "./ChatPanelMessageMenu";
@@ -331,123 +329,7 @@ export function ChatPanel() {
     return "";
   }, [chatMessages]);
 
-  // 把 SQLite 加载的消息按 id 去重、按 sentAt 合并进 store（保持全局顺序）
-  const mergeMessagesFromDisk = useCallback((incoming: Message[]) => {
-    useAppStore.setState((state) => {
-      const messages = mergeMessagesByTime(state.messages, incoming);
-      if (messages === state.messages) return state;
-
-      const messagesByChatId = { ...state.messagesByChatId };
-      const incomingByChat = new Map<string, Message[]>();
-      for (const message of incoming) {
-        if (!message.chatId) continue;
-        const bucket = incomingByChat.get(message.chatId) || [];
-        bucket.push(message);
-        incomingByChat.set(message.chatId, bucket);
-      }
-      for (const [chatId, additions] of incomingByChat) {
-        const bucket =
-          messagesByChatId[chatId] ||
-          state.messages.filter((message) => message.chatId === chatId);
-        messagesByChatId[chatId] = mergeMessagesByTime(bucket, additions);
-      }
-      return { messages, messagesByChatId };
-    });
-  }, []);
-  const historyRequestedRef = useRef(new Set<string>());
-
-  // 打开会话：若内存不足 200 条，从 SQLite 补最近一批（合并排序）
-  useEffect(() => {
-    if (!selectedChatId) return;
-    if (chatMessages.length >= 200) return;
-    let cancelled = false;
-    void loadMessagesPage({ chatId: selectedChatId, limit: 200 }).then((page) => {
-      if (cancelled || !page) return;
-      syncLog("ui.chat", "disk page loaded", {
-        chatId: selectedChatId,
-        pageItems: page.items?.length || 0,
-        pageTotal: page.total,
-        memoryBefore: useAppStore
-          .getState()
-          .messages.filter((message) => message.chatId === selectedChatId).length,
-      });
-      if (page.items?.length) mergeMessagesFromDisk(page.items as Message[]);
-      syncLog("ui.chat", "disk page merged", {
-        chatId: selectedChatId,
-        memoryAfter: useAppStore
-          .getState()
-          .messages.filter((message) => message.chatId === selectedChatId).length,
-        indexedAfter:
-          useAppStore.getState().messagesByChatId[selectedChatId]?.length || 0,
-      });
-      const state = useAppStore.getState();
-      const chat = state.chats.find((item) => item.id === selectedChatId);
-      const accountId = chatAccountId || chat?.accountId || chat?.phoneId || "";
-      const bucket = filterMessagesForAccount(
-        state.messagesByChatId[selectedChatId] || [],
-        accountId,
-        settings.liveBaileysAccountId
-      );
-      const oldest = bucket.find(
-        (message) => message.waKey?.remoteJid && message.waKey?.id
-      );
-      const requestKey = `${accountId}:${selectedChatId}`;
-      if (
-        bucket.length < 200 &&
-        oldest?.waKey &&
-        accountId &&
-        !historyRequestedRef.current.has(requestKey)
-      ) {
-        historyRequestedRef.current.add(requestKey);
-        void baileysFetchMessageHistory(
-          {
-            key: oldest.waKey,
-            oldestMsgTimestampMs: Date.parse(oldest.sentAt),
-            count: 50,
-          },
-          accountId
-        )
-          .then(() => {
-            syncLog("ui.chat", "protocol history requested", {
-              chatId: selectedChatId,
-              accountId,
-              localCount: bucket.length,
-            });
-          })
-          .catch((error) => {
-            historyRequestedRef.current.delete(requestKey);
-            syncLog("ui.chat", "protocol history request failed", {
-              chatId: selectedChatId,
-              error: String(error),
-            });
-          });
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedChatId, chatAccountId, settings.liveBaileysAccountId]);
-
-  // 上滑加载更早：以当前最旧消息为游标，分页拉 SQLite 冷历史并合并
-  const loadOlderFromDisk = useCallback(
-    async (
-      chatId: string,
-      cursor: { beforeSentAt: string; beforeId: string } | null
-    ) => {
-      const page = await loadMessagesPage({
-        chatId,
-        beforeSentAt: cursor?.beforeSentAt ?? null,
-        beforeId: cursor?.beforeId ?? null,
-        limit: 80,
-      });
-      const items = (page?.items || []) as Message[];
-      if (!items.length) return 0;
-      const before = useAppStore.getState().messages.length;
-      mergeMessagesFromDisk(items);
-      return useAppStore.getState().messages.length - before;
-    },
-    [mergeMessagesFromDisk]
-  );
+  const loadOlderFromDisk = useChatHistory(selectedChatId, chatAccountId, settings.liveBaileysAccountId);
 
   const recentStickers = useMemo(() => {
     const seen = new Set<string>();
@@ -996,17 +878,19 @@ export function ChatPanel() {
     if (!focusMessageId || !selectedChatId) return;
     stickToBottomRef.current = false;
     let tries = 0;
+    let timer: number;
     const tick = () => {
       const idx = chatMessages.findIndex((m) => m.id === focusMessageId);
       if (idx >= 0) {
         messageListRef.current?.scrollToMessage(focusMessageId, "smooth");
-        window.setTimeout(() => setFocusMessageId(null), 2200);
+        timer = window.setTimeout(() => setFocusMessageId(null), 2200);
         return;
       }
-      if (++tries < 16) window.setTimeout(tick, 80);
+      if (++tries < 16) timer = window.setTimeout(tick, 80);
       else setFocusMessageId(null);
     };
-    window.setTimeout(tick, 40);
+    timer = window.setTimeout(tick, 40);
+    return () => window.clearTimeout(timer);
   }, [focusMessageId, selectedChatId, setFocusMessageId, chatMessages]);
 
   useEffect(() => {

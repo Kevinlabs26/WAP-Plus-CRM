@@ -387,7 +387,7 @@ export interface AppState extends PersistSlice {
   toggleChatFolderCollapsed: (folderId: string) => void;
   reorderChatFolder: (folderId: string, targetFolderId: string, after?: boolean) => void;
   /** 主归属移入分组（从其它组移除）；folderId=null 则回未分组 */
-  moveChatToFolder: (chatId: string, folderId: string | null) => void;
+  moveChatToFolder: (chatId: string, folderId: string | null, options?: { removeClones?: boolean }) => void;
   /** 分身到另一分组（主归属不变） */
   cloneChatToFolder: (chatId: string, folderId: string) => void;
   removeChatFolderClone: (cloneId: string) => void;

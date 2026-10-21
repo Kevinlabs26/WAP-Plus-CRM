@@ -24,6 +24,8 @@ export type ContactIngestBag = {
   nextSelectedContactId: string | null;
   /** 批内联系人查找索引（惰性构建），避免逐条全表扫描 */
   _contactLookup?: ContactLookup;
+  /** 同步合并会话后，文件夹和分身也必须改指向保留的会话。 */
+  _chatReplacements?: Map<string, string>;
 };
 
 /**
@@ -133,6 +135,11 @@ export function ensureIngestContact(
       const dropChat = chats.find((c) => c.id === dropChatId);
       const keepChatIdx = chats.findIndex((c) => c.id === keepChatId);
       if (dropChat) {
+        const replacements = (bag._chatReplacements ??= new Map());
+        for (const [oldId, targetId] of replacements) {
+          if (targetId === dropChatId) replacements.set(oldId, keepChatId);
+        }
+        replacements.set(dropChatId, keepChatId);
         if (keepChatIdx >= 0) {
           const kc = chats[keepChatIdx];
           chats[keepChatIdx] = {

@@ -231,7 +231,7 @@ export function createSettingsActionsSlice({
         selectedPhoneId: () => get().selectedPhoneId,
         addContact: (contact) => get().addContact(contact),
         prependChat: (chat) => set((state) => ({ chats: [chat, ...state.chats] })),
-        moveChatToFolder: (chatId, id) => get().moveChatToFolder(chatId, id),
+        moveChatToFolder: (chatId, id, options) => get().moveChatToFolder(chatId, id, options),
         recomputeStats: () => get().recomputeStats(),
         // importPhonesToFolder 会在批次结束时请求立即保存完整快照。
         persist: (immediate = false) => persist(get, immediate),

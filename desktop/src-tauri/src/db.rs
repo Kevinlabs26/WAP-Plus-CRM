@@ -39,6 +39,17 @@ pub struct AppSnapshot {
     /** 完整备份恢复：消息和活动表以本快照为准。 */
     #[serde(default)]
     pub replace_messages: bool,
+    #[serde(default)]
+    pub chat_message_remaps: Vec<ChatMessageRemap>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessageRemap {
+    pub from_chat_id: String,
+    pub to_chat_id: String,
+    pub contact_id: String,
+    pub account_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -454,6 +465,30 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
     let mut total_written = 0usize;
     let mut total_skipped = 0usize;
     let mut total_deleted = 0usize;
+
+    for remap in &snap.chat_message_remaps {
+        let target = snap.chats.iter().find(|chat| chat["id"].as_str() == Some(&remap.to_chat_id))
+            .ok_or("历史迁移缺少目标会话")?;
+        let owner = target["accountId"].as_str().filter(|s| !s.is_empty())
+            .or_else(|| target["phoneId"].as_str()).unwrap_or("");
+        if remap.from_chat_id.is_empty() || remap.account_id.is_empty() || remap.from_chat_id == remap.to_chat_id
+            || target["contactId"].as_str() != Some(&remap.contact_id) || owner != remap.account_id {
+            return Err("历史迁移会话归属不匹配".into());
+        }
+        let wrong_owner: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.deviceId'), ''), '') NOT IN ('', ?2)",
+            params![remap.from_chat_id, remap.account_id], |row| row.get(0),
+        ).map_err(|e| e.to_string())?;
+        let wrong_chat_owner: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM chats WHERE id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.phoneId'), ''), '') NOT IN ('', ?2)",
+            params![remap.from_chat_id, remap.account_id], |row| row.get(0),
+        ).map_err(|e| e.to_string())?;
+        if wrong_owner > 0 || wrong_chat_owner > 0 { return Err("已阻止跨账号迁移聊天历史".into()); }
+        tx.execute(
+            "UPDATE messages SET chat_id = ?2, json = json_set(json, '$.chatId', ?2, '$.contactId', ?3), content_hash = NULL WHERE chat_id = ?1",
+            params![remap.from_chat_id, remap.to_chat_id, remap.contact_id],
+        ).map_err(|e| e.to_string())?;
+    }
 
     // phones / contacts / chats / follow_ups：仅写变更 + 删缺失
     if dirty.phones {
@@ -1164,6 +1199,7 @@ pub fn load_snapshot(conn: &Connection) -> Result<Option<AppSnapshot>, String> {
         dirty: None,
         deleted_message_ids: Vec::new(),
         replace_messages: false,
+        chat_message_remaps: Vec::new(),
     }))
 }
 
@@ -1845,6 +1881,62 @@ mod tests {
         clear_remote_messages_before(&conn, "123@s.whatsapp.net", Some("wa-a"), Some("2026-10-01T00:00:00.000Z")).unwrap();
         assert!(get_message_by_id(&conn, "old").unwrap().is_none());
         assert!(get_message_by_id(&conn, "new").unwrap().is_some());
+    }
+
+    #[test]
+    fn chat_merge_moves_cold_history_before_orphan_cleanup() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let target = json!({"id":"kept", "contactId":"customer", "accountId":"wa-a"});
+        save_snapshot(&conn, &AppSnapshot {
+            chats: vec![json!({"id":"old", "contactId":"duplicate", "accountId":"wa-a"}), target.clone()],
+            messages: (0..400).map(|i| json!({"id":format!("cold-{i}"), "chatId":"old", "contactId":"duplicate", "accountId":"wa-a", "body":"history"})).collect(),
+            ..Default::default()
+        }).unwrap();
+        save_snapshot(&conn, &AppSnapshot {
+            chats: vec![target], messages: vec![],
+            chat_message_remaps: vec![ChatMessageRemap { from_chat_id:"old".into(), to_chat_id:"kept".into(), contact_id:"customer".into(), account_id:"wa-a".into() }],
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(count_messages_for_chat(&conn, "kept").unwrap(), 400);
+        assert_eq!(count_messages_for_chat(&conn, "old").unwrap(), 0);
+        let message = get_message_by_id(&conn, "cold-0").unwrap().unwrap();
+        assert_eq!(message["chatId"], "kept");
+        assert_eq!(message["contactId"], "customer");
+    }
+
+    #[test]
+    fn chat_merge_refuses_cross_account_history_and_rolls_back() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let target = json!({"id":"kept", "contactId":"customer", "accountId":"wa-b"});
+        save_snapshot(&conn, &AppSnapshot {
+            chats: vec![json!({"id":"old"}), target.clone()],
+            messages: vec![json!({"id":"cold", "chatId":"old", "accountId":"wa-a"})], ..Default::default()
+        }).unwrap();
+        assert!(save_snapshot(&conn, &AppSnapshot {
+            chats: vec![target],
+            chat_message_remaps: vec![ChatMessageRemap { from_chat_id:"old".into(), to_chat_id:"kept".into(), contact_id:"customer".into(), account_id:"wa-b".into() }],
+            ..Default::default()
+        }).is_err());
+        assert_eq!(count_messages_for_chat(&conn, "old").unwrap(), 1);
+    }
+
+    #[test]
+    fn chat_merge_checks_source_owner_for_legacy_messages_without_account() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let target = json!({"id":"kept", "contactId":"customer", "accountId":"wa-b"});
+        save_snapshot(&conn, &AppSnapshot {
+            chats: vec![json!({"id":"old", "phoneId":"wa-a"}), target.clone()],
+            messages: vec![json!({"id":"legacy", "chatId":"old"})], ..Default::default()
+        }).unwrap();
+        assert!(save_snapshot(&conn, &AppSnapshot {
+            chats: vec![target],
+            chat_message_remaps: vec![ChatMessageRemap { from_chat_id:"old".into(), to_chat_id:"kept".into(), contact_id:"customer".into(), account_id:"wa-b".into() }],
+            ..Default::default()
+        }).is_err());
+        assert_eq!(count_messages_for_chat(&conn, "old").unwrap(), 1);
     }
 
 }

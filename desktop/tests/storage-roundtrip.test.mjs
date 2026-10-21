@@ -4,7 +4,7 @@ import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 
 let sequence = 0;
-async function setup({ sqlite = false, readError = false, writeError = false, clearError = false, idbError = false, snapshot = null, fullHistory = null, fullHistoryError = false, secureReadError = false, secureWriteError = false } = {}) {
+async function setup({ sqlite = false, readError = false, writeError = false, clearError = false, idbError = false, snapshot = null, fullHistory = null, fullHistoryError = false, secureReadError = false, secureWriteError = false, pageError = false } = {}) {
   const values = new Map();
   const calls = [];
   globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
@@ -48,6 +48,8 @@ async function setup({ sqlite = false, readError = false, writeError = false, cl
     if (cmd === "db_load_full_history" && fullHistoryError) throw new Error("Full history unavailable");
     if (cmd === "db_load_full_history") return fullHistory;
     if (cmd === "db_load") return snapshot;
+    if (cmd === "db_load_messages_page" && pageError) throw new Error("Database busy");
+    if (cmd === "db_load_messages_page") return { ok: true, chatId: args.chatId, items: [], total: 0, limit: 80 };
     return null;
   };
   const result = await build({
@@ -67,6 +69,64 @@ async function setup({ sqlite = false, readError = false, writeError = false, cl
   const api = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text + `\n//${sequence++}`).toString("base64")}`);
   return { api, values, calls };
 }
+
+test("history read errors stay retryable instead of reporting an empty page", async () => {
+  const { api } = await setup({ sqlite: true, pageError: true });
+  await assert.rejects(api.loadMessagesPage({ chatId: "chat" }), /历史读取失败/);
+  const browser = await setup();
+  assert.equal(await browser.api.loadMessagesPage({ chatId: "chat" }), null);
+});
+
+test("chat remaps accompany the merged snapshot, survive a failed save and retire after success", async () => {
+  const { api, calls } = await setup({ sqlite: true });
+  const target = { id: "kept", contactId: "customer", accountId: "wa-a" };
+  const snapshot = { phones: [], contacts: [{ id: "customer" }], chats: [{ id: "old" }, target], messages: [], followUps: [], settings: {} };
+  const oldSave = api.saveAppState(snapshot);
+  api.registerChatMessageReplacements(new Map([["old", "kept"]]), [target]);
+  await oldSave;
+  assert.deepEqual(calls.find(call => call.cmd === "db_save").args.snapshot.chatMessageRemaps, []);
+  let fail = true;
+  const invoke = globalThis.__storageTestInvoke;
+  globalThis.__storageTestInvoke = async (cmd, args) => {
+    if (cmd === "db_save" && fail) throw new Error("Disk full");
+    return invoke(cmd, args);
+  };
+  const merged = { ...snapshot, chats: [target] };
+  await assert.rejects(api.saveAppState(merged), /保存失败/);
+  await assert.rejects(api.loadMessagesPage({ chatId: "kept" }), /合并尚未保存/);
+  fail = false;
+  await api.saveAppState(merged);
+  assert.deepEqual(calls.filter(call => call.cmd === "db_save").at(-1).args.snapshot.chatMessageRemaps,
+    [{ fromChatId: "old", toChatId: "kept", contactId: "customer", accountId: "wa-a" }]);
+  await api.saveAppState(merged);
+  assert.deepEqual(calls.filter(call => call.cmd === "db_save").at(-1).args.snapshot.chatMessageRemaps, []);
+  assert.equal((await api.loadMessagesPage({ chatId: "kept" })).ok, true);
+});
+
+test("draft-only saves leave pending history remaps for the chat snapshot", async () => {
+  const { api, calls } = await setup({ sqlite: true });
+  const target = { id: "kept", contactId: "customer", accountId: "wa-a" };
+  const snapshot = { phones: [], contacts: [{ id: "customer" }], chats: [target], messages: [], followUps: [], settings: {} };
+  api.registerChatMessageReplacements(new Map([["old", "kept"]]), [target]);
+  await api.saveAppState({ ...snapshot, dirty: { drafts: true }, draftReplyByChatId: { kept: "draft" } });
+  assert.deepEqual(calls.filter(call => call.cmd === "db_save").at(-1).args.snapshot.chatMessageRemaps, []);
+  await assert.rejects(api.loadMessagesPage({ chatId: "kept" }), /合并尚未保存/);
+  await api.saveAppState(snapshot);
+  assert.equal(calls.filter(call => call.cmd === "db_save").at(-1).args.snapshot.chatMessageRemaps.length, 1);
+});
+
+test("chunked saves migrate cold history only with the final chat snapshot", async () => {
+  const { api, calls } = await setup({ sqlite: true });
+  const target = { id: "kept", contactId: "customer", accountId: "wa-a" };
+  api.registerChatMessageReplacements(new Map([["old", "kept"]]), [target]);
+  await api.saveAppState({ phones: [], contacts: [{ id: "customer" }], chats: [target], followUps: [], settings: {},
+    messages: Array.from({ length: 1501 }, (_, i) => ({ id: `m-${i}`, chatId: "kept" })) });
+  const snapshots = calls.filter(call => call.cmd === "db_save").map(call => call.args.snapshot);
+  assert.equal(snapshots.length, 2);
+  assert.deepEqual(snapshots[0].chatMessageRemaps, []);
+  assert.equal(snapshots[1].chatMessageRemaps.length, 1);
+  assert.deepEqual(snapshots[1].chats, [target]);
+});
 
 test("IDB roundtrip preserves unchanged messages, edits and deletions", async () => {
   const { api } = await setup();

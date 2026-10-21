@@ -262,9 +262,16 @@ export function useSidebarData({
       ),
     [allFilteredChats, contactById, groupFilter, query, mentionedChatIds]
   );
+  const folderChatIds = useMemo(
+    () => new Set([
+      ...chatFoldersAll.flatMap((folder) => folder.chatIds),
+      ...chatFolderClones.map((clone) => clone.sourceChatId),
+    ]),
+    [chatFoldersAll, chatFolderClones]
+  );
   const filteredChats = useMemo(
-    () => hideEmptySiblingChats(groupFilteredChats, chats, contactById),
-    [groupFilteredChats, chats, contactById]
+    () => hideEmptySiblingChats(groupFilteredChats, chats, contactById, folderChatIds),
+    [groupFilteredChats, chats, contactById, folderChatIds]
   );
 
   const getGroupFilterCounts = useCallback(() => {

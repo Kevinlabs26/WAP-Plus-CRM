@@ -166,14 +166,16 @@ export function createChatFolderActions({
       });
     },
 
-    moveChatToFolder(chatId: string, folderId: string | null) {
+    moveChatToFolder(chatId: string, folderId: string | null, options?: { removeClones?: boolean }) {
       if (!chatId) return;
+      // 无效目标不能先移除旧归属，避免文件夹在导入期间被删除时丢失成员。
+      if (folderId && !(getSettings().chatFolders || []).some((folder) => folder.id === folderId)) return;
       let folders = (getSettings().chatFolders || []).map((folder) => ({
         ...folder,
         chatIds: folder.chatIds.filter((id) => id !== chatId),
       }));
       const clones = (getSettings().chatFolderClones || []).filter(
-        (clone) => !(clone.sourceChatId === chatId && clone.folderId === folderId)
+        (clone) => !(clone.sourceChatId === chatId && (options?.removeClones || clone.folderId === folderId))
       );
       if (folderId) {
         folders = folders.map((folder) =>
