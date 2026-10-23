@@ -159,7 +159,7 @@ test("a collapsed parent retains the selected descendant and unread total withou
   const folders=[{id:"parent",name:"Parent",chatIds:[],collapsed:true},{id:"child",parentId:"parent",name:"Child",chatIds:["one"],collapsed:true}];
   const original=structuredClone(folders),items=sidebarModel({chatFolders:folders});
   const parent=items.find(i=>i.folderId==="parent");
-  assert.equal(parent.containsSelected,true);assert.equal(parent.unread,3);assert.equal(parent.total,1);
+  assert.equal(parent.containsSelected,true);assert.equal(parent.unread,1);assert.equal(parent.total,1);
   assert.equal(items.some(i=>i.kind==="chat"),false);assert.equal(items.some(i=>i.folderId==="child"),false);assert.deepEqual(folders,original);
   const expanded=sidebarModel({chatFolders:folders.map(f=>f.id==="parent"?{...f,collapsed:false}:f)});
   assert.equal(expanded.find(i=>i.folderId==="child").containsSelected,true);
@@ -170,7 +170,7 @@ test("a collapsed parent retains the selected descendant and unread total withou
 test("folder selection follows merged account members and explicit copies, and ignores filtered-out or removed threads",()=>{
   const contacts=new Map([["c-one",{id:"c-one",phone:"+12025550100"}],["c-two",{id:"c-two",phone:"+12025550100"}]]);
   const args={isAllAccountsView:true,contactById:contacts,selectedChatId:"two",chatFolders:[{id:"a",name:"A",chatIds:["one"],collapsed:true},{id:"b",name:"B",chatIds:[],collapsed:true}]};
-  let items=sidebarModel(args);assert.equal(items.find(i=>i.folderId==="a").containsSelected,true);assert.equal(items.find(i=>i.folderId==="a").unread,5);
+  let items=sidebarModel(args);assert.equal(items.find(i=>i.folderId==="a").containsSelected,true);assert.equal(items.find(i=>i.folderId==="a").unread,1);
   assert.equal(items.find(i=>i.folderId==="b").containsSelected,false);assert.equal(items.find(i=>i.kind==="ungrouped_header").containsSelected,false);
   items=sidebarModel({...args,chatFolderClones:[{id:"copy",folderId:"b",sourceChatId:"two"}]});assert.equal(items.find(i=>i.folderId==="b").containsSelected,true);
   items=sidebarModel({...args,filteredChats:[{id:"one",contactId:"c-one",lastMessage:"Hello",unread:3}]});
@@ -179,22 +179,34 @@ test("folder selection follows merged account members and explicit copies, and i
   assert.equal(sidebarModel({showArchived:true}).some(i=>i.kind==="folder_header"||i.kind==="ungrouped_header"),false);
 });
 
+test("folder badges count unread conversations rather than messages, including children and ungrouped rows",()=>{
+  const chats=Array.from({length:5},(_,i)=>({id:`chat-${i}`,contactId:`person-${i}`,unread:[10,50,0,0,0][i]}));
+  let items=sidebarModel({filteredChats:chats,chatFolders:[{id:"all",name:"All",chatIds:chats.map(c=>c.id),collapsed:true}]});
+  let header=items.find(i=>i.folderId==="all");assert.equal(header.total,5);assert.equal(header.unread,2);
+  items=sidebarModel({filteredChats:chats,chatFolders:[{id:"parent",name:"Parent",chatIds:[],collapsed:true},{id:"child",parentId:"parent",name:"Child",chatIds:chats.map(c=>c.id)}]});
+  header=items.find(i=>i.folderId==="parent");assert.equal(header.total,5);assert.equal(header.unread,2);
+  items=sidebarModel({filteredChats:chats,chatFolders:[{id:"empty",name:"Empty",chatIds:[]}]});
+  header=items.find(i=>i.kind==="ungrouped_header");assert.equal(header.total,5);assert.equal(header.unread,2);
+  const cleared=sidebarModel({filteredChats:chats.map(c=>({...c,unread:0})),chatFolders:[{id:"all",name:"All",chatIds:chats.map(c=>c.id)}]});
+  assert.equal(cleared.find(i=>i.folderId==="all").unread,0);
+});
+
 test("collapsed folder and ungrouped controls describe current location, exact unread totals and expansion while retaining callbacks",()=>{
   const ui=fixture();try {
     let toggles=0;
-    const props={folderId:"a",name:"A",collapsed:true,depth:0,total:4,unread:123,containsSelected:true,onToggle:()=>toggles++};
+    const props={folderId:"a",name:"A",collapsed:true,depth:0,total:140,unread:123,containsSelected:true,onToggle:()=>toggles++};
     const tree=FolderHeaderRow(props),control=nodes(tree).find(n=>n.props["aria-expanded"]===false);
     assert.ok(control);control.props.onClick();assert.equal(toggles,1);
     assert.ok(nodes(tree).some(n=>n.props.title==="当前打开的会话在此分组中"));
-    assert.ok(nodes(tree).some(n=>n.props["aria-label"]==="123 条未读消息"&&n.props.children==="99+"));
-    assert.ok(nodes(tree).some(n=>n.props["aria-label"]==="4 个会话"));
-    const item={kind:"ungrouped_header",total:4,unread:123,collapsed:true,containsSelected:true};
+    assert.ok(nodes(tree).some(n=>n.props["aria-label"]==="123 个会话有未读消息"&&n.props.children==="99+"));
+    assert.ok(nodes(tree).some(n=>n.props["aria-label"]==="140 个会话"));
+    const item={kind:"ungrouped_header",total:140,unread:123,collapsed:true,containsSelected:true};
     const ungrouped=SidebarSpecialItem({item,onToggleUngrouped:()=>toggles++});
     nodes(ungrouped).find(n=>n.props["aria-expanded"]===false).props.onClick();assert.equal(toggles,2);
     assert.ok(nodes(ungrouped).some(n=>n.props.title==="当前打开的会话在此分组中"));
-    assert.ok(nodes(ungrouped).some(n=>n.props["aria-label"]==="123 条未读消息"&&n.props.children==="99+"));
+    assert.ok(nodes(ungrouped).some(n=>n.props["aria-label"]==="123 个会话有未读消息"&&n.props.children==="99+"));
     const cleared=SidebarSpecialItem({item:{...item,unread:0,containsSelected:false}});
-    assert.equal(nodes(cleared).some(n=>n.props.title==="当前打开的会话在此分组中"||n.props["aria-label"]==="0 条未读消息"),false);
+    assert.equal(nodes(cleared).some(n=>n.props.title==="当前打开的会话在此分组中"||n.props["aria-label"]==="0 个会话有未读消息"),false);
   }finally{ui.close();}
 });
 

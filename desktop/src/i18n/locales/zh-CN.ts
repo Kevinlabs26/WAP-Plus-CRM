@@ -6,6 +6,7 @@ export default {
   "folder.current": "当前",
   "folder.currentChat": "当前打开的会话在此分组中",
   "folder.chatCount": "{count} 个会话",
+  "folder.unreadChatCount": "{count} 个会话有未读消息",
   "inbox.title": "新消息",
   "inbox.button": "新消息，{count} 个未读会话",
   "inbox.count": "{count} 个会话",

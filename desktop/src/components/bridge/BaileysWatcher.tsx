@@ -10,6 +10,7 @@ import {
 import { notifyGroupJoinRequests } from "@/lib/groupJoinNotify";
 import { syncLog } from "@/lib/syncDebug";
 import { isComposerTypingBusy } from "@/lib/composerActivity";
+import { hasRealtimeIngestEvents } from "@/lib/ingestGate";
 import { useAppStore } from "@/store/appStore";
 import { flushPersist, persist } from "@/store/persist";
 import { useI18n } from "@/i18n";
@@ -22,32 +23,23 @@ import {
 
 const cursorKey = (accountId: string) =>
   `wap.baileys.eventCursor.${accountId}`;
-/**
- * 多号并行时过勤会卡 UI。
- * 外层 tick 只负责调度；各账号有自己的最小间隔。
- */
-/**
- * 调度节拍：真正拉 events 仍受各账号 minInterval 限制。
- * 多号：对方发来 / 另一号回声，若号不是 live 且间隔过大，会「好几秒才到」。
- * live / 当前会话所属号较快；其它在线号中等；未连接槽很慢。
- */
 /** 外层调度；真正拉 events 仍受各账号 minInterval 限制 */
-const TICK_MS = 2500;
+const TICK_MS = 1000;
 /** 默认发送号 / 扫码中 */
-const INTERVAL_LIVE_MS = 2800;
+const INTERVAL_LIVE_MS = 2000;
 const INTERVAL_BUSY_MS = 3500;
 /** 当前打开会话所属号（即使用户 live 在别的槽） */
-const INTERVAL_FOCUSED_MS = 3200;
+const INTERVAL_FOCUSED_MS = 2000;
 /** 其它已在线号 */
-const INTERVAL_ONLINE_MS = 9000;
+const INTERVAL_ONLINE_MS = 3000;
 /** 仅有名字、未必在线的槽 */
 const INTERVAL_IDLE_MS = 30_000;
 /** 后台账号单次拉取超过该时长，短暂降频，避免慢 IPC 反复占用轮询队列 */
 const SLOW_POLL_MS = 4_000;
 const SLOW_BACKOFF_MS = 15_000;
 const LABELS_REFRESH_MS = 300_000;
-/** 单 tick 最多串行轮询的账号数（live/focused 优先，其余轮转） */
-const MAX_ACCOUNTS_PER_TICK = 2;
+/** 同时最多四个账号请求；慢账号只占自己的名额。 */
+const MAX_CONCURRENT_POLLS = 4;
 /** 连续失败这么多次才把 UI 标成断开 */
 const FAIL_DEMOTE_AFTER = 3;
 const DURABLE_EVENT_TYPES = new Set([
@@ -165,6 +157,7 @@ export function BaileysWatcher() {
     const pendingCursorByAccount = new Map<string, number>();
     const INGEST_CHUNK_SIZE = 4;
     let ingestInFlight = false;
+    let lastIngestAt = Date.now();
 
     const commitPendingCursors = () => {
       if (!pendingCursorByAccount.size || !useAppStore.getState().hydrated ||
@@ -210,19 +203,17 @@ export function BaileysWatcher() {
         ingestQueue = [];
         return;
       }
-      if (isComposerTypingBusy() || hasPendingUserInput()) {
+      const typing = isComposerTypingBusy() || hasPendingUserInput();
+      const realtimePending = ingestQueue.some(hasRealtimeIngestEvents);
+      if (typing && !realtimePending && Date.now() - lastIngestAt < 1000) {
         scheduleIngestPump();
         return;
       }
-      // 合并后排批次：每次 ingest 都要克隆全数组 + 通知订阅者 + 重渲，固定开销远大于
-      // 逐条处理本身。联系人大同步会被拆成上百条 4-item 小批次，逐条入库会把主线程
-      // 占满几十秒 → 打字卡顿。这里把队列里的小批次合并成少数几次 store 更新：
-      //  - 总 item 数有硬顶（对齐 ingestBridgeEvents 内部的 500 切片），单次 set 有界
-      //  - 合并过程中一有输入待处理（isInputPending）立即让路，不抢打字帧
+      // 保持 FIFO；打字时批次不超过 store 的单片预算，避免实时消息被分片等待卡住。
+      // 空闲时继续合并历史，减少克隆和重渲次数。
       let merged: BridgeEvent[] = [];
       let mergedItems = 0;
       while (ingestQueue.length) {
-        if (hasPendingUserInput()) break;
         const chunk = ingestQueue[0] as BridgeEvent[];
         let chunkItems = 0;
         for (const event of chunk) {
@@ -233,7 +224,8 @@ export function BaileysWatcher() {
           chunkItems +=
             p && Array.isArray(p.items) ? p.items.length : 1;
         }
-        if (merged.length && mergedItems + chunkItems > 480) break;
+        if (merged.length && (mergedItems + chunkItems > (typing ? 48 : 480) ||
+            merged.length + chunk.length > 40)) break;
         merged.push(...(ingestQueue.shift() as BridgeEvent[]));
         mergedItems += chunkItems;
         // 一帧内别把预算全吃掉：合并本身也要留时间给新输入
@@ -258,6 +250,7 @@ export function BaileysWatcher() {
         ingestInFlight = true;
         try {
           await ingest(merged);
+          lastIngestAt = Date.now();
         } catch (error) {
           ingestQueue.unshift(merged);
           ingestDelayTimer = window.setTimeout(() => {
@@ -295,7 +288,8 @@ export function BaileysWatcher() {
         ingestDelayTimer != null
       )
         return;
-      if (isComposerTypingBusy() || hasPendingUserInput()) {
+      if ((isComposerTypingBusy() || hasPendingUserInput()) &&
+          !ingestQueue.some(hasRealtimeIngestEvents) && Date.now() - lastIngestAt < 1000) {
         ingestDelayTimer = window.setTimeout(() => {
           ingestDelayTimer = null;
           scheduleIngestPump();
@@ -304,8 +298,14 @@ export function BaileysWatcher() {
       }
       if (typeof window.requestIdleCallback === "function") {
         ingestIdle = window.requestIdleCallback(pumpIngestQueue, {
-          timeout: 500,
+          timeout: ingestQueue.some(hasRealtimeIngestEvents) ? 50 : 500,
         });
+      } else if (document.hidden) {
+        // 隐藏窗口的动画帧可能暂停，不能把收消息绑在绘制上。
+        ingestDelayTimer = window.setTimeout(() => {
+          ingestDelayTimer = null;
+          void pumpIngestQueue();
+        }, 50);
       } else {
         ingestFrame = requestAnimationFrame(pumpIngestQueue);
       }
@@ -330,11 +330,11 @@ export function BaileysWatcher() {
             : null;
         const items = payload && Array.isArray(payload.items) ? payload.items : null;
         const isLargeSync =
-          (event.type === "contacts.sync" || event.type === "messages.sync") &&
           !!items &&
           items.length > INGEST_CHUNK_SIZE;
         if (!isLargeSync || !items) {
           smallBatch.push(event);
+          if (smallBatch.length >= INGEST_CHUNK_SIZE) flushSmallBatch();
           continue;
         }
 
@@ -800,6 +800,7 @@ export function BaileysWatcher() {
         return;
       }
       r.pollInFlight = true;
+      const pollGapMs = r.lastPollAt ? now - r.lastPollAt : 0;
       r.lastPollAt = now;
       const startedAt = performance.now();
       const epoch = baileysSessionEpoch(accountId);
@@ -978,58 +979,51 @@ export function BaileysWatcher() {
         syncLog(
           "watcher",
           "poll account",
-          { accountId, durationMs, events: eventCount, slowBackoff: !priority && durationMs >= SLOW_POLL_MS },
+          { accountId, pollGapMs, durationMs, events: eventCount, slowBackoff: !priority && durationMs >= SLOW_POLL_MS },
           durationMs >= SLOW_POLL_MS ? "warn" : "debug"
         );
       }
     };
 
-    let tickInFlight = false;
     let resumedAt = 0;
     let resumeTimer: number | null = null;
-    /** 非 live/focused 槽的轮转游标，避免每 tick 扫完全部号 */
+    /** 后台账号轮转，避免固定顺序在并发名额紧张时饿死尾部账号。 */
     let backgroundRotate = 0;
-    const pollAll = async (force = false) => {
-      if (tickInFlight) return;
+    const pollAll = (force = false) => {
+      if (cancelled) return;
       if (!force && Date.now() - resumedAt < 1200) return;
       // 输入尚未开放时不轮询（DeferredWatchers 也应未挂载；双保险）
       if (!useAppStore.getState().uiReady) return;
-      if (isComposerTypingBusy()) return;
       // 启动暖机窗口内只拉 live 号，其它号延后，避免与打字抢主线程
       const bootUntil =
         (window as unknown as { __wapBootUntil?: number }).__wapBootUntil || 0;
       const inBoot = bootUntil > Date.now();
-      tickInFlight = true;
-      try {
-        const ids = accountIdsToPoll();
-        const live = liveId();
-        const focused = focusedAccountId();
-        const primary = [
-          ...ids.filter((id) => id === live),
-          ...ids.filter((id) => id === focused && id !== live),
-        ];
-        const background = ids.filter(
-          (id) => id !== live && id !== focused
-        );
-        let ordered = force ? ids : primary;
-        if (!force && inBoot) {
-          ordered = primary.length ? primary : live ? [live] : [];
-        } else if (!force && background.length) {
-          // 每 tick 最多再带 1 个后台号轮转，控制串行 IPC
-          const pick =
-            background[backgroundRotate % background.length] || background[0];
-          backgroundRotate =
-            (backgroundRotate + 1) % Math.max(1, background.length);
-          const room = Math.max(0, MAX_ACCOUNTS_PER_TICK - ordered.length);
-          if (room > 0 && pick) ordered = [...ordered, pick];
-        }
-        // 硬顶：即使 live+focused 也限制在 MAX+1（双号同时前台）
-        if (!force && ordered.length > MAX_ACCOUNTS_PER_TICK + 1) {
-          ordered = ordered.slice(0, MAX_ACCOUNTS_PER_TICK + 1);
-        }
-        await Promise.all(ordered.map((id) => pollOne(id, force)));
-      } finally {
-        tickInFlight = false;
+      const ids = accountIdsToPoll();
+      const live = liveId();
+      const focused = focusedAccountId();
+      const primary = [
+        ...ids.filter((id) => id === live),
+        ...ids.filter((id) => id === focused && id !== live),
+      ];
+      const background = ids.filter(
+        (id) => id !== live && id !== focused
+      );
+      let ordered = [...primary];
+      if (!force && inBoot) {
+        ordered = primary.length ? primary : live ? [live] : [];
+      } else if (!force && background.length) {
+        ordered.push(...background.slice(backgroundRotate), ...background.slice(0, backgroundRotate));
+        backgroundRotate =
+          (backgroundRotate + 1) % Math.max(1, background.length);
+      }
+      if (force) ordered = [...primary, ...background];
+      let room = MAX_CONCURRENT_POLLS - [...byAccount.current.values()].filter((r) => r.pollInFlight).length;
+      for (const accountId of ordered) {
+        if (room <= 0) break;
+        const r = rt(accountId);
+        if (r.pollInFlight) continue;
+        void pollOne(accountId, force);
+        if (r.pollInFlight) room -= 1;
       }
     };
 

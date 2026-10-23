@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 const mocks = {
   "@/lib/storage": "export const getStorageEngine = () => 'sqlite'; export const saveAppState = async (value) => { await globalThis.restoreBeforeSave?.(); if (globalThis.restoreFail) { globalThis.restoreFail = false; throw new Error('Disk full'); } globalThis.restoreSaved = value; }; export const loadAppState = async () => null; export const clearAppState = async () => {}; export const registerChatMessageReplacements = () => {}; export const clearStoredRemoteMessages = async () => {}; export const deleteStoredMessagesByKeys = async () => {}; export const updateStoredMessageAcks = async (items, accountId) => { globalThis.syncAckWritten = { items, accountId }; await globalThis.syncAckWait?.(); }; export const loadSecureSecrets = async () => null; export const saveSecureSecrets = async () => true;",
   "@/lib/mediaCache": "export const bridgeMessageMediaCacheId = (id, accountId) => accountId + ':' + id; export const readMediaCache = async id => globalThis.restoreMedia.get(id); export const cacheMediaUrl = async (id, url) => { if (globalThis.restoreMediaFail) throw new Error('Media disk full'); globalThis.restoreMedia.set(id, url); }; export const dropMediaCache = async id => { globalThis.restoreMedia.delete(id); };",
-  "@/lib/composerActivity": "export const isComposerTypingBusy = () => false;",
+  "@/lib/composerActivity": "export const isComposerTypingBusy = () => globalThis.restoreTyping === true;",
   "@/lib/syncDebug": "export const noteMainThreadWork = () => {}; export const syncLog = () => {}; export const isSyncDebugEnabled = () => false;",
   "@/lib/aiAutoReply": "export const emitLiveInboundMessages = () => {};",
   "@/lib/inboundMessageNotify": "export const notifyInboundMessages = () => {};",
@@ -21,6 +21,7 @@ const built = await build({
 });
 const { createBootSlice, createIngestSlice, defaultSettings, isDataRestoreActive, persist, assertSendGate, withSendGate } = await import("data:text/javascript;base64," + Buffer.from(built.outputFiles[0].text).toString("base64"));
 function setup() {
+  globalThis.restoreTyping = false;
   globalThis.syncAckWritten = undefined; globalThis.syncAckWait = undefined;
   globalThis.window = { setTimeout, requestIdleCallback: undefined };
   globalThis.restoreBeforeSave = undefined; globalThis.restoreFail = false; globalThis.restoreMediaFail = false; globalThis.restoreSaved = null; globalThis.restoreMedia = new Map();
@@ -191,4 +192,22 @@ test('replayed clear preserves newer messages and isolates accounts', async () =
   set({messages:[make('old','wa','2026-10-01T00:00:00Z'),make('new','wa','2026-10-01T00:00:01.000Z'),make('other','wa-b','2026-10-01T00:00:00Z')]});
   await get().ingestBridgeEvents([{type:'messages.delete',deviceId:'wa',payload:{all:true,jid:'123@s.whatsapp.net',deletedBefore:'2026-10-01T00:00:00.000Z'}}]);
   assert.deepEqual(get().messages.map(m=>m.id),['new','other']);
+});
+
+test('ongoing typing cannot indefinitely hold remaining store slices or complete before they finish', async () => {
+  const {get}=setup(), timers=[]; const originalNow=Date.now; let now=1700000000000;
+  Date.now=()=>now; globalThis.restoreTyping=true;
+  window.setTimeout=(fn,ms=0)=>{timers.push({fn,ms});return timers.length;};
+  try {
+    const items=Array.from({length:61},(_,i)=>({id:'typing-'+i,phone:'+12025550123',body:'typing '+i,direction:'in',sentAt:new Date().toISOString()}));
+    let complete=false;
+    const done=get().ingestBridgeEvents([{type:'messages.sync',deviceId:'wa',payload:{live:false,items}}]).then(()=>{complete=true;});
+    assert.equal(get().messages.some(m=>m.body==='typing 60'),false);
+    timers.shift().fn(); await Promise.resolve(); assert.equal(complete,false);
+    assert.equal(get().messages.some(m=>m.body==='typing 60'),false);
+    now+=120;
+    let steps=0;while(timers.length){assert.ok(++steps<100);const t=timers.shift();now+=t.ms;t.fn();}
+    await done;
+    assert.equal(get().messages.some(m=>m.body==='typing 60'),true);assert.equal(complete,true);
+  } finally {Date.now=originalNow;globalThis.restoreTyping=false;}
 });

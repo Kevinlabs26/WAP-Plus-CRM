@@ -57,7 +57,7 @@ function fixture({count=1,nav="chats"}={}) {
     account(id="wa-0"){return selfAvatarState.settings.waAccounts.find(a=>a.id===id);},
     respond(fn){response=fn;},advance(ms){clock+=ms;},
     async first(){timers.find(t=>t.ms===1500).fn();await settle();},
-    async poll(force=false){if(force)handlers.get("wap:refresh-account-status")();else intervals.find(t=>t.ms===2500).fn();await settle();},
+    async poll(force=false){if(force)handlers.get("wap:refresh-account-status")();else intervals[0].fn();await settle();},
     stop(){selfAvatarCleanup();},
     close(){selfAvatarCleanup();Date.now=originalNow;for(const key of globals)globalThis[key]=originals[key];
       for(const key of ["selfAvatarCleanup","selfAvatarState","selfAvatarStatuses","selfAvatarEpochs","selfAvatarStatusCalls","selfAvatarFetch"])delete globalThis[key];},

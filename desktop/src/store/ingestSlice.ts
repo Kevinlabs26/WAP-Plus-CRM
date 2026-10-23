@@ -824,20 +824,22 @@ export function createIngestSlice({
         void finish().catch(reject);
         return;
       }
-      // 先同步跑第一块，其余块让出主线程；打字进行中则顺延
+      // 块间让出主线程；打字只能短暂推迟，不能把后续实时事件永久堵住。
       runSlice(slices[0]);
       let sliceIdx = 1;
+      let lastSliceAt = Date.now();
       const step = () => {
         if (deferDuringRestore(step)) return;
         if (sliceIdx >= slices.length) {
           void finish().catch(reject);
           return;
         }
-        if (isComposerTypingBusy()) {
-          window.setTimeout(step, INGEST_SLICE_RETRY_MS);
+        if (isComposerTypingBusy() && Date.now() - lastSliceAt < INGEST_SLICE_RETRY_MS) {
+          window.setTimeout(step, 16);
           return;
         }
         try { runSlice(slices[sliceIdx]); } catch (error) { reject(error); return; }
+        lastSliceAt = Date.now();
         sliceIdx += 1;
         window.setTimeout(step, 0);
       };

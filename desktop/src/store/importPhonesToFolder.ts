@@ -58,10 +58,8 @@ export function importPhonesToFolder(
     const phonePlus = `+${digits}`;
     let contacts = deps.getContacts().filter((item) => {
       const phoneDigits = digitsOnly(item.phone || "");
-      const phoneMatches =
-        phoneDigits === digits ||
-        (phoneDigits.length >= 7 &&
-          (phoneDigits.endsWith(digits) || digits.endsWith(phoneDigits)));
+      // 尾号相同不代表同一人，不能复用带不同国家区号或额外前缀的号码。
+      const phoneMatches = phoneDigits === digits;
       const owner = item.accountId || item.boundPhoneId || "";
       return phoneMatches && (!folderAccountId || owner === folderAccountId);
     });

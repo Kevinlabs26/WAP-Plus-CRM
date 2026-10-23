@@ -264,12 +264,10 @@ export function buildSidebarItems({
         containsSelected: primaryDisplayChats.some((item) => item.memberChatIds.includes(selectedChatId || "")) ||
           cloneChats.some((chat) => chat.id === selectedChatId),
         total: primaryDisplayChats.length + cloneChats.length,
+        // 按显示的会话计数，同一会话有多条未读消息也只计一次。
         unread:
-          primaryDisplayChats.reduce(
-            (n, item) => n + (item.chat.unread || 0),
-            0
-          ) +
-          cloneChats.reduce((n, chat) => n + (chat.unread || 0), 0),
+          primaryDisplayChats.filter((item) => (item.chat.unread || 0) > 0).length +
+          cloneChats.filter((chat) => (chat.unread || 0) > 0).length,
       });
     }
     const folderStats = new Map<string, FolderStats>();
@@ -441,10 +439,7 @@ export function buildSidebarItems({
         });
       }
     } else {
-      const unread = ungroupedDisplayChats.reduce(
-        (n, item) => n + (item.chat.unread || 0),
-        0
-      );
+      const unread = ungroupedDisplayChats.filter((item) => (item.chat.unread || 0) > 0).length;
       if (ungroupedDisplayChats.length > 0 || !searchActive) {
         items.push({
           kind: "ungrouped_header",

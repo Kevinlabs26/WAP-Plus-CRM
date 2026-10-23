@@ -6,6 +6,7 @@ export default {
   "folder.current": "Current",
   "folder.currentChat": "The open conversation is in this folder",
   "folder.chatCount": "{count} conversations",
+  "folder.unreadChatCount": "{count} conversations with unread messages",
   "inbox.title": "New messages",
   "inbox.button": "New messages, {count} unread conversations",
   "inbox.count": "{count} conversations",

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createChatFolderActions } from '../src/store/chatFolderActions.ts';
-import { importPhonesToFolder } from '../src/store/importPhonesToFolder.ts';
+import { importPhonesToFolder, parseFolderPhoneEntries } from '../src/store/importPhonesToFolder.ts';
 
 function fixture({ contacts = [], chats = [], folders, clones = [] }) {
   let settings = { chatFolders: folders, chatFolderClones: clones };
@@ -32,6 +32,42 @@ const person = (n, account = 'wa-a', suffix = '') => ({
 });
 const chat = (c, suffix = '') => ({ id: `chat-${c.id}${suffix}`, contactId: c.id, accountId: c.accountId, unread: 0 });
 const folder = (id, chatIds = [], scope = { type: 'all' }) => ({ id, name: id, sort: 0, chatIds, scope });
+
+test('plain phone lists keep every digit and never prepend the row number', () => {
+  const phones = ['243975532209', '243975532210', '7243975532211'];
+  assert.deepEqual(parseFolderPhoneEntries(phones.join('\n')), phones);
+  const f = fixture({ folders: [folder('A')] });
+  assert.deepEqual(importPhonesToFolder('A', phones.join('\n'), f.deps), { matched: 0, created: 3, skipped: 0 });
+  assert.deepEqual(f.contacts.map(c => c.phone), phones.map(p => `+${p}`));
+  assert.deepEqual(f.contacts.map(c => c.name), phones.map(p => `+${p}`));
+});
+
+test('an imported phone cannot reuse existing contacts with extra leading digits', () => {
+  const phone = '243975532209';
+  const contacts = Array.from({ length: 7 }, (_, i) => ({ ...person(i + 1), phone: `+${i + 1}${phone}` }));
+  const chats = contacts.map(c => chat(c));
+  const original = structuredClone(contacts);
+  const f = fixture({ contacts, chats, folders: [folder('B', chats.map(c => c.id)), folder('A')] });
+  assert.deepEqual(importPhonesToFolder('A', phone, f.deps), { matched: 0, created: 1, skipped: 0 });
+  assert.deepEqual(f.contacts.slice(0, 7), original);
+  assert.equal(f.contacts.at(-1).phone, `+${phone}`);
+  assert.deepEqual(f.settings().chatFolders[0].chatIds, chats.slice(0, 7).map(c => c.id));
+  assert.deepEqual(f.settings().chatFolders[1].chatIds, [chats.at(-1).id]);
+});
+
+test('only full phone matches move; shared suffixes never move other people', () => {
+  const exact = { ...person(1), phone: '+243 975 532 209' };
+  const sibling = { ...person(1, 'wa-b', '-b'), phone: '+243975532209' };
+  const extraPrefix = { ...person(2), phone: '+7243975532209' };
+  const shorter = { ...person(3), phone: '+975532209' };
+  const contacts = [exact, sibling, extraPrefix, shorter];
+  const chats = contacts.map(c => chat(c));
+  const f = fixture({ contacts, chats, folders: [folder('B', chats.map(c => c.id)), folder('A')] });
+  assert.deepEqual(importPhonesToFolder('A', '243975532209', f.deps), { matched: 1, created: 0, skipped: 0 });
+  assert.deepEqual(new Set(f.settings().chatFolders[1].chatIds), new Set(chats.slice(0, 2).map(c => c.id)));
+  assert.deepEqual(f.settings().chatFolders[0].chatIds, chats.slice(2).map(c => c.id));
+  assert.equal(f.contacts.length, 4);
+});
 
 test('import 1-10 into A moves existing users 3-8 out of B without duplicating people or losing history', () => {
   const contacts = Array.from({ length: 11 }, (_, i) => person(i + 1));

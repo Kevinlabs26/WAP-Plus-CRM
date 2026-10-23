@@ -102,9 +102,7 @@ export function FolderHeaderRow({
         data-chat-folder-drop={folderId}
         data-folder-reorder-target={folderId}
         className={cn(
-          "group/folder flex items-center gap-0.5 rounded-md px-1 py-1.5 transition-colors",
-          unread > 0 ? "bg-brand/5 hover:bg-brand/10" : "hover:bg-zinc-900/80",
-          containsSelected && "bg-brand/10 ring-1 ring-inset ring-brand/30",
+          "group/folder flex items-center gap-0.5 rounded-md px-1 py-1.5 transition-colors hover:bg-zinc-900/80",
           dropActive && "bg-brand/10 ring-1 ring-brand/40",
           folderDropActive && "bg-brand/15 ring-1 ring-brand/60"
         )}
@@ -124,9 +122,9 @@ export function FolderHeaderRow({
           ) : (
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
           )}
-          <Folder className={cn("h-3.5 w-3.5 shrink-0", unread > 0 || containsSelected ? "text-brand" : "text-zinc-500")} />
+          <Folder className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
           <span
-            className={cn("min-w-0 flex-1 truncate text-[13px]", unread > 0 || containsSelected ? "font-semibold text-zinc-100" : "font-medium text-zinc-400")}
+            className="min-w-0 flex-1 truncate text-[13px] font-medium text-zinc-400"
             title={name}
           >
             {name}
@@ -136,7 +134,7 @@ export function FolderHeaderRow({
             {total}
           </span>
           {unread > 0 && (
-            <span className="inline-flex min-h-5 shrink-0 items-center justify-center rounded-full bg-brand/15 px-1.5 text-xs font-semibold tabular-nums text-brand" title={t("inbox.unread", { count: unread })} aria-label={t("inbox.unread", { count: unread })}>
+            <span className="inline-flex min-h-5 shrink-0 items-center justify-center rounded-full bg-brand/15 px-1.5 text-xs font-semibold tabular-nums text-brand" title={t("folder.unreadChatCount", { count: unread })} aria-label={t("folder.unreadChatCount", { count: unread })}>
               {unread > 99 ? "99+" : unread}
             </span>
           )}

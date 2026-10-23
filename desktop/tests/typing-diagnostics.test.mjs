@@ -64,11 +64,7 @@ test("typing diagnostics record timing and counts without draft text", () => {
   );
   assert.match(watcher, /hasPendingUserInput\(\)/);
   assert.match(watcher, /requestIdleCallback\(pumpIngestQueue/);
-  // 联系人大同步被拆成上百条小批次：必须合并后一次 set，逐条入库会占满主线程卡打字
-  assert.match(
-    watcher,
-    /const pumpIngestQueue[\s\S]*?mergedItems \+ chunkItems > 480[\s\S]*?ingest\(merged\)/
-  );
+  // 批次大小和合并行为由 receive-scheduling 的运行时测试验证。
   assert.match(
     watcher,
     /const pumpIngestQueue[\s\S]*?typeof deadline\.timeRemaining === "function"[\s\S]*?break/
