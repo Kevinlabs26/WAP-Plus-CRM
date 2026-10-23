@@ -1,4 +1,4 @@
-import { resolveSalesStageLabel } from "@/lib/contactWorkflow";
+import { resolveActiveSalesStage, resolveSalesStageLabel } from "@/lib/contactWorkflow";
 import { clearFollowUpNotifyDedupe } from "@/lib/followUpDueNotify";
 import type { SliceContext } from "./types";
 import { persist, scheduleStatsRecompute } from "./persist";
@@ -13,6 +13,7 @@ import { createSaveMessageAction } from "./saveMessageAction";
 import { createContactMergeActions } from "./contactMergeActions";
 
 export function createActionMixins({ set, get }: SliceContext) {
+  const resolveStage = (stage: string | undefined) => resolveActiveSalesStage(stage, get().settings.salesStageOrder);
   const chatFolderActions = createChatFolderActions({
     getSettings: () => get().settings,
     updateSettings: (patch) => get().updateSettings(patch),
@@ -35,6 +36,7 @@ export function createActionMixins({ set, get }: SliceContext) {
     persist: () => persist(get),
   });
   const contactActions = createContactActions({
+    resolveStage,
     getContacts: () => get().contacts,
     getPhones: () => get().phones,
     setState: (updater) => set((state) => updater(state)),
@@ -49,6 +51,7 @@ export function createActionMixins({ set, get }: SliceContext) {
     persist: () => persist(get),
   });
   const contactCreationActions = createContactCreationActions({
+    resolveStage,
     setState: (updater) => set((state) => updater(state)),
     setSelection: (contactId, chatId) =>
       set({ selectedContactId: contactId, selectedChatId: chatId }),

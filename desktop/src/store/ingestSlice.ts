@@ -8,6 +8,7 @@ import {
 import { applyPresenceUpdate } from "./presenceIngest";
 import { applyDeviceHello, applyDeviceStatus } from "./deviceIngest";
 import { applyContactsSync } from "./contactIngest";
+import { resolveActiveSalesStage } from "@/lib/contactWorkflow";
 import { applyMessagesSync } from "./messagesIngest";
 import { applyMessagesDelete } from "./messagesDeleteIngest";
 import { applyChatsDelete } from "./chatsDeleteIngest";
@@ -238,6 +239,7 @@ export function createIngestSlice({
           return n && n.length <= 40 ? n : "";
         })();
         const contactBag = {
+          defaultStage: resolveActiveSalesStage("new", state.settings.salesStageOrder),
           contacts,
           chats,
           messages,

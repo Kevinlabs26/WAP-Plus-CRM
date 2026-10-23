@@ -7,6 +7,8 @@ import en from '../src/i18n/locales/en.ts';
 import fr from '../src/i18n/locales/fr.ts';
 
 const mocks = {
+  "./ContactAvatar": "export const ContactAvatar=()=>null;",
+  "./SalesStageField": "export const SalesStageField=()=>null;",
   react: `export const useRef = value => globalThis.followUpUiHooks.ref(value);
     export const useState = value => globalThis.followUpUiHooks.state(value);
     export const useEffect = (fn, deps) => globalThis.followUpUiHooks.effect(fn, deps);`,

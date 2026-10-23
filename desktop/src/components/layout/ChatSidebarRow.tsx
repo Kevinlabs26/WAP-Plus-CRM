@@ -184,9 +184,10 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
     >
       <ListRow
         active={active}
+        aria-current={active ? "true" : undefined}
         onClick={() => onOpen(chat.contactId, chat.id)}
         onContextMenu={(e) => onOpenMenu(e, chat.id, memberChatIds)}
-        className="!items-center gap-2.5 !py-2 !pr-0"
+        className={cn("!items-center gap-2.5 !py-2 !pr-0", active && "bg-brand/15 ring-1 ring-inset ring-brand/30")}
       >
         <div className="relative shrink-0">
           <Avatar
@@ -208,7 +209,7 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex w-full items-center justify-between gap-1.5">
-            <span className="flex min-w-0 items-center gap-1 truncate text-[14px] font-semibold text-zinc-100">
+            <span className={cn("flex min-w-0 items-center gap-1 truncate text-[14px] text-zinc-100", active || chat.unread > 0 ? "font-semibold" : "font-medium")}>
               {chat.pinned && (
                 <Pin className="h-3 w-3 shrink-0 text-brand" />
               )}
@@ -226,7 +227,7 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
               )}
             </span>
             {messageTime && (
-              <span className="shrink-0 text-2xs tabular-nums text-zinc-500">
+              <span className={cn("shrink-0 text-2xs tabular-nums", chat.unread > 0 ? "font-medium text-brand" : "text-zinc-500")}>
                 {messageTime}
               </span>
             )}
@@ -237,7 +238,7 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
               <span
                 className={cn(
                   "min-w-0 flex-1 truncate text-[13px]",
-                  typingLine ? "font-medium text-brand" : "text-zinc-500"
+                  typingLine ? "font-medium text-brand" : chat.unread > 0 ? "font-medium text-zinc-300" : "text-zinc-500"
                 )}
               >
                 {typingLine || previewText || t("multiAccount.noMessages")}
@@ -245,8 +246,8 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
             </div>
             <div className="flex shrink-0 items-center gap-1">
               {chat.unread > 0 && (
-                <Badge tone="brand" className="!h-4 !min-w-4 !px-1 text-[10px] font-bold tabular-nums">
-                  {chat.unread}
+                <Badge tone="brand" className="!h-5 !min-w-5 !px-1.5 text-xs font-semibold tabular-nums">
+                  <span title={t("inbox.unread", { count: chat.unread })} aria-label={t("inbox.unread", { count: chat.unread })}>{chat.unread > 99 ? "99+" : chat.unread}</span>
                 </Badge>
               )}
               <span

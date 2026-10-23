@@ -26,6 +26,7 @@ export type SidebarSpecialItem =
       kind: "ungrouped_header";
       total: number;
       unread: number;
+      containsSelected?: boolean;
       collapsed: boolean;
       isAllAccountsView: boolean;
       dropActive: boolean;
@@ -147,24 +148,28 @@ export function SidebarSpecialItem({
         <button
           type="button"
           className={cn(
-            "flex w-full items-center gap-1 rounded-md px-1 py-1.5 text-left transition-colors hover:bg-zinc-900/80",
+            "flex w-full items-center gap-1 rounded-md px-1 py-1.5 text-left transition-colors",
+            item.unread > 0 ? "bg-brand/5 hover:bg-brand/10" : "hover:bg-zinc-900/80",
+            item.containsSelected && "bg-brand/10 ring-1 ring-inset ring-brand/30",
             item.dropActive && "bg-brand/10 ring-1 ring-brand/40"
           )}
           onClick={onToggleUngrouped}
+          aria-expanded={!item.collapsed}
         >
           {item.collapsed ? (
             <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
           ) : (
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
           )}
-          <Inbox className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
-          <span className="truncate text-[12px] font-medium text-zinc-500">
+          <Inbox className={cn("h-3.5 w-3.5 shrink-0", item.unread > 0 || item.containsSelected ? "text-brand" : "text-zinc-500")} />
+          <span className={cn("min-w-0 flex-1 truncate text-[13px]", item.unread > 0 || item.containsSelected ? "font-semibold text-zinc-100" : "font-medium text-zinc-400")}>
             {item.isAllAccountsView ? t("folder.ungroupedAll") : t("folder.ungrouped")}
           </span>
-          <span className="text-[11px] tabular-nums text-zinc-500 font-normal">{item.total}</span>
+          {item.containsSelected && <span className={cn("shrink-0 text-xs font-medium text-brand", !item.collapsed && "sr-only")} title={t("folder.currentChat")}>{t("folder.current")}</span>}
+          <span className="shrink-0 text-xs tabular-nums text-zinc-500 font-normal" title={t("folder.chatCount", { count: item.total })} aria-label={t("folder.chatCount", { count: item.total })}>{item.total}</span>
           {item.unread > 0 && (
-            <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-700 text-white dark:bg-emerald-600 dark:text-white px-1 text-[10px] font-bold tabular-nums shadow-2xs">
-              {item.unread}
+            <span className="inline-flex min-h-5 shrink-0 items-center justify-center rounded-full bg-brand/15 px-1.5 text-xs font-semibold tabular-nums text-brand" title={t("inbox.unread", { count: item.unread })} aria-label={t("inbox.unread", { count: item.unread })}>
+              {item.unread > 99 ? "99+" : item.unread}
             </span>
           )}
         </button>

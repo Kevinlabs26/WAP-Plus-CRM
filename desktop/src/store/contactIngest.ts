@@ -22,6 +22,7 @@ export type ContactIngestBag = {
   messages: Message[];
   nextSelectedChatId: string | null;
   nextSelectedContactId: string | null;
+  defaultStage?: string;
   /** 批内联系人查找索引（惰性构建），避免逐条全表扫描 */
   _contactLookup?: ContactLookup;
   /** 同步合并会话后，文件夹和分身也必须改指向保留的会话。 */
@@ -278,7 +279,7 @@ export function ensureIngestContact(
     phone: phone || "",
     channelAddress: channelAddress || jid || undefined,
     tags: [],
-    stage: "new",
+    stage: bag.defaultStage || "new",
     boundPhoneId: deviceId,
     accountId: deviceId,
     personKey: buildPersonKey({

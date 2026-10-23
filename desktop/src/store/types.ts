@@ -380,6 +380,7 @@ export interface AppState extends PersistSlice {
     note?: string
   ) => number;
   updateSettings: (patch: Partial<AppSettings>) => void;
+  deleteSalesStage: (stageId: SalesStage, targetId: SalesStage) => boolean;
   createChatFolder: (name: string, parentId?: string | null) => string | null;
   renameChatFolder: (folderId: string, name: string) => void;
   deleteChatFolder: (folderId: string) => void;

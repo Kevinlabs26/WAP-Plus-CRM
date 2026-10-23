@@ -16,6 +16,7 @@ export type SidebarVirtItem =
       name: string;
       total: number;
       unread: number;
+      containsSelected: boolean;
       collapsed: boolean;
       depth: number;
     }
@@ -48,6 +49,7 @@ export type SidebarVirtItem =
       id: string;
       total: number;
       unread: number;
+      containsSelected: boolean;
     }
   | { kind: "empty"; id: string };
 
@@ -63,6 +65,7 @@ type BuildSidebarItemsArgs = {
   ungroupedCollapsed: boolean;
   query: string;
   folderDisplayName: (folder: ChatFolder) => string;
+  selectedChatId?: string | null;
   leadView?: boolean;
   leadMergeAccounts?: boolean;
   leadDateGroupByChatId?: ReadonlyMap<
@@ -106,6 +109,7 @@ export function buildSidebarItems({
   ungroupedCollapsed,
   query,
   folderDisplayName,
+  selectedChatId,
   leadView = false,
   leadMergeAccounts = true,
   leadDateGroupByChatId,
@@ -246,7 +250,8 @@ export function buildSidebarItems({
         memberChatIds: [chat.id],
       }));
     };
-    const ownFolderStats = new Map<string, { total: number; unread: number }>();
+    type FolderStats = { total: number; unread: number; containsSelected: boolean };
+    const ownFolderStats = new Map<string, FolderStats>();
     for (const folder of chatFolders) {
       const primaryChats = folder.chatIds
         .map((id) => chatById.get(id))
@@ -256,6 +261,8 @@ export function buildSidebarItems({
         .map((cl) => chatById.get(cl.sourceChatId))
         .filter((chat): chat is ChatPreview => !!chat);
       ownFolderStats.set(folder.id, {
+        containsSelected: primaryDisplayChats.some((item) => item.memberChatIds.includes(selectedChatId || "")) ||
+          cloneChats.some((chat) => chat.id === selectedChatId),
         total: primaryDisplayChats.length + cloneChats.length,
         unread:
           primaryDisplayChats.reduce(
@@ -265,16 +272,16 @@ export function buildSidebarItems({
           cloneChats.reduce((n, chat) => n + (chat.unread || 0), 0),
       });
     }
-    const folderStats = new Map<string, { total: number; unread: number }>();
+    const folderStats = new Map<string, FolderStats>();
     const getFolderStats = (
       folderId: string,
       visiting = new Set<string>()
-    ): { total: number; unread: number } => {
+    ): FolderStats => {
       const cached = folderStats.get(folderId);
       if (cached) return cached;
-      if (visiting.has(folderId)) return { total: 0, unread: 0 };
+      if (visiting.has(folderId)) return { total: 0, unread: 0, containsSelected: false };
       visiting.add(folderId);
-      const own = ownFolderStats.get(folderId) || { total: 0, unread: 0 };
+      const own = ownFolderStats.get(folderId) || { total: 0, unread: 0, containsSelected: false };
       const folder = folderById.get(folderId);
       const result = { ...own };
       for (const child of chatFolders) {
@@ -282,6 +289,7 @@ export function buildSidebarItems({
         const childStats = getFolderStats(child.id, new Set(visiting));
         result.total += childStats.total;
         result.unread += childStats.unread;
+        result.containsSelected ||= childStats.containsSelected;
       }
       folderStats.set(folderId, result);
       return result;
@@ -298,7 +306,7 @@ export function buildSidebarItems({
           (x): x is { cl: ChatFolderClone; chat: ChatPreview } =>
             !!x.chat
         );
-      const stats = folderStats.get(folder.id) || { total: 0, unread: 0 };
+      const stats = folderStats.get(folder.id) || { total: 0, unread: 0, containsSelected: false };
       const { total, unread } = stats;
       if (searchActive && total === 0) return;
       items.push({
@@ -308,6 +316,7 @@ export function buildSidebarItems({
         name: folderDisplayName(folder),
         total,
         unread,
+        containsSelected: stats.containsSelected,
         collapsed: !searchActive && !!folder.collapsed,
         depth: 1,
       });
@@ -359,7 +368,7 @@ export function buildSidebarItems({
           (x): x is { cl: ChatFolderClone; chat: ChatPreview } =>
             !!x.chat
         );
-      const stats = folderStats.get(folder.id) || { total: 0, unread: 0 };
+      const stats = folderStats.get(folder.id) || { total: 0, unread: 0, containsSelected: false };
       const { total, unread } = stats;
       if (searchActive && total === 0) continue;
       items.push({
@@ -369,6 +378,7 @@ export function buildSidebarItems({
         name: folderDisplayName(folder),
         total,
         unread,
+        containsSelected: stats.containsSelected,
         collapsed: !searchActive && !!folder.collapsed,
         depth: 0,
       });
@@ -441,6 +451,7 @@ export function buildSidebarItems({
           id: "__ungrouped",
           total: ungroupedDisplayChats.length,
           unread,
+          containsSelected: ungroupedDisplayChats.some((item) => item.memberChatIds.includes(selectedChatId || "")),
         });
       }
       if (searchActive || !ungroupedCollapsed) {

@@ -104,6 +104,8 @@ type AcctRuntime = {
   lastConfirmedConnectedAt: number;
   labelsSyncing: boolean;
   lastLabelsAt: number;
+  lastSelfAvatarAt: number;
+  selfAvatarInFlight: boolean;
   pollInFlight: boolean;
   lastPollAt: number;
   slowUntil: number;
@@ -121,6 +123,8 @@ function emptyRt(): AcctRuntime {
     lastConfirmedConnectedAt: 0,
     labelsSyncing: false,
     lastLabelsAt: 0,
+    lastSelfAvatarAt: 0,
+    selfAvatarInFlight: false,
     pollInFlight: false,
     lastPollAt: 0,
     slowUntil: 0,
@@ -666,15 +670,12 @@ export function BaileysWatcher() {
               scheduleAccountsPersist();
             }
           }
-          // 已连接：无头像则拉本人头像（self=1；节流避免每轮 status 狂打 /avatar）
-          if (connectedNow && !nextAvatar && !needScan) {
-            const w = window as unknown as {
-              __wapSelfAvatarAt?: Record<string, number>;
-            };
-            const stamp = w.__wapSelfAvatarAt || (w.__wapSelfAvatarAt = {});
-            const lastAt = stamp[accountId] || 0;
-            if (identity.changed || Date.now() - lastAt > 45_000) {
-              stamp[accountId] = Date.now();
+          // 已有头像也要复查；设备页更快刷新，后台避免每轮状态查询都下载图片。
+          if (connectedNow && !needScan && !r.selfAvatarInFlight) {
+            const interval = !nextAvatar || st.activeNav === "phones" ? 45_000 : 300_000;
+            if (!r.lastSelfAvatarAt || identity.changed || now - r.lastSelfAvatarAt >= interval) {
+              r.lastSelfAvatarAt = now;
+              r.selfAvatarInFlight = true;
               const bare =
                 typeof status.user?.id === "string"
                   ? status.user.id.replace(/:\d+@/, "@")
@@ -709,7 +710,8 @@ export function BaileysWatcher() {
                   });
                   scheduleAccountsPersist();
                 })
-                .catch(() => undefined);
+                .catch(() => undefined)
+                .finally(() => { r.selfAvatarInFlight = false; });
             }
           }
         }
@@ -804,9 +806,9 @@ export function BaileysWatcher() {
       let eventCount = 0;
       try {
         const isLive = accountId === liveId();
-        // live：每次 status；其它号：约一半次数拉 status
+        // 主动刷新查询所有槽；平时 live 每次查，其它号约一半次数查。
         const pullStatus =
-          isLive || !r.prevConnected || Math.floor(now / 8000) % 2 === 0;
+          force || isLive || !r.prevConnected || Math.floor(now / 8000) % 2 === 0;
 
         const status = pullStatus
           ? await baileysStatus(accountId)

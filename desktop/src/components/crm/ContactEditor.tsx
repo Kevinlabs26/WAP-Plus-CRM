@@ -2,7 +2,7 @@ import { CalendarPlus, MessageSquare } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Contact, SalesStage } from "@/types/crm";
 import { cn, displayPhone } from "@/lib/utils";
-import { Avatar } from "@/components/ui/Avatar";
+import { ContactAvatar } from "./ContactAvatar";
 import { Button, Input, Textarea } from "@/components/ui/primitives";
 import { ActivityTimeline } from "@/components/crm/ActivityTimeline";
 import { ContactTagsNotesEditor } from "@/components/crm/ContactTagsNotesEditor";
@@ -11,6 +11,7 @@ import { ChatFollowUpDialog } from "@/components/chat/ChatFollowUpDialog";
 import { getNextOpenFollowUp } from "@/lib/todayBoard";
 import { useAppStore } from "@/store/appStore";
 import { useI18n } from "@/i18n";
+import { SalesStageField } from "./SalesStageField";
 
 type Props = {
   contact: Contact;
@@ -111,12 +112,7 @@ export function ContactEditor({
     <div className={cn("space-y-3", !compact && "mx-auto max-w-lg")}>
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 items-start gap-2.5">
-          <Avatar
-            name={title}
-            seed={contact.phone || contact.id}
-            src={contact.avatarUrl}
-            size="lg"
-          />
+          <ContactAvatar key={contact.id} contact={contact} />
           <div className="min-w-0">
             <div className="truncate text-[15px] font-semibold tracking-tight">
               {title}
@@ -207,24 +203,7 @@ export function ContactEditor({
         onChange={(value) => updateContact(contact.id, { source: value })}
       />
 
-      <label className="block text-2xs text-zinc-500">
-        {t("crmPanel.salesStage")}
-        <select
-          value={contact.stage}
-          onChange={(event) =>
-            updateContact(contact.id, {
-              stage: event.target.value as SalesStage,
-            })
-          }
-          className="ui-control mt-1 w-full px-2.5 text-[13px]"
-        >
-          {stages.map((stage) => (
-            <option key={stage.id} value={stage.id}>
-              {stage.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <SalesStageField value={contact.stage} onChange={stage => updateContact(contact.id, { stage })} />
 
       <label className="block text-2xs text-zinc-500">
         {t("contact.permanentPhone")}
@@ -281,7 +260,7 @@ export function ContactEditor({
             placeholder={t("contact.aiSummaryPlaceholder")}
           />
         </label>
-        {contact.aiSuggestedStage &&
+        {contact.aiSuggestedStage && stages.some(stage => stage.id === contact.aiSuggestedStage) &&
           contact.aiSuggestedStage !== contact.stage && (
             <div className="flex flex-wrap items-center gap-1.5 text-2xs text-zinc-500">
               <span>

@@ -19,6 +19,7 @@ type ContactDeps = {
     detail?: string
   ) => void;
   stageLabel: (stage: string) => string;
+  resolveStage: (stage: string | undefined) => string;
   recomputeStats: () => void;
   persist: () => void;
 };
@@ -30,6 +31,7 @@ export function createContactActions({
   setSelectedPhone,
   logActivity,
   stageLabel,
+  resolveStage,
   recomputeStats,
   persist,
 }: ContactDeps) {
@@ -44,6 +46,7 @@ export function createContactActions({
       persist();
     },
     updateContact(id: string, patch: Partial<Contact>) {
+      if (patch.stage !== undefined) patch = { ...patch, stage: resolveStage(patch.stage) };
       const previous = getContacts().find((contact) => contact.id === id);
       const nextName = patch.name;
       setState((state) => {
@@ -125,6 +128,7 @@ export function createContactActions({
       }
     ) {
       if (!ids.length) return 0;
+      if (patch.stage !== undefined) patch = { ...patch, stage: resolveStage(patch.stage) };
       const idSet = new Set(ids);
       const prevById = new Map(
         getContacts().filter((c) => idSet.has(c.id)).map((c) => [c.id, c])

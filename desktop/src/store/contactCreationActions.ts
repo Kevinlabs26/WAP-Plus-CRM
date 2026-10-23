@@ -15,6 +15,7 @@ type ContactCreationDeps = {
   logActivity: (contactId: string, detail?: string) => void;
   recomputeStats: () => void;
   persist: (immediate?: boolean) => void;
+  resolveStage: (stage: string | undefined) => string;
 };
 
 export function createContactCreationActions({
@@ -24,11 +25,12 @@ export function createContactCreationActions({
   logActivity,
   recomputeStats,
   persist,
+  resolveStage,
 }: ContactCreationDeps) {
   return {
     addContact(input: Omit<Contact, "id">) {
       const id = `c-${crypto.randomUUID()}`;
-      const contact: Contact = { ...input, id };
+      const contact: Contact = { ...input, id, stage: resolveStage(input.stage) };
       const chatId = `chat-${id}`;
       setState((state) => ({
         contacts: [...state.contacts, contact],
@@ -63,7 +65,7 @@ export function createContactCreationActions({
       const newContacts: Contact[] = contacts.map((input) => ({
         ...input,
         id: `c-import-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        stage: input.stage || "new",
+        stage: resolveStage(input.stage),
         tags: input.tags || [],
       }));
       const newChats: ChatPreview[] = newContacts.map((contact) => ({

@@ -3,6 +3,7 @@ import {
   trimCampaigns,
 } from "@/lib/broadcastCampaign";
 import type { AppState, SliceContext } from "./types";
+import { resolveActiveSalesStage } from "@/lib/contactWorkflow";
 import { accountCreatedAtOf, persist } from "./persist";
 import {
   contactSendablePhone,
@@ -47,7 +48,7 @@ export function createBroadcastSlice({
           phone,
           accountId: input.accountId,
           tags: [],
-          stage: "new",
+          stage: resolveActiveSalesStage("new", state.settings.salesStageOrder),
           source: "broadcast",
         });
         contactIds.push(id);

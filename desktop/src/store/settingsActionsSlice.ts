@@ -9,9 +9,10 @@ import {
   exportContactsCsv as exportContactsCsvAction,
 } from "./exportDataActions";
 import type { AppState, SliceContext } from "./types";
-import { deferDuringRestore } from "./restoreGuard";
+import { deferDuringRestore, isDataRestoreActive } from "./restoreGuard";
 import { persist } from "./persist";
 import type { ScheduledMessage } from "@/types/crm";
+import { removeSalesStage, resolveSalesStageLabel } from "@/lib/contactWorkflow";
 
 let lastSecretSaveErrorAt = 0;
 
@@ -21,6 +22,7 @@ export function createSettingsActionsSlice({
 }: SliceContext): Pick<
   AppState,
   | "updateSettings"
+  | "deleteSalesStage"
   | "importPhonesToFolder"
   | "exportBackup"
   | "exportContactsCsv"
@@ -31,6 +33,26 @@ export function createSettingsActionsSlice({
   | "removeScheduledMessage"
 > {
   return {
+    deleteSalesStage: (stageId, targetId) => {
+      if (isDataRestoreActive()) return false;
+      let deleted = false;
+      let movedIds: string[] = [], previousLabel = "", targetLabel = "";
+      set(state => {
+        const next = removeSalesStage(state.contacts, state.settings.salesStageLabels, state.settings.salesStageOrder, stageId, targetId);
+        if (!next) return state;
+        movedIds = state.contacts.filter(contact => contact.stage === stageId).map(contact => contact.id);
+        previousLabel = resolveSalesStageLabel(stageId, state.settings.salesStageLabels);
+        targetLabel = resolveSalesStageLabel(targetId, state.settings.salesStageLabels);
+        deleted = true;
+        return { contacts: next.contacts, settings: { ...state.settings, salesStageLabels: next.salesStageLabels, salesStageOrder: next.salesStageOrder } };
+      });
+      if (deleted) {
+        for (const id of movedIds) get().logActivity(id, "stage", `阶段变更 · ${targetLabel}`, `${previousLabel} → ${targetLabel}`);
+        get().recomputeStats();
+        persist(get, true);
+      }
+      return deleted;
+    },
     updateSettings: (patch) => {
       if (deferDuringRestore(() => get().updateSettings(patch))) return;
       let changed = false;
@@ -94,11 +116,12 @@ export function createSettingsActionsSlice({
             }
           });
         }
-        // 文件夹属于用户明确维护的结构数据，不能等防抖计时器；
+        // 分组和销售阶段属于用户明确维护的结构数据，不能等防抖计时器；
         // 否则用户马上刷新时，内存里的新分组会被旧数据库覆盖回来。
-        const folderStructureChanged =
-          patch.chatFolders !== undefined || patch.chatFolderClones !== undefined;
-        persist(get, folderStructureChanged);
+        const structureChanged =
+          patch.chatFolders !== undefined || patch.chatFolderClones !== undefined ||
+          patch.salesStageOrder !== undefined || patch.salesStageLabels !== undefined;
+        persist(get, structureChanged);
       }
     },
 

@@ -19,7 +19,8 @@ const built = await build({
   stdin: { contents: `export {useChatFolderDrag} from './src/components/layout/useChatFolderDrag.ts';
     export {ChatSidebarRow} from './src/components/layout/ChatSidebarRow.tsx';
     export {FolderHeaderRow} from './src/components/layout/FolderHeaderRow.tsx';
-    export {SidebarSpecialItem} from './src/components/layout/SidebarSpecialItem.tsx';`, resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
+    export {SidebarSpecialItem} from './src/components/layout/SidebarSpecialItem.tsx';
+    export {buildSidebarItems} from './src/components/layout/buildSidebarItems.ts';`, resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
   bundle: true, write: false, format: "esm", platform: "browser", jsx: "automatic",
   alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) },
   plugins: [{ name: "drag-boundaries", setup(b) {
@@ -27,7 +28,7 @@ const built = await build({
     b.onLoad({filter:/.*/,namespace:"mock"}, args=>({contents:mocks[args.path]}));
   }}],
 });
-const {useChatFolderDrag,ChatSidebarRow,FolderHeaderRow,SidebarSpecialItem} = await import("data:text/javascript;base64,"+Buffer.from(built.outputFiles[0].text).toString("base64"));
+const {useChatFolderDrag,ChatSidebarRow,FolderHeaderRow,SidebarSpecialItem,buildSidebarItems} = await import("data:text/javascript;base64,"+Buffer.from(built.outputFiles[0].text).toString("base64"));
 const nodes = tree => Array.isArray(tree) ? tree.flatMap(nodes) : tree?.props ? [tree,...nodes(tree.props.children)] : [];
 
 function fixture() {
@@ -147,4 +148,64 @@ test("group headers and empty hints expose full drop zones; merged rows are drag
     ChatSidebarRow(props).props.onPointerDown(ui.event());assert.equal(calls.length,1);assert.deepEqual(calls[0].slice(1),["one",["one","two"]]);
     const copy=ChatSidebarRow({...props,cloneId:"copy"});copy.props.onPointerDown(ui.event());assert.equal(calls.length,1);assert.match(copy.props.className,/cursor-default/);
   } finally {ui.close();}
+});
+
+const sidebarModel=(overrides={})=>buildSidebarItems({listTab:"chats",archivedCount:0,showArchived:false,isAllAccountsView:false,
+  filteredChats:[{id:"one",contactId:"c-one",lastMessage:"Hello",unread:3},{id:"two",contactId:"c-two",lastMessage:"Hi",unread:2}],
+  chatFolders:[{id:"parent",name:"Parent",chatIds:[],collapsed:true},{id:"child",parentId:"parent",name:"Child",chatIds:["one"],collapsed:true}],
+  chatFolderClones:[],contactById:new Map(),ungroupedCollapsed:true,query:"",folderDisplayName:f=>f.name,selectedChatId:"one",...overrides});
+
+test("a collapsed parent retains the selected descendant and unread total without expanding or changing membership",()=>{
+  const folders=[{id:"parent",name:"Parent",chatIds:[],collapsed:true},{id:"child",parentId:"parent",name:"Child",chatIds:["one"],collapsed:true}];
+  const original=structuredClone(folders),items=sidebarModel({chatFolders:folders});
+  const parent=items.find(i=>i.folderId==="parent");
+  assert.equal(parent.containsSelected,true);assert.equal(parent.unread,3);assert.equal(parent.total,1);
+  assert.equal(items.some(i=>i.kind==="chat"),false);assert.equal(items.some(i=>i.folderId==="child"),false);assert.deepEqual(folders,original);
+  const expanded=sidebarModel({chatFolders:folders.map(f=>f.id==="parent"?{...f,collapsed:false}:f)});
+  assert.equal(expanded.find(i=>i.folderId==="child").containsSelected,true);
+  const other=sidebarModel({selectedChatId:"two"});assert.equal(other.find(i=>i.folderId==="parent").containsSelected,false);
+  assert.equal(other.find(i=>i.kind==="ungrouped_header").containsSelected,true);
+});
+
+test("folder selection follows merged account members and explicit copies, and ignores filtered-out or removed threads",()=>{
+  const contacts=new Map([["c-one",{id:"c-one",phone:"+12025550100"}],["c-two",{id:"c-two",phone:"+12025550100"}]]);
+  const args={isAllAccountsView:true,contactById:contacts,selectedChatId:"two",chatFolders:[{id:"a",name:"A",chatIds:["one"],collapsed:true},{id:"b",name:"B",chatIds:[],collapsed:true}]};
+  let items=sidebarModel(args);assert.equal(items.find(i=>i.folderId==="a").containsSelected,true);assert.equal(items.find(i=>i.folderId==="a").unread,5);
+  assert.equal(items.find(i=>i.folderId==="b").containsSelected,false);assert.equal(items.find(i=>i.kind==="ungrouped_header").containsSelected,false);
+  items=sidebarModel({...args,chatFolderClones:[{id:"copy",folderId:"b",sourceChatId:"two"}]});assert.equal(items.find(i=>i.folderId==="b").containsSelected,true);
+  items=sidebarModel({...args,filteredChats:[{id:"one",contactId:"c-one",lastMessage:"Hello",unread:3}]});
+  assert.equal(items.filter(i=>i.kind==="folder_header").some(i=>i.containsSelected),false);
+  assert.equal(sidebarModel({selectedChatId:null}).some(i=>i.containsSelected),false);
+  assert.equal(sidebarModel({showArchived:true}).some(i=>i.kind==="folder_header"||i.kind==="ungrouped_header"),false);
+});
+
+test("collapsed folder and ungrouped controls describe current location, exact unread totals and expansion while retaining callbacks",()=>{
+  const ui=fixture();try {
+    let toggles=0;
+    const props={folderId:"a",name:"A",collapsed:true,depth:0,total:4,unread:123,containsSelected:true,onToggle:()=>toggles++};
+    const tree=FolderHeaderRow(props),control=nodes(tree).find(n=>n.props["aria-expanded"]===false);
+    assert.ok(control);control.props.onClick();assert.equal(toggles,1);
+    assert.ok(nodes(tree).some(n=>n.props.title==="当前打开的会话在此分组中"));
+    assert.ok(nodes(tree).some(n=>n.props["aria-label"]==="123 条未读消息"&&n.props.children==="99+"));
+    assert.ok(nodes(tree).some(n=>n.props["aria-label"]==="4 个会话"));
+    const item={kind:"ungrouped_header",total:4,unread:123,collapsed:true,containsSelected:true};
+    const ungrouped=SidebarSpecialItem({item,onToggleUngrouped:()=>toggles++});
+    nodes(ungrouped).find(n=>n.props["aria-expanded"]===false).props.onClick();assert.equal(toggles,2);
+    assert.ok(nodes(ungrouped).some(n=>n.props.title==="当前打开的会话在此分组中"));
+    assert.ok(nodes(ungrouped).some(n=>n.props["aria-label"]==="123 条未读消息"&&n.props.children==="99+"));
+    const cleared=SidebarSpecialItem({item:{...item,unread:0,containsSelected:false}});
+    assert.equal(nodes(cleared).some(n=>n.props.title==="当前打开的会话在此分组中"||n.props["aria-label"]==="0 条未读消息"),false);
+  }finally{ui.close();}
+});
+
+test("selected conversation rows expose current state and retain open/drag actions; unread presentation clears with read state",()=>{
+  const ui=fixture();try {
+    const opened=[],props={chat:{id:"one",contactId:"person",contactName:"Person",unread:123},preview:"Hello",active:true,isBaileys:false,
+      lastMessageAt:"2026-10-23T10:00:00Z",onOpen:(...args)=>opened.push(args)};
+    const tree=ChatSidebarRow(props),row=nodes(tree).find(n=>n.props["aria-current"]==="true");assert.ok(row);
+    row.props.onClick();assert.deepEqual(opened,[["person","one"]]);
+    assert.ok(nodes(tree).some(n=>n.props["aria-label"]==="123 条未读消息"&&n.props.children==="99+"));
+    const read=ChatSidebarRow({...props,active:false,chat:{...props.chat,unread:0}});
+    assert.equal(nodes(read).some(n=>n.props["aria-current"]==="true"||n.props["aria-label"]==="0 条未读消息"),false);
+  }finally{ui.close();}
 });

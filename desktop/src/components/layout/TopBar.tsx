@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/primitives";
 import { DonateModal } from "@/components/DonateModal";
 import { WapPlusMark } from "@/components/brand/WapPlusMark";
 import { AccountSwitcherMenu } from "./AccountSwitcherMenu";
+import { MessageInbox } from "./MessageInbox";
 import { computeAllAccountsHealth } from "@/lib/accountHealth";
 import { syncLog } from "@/lib/syncDebug";
 import { useI18n, type TranslationKey } from "@/i18n";
@@ -227,12 +228,6 @@ export function TopBar() {
               {t(item.labelKey)}
               {item.id === "monitor" && monitorBadge && <span className={monitorBadge.tone === "bad" ? "text-rose-400" : "text-amber-400"}>{monitorBadge.n > 9 ? "9+" : monitorBadge.n}</span>}
             </button>)}
-            <div className="my-1 border-t border-zinc-800" />
-            <button type="button" title={t("nav.supportTitle")}
-              onClick={() => { setMoreOpen(false); setDonateOpen(true); }}
-              className="flex min-h-9 w-full items-center gap-2 rounded px-3 py-2 text-left text-[13px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100">
-              <Coffee className="h-4 w-4" />{t("nav.support")}
-            </button>
           </div>}
         </div>
       </nav>
@@ -243,6 +238,7 @@ export function TopBar() {
             <AccountSwitcherMenu variant="compact" />
           </div>
         )}
+        <MessageInbox onOpen={() => setMoreOpen(false)} />
         <button
           type="button"
           onClick={() => setCommandOpen(true)}
@@ -254,6 +250,16 @@ export function TopBar() {
           <kbd className="hidden rounded border border-zinc-700 bg-zinc-950 px-1 font-mono text-2xs text-zinc-600 lg:inline">
             Ctrl+K
           </kbd>
+        </button>
+        <button
+          type="button"
+          title={t("nav.supportTitle")}
+          aria-label={t("nav.supportTitle")}
+          onClick={() => { setMoreOpen(false); setDonateOpen(true); }}
+          className="ui-btn-secondary !min-h-8 gap-1.5 px-2 text-zinc-300 hover:text-brand"
+        >
+          <Coffee className="h-4 w-4 text-brand" />
+          <span className="hidden text-[12px] xl:inline">{t("nav.support")}</span>
         </button>
         <Button
           variant="ghost"

@@ -46,6 +46,7 @@ assert.equal(restored[0]?.accountId, "wa-1");
 let state = { contacts: [], chats: [], phones: [{ id: "wa-1" }] };
 const contactPersistModes = [];
 const actions = createContactCreationActions({
+  resolveStage: stage => stage || "new",
   setState: (update) => {
     state = { ...state, ...update(state) };
   },

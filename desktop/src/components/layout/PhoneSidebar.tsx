@@ -1506,6 +1506,7 @@ export function PhoneSidebar() {
                       depth={it.depth}
                       total={it.total}
                       unread={it.unread}
+                      containsSelected={it.containsSelected}
                       dropActive={dropTarget === folder.id}
                       folderDropActive={folderDropTarget === folder.id}
                       dragging={dragFolderId === folder.id}

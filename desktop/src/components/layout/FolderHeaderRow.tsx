@@ -24,6 +24,7 @@ type FolderHeaderRowProps = {
   depth: number;
   total: number;
   unread: number;
+  containsSelected?: boolean;
   dropActive: boolean;
   folderDropActive: boolean;
   dragging: boolean;
@@ -46,6 +47,7 @@ export function FolderHeaderRow({
   depth,
   total,
   unread,
+  containsSelected = false,
   dropActive,
   folderDropActive,
   dragging,
@@ -100,7 +102,9 @@ export function FolderHeaderRow({
         data-chat-folder-drop={folderId}
         data-folder-reorder-target={folderId}
         className={cn(
-          "group/folder flex items-center gap-0.5 rounded-md px-1 py-1.5 transition-colors hover:bg-zinc-900/80",
+          "group/folder flex items-center gap-0.5 rounded-md px-1 py-1.5 transition-colors",
+          unread > 0 ? "bg-brand/5 hover:bg-brand/10" : "hover:bg-zinc-900/80",
+          containsSelected && "bg-brand/10 ring-1 ring-inset ring-brand/30",
           dropActive && "bg-brand/10 ring-1 ring-brand/40",
           folderDropActive && "bg-brand/15 ring-1 ring-brand/60"
         )}
@@ -113,25 +117,27 @@ export function FolderHeaderRow({
           type="button"
           className="flex min-w-0 flex-1 items-center gap-1 text-left"
           onClick={onToggle}
+          aria-expanded={!collapsed}
         >
           {collapsed ? (
             <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
           ) : (
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
           )}
-          <Folder className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+          <Folder className={cn("h-3.5 w-3.5 shrink-0", unread > 0 || containsSelected ? "text-brand" : "text-zinc-500")} />
           <span
-            className="truncate text-[12px] font-medium text-zinc-300"
+            className={cn("min-w-0 flex-1 truncate text-[13px]", unread > 0 || containsSelected ? "font-semibold text-zinc-100" : "font-medium text-zinc-400")}
             title={name}
           >
             {name}
           </span>
-          <span className="shrink-0 text-[11px] tabular-nums text-zinc-500 font-normal">
+          {containsSelected && <span className={cn("shrink-0 text-xs font-medium text-brand", !collapsed && "sr-only")} title={t("folder.currentChat")}>{t("folder.current")}</span>}
+          <span className="shrink-0 text-xs tabular-nums text-zinc-500 font-normal" title={t("folder.chatCount", { count: total })} aria-label={t("folder.chatCount", { count: total })}>
             {total}
           </span>
           {unread > 0 && (
-            <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-700 text-white dark:bg-emerald-600 dark:text-white px-1 text-[10px] font-bold tabular-nums shadow-2xs">
-              {unread}
+            <span className="inline-flex min-h-5 shrink-0 items-center justify-center rounded-full bg-brand/15 px-1.5 text-xs font-semibold tabular-nums text-brand" title={t("inbox.unread", { count: unread })} aria-label={t("inbox.unread", { count: unread })}>
+              {unread > 99 ? "99+" : unread}
             </span>
           )}
         </button>

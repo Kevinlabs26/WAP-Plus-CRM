@@ -8,8 +8,7 @@ import {
 } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import {
-  ChevronLeft,
-  ChevronRight,
+  Settings2,
   CheckSquare,
   Plus,
   Search,
@@ -22,7 +21,6 @@ import {
   X,
   Download,
   FilePlus2,
-  Trash2,
 } from "lucide-react";
 import { useAppStore } from "@/store/appStore";
 import type { Contact, SalesStage } from "@/types/crm";
@@ -43,9 +41,9 @@ import {
 import { Avatar } from "@/components/ui/Avatar";
 import { AddContactForm } from "@/components/crm/AddContactForm";
 import { ContactEditor } from "@/components/crm/ContactEditor";
+import { SalesStageManager } from "@/components/crm/SalesStageManager";
 import { ContactImportModal } from "@/components/settings/ContactImportModal";
 import {
-  SALES_STAGES as DEFAULT_STAGES,
   salesStagesWithLabels,
 } from "@/lib/contactWorkflow";
 import {
@@ -96,7 +94,6 @@ export function CrmView() {
   const selectedContactId = useAppStore((s) => s.selectedContactId);
   const setSelectedContact = useAppStore((s) => s.setSelectedContact);
   const updateContact = useAppStore((s) => s.updateContact);
-  const updateSettings = useAppStore((s) => s.updateSettings);
   const addContact = useAppStore((s) => s.addContact);
   const openContactWorkspace = useAppStore((s) => s.openContactWorkspace);
   const setActiveNav = useAppStore((s) => s.setActiveNav);
@@ -107,7 +104,6 @@ export function CrmView() {
   const scheduleFollowUps = useAppStore((s) => s.scheduleFollowUps);
   const pushToast = useAppStore((s) => s.pushToast);
   const batchUpdateContacts = useAppStore((s) => s.batchUpdateContacts);
-  const requestConfirm = useAppStore((s) => s.requestConfirm);
 
   const [q, setQ] = useState("");
   const deferredQ = useDeferredValue(q);
@@ -134,14 +130,11 @@ export function CrmView() {
   });
   const [showAdd, setShowAdd] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
-  const [addingStage, setAddingStage] = useState(false);
-  const [newStageName, setNewStageName] = useState("");
+  const [stageManager, setStageManager] = useState<{ focusId?: string } | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   /** 聊天右上角「客户资料」跳转进来的一次性定位目标 */
   const [crmFocusId, setCrmFocusId] = useState<string | null>(null);
   const listVirtuosoRef = useRef<VirtuosoHandle | null>(null);
-  const [editingStageId, setEditingStageId] = useState<SalesStage | null>(null);
-  const [stageNameDraft, setStageNameDraft] = useState("");
   const [dragOverStage, setDragOverStage] = useState<SalesStage | null>(null);
   /** 多选批量操作模式 */
   const [selectMode, setSelectMode] = useState(false);
@@ -411,81 +404,6 @@ export function CrmView() {
       /* ignore */
     }
   };
-
-  const saveStageLabel = (stageId: SalesStage, raw: string) => {
-    const label = raw.trim().slice(0, 20);
-    const next = { ...(salesStageLabels || {}) };
-    const def =
-      DEFAULT_STAGES.find((s) => s.id === stageId)?.label || stageId;
-    if (!label || label === def) delete next[stageId];
-    else next[stageId] = label;
-    updateSettings({ salesStageLabels: next });
-    setEditingStageId(null);
-    setStageNameDraft("");
-    pushToast(
-      label && label !== def
-        ? t("crm.stageRenamed", { label })
-        : t("crm.stageDefaultRestored", { label: def }),
-      "success"
-    );
-  };
-
-  const addStage = () => {
-    const label = newStageName.trim().slice(0, 20);
-    if (!label) return;
-    const id = `stage_${Date.now().toString(36)}`;
-    updateSettings({
-      salesStageOrder: [...stages.map((stage) => stage.id), id],
-      salesStageLabels: { ...salesStageLabels, [id]: label },
-    });
-    setAddingStage(false);
-    setNewStageName("");
-    pushToast(t("crm.stageAdded", { label }), "success");
-  };
-
-  const moveStage = (stageId: SalesStage, offset: -1 | 1) => {
-    const order = stages.map((stage) => stage.id);
-    const index = order.indexOf(stageId);
-    const nextIndex = index + offset;
-    if (index < 0 || nextIndex < 0 || nextIndex >= order.length) return;
-    [order[index], order[nextIndex]] = [order[nextIndex], order[index]];
-    updateSettings({ salesStageOrder: order });
-  };
-
-  const removeStage = async (stageId: SalesStage) => {
-    if (DEFAULT_STAGES.some((stage) => stage.id === stageId)) {
-      pushToast(t("crm.systemStageNoDelete"), "info");
-      return;
-    }
-    const target = stages.find((stage) => stage.id !== stageId);
-    if (!target) return;
-    const ids = peopleContacts
-      .filter((person) => person.stage === stageId)
-      .map((person) => person.id);
-    const ok = await requestConfirm({
-      title: t("crm.deleteStageTitle", { stage: resolveStageLabel(stageId) }),
-      description: ids.length
-        ? t("crm.deleteStageWithContacts", { count: ids.length, stage: target.label })
-        : t("crm.deleteStageEmpty"),
-      confirmLabel: t("crm.deleteStage"),
-      cancelLabel: t("common.cancel"),
-      tone: "danger",
-    });
-    if (!ok) return;
-    if (ids.length) batchUpdateContacts(ids, { stage: target.id });
-    const labels = { ...salesStageLabels };
-    delete labels[stageId];
-    updateSettings({
-      salesStageOrder: stages
-        .map((stage) => stage.id)
-        .filter((id) => id !== stageId),
-      salesStageLabels: labels,
-    });
-    pushToast(t("crm.stageDeleted"), "success");
-  };
-
-  const resolveStageLabel = (stageId: SalesStage) =>
-    stages.find((stage) => stage.id === stageId)?.label || stageId;
 
   const moveContactToStage = (contactId: string, stageId: SalesStage) => {
     const c = peopleContacts.find((x) => x.id === contactId);
@@ -783,13 +701,10 @@ export function CrmView() {
           <Button
             variant="secondary"
             className="!min-h-8 gap-1 !px-2.5 text-2xs"
-            onClick={() => {
-              changeMode("board");
-              setAddingStage(true);
-            }}
+            onClick={() => setStageManager({})}
           >
-            <Plus className="h-3.5 w-3.5" />
-            {t("crm.newStage")}
+            <Settings2 className="h-3.5 w-3.5" />
+            {t("crm.manageStages")}
           </Button>
         </div>
       </div>
@@ -903,7 +818,7 @@ export function CrmView() {
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* 主区：看板或列表 */}
         <div className="min-w-0 flex-1 overflow-hidden">
-          {peopleContacts.length === 0 && !addingStage ? (
+          {peopleContacts.length === 0 ? (
             <div className="flex h-full items-center justify-center">
               <EmptyState title={t("crm.emptyTitle")} description={t("crm.emptyDescription")}
                 action={!showAdd ? <Button variant="primary" className="mt-3" onClick={() => setShowAdd(true)}>
@@ -926,73 +841,13 @@ export function CrmView() {
                   )}
                 >
                   <div className="group/stage flex items-center justify-between gap-1 border-b border-zinc-800/80 px-2.5 py-2">
-                    {editingStageId === stage.id ? (
-                      <input
-                        autoFocus
-                        value={stageNameDraft}
-                        maxLength={20}
-                        onChange={(e) => setStageNameDraft(e.target.value)}
-                        onBlur={() => saveStageLabel(stage.id, stageNameDraft)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            saveStageLabel(stage.id, stageNameDraft);
-                          }
-                          if (e.key === "Escape") {
-                            e.preventDefault();
-                            setEditingStageId(null);
-                            setStageNameDraft("");
-                          }
-                        }}
-                        className="ui-control h-7 min-w-0 flex-1 px-1.5 text-[12px] font-semibold"
-                        title={t("crm.saveHint")}
-                      />
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingStageId(stage.id);
-                          setStageNameDraft(stage.label);
-                        }}
-                        className="min-w-0 flex-1 truncate rounded px-0.5 text-left text-[12px] font-semibold text-zinc-200 hover:bg-zinc-800/80 hover:text-white"
-                        title={t("crm.editStageHint")}
-                      >
-                        {stage.label}
-                      </button>
-                    )}
-                    <Badge className="tabular-nums">
-                      {byStage[stage.id].length}
-                    </Badge>
-                    <div className="hidden shrink-0 items-center group-hover/stage:flex">
-                      <button
-                        type="button"
-                        disabled={stages[0]?.id === stage.id}
-                        className="rounded p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-20"
-                        title={t("crm.moveLeft")}
-                        onClick={() => moveStage(stage.id, -1)}
-                      >
-                        <ChevronLeft className="h-3 w-3" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={stages.at(-1)?.id === stage.id}
-                        className="rounded p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-20"
-                        title={t("crm.moveRight")}
-                        onClick={() => moveStage(stage.id, 1)}
-                      >
-                        <ChevronRight className="h-3 w-3" />
-                      </button>
-                      {!DEFAULT_STAGES.some((item) => item.id === stage.id) && (
-                        <button
-                          type="button"
-                          className="rounded p-0.5 text-zinc-500 hover:bg-rose-500/15 hover:text-rose-300"
-                          title={t("crm.deleteStage")}
-                          onClick={() => void removeStage(stage.id)}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </button>
-                      )}
-                    </div>
+                    <button type="button" onClick={() => setStageManager({ focusId: stage.id })}
+                      className="flex min-w-0 flex-1 items-center gap-1 rounded px-0.5 text-left text-[13px] font-semibold text-zinc-200 hover:bg-zinc-800/80"
+                      title={t("crm.manageStages")}>
+                      <span className="truncate">{stage.label}</span>
+                      <Settings2 className="h-3 w-3 shrink-0 text-zinc-500" />
+                    </button>
+                    <Badge className="tabular-nums">{byStage[stage.id].length}</Badge>
                   </div>
                   {byStage[stage.id].length ? (
                     <Virtuoso
@@ -1032,53 +887,6 @@ export function CrmView() {
                   )}
                 </div>
               ))}
-              {addingStage ? (
-                <div className="w-56 shrink-0 self-start rounded-lg border border-brand/30 bg-brand/5 p-2">
-                  <Input
-                    autoFocus
-                    value={newStageName}
-                    maxLength={20}
-                    placeholder={t("crm.stageName")}
-                    onChange={(event) => setNewStageName(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") addStage();
-                      if (event.key === "Escape") {
-                        setAddingStage(false);
-                        setNewStageName("");
-                      }
-                    }}
-                  />
-                  <div className="mt-2 flex justify-end gap-1">
-                    <Button
-                      variant="ghost"
-                      className="!min-h-7 !px-2 text-2xs"
-                      onClick={() => {
-                        setAddingStage(false);
-                        setNewStageName("");
-                      }}
-                    >
-                      {t("crm.cancel")}
-                    </Button>
-                    <Button
-                      variant="primary"
-                      className="!min-h-7 !px-2 text-2xs"
-                      disabled={!newStageName.trim()}
-                      onClick={addStage}
-                    >
-                      {t("crm.add")}
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  className="flex h-20 w-40 shrink-0 items-center justify-center gap-1 rounded-lg border border-dashed border-zinc-800 text-[12px] text-zinc-500 hover:border-zinc-600 hover:text-zinc-300"
-                  onClick={() => setAddingStage(true)}
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  {t("crm.addStage")}
-                </button>
-              )}
             </div>
           ) : (
             <div className="flex h-full">
@@ -1214,6 +1022,7 @@ export function CrmView() {
         )}
       </div>
 
+      {stageManager && <SalesStageManager focusStageId={stageManager.focusId} onClose={() => setStageManager(null)} />}
       <ContactImportModal open={importOpen} onClose={() => setImportOpen(false)} />
     </div>
   );

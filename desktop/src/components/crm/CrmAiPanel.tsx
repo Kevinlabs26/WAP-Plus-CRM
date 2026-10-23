@@ -19,15 +19,16 @@ import {
   baileysSetChatLabel,
 } from "@/lib/baileys";
 import { generateSuggestions, hasRealAiKey, type SuggestResult } from "@/lib/aiSuggest";
-import type { Message, SalesStage, WhatsAppLabel } from "@/types/crm";
-import { Avatar } from "@/components/ui/Avatar";
+import type { Message, WhatsAppLabel } from "@/types/crm";
+import { ContactAvatar } from "./ContactAvatar";
 import { Button, SectionLabel } from "@/components/ui/primitives";
 import { ContactTagsNotesEditor } from "./ContactTagsNotesEditor";
 import { PersonMultiAccountPanel } from "./PersonMultiAccountPanel";
 import { CommonGroupsPanel } from "./CommonGroupsPanel";
 import { CustomerNoteEditor } from "./CustomerNoteEditor";
 import { WhatsAppLabelMenu } from "@/components/chat/WhatsAppLabelMenu";
-import { SALES_STAGES, workflowForStage } from "@/lib/contactWorkflow";
+import { workflowForStage } from "@/lib/contactWorkflow";
+import { SalesStageField } from "./SalesStageField";
 import { filterMessagesForAccount } from "@/lib/personThreads";
 import { isWaAccountConnected } from "@/lib/accountConnection";
 import {
@@ -542,18 +543,7 @@ export function CrmAiPanel() {
         ) : (
           <div className="space-y-3">
             <div className="flex items-start gap-2.5">
-              <Avatar
-                name={displayContactLabel(
-                  contact.name,
-                  contact.phone,
-                  contact.channelAddress,
-                  lastIn?.body,
-                  { isGroup: !!contact.isGroup }
-                )}
-                seed={contact.phone || contact.id}
-                src={contact.avatarUrl}
-                size="lg"
-              />
+              <ContactAvatar key={`${contact.id}:${aiAccountId}`} contact={contact} accountId={aiAccountId} />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[15px] font-semibold">
                   {displayContactLabel(
@@ -587,16 +577,7 @@ export function CrmAiPanel() {
               </div>
             )}
 
-            <label className="block text-2xs text-zinc-500">
-              {t("crmPanel.salesStage")}
-              <select
-                value={contact.stage}
-                onChange={(event) => updateContact(contact.id, { stage: event.target.value as SalesStage })}
-                className="ui-control mt-1 h-8 w-full px-2 text-[12px]"
-              >
-                {SALES_STAGES.map((stage) => <option key={stage.id} value={stage.id}>{stage.label}</option>)}
-              </select>
-            </label>
+            <SalesStageField value={contact.stage} onChange={stage => updateContact(contact.id, { stage })} />
 
             {activeOrder && contact.stage !== "won" && contact.stage !== "after_sales" && (
               <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-2.5">

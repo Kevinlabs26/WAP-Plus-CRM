@@ -57,6 +57,7 @@ export function useSidebarData({
 }: UseSidebarDataArgs) {
   const contacts = useAppStore((s) => s.contacts);
   const chats = useAppStore((s) => s.chats);
+  const selectedChatId = useAppStore((s) => s.selectedChatId);
   const chatListFilter = useAppStore((s) => s.chatListFilter);
   const setChatListFilter = useAppStore((s) => s.setChatListFilter);
   const userName = useAppStore((s) => s.baileysUi.userName);
@@ -385,9 +386,11 @@ export function useSidebarData({
         ungroupedCollapsed,
         query,
         folderDisplayName,
+        selectedChatId,
       }),
     [
       listTab,
+      selectedChatId,
       archivedCount,
       showArchived,
       isAllAccountsView,

@@ -16,6 +16,7 @@ const mocks = {
   "@/components/brand/WapPlusMark": "export const WapPlusMark=()=>null;",
   "@/components/DonateModal": "export const DonateModal=()=>null;",
   "./AccountSwitcherMenu": "export const AccountSwitcherMenu=()=>null;",
+  "./MessageInbox": "export const MessageInbox=()=>null;",
   "@/components/crm/FollowUpWorkRow": "export const FollowUpWorkRow=()=>null; export const buildContactWorkCard=()=>({});",
   "./FollowUpsView": "export const FollowUpsView=()=>null;",
   "./MultiWindowWorkspace": "export const MultiWindowWorkspace=()=>null;",
@@ -114,9 +115,14 @@ test("broadcast has a direct navigation entry and supporting pages remain availa
   const ui = fixture();
   try {
     let tree = ui.render(TopBar); assert.ok(text(tree).includes("Ctrl+K"));
+    const support = button(tree, "支持作者"); assert.ok(support, "Support must be available before opening More");
+    support.props.onClick(); tree = ui.render(TopBar);
+    const donation = nodes(tree).find(node => typeof node.props.onClose === "function"); assert.ok(donation);
+    donation.props.onClose(); tree = ui.render(TopBar);
     button(tree, "群发").props.onClick(); assert.deepEqual(ui.calls, [["nav", "broadcast"]]);
     nodes(tree).find(node => node.props["aria-controls"] === "topbar-more-nav").props.onClick(); tree = ui.render(TopBar);
-    for (const label of ["星标", "统计", "监测", "设备", "支持作者"]) assert.ok(button(tree, label), label);
+    for (const label of ["星标", "统计", "监测", "设备"]) assert.ok(button(tree, label), label);
+    assert.equal(button(nodes(tree).find(node => node.props.id === "topbar-more-nav"), "支持作者"), undefined);
     assert.equal(nodes(tree).filter(node => node.type === "button" && text(node) === "群发").length, 1);
     button(tree, "监测").props.onClick(); assert.deepEqual(ui.calls.at(-1), ["nav", "monitor"]);
   } finally { ui.close(); }

@@ -1,4 +1,4 @@
-import type { SalesStage } from "@/types/crm";
+import type { Contact, SalesStage } from "@/types/crm";
 
 export const SALES_STAGES: { id: SalesStage; label: string }[] = [
   { id: "new", label: "新客户" },
@@ -17,8 +17,8 @@ export function resolveSalesStageLabel(
   stage: SalesStage,
   overrides?: Partial<Record<SalesStage, string>> | null
 ): string {
-  const custom = (overrides?.[stage] || "").trim();
-  return custom || SALES_STAGE_LABEL[stage] || stage;
+  const custom = overrides?.[stage];
+  return (typeof custom === "string" && custom.trim()) || SALES_STAGES.find(item => item.id === stage)?.label || stage;
 }
 
 export function salesStagesWithLabels(
@@ -27,6 +27,31 @@ export function salesStagesWithLabels(
 ): { id: SalesStage; label: string }[] {
   const ids = order?.length ? [...new Set(order)] : SALES_STAGES.map((s) => s.id);
   return ids.map((id) => ({ id, label: resolveSalesStageLabel(id, overrides) }));
+}
+
+export function resolveActiveSalesStage(stage: SalesStage | undefined, order?: SalesStage[] | null): SalesStage {
+  const ids = order?.length ? order : SALES_STAGES.map(item => item.id);
+  const requested = stage || "new";
+  return ids.includes(requested) ? requested : ids[0]!;
+}
+
+/** 同时移走全部账号的客户和删除阶段配置，避免留下看板不可见的客户。 */
+export function removeSalesStage(
+  contacts: Contact[],
+  labels: Partial<Record<SalesStage, string>>,
+  order: SalesStage[],
+  stageId: SalesStage,
+  targetId: SalesStage
+) {
+  const ids = salesStagesWithLabels(labels, order).map(stage => stage.id);
+  if (ids.length < 2 || stageId === targetId || !ids.includes(stageId) || !ids.includes(targetId)) return null;
+  const nextLabels = { ...labels };
+  delete nextLabels[stageId];
+  return {
+    contacts: contacts.map(contact => contact.stage === stageId ? { ...contact, stage: targetId } : contact),
+    salesStageLabels: nextLabels,
+    salesStageOrder: ids.filter(id => id !== stageId),
+  };
 }
 
 export function workflowForStage(stage: SalesStage) {

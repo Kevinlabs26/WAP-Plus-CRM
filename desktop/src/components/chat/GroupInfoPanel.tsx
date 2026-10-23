@@ -24,6 +24,7 @@ import { useAppStore } from "@/store/appStore";
 import type { Contact, GroupDetails, GroupMember } from "@/types/crm";
 import { Avatar } from "@/components/ui/Avatar";
 import { useI18n } from "@/i18n";
+import { resolveActiveSalesStage } from "@/lib/contactWorkflow";
 
 type Props = {
   open: boolean;
@@ -90,7 +91,7 @@ export const GroupInfoPanel = memo(function GroupInfoPanel({
             (c.accountId || c.phoneId || owner) === owner
         );
         return {
-          contacts: hasContact ? s.contacts : [...s.contacts, contact],
+          contacts: hasContact ? s.contacts : [...s.contacts, { ...contact, stage: resolveActiveSalesStage(contact.stage, s.settings.salesStageOrder) }],
           chats: hasChat
             ? s.chats
             : [

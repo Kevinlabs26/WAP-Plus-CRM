@@ -112,6 +112,7 @@ import { useOverlayContactCard } from "./useOverlayContactCard";
 import { SaveContactDialog } from "./SaveContactDialog";
 import { ContactCardPicker } from "./ContactCardPicker";
 import { useI18n } from "@/i18n";
+import { resolveActiveSalesStage } from "@/lib/contactWorkflow";
 
 const EMPTY_MESSAGES: Message[] = [];
 /** 非群聊时的发送者映射（稳定引用） */
@@ -794,7 +795,7 @@ export function ChatPanel() {
               (c.accountId || c.phoneId || owner) === owner
           );
           return {
-            contacts: hasContact ? s.contacts : [...s.contacts, dm],
+            contacts: hasContact ? s.contacts : [...s.contacts, { ...dm, stage: resolveActiveSalesStage(dm.stage, s.settings.salesStageOrder) }],
             chats: hasChat
               ? s.chats
               : [
