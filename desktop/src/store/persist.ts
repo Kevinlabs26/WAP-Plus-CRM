@@ -160,6 +160,7 @@ export function buildPersistSlice(
     zhipuKey: "",
     openrouterKey: "",
     customAiKey: "",
+    transcriptionApiKey: "",
     bridgeToken: "",
   };
   return {

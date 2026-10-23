@@ -78,6 +78,7 @@ export function createBootSlice({
           legacySecrets?.zhipuKey ||
           legacySecrets?.openrouterKey ||
           legacySecrets?.customAiKey ||
+          legacySecrets?.transcriptionApiKey ||
           legacySecrets?.bridgeToken)
       ) {
         const migrated = await saveSecureSecrets({
@@ -89,6 +90,7 @@ export function createBootSlice({
           zhipuKey: legacySecrets.zhipuKey || "",
           openrouterKey: legacySecrets.openrouterKey || "",
           customAiKey: legacySecrets.customAiKey || "",
+          transcriptionApiKey: legacySecrets.transcriptionApiKey || "",
           bridgeToken: legacySecrets.bridgeToken || "",
         });
         if (!migrated && getStorageEngine() === "sqlite") throw new Error("旧密钥安全迁移失败，请重试");
@@ -102,12 +104,13 @@ export function createBootSlice({
             zhipuKey: legacySecrets.zhipuKey || "",
             openrouterKey: legacySecrets.openrouterKey || "",
             customAiKey: legacySecrets.customAiKey || "",
+            transcriptionApiKey: legacySecrets.transcriptionApiKey || "",
             bridgeToken: legacySecrets.bridgeToken || "",
           };
         }
       }
       if (getStorageEngine() === "sqlite" && saved?.settings && secureSecrets &&
-          ["openaiKey", "groqKey", "geminiKey", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "bridgeToken"].some(key => (saved.settings as unknown as Record<string, unknown>)[key])) {
+          ["openaiKey", "groqKey", "geminiKey", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "transcriptionApiKey", "bridgeToken"].some(key => (saved.settings as unknown as Record<string, unknown>)[key])) {
         await saveAppState({ phones: [], contacts: [], chats: [], messages: [], followUps: [],
           settings: saved.settings, broadcastCampaigns: saved.broadcastCampaigns, dirty: { settings: true } }, { force: true });
       }
@@ -176,10 +179,16 @@ export function createBootSlice({
       };
       const savedContacts = legacyDemo ? [] : saved?.contacts ?? [];
       const removedDefaultSources = savedContacts.some((c) => c.source === "WhatsApp");
+      const migratedTranscription = Boolean(saved?.settings && saved.settings.transcriptionProvider === undefined);
       const settingsNorm = normalizeLoadedSettings({
         ...(saved?.settings as Partial<AppSettings> | undefined),
         ...(secureSecrets || {}),
       }) as AppSettings;
+      if (getStorageEngine() === "sqlite" && secureSecrets &&
+          migratedTranscription && settingsNorm.transcriptionApiKey) {
+        const migrated = await saveSecureSecrets({ ...secureSecrets, transcriptionApiKey: settingsNorm.transcriptionApiKey });
+        if (!migrated) throw new Error("语音转写密钥安全迁移失败，请重试");
+      }
       // 旧数据：有明确 accountId/bound 保留；纯孤儿不要强行标成当前 live（会串到第二号）
       const fallbackAccountId =
         settingsNorm.liveBaileysAccountId ||
@@ -412,6 +421,7 @@ export function createBootSlice({
         }
       });
       if (
+        migratedTranscription ||
         legacyDemo ||
         chats.length !== rawChats.length ||
         removedDefaultSources ||
@@ -422,7 +432,7 @@ export function createBootSlice({
         phonesChanged || recoveredPending > 0
       ) {
         // 启动写盘再拖后一点，别和首屏抢
-        if (mergedLocalChats.changed) await flushPersist(get);
+        if (mergedLocalChats.changed || migratedTranscription) await flushPersist(get);
         else window.setTimeout(() => {
           flushPersist(get);
         }, 2500);
@@ -484,6 +494,7 @@ export function createBootSlice({
           zhipuKey: currentSettings.zhipuKey,
           openrouterKey: currentSettings.openrouterKey,
           customAiKey: currentSettings.customAiKey,
+          transcriptionApiKey: currentSettings.transcriptionApiKey,
           bridgeToken: currentSettings.bridgeToken,
           aiReplyMode: "semi",
         }) as AppSettings;

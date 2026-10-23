@@ -25,7 +25,7 @@ function setup() {
   globalThis.window = { setTimeout, requestIdleCallback: undefined };
   globalThis.restoreBeforeSave = undefined; globalThis.restoreFail = false; globalThis.restoreMediaFail = false; globalThis.restoreSaved = null; globalThis.restoreMedia = new Map();
   let state = { hydrated: false, phones: [], contacts: [{ id: 'original' }], chats: [], messages: [], followUps: [], activities: [], broadcastCampaigns: [], scheduledMessages: [], draftReplyByChatId: { original: 'keep on failure' },
-    settings: { ...defaultSettings, aiReplyMode: 'auto', customAiKey: 'private-ai-key', openaiKey: 'private-key', bridgeToken: 'private-token', customAiBaseUrl: 'https://local.invalid', waAccounts: [{ id: 'wa', label: 'local', status: 'connected', warmupExempt: false, createdAt: '2026-09-30T00:00:00Z' }], activeAccountId: 'wa', liveBaileysAccountId: 'wa' },
+    settings: { ...defaultSettings, transcriptionProvider: 'custom', transcriptionApiKey: 'private-speech-key', transcriptionBaseUrl: 'https://speech.invalid/v1', transcriptionModel: 'speech-model', aiReplyMode: 'auto', customAiKey: 'private-ai-key', openaiKey: 'private-key', bridgeToken: 'private-token', customAiBaseUrl: 'https://local.invalid', waAccounts: [{ id: 'wa', label: 'local', status: 'connected', warmupExempt: false, createdAt: '2026-09-30T00:00:00Z' }], activeAccountId: 'wa', liveBaileysAccountId: 'wa' },
     recomputeStats() {}, pushToast() {}, peerPresenceByKey: {}, baileysUi: {},
   };
   const ctx = { get: () => state, set: patch => { state = { ...state, ...(typeof patch === "function" ? patch(state) : patch) }; } };
@@ -40,9 +40,10 @@ test('restore preserves local credentials and protections, persists no keys and 
   const { get } = setup(); assert.deepEqual(await get().importBackup(backup), { ok: true });
   const settings = get().settings;
   assert.equal(settings.customAiBaseUrl, 'https://local.invalid'); assert.equal(settings.bridgeToken, 'private-token'); assert.equal(settings.customAiKey, 'private-ai-key'); assert.equal(settings.aiReplyMode, 'semi');
+  assert.equal(settings.transcriptionApiKey, 'private-speech-key'); assert.equal(settings.transcriptionBaseUrl, 'https://speech.invalid/v1');
   assert.equal(settings.waAccounts[0].warmupExempt, false); assert.equal(settings.waAccounts[0].createdAt, '2026-09-30T00:00:00Z');
   assert.equal(settings.scheduledMessages[0].status, 'failed');
-  for (const key of ['customAiKey', 'openaiKey', 'bridgeToken']) assert.equal(globalThis.restoreSaved.settings[key], '');
+  for (const key of ['customAiKey', 'transcriptionApiKey', 'openaiKey', 'bridgeToken']) assert.equal(globalThis.restoreSaved.settings[key], '');
   assert.equal(globalThis.restoreSaved.messages[0].mediaUrl, undefined);
   assert.equal(globalThis.restoreMedia.get('media'), mediaUrl);
   assert.deepEqual(globalThis.restoreSaved.draftReplyByChatId, {});

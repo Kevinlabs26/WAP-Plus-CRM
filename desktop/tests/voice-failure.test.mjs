@@ -67,7 +67,7 @@ test('real transcription returns empty text and an error for missing credentials
   const originalFetch = globalThis.fetch;
   try {
     const missing = await transcribeVoice('fixture', 'audio/webm', { aiProvider: 'ollama' });
-    assert.equal(missing.text, ''); assert.equal(missing.fallback, true); assert.match(missing.error, /Ollama/);
+    assert.equal(missing.text, ''); assert.equal(missing.fallback, true); assert.match(missing.error, /单独配置语音转写/);
     globalThis.fetch = async () => new Response(JSON.stringify({ error: { message: 'invalid key' } }), { status: 401 });
     const failed = await transcribeVoice('fixture', 'audio/webm', { aiProvider: 'openai', openaiKey: 'fixture-only' });
     assert.equal(failed.text, ''); assert.match(failed.error, /401.*invalid key/);

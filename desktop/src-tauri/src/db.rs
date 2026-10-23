@@ -706,7 +706,7 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
     // 嵌入在 settings 里的现有战役——delta 保存的顶层空数组不得清库。
     let mut settings_value = snap.settings.clone();
     if let Some(obj) = settings_value.as_object_mut() {
-        for key in ["openaiKey", "groqKey", "geminiKey", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "bridgeToken"] {
+        for key in ["openaiKey", "groqKey", "geminiKey", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "transcriptionApiKey", "bridgeToken"] {
             obj.remove(key);
         }
         if dirty.broadcast_campaigns {
@@ -1845,12 +1845,13 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         save_snapshot(&conn, &AppSnapshot {
-            settings: json!({"customAiKey":"private", "bridgeToken":"token", "theme":"dark"}),
+            settings: json!({"customAiKey":"private", "transcriptionApiKey":"speech-private", "bridgeToken":"token", "theme":"dark"}),
             ..Default::default()
         }).unwrap();
         let settings = load_snapshot(&conn).unwrap().unwrap().settings;
         assert_eq!(settings["theme"], "dark");
         assert!(settings.get("customAiKey").is_none());
+        assert!(settings.get("transcriptionApiKey").is_none());
         assert!(settings.get("bridgeToken").is_none());
     }
 

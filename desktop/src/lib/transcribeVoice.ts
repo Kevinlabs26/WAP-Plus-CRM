@@ -1,33 +1,18 @@
 /**
- * 语音转文字：复用现有 AI provider（OpenAI / Groq / Gemini / 自定义 OpenAI 兼容的 whisper 转写接口）。
+ * 语音转文字：使用独立语音服务；旧配置只在迁移时读取文字服务设置。
  * 无 Key / 失败时返回空正文与错误；错误说明不得进入转写或消息草稿。
  */
 import type { AppSettings } from "@/store/appStore";
 import { normalizeVoiceInputLanguage } from "@/lib/voiceInputLanguage";
 import { mediaUrlToBlob } from "@/lib/mediaBlob";
 import { geminiTranscribeAudio } from "./gemini.ts";
+import { resolveTranscriptionConfig } from "./transcriptionConfig";
 
 export interface TranscriptResult {
   text: string;
   source: "mock" | "local" | "openai" | "groq" | "gemini" | "custom";
   fallback: boolean;
   error?: string;
-}
-
-function hasKey(s: AppSettings): boolean {
-  if (s.aiProvider === "openai") return !!s.openaiKey.trim();
-  if (s.aiProvider === "groq") return !!s.groqKey.trim();
-  if (s.aiProvider === "gemini") return !!s.geminiKey.trim();
-  // 自定义：Base URL + Key + 转写模型名齐备才可用
-  if (s.aiProvider === "custom") {
-    return !!(
-      s.customAiBaseUrl.trim() &&
-      s.customAiKey.trim() &&
-      s.customWhisperModel.trim()
-    );
-  }
-  // ollama 无内置转写
-  return false;
 }
 
 function failedTranscript(error: string): TranscriptResult {
@@ -41,28 +26,14 @@ function failedTranscript(error: string): TranscriptResult {
 }
 
 async function postTranscription(opts: {
-  provider: "openai" | "groq" | "custom";
+  config: ReturnType<typeof resolveTranscriptionConfig>;
   settings: AppSettings;
   audioBlob: Blob;
   mimeType: string;
 }): Promise<string> {
-  const isCustom = opts.provider === "custom";
-  const baseUrl = isCustom
-    ? (opts.settings.customAiBaseUrl || "").replace(/\/$/, "")
-    : opts.provider === "openai"
-      ? "https://api.openai.com/v1"
-      : "https://api.groq.com/openai/v1";
-  const apiKey = isCustom
-    ? opts.settings.customAiKey
-    : opts.provider === "openai"
-      ? opts.settings.openaiKey
-      : opts.settings.groqKey;
-  const model = isCustom
-    ? opts.settings.customWhisperModel.trim()
-    : opts.provider === "groq"
-      ? "whisper-large-v3-turbo"
-      : "whisper-1";
-  if (!baseUrl || !model) throw new Error("自定义提供商缺少 Base URL 或转写模型名");
+  const { baseUrl, apiKey, model, provider } = opts.config;
+  const url = new URL(baseUrl);
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("语音服务 Base URL 必须使用 HTTP 或 HTTPS，且不能包含账号密码");
   const ext = opts.mimeType.includes("ogg")
     ? "ogg"
     : opts.mimeType.includes("mp4")
@@ -92,11 +63,11 @@ async function postTranscription(opts: {
     } catch {
       /* ignore */
     }
-    throw new Error(`${opts.provider} ${res.status}: ${detail}`);
+    throw new Error(`${provider} ${res.status}: ${detail}`);
   }
   const data = (await res.json()) as { text?: string };
   const text = (data.text || "").trim();
-  if (!text) throw new Error(`${opts.provider} 空转写`);
+  if (!text) throw new Error(`${provider} 空转写`);
   return text;
 }
 
@@ -152,34 +123,27 @@ async function transcribeVoiceImpl(
   } catch (e) {
     console.warn("[localSpeech] 本地转写失败，回落云端：", e);
   }
-  if (!hasKey(settings)) {
-    const provider = settings.aiProvider === "ollama"
-      ? "当前选择的 Ollama 仅支持文字，不能进行云端语音转写"
-      : `当前选择的 ${settings.aiProvider} 未配置可用的语音转写 Key`;
-    return failedTranscript(provider);
-  }
+  const config = resolveTranscriptionConfig(settings);
+  const provider = config.provider;
+  if (provider === "none") return failedTranscript("请在 AI 设置中单独配置语音转写服务，或安装本地语音模型");
+  if (!config.apiKey || !config.model || (provider !== "gemini" && !config.baseUrl))
+    return failedTranscript("语音转写服务缺少 API Key、模型名或 Base URL，请检查独立的语音设置");
   try {
     const blob = await mediaUrlToBlob(dataUrl, mimeType || "audio/webm");
     const mime = mimeType || blob.type || "audio/webm";
-    if (settings.aiProvider === "gemini") {
+    if (provider === "gemini") {
       const base64 = await blobToBase64(blob);
       const text = await geminiTranscribeAudio({
-        apiKey: settings.geminiKey,
-        model: settings.aiModel.trim() || undefined,
+        apiKey: config.apiKey,
+        model: config.model,
         mimeType: mime,
         base64,
       });
       if (!text.trim()) throw new Error("gemini 空转写");
       return { text: text.trim(), source: "gemini", fallback: false };
     }
-    const provider =
-      settings.aiProvider === "custom"
-        ? ("custom" as const)
-        : settings.aiProvider === "openai"
-          ? ("openai" as const)
-          : ("groq" as const);
     const text = await postTranscription({
-      provider,
+      config,
       settings,
       audioBlob: blob,
       mimeType: mime,

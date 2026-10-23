@@ -30,6 +30,7 @@ import {
 } from "@/lib/accounts";
 import { dedupeAccountLabels } from "@/lib/accountLabels";
 import { normalizeVoiceInputLanguage } from "@/lib/voiceInputLanguage";
+import { resolveTranscriptionConfig, type TranscriptionProvider } from "@/lib/transcriptionConfig";
 import { DEFAULT_ACCOUNT_ID } from "@/types/account";
 import {
   DEFAULT_FOLLOW_UP_RULE_SETTINGS,
@@ -136,8 +137,12 @@ export interface SettingsShape {
   customAiKey: string;
   /** 自定义提供商聊天/翻译模型名 */
   customAiModel: string;
-  /** 自定义提供商转写模型名（空 = 不支持转写） */
+  /** 旧版共用服务的转写模型，仅用于迁移。 */
   customWhisperModel: string;
+  transcriptionProvider: TranscriptionProvider;
+  transcriptionBaseUrl: string;
+  transcriptionApiKey: string;
+  transcriptionModel: string;
   /** 当前提供商选的模型（OpenAI / Groq / Gemini / Ollama 共用）；空 = 用提供商默认 */
   aiModel: string;
   /**
@@ -303,6 +308,10 @@ export const defaultSettings: SettingsShape = {
   customAiKey: "",
   customAiModel: "",
   customWhisperModel: "",
+  transcriptionProvider: "none",
+  transcriptionBaseUrl: "",
+  transcriptionApiKey: "",
+  transcriptionModel: "",
   aiModel: "",
   aiReplyMode: "semi",
   aiAutoReplyIntervalMs: 30000,
@@ -542,6 +551,11 @@ export function normalizeLoadedSettings(
   merged.customAiBaseUrl = String(merged.customAiBaseUrl || "").trim().replace(/\/+$/, "");
   merged.customAiModel = String(merged.customAiModel || "").trim();
   merged.customWhisperModel = String(merged.customWhisperModel || "").trim();
+  const transcription = resolveTranscriptionConfig(src);
+  merged.transcriptionProvider = transcription.provider;
+  merged.transcriptionBaseUrl = transcription.baseUrl;
+  merged.transcriptionApiKey = transcription.apiKey;
+  merged.transcriptionModel = transcription.model;
   merged.aiModel = String(merged.aiModel || "").trim();
   merged.bridgeToken = String(merged.bridgeToken || "").trim().slice(0, 256);
   merged.aiAutoReplyManualChatIds = Array.isArray(merged.aiAutoReplyManualChatIds)

@@ -9,6 +9,7 @@ import {
 import type { AppSettings } from "@/store/appStore";
 import { hasAiCredentials } from "@/lib/aiProviders.ts";
 import { useI18n } from "@/i18n";
+import { TRANSCRIPTION_DEFAULTS, type TranscriptionProvider } from "@/lib/transcriptionConfig";
 
 export function SettingsAiPanel() {
   const { t } = useI18n();
@@ -83,7 +84,6 @@ export function SettingsAiPanel() {
                       updateSettings({
                         customAiBaseUrl: preset.baseUrl,
                         customAiModel: preset.model,
-                        customWhisperModel: preset.whisperModel,
                       });
                   }}
                   className="ui-control mt-1 w-full px-2.5 text-[13px]"
@@ -102,10 +102,6 @@ export function SettingsAiPanel() {
               <label className="block text-2xs text-zinc-500">
                 {t("settingsAi.chatModel")}
                 <Input value={settings.customAiModel} onChange={(event) => updateSettings({ customAiModel: event.target.value })} className="mt-1" placeholder="deepseek-chat" />
-              </label>
-              <label className="block text-2xs text-zinc-500">
-                {t("settingsAi.transcriptionModel")}
-                <Input value={settings.customWhisperModel} onChange={(event) => updateSettings({ customWhisperModel: event.target.value })} className="mt-1" placeholder="whisper-large-v3" />
               </label>
             </>
           )}
@@ -164,9 +160,41 @@ export function SettingsAiPanel() {
           </label>
         </div>
         <p className="mt-3 text-2xs text-zinc-600">{t("settingsAi.keyHint")}</p>
-        <p className="mt-1 text-2xs leading-4 text-zinc-600">
-          {t("settingsAi.transcriptionHint")}
-        </p>
+      </section>
+
+      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+        <SectionLabel>{t("settingsAi.speechService")}</SectionLabel>
+        <p className="mt-2 text-xs leading-relaxed text-zinc-500">{t("settingsAi.speechHint")}</p>
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="block text-2xs text-zinc-500 sm:col-span-2">
+            {t("settingsAi.speechProvider")}
+            <select value={settings.transcriptionProvider} className="ui-control mt-1 w-full px-2.5 text-[13px]"
+              onChange={(event) => {
+                const provider = event.target.value as TranscriptionProvider;
+                updateSettings({ transcriptionProvider: provider, transcriptionApiKey: "",
+                  transcriptionBaseUrl: TRANSCRIPTION_DEFAULTS[provider].baseUrl,
+                  transcriptionModel: TRANSCRIPTION_DEFAULTS[provider].model });
+              }}>
+              <option value="none">{t("settingsAi.speechDisabled")}</option>
+              <option value="openai">OpenAI</option>
+              <option value="groq">Groq</option>
+              <option value="gemini">Gemini</option>
+              <option value="custom">{t("settingsAi.provider.custom")}</option>
+            </select>
+          </label>
+          {settings.transcriptionProvider !== "none" && <>
+            {settings.transcriptionProvider !== "gemini" && <label className="block text-2xs text-zinc-500 sm:col-span-2">
+              {t("settingsAi.speechBaseUrl")}
+              <Input value={settings.transcriptionBaseUrl} onChange={(event) => updateSettings({ transcriptionBaseUrl: event.target.value })} className="mt-1" placeholder="https://your-speech-service.example/v1" />
+            </label>}
+            <SecretInput label={t("settingsAi.speechKey")} value={settings.transcriptionApiKey} placeholder="…" onChange={(value) => updateSettings({ transcriptionApiKey: value })} />
+            <label className="block text-2xs text-zinc-500">
+              {t("settingsAi.speechModel")}
+              <Input value={settings.transcriptionModel} onChange={(event) => updateSettings({ transcriptionModel: event.target.value })} className="mt-1" placeholder={TRANSCRIPTION_DEFAULTS[settings.transcriptionProvider].model || "whisper-large-v3"} />
+            </label>
+          </>}
+        </div>
+        <p className="mt-3 text-xs leading-relaxed text-zinc-500">{t("settingsAi.speechLocalHint")}</p>
       </section>
     </div>
   );
@@ -308,48 +336,41 @@ function ModelPicker({
 
 const CUSTOM_PRESETS: Record<
   string,
-  { label: string; baseUrl: string; model: string; whisperModel: string }
+  { label: string; baseUrl: string; model: string }
 > = {
   deepseek: {
     label: "DeepSeek",
     baseUrl: "https://api.deepseek.com/v1",
     model: "deepseek-chat",
-    whisperModel: "",
   },
   moonshot: {
     label: "Kimi / Moonshot",
     baseUrl: "https://api.moonshot.cn/v1",
     model: "moonshot-v1-8k",
-    whisperModel: "",
   },
   qwen: {
     label: "Qwen (Alibaba)",
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     model: "qwen-plus",
-    whisperModel: "",
   },
   zhipu: {
     label: "Zhipu GLM",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     model: "glm-4-flash",
-    whisperModel: "",
   },
   openrouter: {
     label: "OpenRouter",
     baseUrl: "https://openrouter.ai/api/v1",
     model: "openai/gpt-4o-mini",
-    whisperModel: "",
   },
   siliconflow: {
     label: "SiliconFlow",
     baseUrl: "https://api.siliconflow.cn/v1",
     model: "deepseek-ai/DeepSeek-V3",
-    whisperModel: "FunAudioLLM/SenseVoiceSmall",
   },
   custom: {
     label: "Custom OpenAI-compatible endpoint",
     baseUrl: "",
     model: "",
-    whisperModel: "",
   },
 };

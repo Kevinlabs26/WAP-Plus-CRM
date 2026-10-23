@@ -97,6 +97,7 @@ export function createSettingsActionsSlice({
             patch.zhipuKey !== undefined ||
             patch.openrouterKey !== undefined ||
             patch.customAiKey !== undefined ||
+            patch.transcriptionApiKey !== undefined ||
             patch.bridgeToken !== undefined)
         ) {
           void saveSecureSecrets({
@@ -108,6 +109,7 @@ export function createSettingsActionsSlice({
             zhipuKey: next.zhipuKey,
             openrouterKey: next.openrouterKey,
             customAiKey: next.customAiKey,
+            transcriptionApiKey: next.transcriptionApiKey,
             bridgeToken: next.bridgeToken,
           }).then((ok) => {
             if (!ok && Date.now() - lastSecretSaveErrorAt > 10_000) {

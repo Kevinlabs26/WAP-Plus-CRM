@@ -151,6 +151,9 @@ function writeSettingsBackup(data: unknown): void {
       qwenKey: _q,
       zhipuKey: _z,
       openrouterKey: _r,
+      customAiKey: _custom,
+      transcriptionApiKey: _transcription,
+      bridgeToken: _token,
       __broadcastCampaigns: _b,
       ...safe
     } = raw;

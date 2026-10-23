@@ -134,6 +134,8 @@ pub struct SecureSecrets {
     #[serde(default)]
     pub custom_ai_key: String,
     #[serde(default)]
+    pub transcription_api_key: String,
+    #[serde(default)]
     pub bridge_token: String,
 }
 
