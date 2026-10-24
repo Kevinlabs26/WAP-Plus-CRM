@@ -204,7 +204,9 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_messages_sent_global ON messages(sent_at DESC, id DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_messages_sent_global ON messages(sent_at DESC, id DESC);
+         CREATE INDEX IF NOT EXISTS idx_messages_wa_message_id ON messages(json_extract(json, '$.waMessageId'));
+         CREATE INDEX IF NOT EXISTS idx_messages_wa_key_id ON messages(json_extract(json, '$.waKey.id'));",
     )
     .map_err(|e| e.to_string())?;
 
@@ -430,6 +432,8 @@ fn ack_rank(status: &str) -> u8 {
     match status { "sent" => 1, "server" => 2, "delivered" => 3, "read" => 4, "played" => 5, _ => 0 }
 }
 
+const ACK_MESSAGE_ROWS_SQL: &str = "SELECT id, json FROM messages WHERE (id = ?1 OR json_extract(json, '$.waMessageId') = ?1 OR json_extract(json, '$.waKey.id') = ?1) AND COALESCE(json_extract(json, '$.accountId'), json_extract(json, '$.deviceId'), '') = ?2";
+
 pub fn update_message_acks(conn: &Connection, items: &[Value], account_id: &str) -> Result<(), String> {
     if account_id.is_empty() { return Err("回执缺少账号".into()); }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
@@ -438,7 +442,7 @@ pub fn update_message_acks(conn: &Connection, items: &[Value], account_id: &str)
         let ack = item.get("ack").and_then(Value::as_str).unwrap_or("");
         if key.is_empty() || ack_rank(ack) == 0 { continue; }
         let rows: Vec<(String, String)> = {
-            let mut stmt = tx.prepare("SELECT id, json FROM messages WHERE (id = ?1 OR json_extract(json, '$.waMessageId') = ?1 OR json_extract(json, '$.waKey.id') = ?1) AND COALESCE(json_extract(json, '$.accountId'), json_extract(json, '$.deviceId'), '') = ?2").map_err(|e| e.to_string())?;
+            let mut stmt = tx.prepare(ACK_MESSAGE_ROWS_SQL).map_err(|e| e.to_string())?;
             let rows = stmt.query_map(params![key, account_id], |r| Ok((r.get(0)?, r.get(1)?))).map_err(|e| e.to_string())?;
             rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
         };
@@ -1868,6 +1872,25 @@ mod tests {
         save_snapshot(&conn, &AppSnapshot { messages: vec![a], dirty: Some(dirty), ..Default::default() }).unwrap();
         assert_eq!(get_message_by_id(&conn, "a").unwrap().unwrap()["deliveryStatus"], "read");
         assert_eq!(get_message_by_id(&conn, "b").unwrap().unwrap()["deliveryStatus"], "sent");
+    }
+
+    #[test]
+    fn cold_ack_lookup_uses_indexes_for_every_message_identifier() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let query = format!("EXPLAIN QUERY PLAN {ACK_MESSAGE_ROWS_SQL}");
+        let mut stmt = conn.prepare(&query).unwrap();
+        let plan = stmt.query_map(params!["missing", "wa-a"], |row| row.get::<_, String>(3))
+            .unwrap().collect::<Result<Vec<_>, _>>().unwrap().join("\n");
+        assert!(!plan.contains("SCAN messages"), "{plan}");
+        assert!(plan.contains("idx_messages_wa_message_id"), "{plan}");
+        assert!(plan.contains("idx_messages_wa_key_id"), "{plan}");
+        // 升级已有 v5 库时也补索引；再次启动不会重建。
+        conn.execute_batch("DROP INDEX idx_messages_wa_message_id; DROP INDEX idx_messages_wa_key_id;").unwrap();
+        migrate(&conn).unwrap();
+        update_message_acks(&conn, &[json!({"id":"missing", "ack":"read"})], "wa-a").unwrap();
+        let indexes: i64 = conn.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('idx_messages_wa_message_id', 'idx_messages_wa_key_id')", [], |row| row.get(0)).unwrap();
+        assert_eq!(indexes, 2);
     }
 
     #[test]

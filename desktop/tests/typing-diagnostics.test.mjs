@@ -54,10 +54,7 @@ test("typing diagnostics record timing and counts without draft text", () => {
     composer,
     /onKeyDown=\{\(e\) => \{\s*markComposerInput\(\);/
   );
-  assert.match(
-    app,
-    /function DeferredWatchers[\s\S]*?if \(isComposerInputActive\(\)\)[\s\S]*?setTimeout\(mount, 300\)/
-  );
+  // 启动时输入让路的时间上限由 watcher-startup 的运行时测试验证。
   assert.match(
     watcher,
     /const pumpIngestQueue[\s\S]*?isComposerTypingBusy\(\) \|\| hasPendingUserInput\(\)[\s\S]*?scheduleIngestPump\(\)/

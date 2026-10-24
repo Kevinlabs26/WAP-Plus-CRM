@@ -158,10 +158,15 @@ export function BaileysWatcher() {
     const INGEST_CHUNK_SIZE = 4;
     let ingestInFlight = false;
     let lastIngestAt = Date.now();
+    let checkpointInFlight = false;
+    let checkpointRetryTimer: number | null = null;
 
     const commitPendingCursors = () => {
-      if (!pendingCursorByAccount.size || !useAppStore.getState().hydrated ||
+      if (cancelled || checkpointInFlight || checkpointRetryTimer != null ||
+          !pendingCursorByAccount.size || !useAppStore.getState().hydrated ||
           pendingEvents.length || ingestQueue.length || ingestInFlight) return;
+      checkpointInFlight = true;
+      let retryDelay = 0;
       const cursorSnapshot = new Map(pendingCursorByAccount);
       const epochs = new Map([...cursorSnapshot.keys()].map(id => [id, baileysSessionEpoch(id)]));
       void Promise.all([
@@ -180,7 +185,15 @@ export function BaileysWatcher() {
             }
           }
         })
-        .catch(() => undefined);
+        .catch(() => { retryDelay = 15_000; })
+        .finally(() => {
+          checkpointInFlight = false;
+          if (cancelled || !pendingCursorByAccount.size) return;
+          checkpointRetryTimer = window.setTimeout(() => {
+            checkpointRetryTimer = null;
+            commitPendingCursors();
+          }, retryDelay);
+        });
     };
 
     const hasPendingUserInput = () => {
@@ -388,6 +401,9 @@ export function BaileysWatcher() {
           a.status === "connected" ||
           a.status === "connecting" ||
           a.status === "qr" ||
+          !!a.phoneE164 ||
+          !!a.historyPhoneE164 ||
+          !!a.sessionAccountId ||
           !!(a.userName && a.userName.trim())
         ) {
           ids.add(a.id);
@@ -815,6 +831,26 @@ export function BaileysWatcher() {
           ? await baileysStatus(accountId)
           : null;
         if (cancelled || epoch !== baileysSessionEpoch(accountId)) return;
+
+        // 连接状态不等消息拉取；消息超时也不能挡住顶栏和账号列表更新。
+        let connected = r.prevConnected;
+        let userName: string | null = null;
+        if (status) {
+          connected = applyUiFromStatus(accountId, status);
+          userName =
+            extractAccountHumanName(status.user?.name) ||
+            extractAccountHumanName(status.user?.notify) ||
+            extractAccountHumanName(status.user?.verifiedName) ||
+            status.user?.id ||
+            null;
+        } else {
+          const slot = (useAppStore.getState().settings.waAccounts || []).find(
+            (a) => a.id === accountId
+          );
+          connected = slot?.status === "connected" || r.prevConnected;
+          userName = slot?.userName || null;
+        }
+
         const result = await baileysEvents(r.cursor, accountId);
         if (cancelled || epoch !== baileysSessionEpoch(accountId)) return;
 
@@ -889,25 +925,6 @@ export function BaileysWatcher() {
           }
           queueEvents(tagged as BridgeEvent[]);
           r.lastEventAt = Date.now();
-        }
-
-        let connected = r.prevConnected;
-        let userName: string | null = null;
-        if (status) {
-          connected = applyUiFromStatus(accountId, status);
-          userName =
-            extractAccountHumanName(status.user?.name) ||
-            extractAccountHumanName(status.user?.notify) ||
-            extractAccountHumanName(status.user?.verifiedName) ||
-            status.user?.id ||
-            null;
-        } else {
-          // 无 status 时沿用槽状态
-          const slot = (useAppStore.getState().settings.waAccounts || []).find(
-            (a) => a.id === accountId
-          );
-          connected = slot?.status === "connected" || r.prevConnected;
-          userName = slot?.userName || null;
         }
 
         if (connected && !r.prevConnected) {
@@ -1051,6 +1068,7 @@ export function BaileysWatcher() {
       if (ingestFrame != null) cancelAnimationFrame(ingestFrame);
       if (ingestIdle != null) window.cancelIdleCallback(ingestIdle);
       if (ingestDelayTimer != null) window.clearTimeout(ingestDelayTimer);
+      if (checkpointRetryTimer != null) window.clearTimeout(checkpointRetryTimer);
       pendingEvents = [];
       ingestQueue = [];
       // 丢弃尚未处理的队列时，下一次挂载必须从已落盘游标重拉。

@@ -36,7 +36,8 @@ function reportPersistError(get: () => AppState, error: unknown) {
   const now = Date.now();
   if (now - lastPersistErrorAt < 10_000) return;
   lastPersistErrorAt = now;
-  get().pushToast("本地保存失败，请检查磁盘空间后重试", "error");
+  const reason = error instanceof Error ? error.message : String(error || "未知错误");
+  get().pushToast(`本地保存失败：${reason.slice(0, 180)}`, "error");
 }
 
 type PersistRefs = Pick<

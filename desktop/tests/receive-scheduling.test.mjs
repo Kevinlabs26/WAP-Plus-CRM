@@ -44,6 +44,26 @@ test('different sending/viewing accounts keep all five accounts polling, includi
 test('one blocked account cannot hold other accounts or start duplicate polls of itself',async()=>{
  const ui=fixture({blocked:'c'});try{await ui.advance(20000);for(const id of ['a','b','d','e'])assert.ok(ui.calls.filter(c=>c.id===id).length>=3,id);assert.equal(ui.statusCalls.filter(id=>id==='c').length,1);assert.ok(ui.maxActive<=4);ui.slow.resolve();await settle();assert.equal(ui.calls.filter(c=>c.id==='c').length,1);}finally{ui.close();}
 });
+test('saved accounts refresh from two to three connected without visiting devices or starting empty slots',async()=>{
+ for(const savedIdentity of [{phoneE164:'+15550000003'},{historyPhoneE164:'+15550000003'},{sessionAccountId:'session-c'}]){
+  const ui=fixture({focused:'a'});
+  const state=globalThis.receiveState;
+  state.settings.waAccounts[2]={id:'c',...savedIdentity,status:'disconnected'};
+  for(const i of [3,4])state.settings.waAccounts[i]={id:ui.ids[i],status:'disconnected'};
+  globalThis.receiveStatus=async()=>({connection:'connected'});
+  const connectedCount=()=>state.settings.waAccounts.filter(a=>a.status==='connected').length;
+  try{assert.equal(connectedCount(),2);await ui.advance(5000);assert.equal(connectedCount(),3);assert.ok(ui.calls.some(c=>c.id==='c'));assert.ok(ui.calls.every(c=>!['d','e'].includes(c.id)));assert.equal(state.activeNav,'chats');}finally{ui.close();}
+ }
+});
+test('connection status updates before a delayed or failed message request completes',async()=>{
+ for(const fail of [false,true]){
+  const ui=fixture({accounts:1,focused:'a'}),events=deferred();
+  globalThis.receiveState.settings.waAccounts[0].status='connecting';
+  globalThis.receiveStatus=async()=>({connection:'connected'});
+  globalThis.receiveEvents=()=>fail?Promise.reject(new Error('Events unavailable')):events.promise;
+  try{await ui.advance(1600);assert.equal(globalThis.receiveState.settings.waAccounts[0].status,'connected',`events failed=${fail}`);assert.equal(globalThis.receiveState.activeNav,'chats');}finally{events.resolve({cursor:0,events:[]});await settle();ui.close();}
+ }
+});
 test('busy typing still ingests live messages and retains the durable cursor until saving finishes',async()=>{
  const ui=fixture({typing:true,accounts:1,focused:'a'}),saved=deferred();let sent=false;globalThis.receiveSave=()=>saved.promise;
  globalThis.receiveEvents=async(cursor,id)=>{ui.calls.push({id,cursor});if(sent)return {cursor:1,events:[]};sent=true;return {cursor:1,events:[{type:'contacts.sync',deviceId:id,payload:{source:'message',items:[{id:'person'}]}},{type:'messages.sync',deviceId:id,payload:{live:true,items:[{id:'live',body:'Hello'}]}}]};};
@@ -81,4 +101,18 @@ test('idle history batches stay coalesced instead of updating the store once per
  const ui=fixture({accounts:1,focused:'a'});let sent=false;
  globalThis.receiveEvents=async()=>{if(sent)return {cursor:1,events:[]};sent=true;return {cursor:1,events:[{type:'contacts.sync',deviceId:'a',payload:{source:'history',items:Array.from({length:400},(_,i)=>({id:'bulk-'+i}))}}]};};
  try{await ui.advance(2000);assert.equal(ui.ingested.flat().flatMap(e=>e.payload.items).length,400);assert.ok(ui.ingested.length<=4);}finally{ui.close();}
+});
+
+test('slow checkpoints stay single-flight and save the newest cursor after the first save completes',async()=>{
+ const ui=fixture({accounts:1,focused:'a'}),saved=deferred();let saves=0,sequence=0;
+ globalThis.receiveSave=()=>{saves++;return saves===1?saved.promise:Promise.resolve();};
+ globalThis.receiveEvents=async()=>({cursor:++sequence,events:[{type:'messages.sync',deviceId:'a',payload:{live:true,items:[{id:'live-'+sequence}]}}]});
+ try{await ui.advance(6500);assert.equal(saves,1);assert.equal(ui.cursors.size,0);saved.resolve();await settle();await ui.advance(1);assert.equal(saves,2);assert.equal(ui.cursors.get('wap.baileys.eventCursor.a'),String(sequence));}finally{saved.resolve();ui.close();}
+});
+
+test('failed checkpoints retry without waiting for another message and do not replay displayed events',async()=>{
+ const ui=fixture({accounts:1,focused:'a'});let saves=0,sent=false;
+ globalThis.receiveSave=async()=>{if(++saves===1)throw new Error('temporary save failure');};
+ globalThis.receiveEvents=async()=>{if(sent)return {cursor:1,events:[]};sent=true;return {cursor:1,events:[{type:'messages.sync',deviceId:'a',payload:{live:true,items:[{id:'once'}]}}]};};
+ try{await ui.advance(2000);assert.equal(saves,1);assert.equal(ui.cursors.size,0);await ui.advance(16000);assert.equal(saves,2);assert.equal(ui.cursors.get('wap.baileys.eventCursor.a'),'1');assert.equal(ui.ingested.flat().flatMap(e=>e.payload.items).length,1);}finally{ui.close();}
 });

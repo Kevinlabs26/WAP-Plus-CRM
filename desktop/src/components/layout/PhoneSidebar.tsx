@@ -604,7 +604,6 @@ export function PhoneSidebar() {
         }
         // 本地状态可能滞后，发起同步前再确认该账号的实际连接状态。
         const slotOk =
-          accountIsConnected(syncAid) &&
           (await baileysStatus(syncAid)).connection === "connected";
         if (!slotOk) {
           syncLog(

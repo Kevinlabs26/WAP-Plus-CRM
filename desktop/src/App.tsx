@@ -415,8 +415,10 @@ function DeferredWatchers({ interactive }: { interactive: boolean }) {
       return;
     }
     let t: number;
+    const mountDeadline = Date.now() + WATCHER_AFTER_READY_MS + 1500;
     const mount = () => {
-      if (isComposerInputActive()) {
+      // 输入只短暂让路，持续打字也必须启动全局收消息和状态检查。
+      if (isComposerInputActive() && Date.now() < mountDeadline) {
         t = window.setTimeout(mount, 300);
         return;
       }

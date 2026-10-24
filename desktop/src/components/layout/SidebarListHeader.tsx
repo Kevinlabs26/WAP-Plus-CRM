@@ -141,7 +141,6 @@ export function SidebarListHeader({
     ...(isBaileys ? [{ label: t("sidebar.newGroup"), Icon: UsersRound, run: onCreateGroup }] : []),
     { label: t("sidebar.batchSaveContacts"), Icon: UserPlus, run: onBatchSaveContacts },
     ...(listTab === "chats" ? [{ label: t("leadInbox.settings"), Icon: Settings2, run: onOpenLeadSettings }] : []),
-    { label: syncing ? t("sidebar.syncing") : t("sidebar.syncChats"), Icon: RefreshCw, run: onSync, disabled: syncDisabled, title: syncTitle },
   ];
 
   useEffect(() => {
@@ -221,6 +220,11 @@ export function SidebarListHeader({
             className="ui-control h-9 w-full pl-7 pr-2 text-[13px]"
           />
         </div>
+        <button type="button" onClick={onSync} disabled={syncDisabled}
+          aria-label={syncing ? t("sidebar.syncing") : t("sidebar.syncChats")}
+          title={syncTitle} className="ui-btn-secondary h-9 w-9 shrink-0 !px-0">
+          <RefreshCw className={cn("h-4 w-4", syncing && "animate-spin")} />
+        </button>
         <div className="relative shrink-0" ref={actionsRef}>
           <button type="button" aria-label={t("sidebar.actions")} title={t("sidebar.actions")}
             aria-expanded={actionsOpen} aria-controls="sidebar-actions"

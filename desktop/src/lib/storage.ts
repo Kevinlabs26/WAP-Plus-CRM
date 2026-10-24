@@ -57,6 +57,24 @@ async function tryInvokeOk(
   }
 }
 
+async function saveSqliteSnapshot(snapshot: Record<string, unknown>): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await invoke("db_save", { snapshot });
+      return;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      // SQLite 事务失败会回滚；仅锁占用可安全重试同一块，其他错误保留原因。
+      if (attempt < 2 && /\bSQLITE_(?:BUSY|LOCKED)\b|database (?:table )?is (?:locked|busy)/i.test(reason)) {
+        await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)));
+        continue;
+      }
+      throw new Error(`SQLite 数据保存失败：${reason}`, { cause: error });
+    }
+  }
+}
+
 export function getStorageEngine(): StorageEngine {
   return engine;
 }
@@ -114,6 +132,8 @@ export interface PersistedAppState {
 
 type ChatMessageRemap = { fromChatId: string; toChatId: string; contactId: string; accountId: string };
 const pendingChatMessageRemaps = new Map<string, ChatMessageRemap>();
+// 保存失败后增量基线会重置，删除意图必须留到真正落盘。
+const pendingDeletedMessageIds = new Set<string>();
 
 /** 会话合并必须同时迁移尚未加载的磁盘历史，且与会话快照同事务保存。 */
 export function registerChatMessageReplacements(
@@ -403,15 +423,12 @@ async function saveAppStateNow(
           chatMessageRemaps: last ? data.chatMessageRemaps : [],
           replaceMessages: false,
         };
-        if (!(await tryInvokeOk("db_save", { snapshot: toRust(part) }))) {
-          throw new Error("SQLite 数据保存失败");
-        }
+        await saveSqliteSnapshot(toRust(part));
       }
       rememberSavedWeight(data);
       return;
     }
-    const ok = await tryInvokeOk("db_save", { snapshot: toRust(data) });
-    if (!ok) throw new Error("SQLite 数据保存失败");
+    await saveSqliteSnapshot(toRust(data));
     rememberSavedWeight(data);
     return;
   }
@@ -491,7 +508,25 @@ export function saveAppState(
   const chatIds = new Set(data.chats.map((chat) => (chat as { id?: string }).id));
   const remaps = data.replaceMessages || (data.dirty && !data.dirty.chats) ? [] : [...pendingChatMessageRemaps.values()]
     .filter((remap) => chatIds.has(remap.toChatId) && !chatIds.has(remap.fromChatId));
-  const run = saveQueue.then(() => saveAppStateNow(remaps.length ? { ...data, chatMessageRemaps: remaps } : data, opts)).then(() => {
+  const run = saveQueue.then(async () => {
+    const writesMessages = !data.dirty || data.dirty.messages;
+    const restoredIds = new Set(writesMessages && pendingDeletedMessageIds.size
+      ? (data.messages || []).map(message => (message as { id?: string }).id)
+      : []);
+    const deletedIds = writesMessages && !data.replaceMessages
+      ? [...new Set([...pendingDeletedMessageIds].filter(id => !restoredIds.has(id)).concat(data.deletedMessageIds || []))]
+      : data.deletedMessageIds || [];
+    try {
+      await saveAppStateNow({ ...data, chatMessageRemaps: remaps.length ? remaps : data.chatMessageRemaps, deletedMessageIds: deletedIds }, opts);
+    } catch (error) {
+      if (writesMessages) for (const id of deletedIds) pendingDeletedMessageIds.add(id);
+      throw error;
+    }
+    if (writesMessages) {
+      for (const id of [...deletedIds, ...restoredIds]) if (id) pendingDeletedMessageIds.delete(id);
+    }
+    if (data.replaceMessages) pendingDeletedMessageIds.clear();
+  }).then(() => {
     if (data.replaceMessages) pendingChatMessageRemaps.clear();
     for (const remap of remaps) {
       if (pendingChatMessageRemaps.get(remap.fromChatId) === remap) pendingChatMessageRemaps.delete(remap.fromChatId);
@@ -520,6 +555,7 @@ async function clearAppStateNow(): Promise<void> {
   lastSavedChatCount = 0;
   lastSavedContactCount = 0;
   pendingChatMessageRemaps.clear();
+  pendingDeletedMessageIds.clear();
 }
 
 export function clearAppState(): Promise<void> {

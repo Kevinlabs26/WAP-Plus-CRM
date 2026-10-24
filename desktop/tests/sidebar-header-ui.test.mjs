@@ -65,7 +65,7 @@ test("secondary actions preserve callbacks, disabled sync, outside click and Esc
   const open = () => { ui.render().find(node => node.type === "button" && node.props["aria-label"] === "sidebar.actions").props.onClick(); return ui.render(); };
   try {
     let tree = open();
-    assert.equal(tree.find(node => node.type === "button" && node.props.children?.[1] === "sidebar.syncChats").props.disabled, true);
+    assert.equal(tree.find(node => node.type === "button" && node.props["aria-label"] === "sidebar.syncChats").props.disabled, true);
     tree.find(node => node.type === "button" && node.props.children?.[1] === "sidebar.newGroup").props.onClick();
     assert.deepEqual(ui.calls, ["create"]);
     assert.equal(ui.render().some(node => node.props.id === "sidebar-actions"), false);
@@ -81,10 +81,11 @@ test("Android contact lists keep bulk save and sync without WhatsApp group or le
   try {
     ui.render().find(node => node.type === "button" && node.props["aria-label"] === "sidebar.actions").props.onClick();
     const actions = ui.render().find(node => node.props.id === "sidebar-actions").props.children;
-    assert.equal(actions.length, 2);
+    assert.equal(actions.length, 1);
     assert.equal(actions[0].props.children[1], "sidebar.batchSaveContacts");
-    assert.equal(actions[1].props.disabled, false);
-    actions[1].props.onClick();
+    const sync = ui.render().find(node => node.type === "button" && node.props["aria-label"] === "sidebar.syncChats");
+    assert.equal(sync.props.disabled, false);
+    sync.props.onClick();
     assert.deepEqual(ui.calls, ["sync"]);
   } finally { ui.close(); }
 });

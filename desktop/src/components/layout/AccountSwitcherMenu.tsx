@@ -548,7 +548,7 @@ export function AccountSwitcherMenu({
           </div>
 
           <div className="border-t border-zinc-800 py-0.5">
-            <button
+            {onSync && <button
               type="button"
               className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px] text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
               disabled={
@@ -573,7 +573,7 @@ export function AccountSwitcherMenu({
                 }
               />
               {syncing ? t("account.syncing") : t("account.syncChats")}
-            </button>
+            </button>}
             {activeId !== liveId &&
               accounts.find((a) => a.id === activeId)?.status !== "connected" && (
                 <button

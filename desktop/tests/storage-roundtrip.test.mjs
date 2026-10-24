@@ -314,6 +314,68 @@ test("chunked SQLite saves send metadata and deletions only in the final transac
   assert.deepEqual(replacement[0].args.snapshot.messages, snapshot.messages);
 });
 
+test('SQLite briefly locked transactions retry without reporting a failed save', async () => {
+  const {api,calls}=await setup({sqlite:true});
+  let attempts=0;
+  const invoke=globalThis.__storageTestInvoke;
+  globalThis.__storageTestInvoke=async(cmd,args)=>{
+    if(cmd==='db_save' && ++attempts<3)throw 'database is locked';
+    return invoke(cmd,args);
+  };
+  await api.saveAppState({phones:[],contacts:[{id:'c'}],chats:[],messages:[],followUps:[],settings:{}});
+  assert.equal(attempts,3);
+  assert.equal(calls.filter(c=>c.cmd==='db_save').length,1);
+  attempts=0;
+  globalThis.__storageTestInvoke=async cmd=>{if(cmd==='db_save'){attempts++;throw 'database is locked';}};
+  await assert.rejects(api.saveAppState({phones:[],contacts:[{id:'c'}],chats:[],messages:[],followUps:[],settings:{}}),/database is locked/);
+  assert.equal(attempts,3);
+});
+
+test('fatal SQLite errors retain their cause in the UI and do not retry indefinitely', async () => {
+  const {api}=await setup({sqlite:true});
+  let attempts=0;
+  const toasts=[];
+  globalThis.__storageTestInvoke=async cmd=>{if(cmd==='db_save'){attempts++;throw 'database disk image is malformed';}};
+  const state={hydrated:true,phones:[],contacts:[{id:'c'}],chats:[],messages:[],followUps:[],activities:[],settings:{},broadcastCampaigns:[],pushToast:text=>toasts.push(text)};
+  await assert.rejects(api.flushPersist(()=>state),/database disk image is malformed/);
+  assert.equal(attempts,1);
+  assert.match(toasts[0],/database disk image is malformed/);
+  assert.doesNotMatch(toasts[0],/检查磁盘空间/);
+});
+
+test('a failed message deletion remains pending through draft saves and is retried with the next message snapshot', async () => {
+  const {api,calls}=await setup({sqlite:true});
+  const snapshot={phones:[],contacts:[{id:'c'}],chats:[{id:'chat'}],messages:[{id:'old',chatId:'chat'}],followUps:[],settings:{}};
+  await api.saveAppState(snapshot);
+  const invoke=globalThis.__storageTestInvoke;
+  let fail=true;
+  globalThis.__storageTestInvoke=async(cmd,args)=>{if(cmd==='db_save' && fail)throw 'disk I/O error';return invoke(cmd,args);};
+  await assert.rejects(api.saveAppState({...snapshot,messages:[],deletedMessageIds:['old']}),/保存失败/);
+  fail=false;
+  await api.saveAppState({...snapshot,messages:[],dirty:{drafts:true}});
+  assert.deepEqual(calls.at(-1).args.snapshot.deletedMessageIds,[]);
+  await api.saveAppState({...snapshot,messages:[],dirty:{messages:true}});
+  assert.deepEqual(calls.at(-1).args.snapshot.deletedMessageIds,['old']);
+  await api.saveAppState({...snapshot,messages:[],dirty:{messages:true}});
+  assert.deepEqual(calls.at(-1).args.snapshot.deletedMessageIds,[]);
+});
+
+test('restored messages and successful full replacements cancel earlier failed deletions', async () => {
+  for(const replaceMessages of [false,true]){
+    const {api,calls}=await setup({sqlite:true});
+    const snapshot={phones:[],contacts:[{id:'c'}],chats:[{id:'chat'}],messages:[{id:'old',chatId:'chat'}],followUps:[],settings:{}};
+    await api.saveAppState(snapshot);
+    const invoke=globalThis.__storageTestInvoke;
+    globalThis.__storageTestInvoke=async cmd=>{if(cmd==='db_save')throw 'disk I/O error';};
+    await assert.rejects(api.saveAppState({...snapshot,messages:[],deletedMessageIds:['old']}),/保存失败/);
+    globalThis.__storageTestInvoke=invoke;
+    await api.saveAppState({...snapshot,replaceMessages});
+    assert.deepEqual(calls.at(-1).args.snapshot.deletedMessageIds,[]);
+    await api.saveAppState({...snapshot,messages:[],dirty:{messages:true}});
+    assert.deepEqual(calls.at(-1).args.snapshot.deletedMessageIds,[]);
+  }
+});
+
 test("save guards stop on database read failure instead of assuming an empty database", async () => {
   const { api, calls } = await setup({ sqlite: true, readError: true });
   await assert.rejects(api.saveAppState({ phones: [], contacts: [], chats: [], messages: [], followUps: [], settings: {} }), /SQLite unavailable/);
