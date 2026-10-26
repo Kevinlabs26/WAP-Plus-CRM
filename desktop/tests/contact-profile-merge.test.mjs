@@ -17,7 +17,7 @@ const { createContactMergeActions } = await import("data:text/javascript;base64,
 test("sharing a customer profile preserves every account identity, chat and cold-history reference", () => {
   let state = { contacts: [
     { id: "a", accountId: "wa-a", channelAddress: "111@lid", phone: "+12025550100", name: "Customer", tags: ["a"], notes: "notes" },
-    { id: "b", accountId: "wa-b", boundPhoneId: "wa-b", channelAddress: "222@lid", phone: "+12025550100", name: "Other name", tags: ["b"] },
+    { id: "b", accountId: "wa-b", boundPhoneId: "wa-b", channelAddress: "222@lid", phone: "+12025550100", name: "Other name", tags: ["b"], timeZone: "America/New_York" },
   ], chats: [{ id: "bridge-chat-a", contactId: "a", accountId: "wa-a" }, { id: "bridge-chat-b", contactId: "b", accountId: "wa-b" }],
   messages: [], followUps: [{ id: "f", contactId: "b", contactName: "Other name" }], activities: [],
   selectedChatId: "bridge-chat-b", settings: { chatFolders: [{ id: "folder", chatIds: ["bridge-chat-b"] }] } };
@@ -30,6 +30,7 @@ test("sharing a customer profile preserves every account identity, chat and cold
   assert.equal(state.contacts[1].boundPhoneId, "wa-b");
   assert.equal(state.contacts[1].name, "Customer");
   assert.equal(state.contacts[1].notes, "notes");
+  assert.ok(state.contacts.every(contact => contact.timeZone === "America/New_York"));
   assert.deepEqual(state.contacts[1].tags, ["a", "b"]);
   assert.equal(state.chats.length, 2);
   assert.deepEqual(state.chats.map(c => [c.id, c.accountId, c.contactId]), chats.map(c => [c.id, c.accountId, c.contactId]));

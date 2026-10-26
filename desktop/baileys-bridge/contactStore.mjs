@@ -127,9 +127,8 @@ export function createContactStore(deps) {
               (jid.endsWith("@s.whatsapp.net") ? jid : existing.pnJid || ""),
             displayName: prettyName(
               // 新名字优先（pushName），否则保留旧的好名字
-              isHumanName(name)
-                ? name
-                : c.displayName || existing.displayName || name,
+              [name, c.displayName, existing.displayName].find(isHumanName) ||
+                c.displayName || existing.displayName || name,
               phoneE164,
               jid
             ),

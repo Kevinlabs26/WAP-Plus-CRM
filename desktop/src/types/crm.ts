@@ -32,6 +32,8 @@ export interface Contact {
   /** Baileys 会话地址；手机号被 WhatsApp 隐藏时仍可用 @lid 收发 */
   channelAddress?: string;
   country?: string;
+  /** 手动选定的 IANA 时区；留空显示号码归属国家的全部当地时间。 */
+  timeZone?: string;
   /** 朗读/TTS 语言偏好（BCP47 短码如 zh-CN/fr-FR）；空 = 自动探测 */
   language?: string;
   company?: string;

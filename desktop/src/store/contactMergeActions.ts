@@ -31,6 +31,7 @@ export function createContactMergeActions({
         phone: keep.phone || drops.find((d) => d.phone)?.phone || "",
         company: keep.company || drops.find((d) => d.company)?.company,
         country: keep.country || drops.find((d) => d.country)?.country,
+        timeZone: keep.timeZone || drops.find((d) => d.timeZone)?.timeZone,
         source: keep.source || drops.find((d) => d.source)?.source,
         owner: keep.owner || drops.find((d) => d.owner)?.owner,
         notes: keep.notes || drops.find((d) => d.notes)?.notes,

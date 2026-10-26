@@ -583,10 +583,10 @@ export function applyMessagesSync(opts: {
         200
       );
       const resolvedName =
-        incomingName && !isInternalName(incomingName)
-          ? incomingName
-          : contact.name && !isInternalName(contact.name)
-            ? contact.name
+        contact.name && !isInternalName(contact.name)
+          ? contact.name
+          : incomingName && !isInternalName(incomingName)
+            ? incomingName
             : "";
 
       // 真名写回联系人（历史/实时）

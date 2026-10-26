@@ -1,4 +1,5 @@
 import { isValidAccountId } from "@/types/account";
+import { getTimezone } from "countries-and-timezones";
 import type {
   Activity,
   ChatPreview,
@@ -272,6 +273,7 @@ function sanitizeContact(raw: unknown): Contact | null {
     personKey: str(c.personKey, 120) || undefined,
     channelAddress: str(c.channelAddress, 200) || undefined,
     country: str(c.country, 80) || undefined,
+    timeZone: typeof c.timeZone === "string" && c.timeZone.length <= 80 ? getTimezone(c.timeZone)?.name : undefined,
     company: str(c.company, 200) || undefined,
     source: str(c.source, 120) || undefined,
     owner: str(c.owner, 120) || undefined,

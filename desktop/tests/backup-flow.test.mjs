@@ -58,6 +58,21 @@ test('failed restore preserves original data and previous cached attachments', a
   assert.equal(globalThis.restoreMedia.get('media'), 'data:image/png;base64,OLD');
   assert.deepEqual(get().draftReplyByChatId, { original: 'keep on failure' });
 });
+
+test('restoring contacts preserves selected time zones while rejecting invalid imported values', async () => {
+  const { get } = setup();
+  const contacts = [
+    { ...backup.contacts[0], timeZone: 'Africa/Maputo' },
+    { ...backup.contacts[0], id: 'bad-zone', timeZone: 'Wrong/City' },
+    { ...backup.contacts[0], id: 'bad-type', timeZone: { name: 'Africa/Lagos' } },
+  ];
+  assert.deepEqual(await get().importBackup({ ...backup, contacts }), { ok: true });
+  for (const rows of [get().contacts, globalThis.restoreSaved.contacts]) {
+    assert.equal(rows.find(c => c.id === 'restored').timeZone, 'Africa/Maputo');
+    assert.equal(rows.find(c => c.id === 'bad-zone').timeZone, undefined);
+    assert.equal(rows.find(c => c.id === 'bad-type').timeZone, undefined);
+  }
+});
 test('media write failure stops restore before writing the database', async () => {
   const { get } = setup(); globalThis.restoreMediaFail = true;
   assert.equal((await get().importBackup(backup)).ok, false);

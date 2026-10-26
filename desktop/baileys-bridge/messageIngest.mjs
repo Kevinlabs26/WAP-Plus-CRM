@@ -177,7 +177,7 @@ export function createMessageIngest(deps) {
     const fromMe = Boolean(message.key?.fromMe);
     const pushName = fromMe
       ? ""
-      : (message.pushName || message.verifiedBizName || "").trim();
+      : ([message.pushName, message.verifiedBizName].find(isHumanName) || "").trim();
     const storedName = lookupStoredName(jid, isGroup ? "" : alt);
     const nameHint = isGroup ? storedName : pushName || storedName;
     const contact = upsertContact(

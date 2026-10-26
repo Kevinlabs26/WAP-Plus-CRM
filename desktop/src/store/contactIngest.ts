@@ -123,6 +123,7 @@ export function ensureIngestContact(
         stage: keep.stage !== "new" ? keep.stage : drop.stage,
         company: keep.company || drop.company,
         country: keep.country || drop.country,
+        timeZone: keep.timeZone || drop.timeZone,
       };
       const dropChatId = `bridge-chat-${dropId}`;
       const keepChatId = `bridge-chat-${keepId}`;
@@ -185,9 +186,10 @@ export function ensureIngestContact(
       isGroup: isGroup || prev.isGroup,
     });
     const nextPhone = phone || prev.phone;
-    // 群：有真 subject 就更新；空/占位不覆盖已有群名
+    // shortcut: 旧私聊名无来源标记，先保留避免覆盖备注；需跟随昵称变更时再记录来源。
     const nextName =
       name && !isInternalContactName(name, { isGroup: isGroup || prev.isGroup })
+        && (prevNameInternal || isGroup || prev.isGroup)
         ? name
         : prevNameInternal
           ? (isGroup || prev.isGroup
