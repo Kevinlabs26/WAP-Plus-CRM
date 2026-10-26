@@ -18,7 +18,7 @@ import {
   baileysLabels,
   baileysSetChatLabel,
 } from "@/lib/baileys";
-import { generateSuggestions, hasRealAiKey, type SuggestResult } from "@/lib/aiSuggest";
+import { generateSuggestions, getSuggestionContextKey, hasRealAiKey, type SuggestResult } from "@/lib/aiSuggest";
 import type { Message, WhatsAppLabel } from "@/types/crm";
 import { ContactAvatar } from "./ContactAvatar";
 import { Button, SectionLabel } from "@/components/ui/primitives";
@@ -109,7 +109,7 @@ export function CrmAiPanel() {
   const [loading, setLoading] = useState(false);
   const [aiSource, setAiSource] = useState<string>(settings.aiProvider);
   const [aiError, setAiError] = useState("");
-  const autoKey = useRef("");
+  const generation = useRef(0);
   const suggestionCache = useRef(
     new Map<string, { suggestions: SuggestResult[]; source: string }>()
   );
@@ -207,25 +207,19 @@ export function CrmAiPanel() {
     [settings.quickReplies, settings.quickReplyCustomCategories]
   );
 
-  const makeSuggestionKey = () =>
-    [
-      selectedChatId || "",
-      contact?.id || "",
-      aiAccountId || "default",
-      settings.aiProvider,
-      settings.aiModel,
-      settings.aiSystemPrompt,
-      settings.aiSystemPromptByAccountId?.[aiAccountId || ""] || "",
-      lastIn?.id || "none",
-    ].join("\u001f");
+  const suggestionKey = useMemo(() => JSON.stringify([
+    selectedChatId || "", selectedContactId || "",
+    getSuggestionContextKey(contact, thread, settings, aiAccountId),
+  ]), [selectedChatId, selectedContactId, contact, thread, settings, aiAccountId]);
+  const latestSuggestionKey = useRef(suggestionKey);
+  latestSuggestionKey.current = suggestionKey;
 
-  const rememberSuggestions = (result: {
+  const rememberSuggestions = (key: string, result: {
     suggestions: SuggestResult[];
     source: string;
     fallback?: boolean;
   }) => {
     if (result.fallback) return;
-    const key = makeSuggestionKey();
     suggestionCache.current.set(key, {
       suggestions: result.suggestions,
       source: result.source,
@@ -311,7 +305,6 @@ export function CrmAiPanel() {
     setTagsOpen(false);
     setFollowSchedulerOpen(false);
     setFollowNote("");
-    autoKey.current = "";
     setAiError("");
     useAppStore.setState({ aiSuggestions: [] });
   }, [selectedChatId, selectedContactId]);
@@ -323,77 +316,78 @@ export function CrmAiPanel() {
       setAiSource("unconfigured");
       return;
     }
+    const request = ++generation.current;
+    const key = suggestionKey;
     setLoading(true);
     setAiError("");
     try {
       const result = await generateSuggestions(contact, thread, settings, {
         accountId: aiAccountId,
       });
+      if (request !== generation.current || latestSuggestionKey.current !== key) return;
       useAppStore.setState({ aiSuggestions: result.suggestions });
       setAiSource(result.source === "mock" ? t("crmPanel.localTemplate") : result.source);
       setAiError(result.error || "");
-      rememberSuggestions(result);
+      rememberSuggestions(key, result);
       pushToast(
         result.fallback ? result.error || "API \u4e0d\u53ef\u7528" : "\u5df2\u751f\u6210\u56de\u590d\u5efa\u8bae",
         result.fallback ? "error" : "success"
       );
     } catch (error) {
+      if (request !== generation.current || latestSuggestionKey.current !== key) return;
       pushToast(error instanceof Error ? error.message : "\u751f\u6210\u5efa\u8bae\u5931\u8d25", "error");
     } finally {
-      setLoading(false);
+      if (request === generation.current && latestSuggestionKey.current === key) setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (collapsed || !contact || !thread.length || !aiReady) return;
-    const key = makeSuggestionKey();
-    if (autoKey.current === key) return;
-    autoKey.current = key;
+    const request = ++generation.current;
+    const key = suggestionKey;
+    useAppStore.setState({ aiSuggestions: [] });
+    if (collapsed || !contact || !thread.length || !aiReady) {
+      setLoading(false);
+      return () => { generation.current++; };
+    }
     const cached = suggestionCache.current.get(key);
     if (cached) {
       useAppStore.setState({ aiSuggestions: cached.suggestions });
       setAiSource(cached.source === "mock" ? t("crmPanel.localTemplate") : cached.source);
       setAiError("");
       setLoading(false);
-      return;
+      return () => { generation.current++; };
     }
     let cancelled = false;
     setLoading(true);
     setAiError("");
     const timer = window.setTimeout(() => {
+      if (request !== generation.current || latestSuggestionKey.current !== key) return;
       void generateSuggestions(contact, thread, settings, {
         accountId: aiAccountId,
       })
         .then((result) => {
-          if (cancelled) return;
+          if (cancelled || request !== generation.current || latestSuggestionKey.current !== key) return;
           useAppStore.setState({ aiSuggestions: result.suggestions });
           setAiSource(result.source === "mock" ? t("crmPanel.localTemplate") : result.source);
           setAiError(result.error || "");
-          rememberSuggestions(result);
+          rememberSuggestions(key, result);
           setLoading(false);
         })
         .catch(() => {
-          if (!cancelled) setLoading(false);
+          if (!cancelled && request === generation.current && latestSuggestionKey.current === key) setLoading(false);
         });
     }, 350);
     return () => {
       cancelled = true;
+      generation.current++;
       window.clearTimeout(timer);
-      setLoading(false);
     };
-    // Only refresh when the conversation changes.
+    // 回执不改变 key；发言、转写、备注、身份或模型变化才重新生成。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     collapsed,
-    selectedChatId,
-    contact?.id,
-    aiAccountId,
-    lastIn?.id,
+    suggestionKey,
     aiReady,
-    settings.aiProvider,
-    settings.aiModel,
-    settings.aiSystemPrompt,
-    settings.aiSystemPromptByAccountId,
   ]);
 
   const refreshLabels = async () => {

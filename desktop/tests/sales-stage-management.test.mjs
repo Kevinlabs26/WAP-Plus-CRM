@@ -11,7 +11,7 @@ const mocks = {
   "@/store/appStore": "export const useAppStore=selector=>selector(globalThis.stageState);useAppStore.getState=()=>globalThis.stageState;",
   "@/i18n": "export const useI18n=()=>({t:(key,params)=>globalThis.stageTranslate(key,params)});",
   "@/components/ui/primitives": "export const Button='button',Input='input';",
-  "@/lib/storage": "export const getStorageEngine=()=> 'idb';export const saveSecureSecrets=async()=>true;export const registerChatMessageReplacements=()=>{};export const clearStoredRemoteMessages=async()=>{};export const deleteStoredMessagesByKeys=async()=>{};export const updateStoredMessageAcks=async()=>{};export const clearStoredChatMessages=async()=>{};export const getMessageFromDb=async()=>null;export const searchMessagesInDb=async()=>null;",
+  "@/lib/storage": "export const getStorageEngine=()=> 'idb'; export const canPersistRowDeltas=()=>false;export const saveSecureSecrets=async()=>true;export const registerChatMessageReplacements=()=>{};export const clearStoredRemoteMessages=async()=>{};export const deleteStoredMessagesByKeys=async()=>{};export const updateStoredMessageAcks=async()=>{};export const clearStoredChatMessages=async()=>{};export const getMessageFromDb=async()=>null;export const searchMessagesInDb=async()=>null;",
   "./persist": "export const persist=(get,immediate)=>globalThis.stageSaves.push({contacts:get().contacts,settings:get().settings,immediate});export const scheduleStatsRecompute=()=>{};export const accountCreatedAtOf=()=>undefined;",
   "./exportDataActions": "export const exportBackup=()=>{};export const exportContactsCsv=()=>{};",
   "./restoreGuard": "export const deferDuringRestore=()=>false;export const isDataRestoreActive=()=>Boolean(globalThis.stageRestoring);",

@@ -91,7 +91,12 @@ test("private notifications exclude customer text, names and avatars", () => {
 test("old manual history outside the context window does not prevent a fresh reply", async () => {
   const inbound = setup("long-history");
   globalThis.flowState.messages.unshift(...Array.from({ length: 20 }, (_, index) => ({ ...inbound, id: "old-" + index, direction: index === 0 ? "out" : "in", sentAt: new Date(Date.now() - 3600000 + index).toISOString() })));
-  globalThis.generateFlow = async () => reply;
+  globalThis.generateFlow = async (_contact, context) => {
+    assert.ok(context.length > 14);
+    assert.ok(context.some(message => message.id === "old-0"));
+    assert.ok(context.every(message => message.chatId === inbound.chatId));
+    return reply;
+  };
   await autoReplyInbound(inbound);
   assert.deepEqual(globalThis.sentFlow, ["Hello there"]);
 });

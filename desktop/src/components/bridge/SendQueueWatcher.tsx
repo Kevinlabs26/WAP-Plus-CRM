@@ -52,11 +52,19 @@ function isTransientError(result: {
  * 不阻塞 UI；与 ChatPanel 手动「重试」共用 updateMessageDelivery。
  */
 export function SendQueueWatcher() {
-  const flushLock = useRef(false);
+  const inflightAccounts = useRef(new Set<string>());
   const inflight = useRef(new Set<string>());
 
   useEffect(() => {
     let cancelled = false;
+
+    const accountFor = (msg: Message, state = useAppStore.getState()) => resolveWaSendAccountId(
+      state.settings.waAccounts,
+      msg.accountId || state.contacts.find(c => c.id === msg.contactId)?.accountId ||
+        state.settings.liveBaileysAccountId || state.settings.activeAccountId,
+      state.settings.liveBaileysAccountId,
+      state.baileysUi.connection
+    );
 
     const flushOne = async (queued: Message) => {
       // 前一条的网络请求期间，用户可能取消、删除或推迟了本条消息。
@@ -92,19 +100,7 @@ export function SendQueueWatcher() {
         });
         return;
       }
-      const requestedAccountId =
-        msg.accountId ||
-        (msg.contactId
-          ? state.contacts.find((c) => c.id === msg.contactId)?.accountId
-          : undefined) ||
-        settings.liveBaileysAccountId ||
-        settings.activeAccountId;
-      const accountId = resolveWaSendAccountId(
-        settings.waAccounts,
-        requestedAccountId,
-        settings.liveBaileysAccountId,
-        state.baileysUi.connection
-      );
+      const accountId = accountFor(msg, state);
 
       if (
         channelId === "baileys" &&
@@ -220,21 +216,28 @@ export function SendQueueWatcher() {
       }
     };
 
-    const tick = async () => {
-      if (cancelled || flushLock.current) return;
-      flushLock.current = true;
-      try {
-        const due = useAppStore
-          .getState()
-          .listRetryableOutgoing()
-          .sort((a, b) => a.sentAt.localeCompare(b.sentAt))
-          .slice(0, 3);
-        for (const msg of due) {
-          if (cancelled) break;
-          await flushOne(msg);
-        }
-      } finally {
-        flushLock.current = false;
+    const tick = () => {
+      if (cancelled) return;
+      const state = useAppStore.getState();
+      const due = state.listRetryableOutgoing().filter(msg =>
+        !msg.mediaType && isRetryableOutgoing(msg) &&
+        !state.settings.scheduledMessages?.some(task => task.messageId === msg.id && task.status === "cancelled")
+      ).sort((a, b) => a.sentAt.localeCompare(b.sentAt));
+      for (const msg of due) {
+        if (cancelled || inflightAccounts.current.size >= 3) break;
+        const account = accountFor(msg, state) || msg.deviceId || "legacy";
+        if (inflightAccounts.current.has(account) || inflight.current.has(msg.id)) continue;
+        inflightAccounts.current.add(account);
+        // 同号保序；慢账号不占住其它账号的重试，发送仍经过统一限速门闸。
+        void flushOne(msg).catch(error => {
+          if (!cancelled) useAppStore.getState().pushToast(String(error), "error");
+        }).finally(() => {
+          inflightAccounts.current.delete(account);
+          if (!cancelled) {
+            const current = useAppStore.getState().messages.find(item => item.id === msg.id);
+            if (!current || !isRetryableOutgoing(current)) tick();
+          }
+        });
       }
     };
 

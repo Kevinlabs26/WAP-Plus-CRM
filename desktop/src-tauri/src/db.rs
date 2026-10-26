@@ -41,6 +41,15 @@ pub struct AppSnapshot {
     pub replace_messages: bool,
     #[serde(default)]
     pub chat_message_remaps: Vec<ChatMessageRemap>,
+    #[serde(default)]
+    pub row_deltas: Option<RowDeltas>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RowDeltas {
+    // 存在时 contacts/chats 只携带变更行，这里列出明确删除的 id。
+    pub contacts: Option<Vec<String>>,
+    pub chats: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -337,12 +346,15 @@ fn upsert_json_table(
     tx: &rusqlite::Transaction<'_>,
     table: &str,
     rows: &[(String, String)],
+    deleted_ids: Option<&[String]>,
 ) -> Result<(usize, usize, usize), String> {
     let keep = format!("_keep_{table}");
+    if deleted_ids.is_none() {
     tx.execute_batch(&format!(
         "CREATE TEMP TABLE IF NOT EXISTS {keep}(id TEXT PRIMARY KEY NOT NULL); DELETE FROM {keep};"
     ))
     .map_err(|e| e.to_string())?;
+    }
 
     let insert_keep = format!("INSERT OR IGNORE INTO {keep}(id) VALUES (?1)");
     // ON CONFLICT DO UPDATE … WHERE 不同才写，避免无意义刷盘
@@ -354,8 +366,10 @@ fn upsert_json_table(
     let mut written = 0usize;
     let mut skipped = 0usize;
     for (id, json) in rows {
+        if deleted_ids.is_none() {
         tx.execute(&insert_keep, params![id])
             .map_err(|e| e.to_string())?;
+        }
         let n = tx
             .execute(&upsert, params![id, json])
             .map_err(|e| e.to_string())?;
@@ -364,6 +378,19 @@ fn upsert_json_table(
         } else {
             skipped += 1;
         }
+    }
+    if let Some(ids) = deleted_ids {
+        let mut deleted = 0;
+        for id in ids {
+            if id.is_empty() || rows.iter().any(|row| row.0 == *id) {
+                return Err("增量删除 id 为空或与更新记录冲突".into());
+            }
+            if table == "contacts" {
+                tx.execute("DELETE FROM activities WHERE json_extract(json, '$.contactId') = ?1", params![id]).map_err(|e| e.to_string())?;
+            }
+            deleted += tx.execute(&format!("DELETE FROM {table} WHERE id = ?1"), params![id]).map_err(|e| e.to_string())?;
+        }
+        return Ok((written, skipped, deleted));
     }
     if table == "contacts" {
         tx.execute(
@@ -460,6 +487,7 @@ pub fn update_message_acks(conn: &Connection, items: &[Value], account_id: &str)
 pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String> {
     // dirty=None → 全量（兼容旧前端 / force 保存）。在事务前拒绝超限，保留原数据。
     let dirty = snap.dirty.clone().unwrap_or_else(PersistDirtyFlags::all_true);
+    let row_deltas = if snap.replace_messages { None } else { snap.row_deltas.as_ref() };
     let drafts_json = if dirty.drafts {
         Some(serialize_chat_drafts(&snap.draft_reply_by_chat_id)?)
     } else {
@@ -502,7 +530,7 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
         let j = serde_json::to_string(p).map_err(|e| e.to_string())?;
         phone_rows.push((id, j));
     }
-    let (w, s, d) = upsert_json_table(&tx, "phones", &phone_rows)?;
+    let (w, s, d) = upsert_json_table(&tx, "phones", &phone_rows, None)?;
     total_written += w;
     total_skipped += s;
     total_deleted += d;
@@ -515,7 +543,7 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
         let j = serde_json::to_string(c).map_err(|e| e.to_string())?;
         contact_rows.push((id, j));
     }
-    let (w, s, d) = upsert_json_table(&tx, "contacts", &contact_rows)?;
+    let (w, s, d) = upsert_json_table(&tx, "contacts", &contact_rows, row_deltas.and_then(|delta| delta.contacts.as_deref()))?;
     total_written += w;
     total_skipped += s;
     total_deleted += d;
@@ -528,7 +556,7 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
         let j = serde_json::to_string(c).map_err(|e| e.to_string())?;
         chat_rows.push((id, j));
     }
-    let (w, s, d) = upsert_json_table(&tx, "chats", &chat_rows)?;
+    let (w, s, d) = upsert_json_table(&tx, "chats", &chat_rows, row_deltas.and_then(|delta| delta.chats.as_deref()))?;
     total_written += w;
     total_skipped += s;
     total_deleted += d;
@@ -624,7 +652,7 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
     }
     // 已删除的会话：清掉其磁盘消息（chats 表已按快照同步）
     // 仅当 chats 也在本轮写入时做，避免 dirty.messages-only 误删
-    if dirty.chats {
+    if dirty.chats && row_deltas.and_then(|delta| delta.chats.as_ref()).is_none() {
         total_deleted += tx
             .execute(
                 "DELETE FROM messages WHERE chat_id IS NOT NULL AND chat_id != '' AND chat_id NOT IN (SELECT id FROM chats)",
@@ -640,6 +668,17 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
     }
     } // end dirty.messages
 
+    if dirty.chats {
+        if let Some(ids) = row_deltas.and_then(|delta| delta.chats.as_ref()) {
+            for id in ids {
+                if fts_available(&tx) {
+                    tx.execute("DELETE FROM messages_fts WHERE id IN (SELECT id FROM messages WHERE chat_id = ?1)", params![id]).map_err(|e| e.to_string())?;
+                }
+                total_deleted += tx.execute("DELETE FROM messages WHERE chat_id = ?1", params![id]).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
     if dirty.follow_ups {
     let mut fu_rows = Vec::with_capacity(snap.follow_ups.len());
     for f in &snap.follow_ups {
@@ -647,7 +686,7 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
         let j = serde_json::to_string(f).map_err(|e| e.to_string())?;
         fu_rows.push((id, j));
     }
-    let (w, s, d) = upsert_json_table(&tx, "follow_ups", &fu_rows)?;
+    let (w, s, d) = upsert_json_table(&tx, "follow_ups", &fu_rows, None)?;
     total_written += w;
     total_skipped += s;
     total_deleted += d;
@@ -1204,6 +1243,7 @@ pub fn load_snapshot(conn: &Connection) -> Result<Option<AppSnapshot>, String> {
         deleted_message_ids: Vec::new(),
         replace_messages: false,
         chat_message_remaps: Vec::new(),
+        row_deltas: None,
     }))
 }
 
@@ -1235,6 +1275,7 @@ pub fn db_info(conn: &Connection) -> Result<Value, String> {
 
     Ok(serde_json::json!({
         "engine": "sqlite",
+        "snapshotRowDeltas": true,
         "contacts": contacts,
         "messages": messages,
         "activities": activities,
@@ -1891,6 +1932,60 @@ mod tests {
         update_message_acks(&conn, &[json!({"id":"missing", "ack":"read"})], "wa-a").unwrap();
         let indexes: i64 = conn.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('idx_messages_wa_message_id', 'idx_messages_wa_key_id')", [], |row| row.get(0)).unwrap();
         assert_eq!(indexes, 2);
+    }
+
+    #[test]
+    fn row_deltas_touch_only_changed_rows_and_preserve_other_accounts_and_cold_history() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        save_snapshot(&conn, &AppSnapshot {
+            contacts: vec![json!({"id":"a"}), json!({"id":"b"}), json!({"id":"other"})],
+            chats: vec![json!({"id":"a"}), json!({"id":"b"}), json!({"id":"other"})],
+            messages: vec![json!({"id":"cold-a", "chatId":"a", "accountId":"one"}), json!({"id":"cold-b", "chatId":"b", "accountId":"one"}), json!({"id":"cold-other", "chatId":"other", "accountId":"two"})],
+            activities: vec![json!({"id":"act-b", "contactId":"b"}), json!({"id":"act-other", "contactId":"other"})],
+            ..Default::default()
+        }).unwrap();
+        let before = conn.total_changes();
+        save_snapshot(&conn, &AppSnapshot {
+            contacts: vec![json!({"id":"a", "name":"changed"})],
+            chats: vec![json!({"id":"a", "lastMessage":"new"})],
+            dirty: Some(PersistDirtyFlags { contacts: true, chats: true, ..Default::default() }),
+            row_deltas: Some(RowDeltas { contacts: Some(vec![]), chats: Some(vec![]) }),
+            ..Default::default()
+        }).unwrap();
+        assert!(conn.total_changes() - before <= 3);
+        assert_eq!(load_table(&conn, "contacts").unwrap().len(), 3);
+        assert!(get_message_by_id(&conn, "cold-other").unwrap().is_some());
+        save_snapshot(&conn, &AppSnapshot {
+            dirty: Some(PersistDirtyFlags { contacts: true, chats: true, ..Default::default() }),
+            row_deltas: Some(RowDeltas { contacts: Some(vec!["b".into()]), chats: Some(vec!["b".into()]) }),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(load_table(&conn, "contacts").unwrap().len(), 2);
+        assert!(get_message_by_id(&conn, "cold-b").unwrap().is_none());
+        assert!(get_message_by_id(&conn, "cold-a").unwrap().is_some());
+        assert!(get_message_by_id(&conn, "cold-other").unwrap().is_some());
+        assert_eq!(load_table(&conn, "activities").unwrap(), vec![json!({"id":"act-other", "contactId":"other"})]);
+    }
+
+    #[test]
+    fn invalid_row_deltas_roll_back_and_complete_restore_retains_replacement_semantics() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        save_snapshot(&conn, &AppSnapshot { contacts: vec![json!({"id":"a", "name":"original"}), json!({"id":"b"})], ..Default::default() }).unwrap();
+        assert!(save_snapshot(&conn, &AppSnapshot {
+            contacts: vec![json!({"id":"a", "name":"changed"})],
+            dirty: Some(PersistDirtyFlags { contacts: true, ..Default::default() }),
+            row_deltas: Some(RowDeltas { contacts: Some(vec!["a".into()]), ..Default::default() }),
+            ..Default::default()
+        }).is_err());
+        assert_eq!(load_table(&conn, "contacts").unwrap()[0]["name"], "original");
+        save_snapshot(&conn, &AppSnapshot {
+            contacts: vec![json!({"id":"restored"})], replace_messages: true,
+            row_deltas: Some(RowDeltas { contacts: Some(vec![]), chats: Some(vec![]) }),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(load_table(&conn, "contacts").unwrap(), vec![json!({"id":"restored"})]);
     }
 
     #[test]

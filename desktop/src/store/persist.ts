@@ -1,6 +1,7 @@
 import {
   saveAppState,
   getStorageEngine,
+  canPersistRowDeltas,
   type PersistDirtyFlags,
 } from "@/lib/storage";
 import {
@@ -15,7 +16,7 @@ import type {
   PersistSlice,
 } from "./types";
 import { deferDuringRestore, isDataRestoreActive } from "./restoreGuard";
-import { diffMessageRows } from "./messagePersistDelta";
+import { diffMessageRows as diffRows } from "./messagePersistDelta";
 import { assertChatDraftCapacity } from "@/lib/chatDrafts";
 
 /** SQLite 增量保存，IDB 保存完整快照。UI 交互用防抖；退出前可 flushPersist。 */
@@ -131,11 +132,18 @@ export function buildPersistSlice(
   get: () => AppState,
   dirty?: PersistDirtyFlags,
   messageRows?: AppState["messages"],
-  deletedMessageIds?: string[]
+  deletedMessageIds?: string[],
+  rowChanges?: {
+    contacts?: { changedRows: AppState["contacts"]; deletedIds: string[] };
+    chats?: { changedRows: AppState["chats"]; deletedIds: string[] };
+  }
 ): PersistSlice & {
   dirty?: PersistDirtyFlags;
   deletedMessageIds?: string[];
   messageCount: number;
+  contactCount: number;
+  chatCount: number;
+  rowDeltas?: { contacts?: string[]; chats?: string[] };
 } {
   const s = get();
   const sqlite = getStorageEngine() === "sqlite";
@@ -169,8 +177,11 @@ export function buildPersistSlice(
     contacts:
       sqlite && dirty?.contacts === false
         ? s.contacts
-        : stripHeavyContactMediaForPersist(s.contacts),
-    chats: s.chats,
+        : stripHeavyContactMediaForPersist(rowChanges?.contacts?.changedRows ?? s.contacts),
+    chats: rowChanges?.chats?.changedRows ?? s.chats,
+    contactCount: s.contacts.length,
+    chatCount: s.chats.length,
+    rowDeltas: rowChanges ? { contacts: rowChanges.contacts?.deletedIds, chats: rowChanges.chats?.deletedIds } : undefined,
     messageCount: s.messages.length,
     messages:
       sqlite && dirty?.messages === false
@@ -185,6 +196,16 @@ export function buildPersistSlice(
     dirty,
     deletedMessageIds,
   };
+}
+
+function buildPendingPersistSlice(state: AppState, dirty: PersistDirtyFlags) {
+  const messageDelta = dirty.messages && persistedRefs
+    ? diffRows(persistedRefs.messages, state.messages) : undefined;
+  const rowChanges = persistedRefs && canPersistRowDeltas() ? {
+    contacts: dirty.contacts ? diffRows(persistedRefs.contacts, state.contacts) : undefined,
+    chats: dirty.chats ? diffRows(persistedRefs.chats, state.chats) : undefined,
+  } : undefined;
+  return buildPersistSlice(() => state, dirty, messageDelta?.changedRows, messageDelta?.deletedIds, rowChanges);
 }
 
 export function persist(
@@ -209,19 +230,10 @@ export function persist(
       persistTimer = null;
     }
     const dirty = persistedRefs ? pendingDirty : allDirty();
-    const messageDelta = dirty.messages && persistedRefs
-      ? diffMessageRows(persistedRefs.messages, state.messages)
-      : undefined;
+    const snapshot = buildPendingPersistSlice(state, dirty);
     persistedRefs = captureRefs(state);
     pendingDirty = noDirty();
-    const savePromise = saveAppState(
-      buildPersistSlice(
-        () => state,
-        dirty,
-        messageDelta?.changedRows,
-        messageDelta?.deletedIds
-      )
-    );
+    const savePromise = saveAppState(snapshot);
     void savePromise.catch((error) => reportPersistError(get, error));
     return savePromise;
   }
@@ -239,20 +251,10 @@ export function persist(
     markDirty(current);
     const dirty = pendingDirty;
     if (!Object.values(dirty).some(Boolean)) return;
-    const messageDelta =
-      dirty.messages && persistedRefs
-        ? diffMessageRows(persistedRefs.messages, current.messages)
-        : undefined;
+    const snapshot = buildPendingPersistSlice(current, dirty);
     pendingDirty = noDirty();
     persistedRefs = captureRefs(current);
-    void saveAppState(
-      buildPersistSlice(
-        () => current,
-        dirty,
-        messageDelta?.changedRows,
-        messageDelta?.deletedIds
-      )
-    ).catch((error) => reportPersistError(get, error));
+    void saveAppState(snapshot).catch((error) => reportPersistError(get, error));
     noteMainThreadWork("persist prepare", startedAt);
   };
   persistTimer = setTimeout(run, debounceMs);

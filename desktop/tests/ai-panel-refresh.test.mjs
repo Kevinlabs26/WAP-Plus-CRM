@@ -7,12 +7,14 @@ const source = await readFile(
 );
 
 assert.match(source, /useAppStore\.setState\(\{ aiSuggestions: \[\] \}\)/);
-assert.match(source, /const makeSuggestionKey = \(\) =>[\s\S]*?selectedChatId \|\| ""/);
+assert.match(source, /const suggestionKey = useMemo[\s\S]*?getSuggestionContextKey\(contact, thread, settings, aiAccountId\)/);
 assert.match(source, /useLayoutEffect\([\s\S]*?\[selectedChatId, selectedContactId, setCrmPanelCollapsed\]/);
 assert.match(source, /\}, \[selectedChatId, selectedContactId\]\)/);
-assert.match(source, /autoKey\.current = key;[\s\S]*?setLoading\(true\)/);
+assert.match(source, /const request = \+\+generation\.current/);
 assert.match(source, /suggestionCache/);
 assert.match(source, /window\.setTimeout\(\(\) =>/);
-assert.match(source, /lastIn\?\.id \|\| "none"/);
+assert.match(source, /latestSuggestionKey\.current !== key/);
+assert.match(source, /rememberSuggestions\(key, result\)/);
+assert.match(source, /\[\s*collapsed,\s*suggestionKey,\s*aiReady,\s*\]/);
 
 console.log("ai-panel-refresh.test.mjs ok");

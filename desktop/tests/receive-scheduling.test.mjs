@@ -18,9 +18,10 @@ const {BaileysWatcher}=await import('data:text/javascript;base64,'+Buffer.from(r
 const settle=async()=>{for(let i=0;i<50;i++)await Promise.resolve();};
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
 function fixture({typing=false,focused='b',blocked='',accounts=5}={}){
- const original={window:globalThis.window,document:globalThis.document,sessionStorage:globalThis.sessionStorage,navigator:globalThis.navigator,requestAnimationFrame:globalThis.requestAnimationFrame,cancelAnimationFrame:globalThis.cancelAnimationFrame},oldNow=Date.now;
+ const original={window:globalThis.window,document:globalThis.document,sessionStorage:globalThis.sessionStorage,navigator:globalThis.navigator,requestAnimationFrame:globalThis.requestAnimationFrame,cancelAnimationFrame:globalThis.cancelAnimationFrame,performance:globalThis.performance},oldNow=Date.now;
  let now=1700000000000,nextTimer=0,active=0,maxActive=0;
  Date.now=()=>now;
+ globalThis.performance={now:()=>now};
  const timers=new Map(),handlers=new Map(),cursors=new Map(),calls=[],statusCalls=[],ingested=[],errors=[],slow=deferred();
  globalThis.receiveTyping=typing;globalThis.receiveEpochs={};globalThis.receiveSave=async()=>{};
  const later=(fn,ms,interval=0)=>{const id=++nextTimer;timers.set(id,{fn,at:now+ms,interval});return id;};
@@ -93,8 +94,8 @@ test('live work has a short idle-callback deadline even when the browser is cont
  const ui=fixture({typing:true,accounts:1,focused:'a'});let sent=false;
  window.requestIdleCallback=(fn,{timeout})=>window.setTimeout(()=>fn({timeRemaining:()=>0,didTimeout:true}),timeout);
  window.cancelIdleCallback=id=>window.clearTimeout(id);
- globalThis.receiveEvents=async()=>{if(sent)return {cursor:2,events:[]};sent=true;return {cursor:2,events:[{type:'messages.sync',deviceId:'a',payload:{live:false,source:'history',items:Array.from({length:100},(_,i)=>({id:'idle-history-'+i}))}},{type:'messages.sync',deviceId:'a',payload:{live:true,items:[{id:'idle-live'}]}}]};};
- try{await ui.advance(4000);const ids=ui.ingested.flat().flatMap(e=>e.payload.items.map(i=>i.id));assert.equal(ids.length,101);assert.equal(ids.at(-1),'idle-live');}finally{ui.close();}
+ globalThis.receiveEvents=async()=>{if(sent)return {cursor:2,events:[]};sent=true;return {cursor:2,events:[{type:'messages.sync',deviceId:'a',payload:{live:false,source:'history',items:Array.from({length:1000},(_,i)=>({id:'idle-history-'+i}))}},{type:'messages.sync',deviceId:'a',payload:{live:true,items:[{id:'idle-live'}]}}]};};
+ try{await ui.advance(4000);const ids=ui.ingested.flat().flatMap(e=>e.payload.items.map(i=>i.id));assert.equal(ids.length,1001);assert.equal(ids.at(-1),'idle-live');assert.ok(ui.ingested.every(batch=>batch.flatMap(e=>e.payload.items||[e]).length<=48));}finally{ui.close();}
 });
 
 test('idle history batches stay coalesced instead of updating the store once per tiny chunk',async()=>{
@@ -115,4 +116,16 @@ test('failed checkpoints retry without waiting for another message and do not re
  globalThis.receiveSave=async()=>{if(++saves===1)throw new Error('temporary save failure');};
  globalThis.receiveEvents=async()=>{if(sent)return {cursor:1,events:[]};sent=true;return {cursor:1,events:[{type:'messages.sync',deviceId:'a',payload:{live:true,items:[{id:'once'}]}}]};};
  try{await ui.advance(2000);assert.equal(saves,1);assert.equal(ui.cursors.size,0);await ui.advance(16000);assert.equal(saves,2);assert.equal(ui.cursors.get('wap.baileys.eventCursor.a'),'1');assert.equal(ui.ingested.flat().flatMap(e=>e.payload.items).length,1);}finally{ui.close();}
+});
+
+test('slow productive background polls keep receiving while slow empty polls still back off',async()=>{
+ for(const productive of [false,true]){
+  const ui=fixture({accounts:2,focused:'a'});
+  globalThis.receiveEvents=async(cursor,id)=>{
+   ui.calls.push({id,at:Date.now(),cursor});
+   if(id==='b')await new Promise(resolve=>window.setTimeout(resolve,5000));
+   return {cursor:1,events:id==='b'&&productive?[{type:'messages.sync',deviceId:id,payload:{live:true,items:[{id:'new'}]}}]:[]};
+  };
+  try{await ui.advance(12000);const count=ui.calls.filter(c=>c.id==='b').length;assert.equal(count,productive?2:1);assert.ok(ui.calls.filter(c=>c.id==='a').length>=4);}finally{ui.close();}
+ }
 });

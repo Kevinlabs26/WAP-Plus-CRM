@@ -300,6 +300,59 @@ test("generateSuggestions mock mode returns English for english cue", async () =
   );
 });
 
+for (const provider of ["custom", "gemini", "ollama"]) {
+  test(`${provider} receives conversational defaults, sender examples and account overrides in manual and auto modes`, async (t) => {
+    let request;
+    let replyCount = 3;
+    t.mock.method(globalThis, "fetch", async (_url, options) => {
+      request = JSON.parse(options.body);
+      const content = JSON.stringify(["D'accord.", "Bien reçu, merci.", "Merci pour le document."].slice(0, replyCount).map(text => ({ text, tone: "simple" })));
+      return new Response(JSON.stringify(provider === "gemini"
+        ? { candidates: [{ content: { parts: [{ text: content }] } }] }
+        : provider === "ollama" ? { message: { content } }
+        : { choices: [{ message: { content } }] }), { status: 200 });
+    });
+    const settings = {
+      aiProvider: provider, aiModel: "test-model", geminiKey: "test-key",
+      customAiBaseUrl: "https://example.invalid/v1", customAiKey: "test-key", customAiModel: "test-model",
+      ollamaUrl: "http://127.0.0.1:11434",
+    };
+    const contact = { name: "Alice", accountId: "personal", stage: "won", tags: [] };
+    const recent = [
+      { id: "out", direction: "out", body: "Salut, ça marche !", sentAt: "2026-01-01T00:00:00Z" },
+      { id: "in", direction: "in", body: "Je t'ai envoyé le document.", sentAt: "2026-01-01T00:01:00Z" },
+    ];
+    for (const mode of ["manual", "account", "auto"]) {
+      const auto = mode === "auto";
+      replyCount = auto ? 1 : 3;
+      const result = await generateSuggestions(contact, recent, mode === "account" ? {
+        ...settings, aiSystemPrompt: "GLOBAL PROFILE",
+        aiSystemPromptByAccountId: { personal: "Réponds en français avec un ton formel." },
+      } : settings, { auto });
+      assert.equal(result.fallback, false);
+      assert.equal(result.source, provider);
+      assert.equal(result.suggestions.length, replyCount);
+      const system = provider === "gemini" ? request.systemInstruction.parts[0].text : request.messages[0].content;
+      const user = provider === "gemini" ? request.contents[0].parts[0].text : request.messages[1].content;
+      assert.match(system, /Me messages/);
+      assert.match(system, /Do not recap/);
+      assert.match(system, /Do not invent facts/);
+      assert.match(system, /Use the customer's language/);
+      assert.doesNotMatch(system, /upsell|advance the deal/);
+      assert.match(system, new RegExp(`exactly ${replyCount} object`));
+      assert.ok(user.includes(`Me: ${JSON.stringify("Salut, ça marche !")}`));
+      assert.ok(user.includes(`Customer: ${JSON.stringify("Je t'ai envoyé le document.")}`));
+      if (auto) assert.match(system, /DIRECTLY to the customer as an AI assistant/);
+      else assert.match(system, /not three paraphrases/);
+      if (mode === "account") {
+        assert.match(system, /overrides the general defaults/);
+        assert.ok(system.includes("Réponds en français avec un ton formel."));
+        assert.doesNotMatch(system, /GLOBAL PROFILE/);
+      }
+    }
+  });
+}
+
 test("French and other business languages trigger conservative safety guards", () => {
   for (const text of ["Je souhaite un remboursement", "Quel est le prix ?", "Mon mot de passe", "Quiero un reembolso", "Quero um reembolso", "Ich brauche eine Rückerstattung"]) assert.ok(getAutoReplyBlockReason(text), text);
   for (const text of ["Je vous garantis la livraison demain", "Te prometo la entrega", "Eu garanto a entrega", "Ich verspreche die Lieferung"]) assert.ok(getAutoReplyOutputBlockReason(text), text);

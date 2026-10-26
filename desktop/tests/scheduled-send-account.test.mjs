@@ -12,7 +12,7 @@ const result = await build({
     b.onLoad({ filter: /.*/, namespace: "mock" }, (a) => ({ contents:
       a.path === "react" ? "export const useRef = (current) => ({current}); export const useEffect = (effect) => effect(); export const useCallback = (fn) => fn;" :
       a.path === "@/store/appStore" ? "export const useAppStore = {getState: () => globalThis.__watcherState};" :
-      'export const normalizeChannelId = (id) => id; export const dispatchSendText = async (request) => { globalThis.__sentRequests.push(request); await globalThis.__waitSend?.(); return {ok:true}; };'
+      'export const normalizeChannelId = (id) => id; export const dispatchSendText = async (request) => { globalThis.__sentRequests.push(request); await globalThis.__waitSend?.(request); return {ok:true}; };'
     }));
   } }],
 });
@@ -101,4 +101,29 @@ test("cancelling or deleting a later item invalidates the queue's captured batch
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(globalThis.__sentRequests.length, 1, action);
   }
+});
+
+test('a blocked sending account cannot hide another account behind its queued messages',async()=>{
+ const state=setup('wa-b');state.settings.waAccounts.push({id:'wa-a',status:'connected'});
+ state.messages=['first','second','third','other'].map((id,i)=>({id,body:id,accountId:i===3?'wa-b':'wa-a',phoneE164:'+12025550100',direction:'out',deliveryStatus:'queued',sentAt:String(i)}));
+ let release;const blocked=new Promise(resolve=>{release=resolve;});
+ globalThis.__waitSend=request=>request.accountId==='wa-a'?blocked:undefined;
+ SendQueueWatcher();await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(globalThis.__sentRequests.map(r=>r.text),['first','other']);
+ assert.equal(state.messages[3].deliveryStatus,'sent');
+ release();await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(globalThis.__sentRequests.filter(r=>r.accountId==='wa-a').map(r=>r.text),['first','second','third']);
+});
+
+test('queued retries limit concurrent accounts and media placeholders cannot starve later text',async()=>{
+ const state=setup('wa-b');state.settings.waAccounts=['a','b','c','d'].map(id=>({id,status:'connected'}));state.settings.liveBaileysAccountId='a';
+ state.messages=[{id:'media',body:'[image]',mediaType:'image',accountId:'a',phoneE164:'+12025550100',direction:'out',deliveryStatus:'queued',sentAt:'0'},...['a','b','c','d'].map((id,i)=>({id,body:id,accountId:id,phoneE164:'+12025550100',direction:'out',deliveryStatus:'queued',sentAt:String(i+1)}))];
+ const releases={};const blocked=Object.fromEntries(['a','b','c'].map(id=>[id,new Promise(resolve=>{releases[id]=resolve;})]));
+ globalThis.__waitSend=request=>blocked[request.accountId];
+ SendQueueWatcher();await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(globalThis.__sentRequests.map(r=>r.accountId),['a','b','c']);
+ releases.a();await new Promise(resolve=>setImmediate(resolve));
+ assert.deepEqual(globalThis.__sentRequests.map(r=>r.accountId),['a','b','c','d']);
+ releases.b();releases.c();await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(globalThis.__sentRequests.some(r=>r.text==='[image]'),false);
 });

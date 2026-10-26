@@ -20,6 +20,7 @@ export type StorageEngine = "sqlite" | "idb" | "none";
 let engine: StorageEngine = "none";
 let engineResolved = false;
 let engineResolvePromise: Promise<StorageEngine> | null = null;
+let snapshotRowDeltas = false;
 
 /** 上次成功落盘的重量缓存，避免每次 save 前全量 db_load */
 let lastSavedWeight = 0;
@@ -57,7 +58,32 @@ async function tryInvokeOk(
   }
 }
 
+function normalizeSnapshotText(value: unknown): unknown {
+  if (typeof value === "string") return value.replace(/[\uD800-\uDFFF]/gu, "\uFFFD");
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) {
+    let changed = false;
+    const items = value.map(item => {
+      const normalized = normalizeSnapshotText(item);
+      if (normalized !== item) changed = true;
+      return normalized;
+    });
+    return changed ? items : value;
+  }
+  let copy: Record<string, unknown> | undefined;
+  for (const [key, item] of Object.entries(value)) {
+    const normalized = normalizeSnapshotText(item);
+    if (normalized !== item) {
+      copy ??= { ...value };
+      copy[key] = normalized;
+    }
+  }
+  return copy ?? value;
+}
+
 async function saveSqliteSnapshot(snapshot: Record<string, unknown>): Promise<void> {
+  // JS 可持有半个 UTF-16 字符；Rust JSON 不接受。只修复异常码元，保留正常 emoji 和内存原值。
+  snapshot = normalizeSnapshotText(snapshot) as Record<string, unknown>;
   const { invoke } = await import("@tauri-apps/api/core");
   for (let attempt = 0; ; attempt++) {
     try {
@@ -79,14 +105,20 @@ export function getStorageEngine(): StorageEngine {
   return engine;
 }
 
+export function canPersistRowDeltas(): boolean {
+  // 历史合并需要完整会话列表校验归属，并与冷历史迁移一起提交。
+  return snapshotRowDeltas && pendingChatMessageRemaps.size === 0;
+}
+
 export async function resolveStorageEngine(): Promise<StorageEngine> {
   if (engineResolved) return engine;
   if (!engineResolvePromise) {
-    engineResolvePromise = tryInvoke<{ engine?: string }>("db_info").then(
+    engineResolvePromise = tryInvoke<{ engine?: string; snapshotRowDeltas?: boolean }>("db_info").then(
       (info) => {
         // 桌面版探测失败也不能降级到 IndexedDB：那会把写入放到另一套库，
         // 下一次启动从 SQLite 读取时，用户刚保存的数据就像消失了一样。
         engine = info?.engine === "sqlite" || isTauri() ? "sqlite" : "idb";
+        snapshotRowDeltas = engine === "sqlite" && info?.snapshotRowDeltas === true;
         engineResolved = true;
         return engine;
       }
@@ -115,6 +147,10 @@ export interface PersistedAppState {
   messages: unknown[];
   /** 完整内存消息数；增量 messages 不能用于判断整库是否被清空。 */
   messageCount?: number;
+  contactCount?: number;
+  chatCount?: number;
+  /** 字段存在时对应数组仅含变更行，字段值是明确删除的 id。 */
+  rowDeltas?: { contacts?: string[]; chats?: string[] };
   followUps: unknown[];
   activities?: unknown[];
   settings: unknown;
@@ -208,6 +244,7 @@ function toRust(data: PersistedAppState): Record<string, unknown> {
     deletedMessageIds: data.deletedMessageIds ?? [],
     replaceMessages: data.replaceMessages === true,
     chatMessageRemaps: data.chatMessageRemaps ?? [],
+    rowDeltas: data.replaceMessages ? undefined : data.rowDeltas,
     dirty: d
       ? {
           phones: !!d.phones,
@@ -294,10 +331,11 @@ export async function loadAppState<T = PersistedAppState>(): Promise<T | null> {
         ) as SecureSecrets)) throw new Error("旧密钥安全迁移失败，请重试");
         await idbSave({ ...fromIdb, settings: publicSettings(fromIdb.settings) });
       }
-      const saved = await tryInvokeOk("db_save", {
-        snapshot: toRust(fromIdb),
-      });
-      if (!saved) throw new Error("IndexedDB 数据迁移到 SQLite 失败，请重试");
+      try {
+        await saveSqliteSnapshot(toRust(fromIdb));
+      } catch (error) {
+        throw new Error(`IndexedDB 数据迁移到 SQLite 失败：${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      }
       console.info("[storage] migrated IndexedDB → SQLite");
       rememberSavedWeight(fromIdb);
       console.info(
@@ -321,8 +359,8 @@ export async function loadAppState<T = PersistedAppState>(): Promise<T | null> {
 function stateWeight(data: Partial<PersistedAppState> | null | undefined) {
   if (!data) return 0;
   return (
-    (data.contacts?.length || 0) +
-    (data.chats?.length || 0) +
+    (data.contactCount ?? data.contacts?.length ?? 0) +
+    (data.chatCount ?? data.chats?.length ?? 0) +
     (data.messageCount ?? data.messages?.length ?? 0) +
     (data.phones?.length || 0)
   );
@@ -331,8 +369,8 @@ function stateWeight(data: Partial<PersistedAppState> | null | undefined) {
 function rememberSavedWeight(data: PersistedAppState) {
   lastSavedWeight = stateWeight(data);
   lastSavedMsgCount = data.messageCount ?? data.messages?.length ?? 0;
-  lastSavedChatCount = data.chats?.length || 0;
-  lastSavedContactCount = data.contacts?.length || 0;
+  lastSavedChatCount = data.chatCount ?? data.chats?.length ?? 0;
+  lastSavedContactCount = data.contactCount ?? data.contacts?.length ?? 0;
 }
 
 /**
@@ -347,6 +385,9 @@ async function saveAppStateNow(
   opts?: { force?: boolean }
 ): Promise<void> {
   const eng = await resolveStorageEngine();
+  if (data.rowDeltas && (eng !== "sqlite" || !snapshotRowDeltas)) {
+    throw new Error("当前存储版本不支持记录增量保存，已停止写入");
+  }
   const incoming = stateWeight(data);
 
   if (!opts?.force) {
@@ -383,9 +424,9 @@ async function saveAppStateNow(
       (data.messageCount ?? data.messages?.length ?? 0) === 0 && prevMsg > 10 &&
       !(eng === "sqlite" && !data.replaceMessages && data.deletedMessageIds?.length);
     const chatCrash =
-      (data.chats?.length || 0) === 0 && prevChat > 5;
+      (data.chatCount ?? data.chats?.length ?? 0) === 0 && prevChat > 5;
     const contactCrash =
-      (data.contacts?.length || 0) === 0 && prevContact > 5;
+      (data.contactCount ?? data.contacts?.length ?? 0) === 0 && prevContact > 5;
     if (
       prevW >= 20 &&
       incoming < Math.max(5, Math.floor(prevW * 0.1)) &&
@@ -421,6 +462,7 @@ async function saveAppStateNow(
           dirty: last ? data.dirty : { messages: true },
           deletedMessageIds: last ? data.deletedMessageIds : [],
           chatMessageRemaps: last ? data.chatMessageRemaps : [],
+          rowDeltas: last ? data.rowDeltas : undefined,
           replaceMessages: false,
         };
         await saveSqliteSnapshot(toRust(part));

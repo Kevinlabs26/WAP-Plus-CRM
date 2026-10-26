@@ -4,7 +4,7 @@ import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 
 let sequence = 0;
-async function setup({ sqlite = false, readError = false, writeError = false, clearError = false, idbError = false, snapshot = null, fullHistory = null, fullHistoryError = false, secureReadError = false, secureWriteError = false, pageError = false } = {}) {
+async function setup({ sqlite = false, readError = false, writeError = false, clearError = false, idbError = false, snapshot = null, fullHistory = null, fullHistoryError = false, secureReadError = false, secureWriteError = false, pageError = false, rowDeltas = true } = {}) {
   const values = new Map();
   const calls = [];
   globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
@@ -41,7 +41,7 @@ async function setup({ sqlite = false, readError = false, writeError = false, cl
     calls.push({ cmd, args });
     if (cmd === "secure_save_secrets" && secureWriteError) throw new Error("DPAPI write failed");
     if (cmd === "secure_load_secrets" && secureReadError) throw new Error("DPAPI unavailable");
-    if (cmd === "db_info") return { engine: sqlite ? "sqlite" : "idb" };
+    if (cmd === "db_info") return { engine: sqlite ? "sqlite" : "idb", snapshotRowDeltas: rowDeltas };
     if (cmd === "db_load" && readError) throw new Error("SQLite unavailable");
     if (cmd === "db_save" && writeError) throw new Error("SQLite write failed");
     if (cmd === "db_clear" && clearError) throw new Error("SQLite clear failed");
@@ -227,6 +227,14 @@ test("failed migration does not report successful hydration", async () => {
   assert.equal(values.get("app_state_v1").contacts[0].id, "legacy");
 });
 
+test('legacy browser snapshots with half emoji can migrate without rewriting the browser copy',async()=>{
+  const {api,values,calls}=await setup({sqlite:true});
+  values.set('app_state_v1',{contacts:[{id:'legacy',name:'old\ud83d'}],messages:[],chats:[],phones:[],followUps:[],settings:{}});
+  await api.loadAppState();
+  assert.equal(calls.find(call=>call.cmd==='db_save').args.snapshot.contacts[0].name,'old�');
+  assert.equal(values.get('app_state_v1').contacts[0].name,'old\ud83d');
+});
+
 test("IDB read failures reject instead of returning an empty workspace", async () => {
   const { api } = await setup({ idbError: true });
   await assert.rejects(api.loadAppState(), /IDB unavailable/);
@@ -252,6 +260,52 @@ test("SQLite deletion-only deltas reach the database without triggering the wipe
   const second = await save();
   assert.equal(second.length, 2);
   assert.equal(second[1].args.snapshot.deletedMessageIds.length, 99);
+});
+
+test('one contact and chat change only submit their rows, while deletions are explicit and counts remain complete',async()=>{
+ const {api,calls}=await setup({sqlite:true});await api.loadAppState();
+ let state={hydrated:true,phones:[],contacts:Array.from({length:5000},(_,i)=>({id:'c'+i,name:'Name '+i})),chats:Array.from({length:5000},(_,i)=>({id:'chat'+i,accountId:i%2?'a':'b'})),messages:[],followUps:[],activities:[],settings:{},broadcastCampaigns:[],scheduledMessages:[],pushToast:assert.fail};
+ api.primePersistBaseline(()=>state);
+ state={...state,contacts:state.contacts.map((c,i)=>i===10?{...c,name:'changed'}:c).filter(c=>c.id!=='c11'),chats:state.chats.map((c,i)=>i===10?{...c,lastMessage:'new'}:c).filter(c=>c.id!=='chat11')};
+ await api.flushPersist(()=>state);
+ const saved=calls.findLast(c=>c.cmd==='db_save').args.snapshot;
+ assert.deepEqual(saved.contacts,[state.contacts[10]]);assert.deepEqual(saved.chats,[state.chats[10]]);
+ assert.deepEqual(saved.rowDeltas,{contacts:['c11'],chats:['chat11']});
+ const deltaBytes=JSON.stringify(saved).length;
+ const fullBytes=JSON.stringify(api.buildPersistSlice(()=>state)).length;
+ assert.ok(deltaBytes<fullBytes/100,`${deltaBytes} vs ${fullBytes}`);
+});
+
+test('older native versions retain full snapshots and failed deltas recover with a complete snapshot',async()=>{
+ for(const rowDeltas of [false,true]){
+  const {api,calls}=await setup({sqlite:true,rowDeltas});await api.loadAppState();
+  const toasts=[];
+  let state={hydrated:true,phones:[],contacts:[{id:'a'},{id:'b'}],chats:[{id:'a'},{id:'b'}],messages:[],followUps:[],activities:[],settings:{},broadcastCampaigns:[],scheduledMessages:[],pushToast:t=>toasts.push(t)};
+  api.primePersistBaseline(()=>state);state={...state,contacts:[{id:'a',name:'changed'}],chats:[{id:'a'}]};
+  const invoke=globalThis.__storageTestInvoke;
+  globalThis.__storageTestInvoke=async(cmd,args)=>{if(cmd==='db_save')throw 'disk I/O error';return invoke(cmd,args);};
+  await assert.rejects(api.flushPersist(()=>state),/保存失败/);
+  globalThis.__storageTestInvoke=invoke;
+  await api.flushPersist(()=>state);
+  const saved=calls.findLast(c=>c.cmd==='db_save').args.snapshot;
+  assert.deepEqual(saved.contacts,state.contacts);assert.deepEqual(saved.chats,state.chats);
+  assert.equal(saved.rowDeltas,undefined);assert.equal(toasts.length,1);
+ }
+});
+
+test('pending cold-history remaps use complete chat snapshots instead of partial rows',async()=>{
+ const {api,calls}=await setup({sqlite:true});await api.loadAppState();
+ const target={id:'target',contactId:'c',accountId:'a'};
+ let state={hydrated:true,phones:[],contacts:[{id:'c'}],chats:[target,{id:'old'},{id:'other'}],messages:[],followUps:[],activities:[],settings:{},broadcastCampaigns:[],scheduledMessages:[],pushToast:assert.fail};
+ api.primePersistBaseline(()=>state);
+ state={...state,chats:state.chats.filter(chat=>chat.id!=='old')};
+ api.registerChatMessageReplacements(new Map([['old','target']]),state.chats);
+ await api.flushPersist(()=>state);
+ const saved=calls.findLast(c=>c.cmd==='db_save').args.snapshot;
+ assert.equal(saved.rowDeltas,undefined);
+ assert.deepEqual(saved.chats,state.chats);
+ assert.deepEqual(saved.chatMessageRemaps,[{fromChatId:'old',toChatId:'target',contactId:'c',accountId:'a'}]);
+ assert.equal(api.canPersistRowDeltas(),true);
 });
 
 
@@ -341,6 +395,30 @@ test('fatal SQLite errors retain their cause in the UI and do not retry indefini
   assert.equal(attempts,1);
   assert.match(toasts[0],/database disk image is malformed/);
   assert.doesNotMatch(toasts[0],/检查磁盘空间/);
+});
+
+test('SQLite IPC repairs unpaired UTF-16 without changing valid emoji, literal escapes or the in-memory snapshot', async () => {
+  const {api,calls}=await setup({sqlite:true});
+  const contact={id:'c',name:'客户\ud83d',notes:'正常😀，文字 \\ud83d 不能改'};
+  const message={id:'m',body:'开头\ude00中间\ud83d结尾',waKey:{id:'protocol-id'}};
+  const clean={id:'clean',body:'😀 中文 𝄞 \\u1234'};
+  const snapshot={phones:[],contacts:[contact],chats:[{id:'chat',lastMessage:'preview\ud83d'}],messages:[message,clean],followUps:[],settings:{nested:{text:'bad\ud83d'}},draftReplyByChatId:{chat:'draft\ude00'}};
+  const invoke=globalThis.__storageTestInvoke;
+  const assertUtf8=value=>{
+    if(typeof value==='string')assert.equal(value,new TextDecoder().decode(new TextEncoder().encode(value)));
+    else if(value && typeof value==='object')for(const [key,item] of Object.entries(value)){assertUtf8(key);assertUtf8(item);}
+  };
+  globalThis.__storageTestInvoke=async(cmd,args)=>{if(cmd==='db_save')assertUtf8(args.snapshot);return invoke(cmd,args);};
+  await api.saveAppState(snapshot);
+  const saved=calls.findLast(call=>call.cmd==='db_save').args.snapshot;
+  assert.equal(saved.contacts[0].name,'客户�');
+  assert.equal(saved.contacts[0].notes,contact.notes);
+  assert.equal(saved.messages[0].body,'开头�中间�结尾');
+  assert.equal(saved.messages[1],clean);
+  assert.equal(saved.settings.nested.text,'bad�');
+  assert.equal(saved.draftReplyByChatId.chat,'draft�');
+  assert.equal(contact.name,'客户\ud83d');
+  assert.equal(message.body,'开头\ude00中间\ud83d结尾');
 });
 
 test('a failed message deletion remains pending through draft saves and is retried with the next message snapshot', async () => {

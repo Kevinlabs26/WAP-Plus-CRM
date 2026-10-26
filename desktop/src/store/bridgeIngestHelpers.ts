@@ -1,7 +1,9 @@
 import type { Message } from "@/types/crm";
 
 export function ingestString(value: unknown, max = 500): string {
-  return typeof value === "string" ? value.trim().slice(0, max) : "";
+  return typeof value === "string"
+    ? value.trim().slice(0, max).replace(/[\uD800-\uDBFF]$/u, "")
+    : "";
 }
 
 export function ingestObject(

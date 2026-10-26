@@ -246,7 +246,7 @@ export function BaileysWatcher() {
           typeof deadline === "object" &&
           deadline !== null &&
           typeof deadline.timeRemaining === "function" &&
-          deadline.timeRemaining() < 6
+          deadline.timeRemaining() < 6 && mergedItems >= 48
         ) {
           break;
         }
@@ -988,15 +988,16 @@ export function BaileysWatcher() {
       } finally {
         r.pollInFlight = false;
         const durationMs = Math.round(performance.now() - startedAt);
-        if (!priority && durationMs >= SLOW_POLL_MS) {
+        const slowBackoff = !priority && durationMs >= SLOW_POLL_MS && eventCount === 0;
+        if (slowBackoff) {
           r.slowUntil = Date.now() + SLOW_BACKOFF_MS;
-        } else if (durationMs < SLOW_POLL_MS) {
+        } else if (durationMs < SLOW_POLL_MS || eventCount > 0) {
           r.slowUntil = 0;
         }
         syncLog(
           "watcher",
           "poll account",
-          { accountId, pollGapMs, durationMs, events: eventCount, slowBackoff: !priority && durationMs >= SLOW_POLL_MS },
+          { accountId, pollGapMs, durationMs, events: eventCount, slowBackoff },
           durationMs >= SLOW_POLL_MS ? "warn" : "debug"
         );
       }

@@ -190,10 +190,10 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
     return;
   }
 
-  const thread = state.messages
+  const conversation = state.messages
     .filter((x) => x.chatId === m.chatId)
-    .sort((a, b) => a.sentAt.localeCompare(b.sentAt))
-    .slice(-14);
+    .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
+  const thread = conversation.slice(-14);
   const policy = resolveAutoReplyPolicy(
     settings.aiAutoReplyPolicy,
     settings.aiAutoReplyPolicyByAccountId,
@@ -220,7 +220,7 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
     }
     return;
   }
-  const result = await generateSuggestions(contact, thread, settings, {
+  const result = await generateSuggestions(contact, conversation, settings, {
     auto: true,
     accountId,
   });
