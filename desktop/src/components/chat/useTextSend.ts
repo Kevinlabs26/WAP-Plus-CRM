@@ -72,7 +72,8 @@ export function useTextSend(opts: UseTextSendOptions) {
     );
 
   const sendText = async () => {
-    const text = (opts.getDraft?.() ?? useAppStore.getState().draftReply).trim();
+    const draft = opts.getDraft?.() ?? useAppStore.getState().draftReply;
+    const text = draft.trim();
     if (!text || opts.sending || sendLockRef.current) return;
     if (!opts.guardBlockedSend()) return;
     sendLockRef.current = true;
@@ -182,7 +183,7 @@ export function useTextSend(opts: UseTextSendOptions) {
         });
         opts.setReplyTo(null);
       }
-      // 离线入队已交给发件队列，保持既有清理行为；在线发送仅在成功后清理。
+      // 已交给发件队列，编辑器可以继续写下一条。
       if (queuedId) clearDraft();
         return;
       }
@@ -220,14 +221,21 @@ export function useTextSend(opts: UseTextSendOptions) {
       accountId: opts.chatAccountId,
       }).catch(() => undefined);
 
+      const mentions = opts.mentionTrackerRef.current;
       const mentionedJid =
       contact.isGroup || opts.activeChat?.isGroup
         ? resolveMentionsForSend(
             text,
-            opts.mentionTrackerRef.current,
+            mentions,
             opts.groupMembers.map((m) => m.jid)
           )
         : undefined;
+
+      // 消息已进入出站记录；先腾空输入框，回执不能再清理下一条草稿。
+      clearDraft();
+      if (opts.replyTo) opts.setReplyTo(null);
+      opts.mentionTrackerRef.current = [];
+      let failed = false;
 
       await sendTextMessage({
       msgId,
@@ -242,16 +250,27 @@ export function useTextSend(opts: UseTextSendOptions) {
       messages: useAppStore.getState().messages,
       quoted,
       mentionedJid,
-      updateMessageDelivery: opts.updateMessageDelivery,
-      setBaileysLoginOpen: opts.setBaileysLoginOpen,
-      setReplyTo: (reply) => { if (sameContext() && latestOptsRef.current.replyTo === opts.replyTo) opts.setReplyTo(reply); },
-      clearDraft,
-      clearMentions: () => {
-        if (sameContext()) opts.mentionTrackerRef.current = [];
+      updateMessageDelivery: (id, patch) => {
+        if (patch.deliveryStatus === "failed") failed = true;
+        opts.updateMessageDelivery(id, patch);
       },
+      setBaileysLoginOpen: opts.setBaileysLoginOpen,
+      setReplyTo: () => {},
+      clearDraft: () => {},
+      clearMentions: () => {},
       setSending: opts.setSending,
       pushToast: opts.pushToast,
       });
+      if (failed && opts.selectedChatId && sameContext() && !latestOptsRef.current.editingId) {
+        const state = useAppStore.getState();
+        const current = latestOptsRef.current.getDraft?.() ?? state.draftReplyByChatId[opts.selectedChatId] ?? "";
+        const nextReply = latestOptsRef.current.replyTo;
+        if (!current && (!nextReply || nextReply === opts.replyTo) && !opts.mentionTrackerRef.current.length) {
+          state.setChatDraft(opts.selectedChatId, draft);
+          if (opts.replyTo) opts.setReplyTo(opts.replyTo);
+          opts.mentionTrackerRef.current = mentions;
+        }
+      }
     } finally {
       sendLockRef.current = false;
     }

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Contact, SalesStage } from "@/types/crm";
 import { cn, displayPhone } from "@/lib/utils";
 import { ContactAvatar } from "./ContactAvatar";
+import { ContactLocalTime } from "./ContactLocalTime";
 import { Button, Input, Textarea } from "@/components/ui/primitives";
 import { ActivityTimeline } from "@/components/crm/ActivityTimeline";
 import { ContactTagsNotesEditor } from "@/components/crm/ContactTagsNotesEditor";
@@ -120,6 +121,7 @@ export function ContactEditor({
             <div className="text-2xs tabular-nums text-zinc-500">
               {displayPhone(contact.phone) || contact.phone || t("contact.noPhone")}
             </div>
+            <ContactLocalTime contact={contact} />
             {needsName ? (
               <div className="mt-1 text-2xs text-amber-300/90">
                 {t("contact.nameHint")}

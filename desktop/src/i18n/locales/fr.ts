@@ -2379,4 +2379,8 @@ export default {
   "translation.restoreAuto": "Rétablir auto",
   "translation.shortcuts": "Ctrl/⌘⇧T Traduire · Entrée Envoyer",
   "translation.done": "Traduction en {language} terminée",
+  "contactTime.hint": "Heures indicatives du pays du numéro, qui peut différer de la localisation réelle. Pour un pays à plusieurs fuseaux, confirmez la région. Dates, heures et heure d’été utilisent les données de fuseaux de cet appareil.",
+  "contactTime.reference": "Indicatif",
+  "contactTime.multiple": "Plusieurs fuseaux",
+  "contactTime.timeCount": "{count} heures locales",
 } as const;

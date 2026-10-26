@@ -117,6 +117,60 @@ test('real text send keeps original recipient/account and clears only the origin
   r.unmount();
 });
 
+for (const nextDraft of ['next message', 'old text']) test(`accepted text clears immediately and a late success preserves the next draft: ${nextDraft}`, async () => {
+  const r = runtime(), pending = deferred(), state = store(), sent = [];
+  let liveDraft = state.draftReply;
+  const write = state.setChatDraft.bind(state);
+  state.setChatDraft = (id, value) => { write(id, value); if (state.selectedChatId === id) liveDraft = value; };
+  globalThis.sendText = input => { sent.push(input); return pending.promise; };
+  const options = { sending: false, guardBlockedSend: () => true, getDraft: () => liveDraft,
+    selectedChatId: 'A', chatAccountId: 'account-A', activeContact: { id: 'contact-A', phone: '+33600000000' },
+    activeChat: { id: 'A' }, isBaileys: true, chatConnected: true, channelId: 'baileys', selectedPhoneId: null,
+    chatMessages: [], replyTo: null, editingId: null, groupMembers: [], mentionTrackerRef: { current: [] },
+    setSending() {}, stickToBottom() {}, updateContact() {},
+    enqueueOutgoingMessage(input) { state.messages.push({ ...input, id: 'msg-A', direction: 'out' }); return 'msg-A'; },
+    patchMessage() {}, updateMessageDelivery(id, patch) { Object.assign(state.messages.find(m => m.id === id), patch); },
+    setBaileysLoginOpen() {}, setDraftReply: assert.fail, setReplyTo() {}, pushToast() {}, setEditingId() {} };
+  const sender = r.render(() => useTextSend(options));
+  const run = sender.sendText();
+  assert.equal(liveDraft, '', 'clear before the network response, not after it');
+  assert.equal(sent[0].text, 'old text');
+  liveDraft = nextDraft; // Has not reached the debounced store yet.
+  await sender.sendText();
+  assert.equal(sent.length, 1, 'the in-flight lock still prevents duplicate dispatch');
+  pending.resolve({ ok: true, status: 'sent' }); await run;
+  assert.equal(liveDraft, nextDraft, 'even identical text belongs to the next draft');
+  assert.equal(state.messages[0].body, 'old text');
+  assert.equal(state.messages[0].deliveryStatus, 'sent');
+  r.unmount();
+});
+
+test('quoted group text snapshots mentions before clearing and restores the complete draft on rejection only while it is still empty', async () => {
+  const r = runtime(), pending = deferred(), state = store(), calls = [];
+  state.draftReply = state.draftReplyByChatId.A = '  hello @Peer  ';
+  const quoted = { id: 'quoted', body: 'earlier message', direction: 'in' };
+  let reply = quoted;
+  const mentions = [{ token: '@Peer', jid: 'peer@s.whatsapp.net' }], tracker = { current: mentions };
+  globalThis.sendText = input => { calls.push(input); return pending.promise; };
+  const options = { sending: false, guardBlockedSend: () => true, getDraft: () => state.draftReply,
+    selectedChatId: 'A', chatAccountId: 'account-A', activeContact: { id: 'c', phone: '+33600000000', isGroup: true },
+    activeChat: { id: 'A', isGroup: true }, isBaileys: true, chatConnected: true, channelId: 'baileys', selectedPhoneId: null,
+    chatMessages: [{ ...quoted, waKey: { id: 'wa-quoted', remoteJid: 'group@g.us', fromMe: false } }],
+    replyTo: quoted, editingId: null, groupMembers: [], mentionTrackerRef: tracker,
+    setSending() {}, stickToBottom() {}, updateContact() {}, enqueueOutgoingMessage: () => 'msg-A', patchMessage() {},
+    updateMessageDelivery() {}, setBaileysLoginOpen() {}, setDraftReply: assert.fail,
+    setReplyTo(value) { reply = value; }, pushToast() {}, setEditingId() {} };
+  const run = r.render(() => useTextSend(options)).sendText();
+  assert.equal(state.draftReply, ''); assert.equal(reply, null); assert.deepEqual(tracker.current, []);
+  assert.deepEqual(calls[0].mentionedJid, ['peer@s.whatsapp.net']);
+  assert.equal(calls[0].quoted.id, 'wa-quoted');
+  r.render(() => useTextSend({ ...options, replyTo: reply }));
+  pending.resolve({ ok: false, status: 'failed', error: 'rejected' }); await run;
+  assert.equal(state.draftReply, '  hello @Peer  ');
+  assert.equal(reply, quoted); assert.deepEqual(tracker.current, mentions);
+  r.unmount();
+});
+
 for (const kind of ['file', 'image', 'audio', 'gif']) test(`${kind} read fixes caption/chat/account before a switch and keeps new input`, async () => {
   const originalReader = globalThis.FileReader;
   const originalDocument = globalThis.document;
@@ -330,7 +384,7 @@ for (const [outcome, result, expectedDraft] of [
   globalThis.sendText = async () => result;
   try {
     const sender = r.render(() => useTextSend({ sending: false, guardBlockedSend: () => true,
-      getDraft: () => 'old text', selectedChatId: 'A', chatAccountId: 'account-A',
+      getDraft: () => state.draftReply, selectedChatId: 'A', chatAccountId: 'account-A',
       activeContact: { id: 'contact-A', phone: '+33600000000' }, activeChat: { id: 'A' },
       isBaileys: true, chatConnected: true, channelId: 'baileys', selectedPhoneId: null,
       chatMessages: [], replyTo: null, editingId: null, groupMembers: [], mentionTrackerRef: { current: [] },
@@ -341,6 +395,50 @@ for (const [outcome, result, expectedDraft] of [
     assert.equal(state.draftReplyByChatId.A || '', expectedDraft); assert.equal(state.draftReplyByChatId.B, 'B draft');
     assert.equal(updates.at(-1).deliveryStatus, outcome === 'retry queue' ? 'queued' : 'failed');
   } finally { r.unmount(); }
+});
+
+for (const [outcome, result] of [
+  ['rejected', { ok: false, status: 'failed', error: 'rejected' }],
+  ['unknown', { ok: false, status: 'failed', error: 'baileys_delivery_unknown' }],
+  ['queued', { ok: false, status: 'queued', error: 'rate_limited' }],
+]) test(`late ${outcome} cannot restore the old message over fresh unflushed input or clear its mentions`, async () => {
+  const r = runtime(), pending = deferred(), state = store(), tracker = { current: [] };
+  let liveDraft = state.draftReply;
+  const write = state.setChatDraft.bind(state);
+  state.setChatDraft = (id, value) => { write(id, value); if (state.selectedChatId === id) liveDraft = value; };
+  globalThis.sendText = () => pending.promise;
+  const options = { sending: false, guardBlockedSend: () => true, getDraft: () => liveDraft,
+    selectedChatId: 'A', chatAccountId: 'account-A', activeContact: { id: 'contact-A', phone: '+33600000000' },
+    activeChat: { id: 'A' }, isBaileys: true, chatConnected: true, channelId: 'baileys', selectedPhoneId: null,
+    chatMessages: [], replyTo: null, editingId: null, groupMembers: [], mentionTrackerRef: tracker,
+    setSending() {}, stickToBottom() {}, updateContact() {}, enqueueOutgoingMessage: () => 'msg-A',
+    patchMessage() {}, updateMessageDelivery() {}, setBaileysLoginOpen() {}, setDraftReply: assert.fail,
+    setReplyTo() {}, pushToast() {}, setEditingId() {} };
+  const run = r.render(() => useTextSend(options)).sendText();
+  assert.equal(liveDraft, '');
+  liveDraft = 'fresh draft'; tracker.current = [{ token: '@New', jid: 'new@s.whatsapp.net' }];
+  pending.resolve(result); await run;
+  assert.equal(liveDraft, 'fresh draft');
+  assert.equal(tracker.current[0].token, '@New');
+  assert.equal(state.draftReplyByChatId.B, 'B draft');
+  r.unmount();
+});
+
+test('a blocked send or failed local enqueue keeps the original draft without making a network request', async () => {
+  for (const blocked of [true, false]) {
+    const r = runtime(), state = store(); let enqueues = 0;
+    globalThis.sendText = assert.fail;
+    const sender = r.render(() => useTextSend({ sending: false, guardBlockedSend: () => !blocked,
+      getDraft: () => state.draftReply, selectedChatId: 'A', chatAccountId: 'account-A',
+      activeContact: { id: 'c', phone: '+33600000000' }, activeChat: { id: 'A' }, isBaileys: true,
+      chatConnected: true, replyTo: null, editingId: null, chatMessages: [],
+      setSending() {}, stickToBottom() {}, enqueueOutgoingMessage() { enqueues++; return null; }, pushToast() {},
+    }));
+    await sender.sendText();
+    assert.equal(state.draftReply, 'old text');
+    assert.equal(enqueues, blocked ? 0 : 1);
+    r.unmount();
+  }
 });
 
 test('continuous typing still checkpoints at five seconds and completed restore invalidates the old editor', async () => {

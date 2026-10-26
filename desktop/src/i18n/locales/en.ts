@@ -2379,4 +2379,8 @@ export default {
   "translation.restoreAuto": "Restore auto",
   "translation.shortcuts": "Ctrl/⌘⇧T Translate · Enter Send",
   "translation.done": "Translated to {language}",
+  "contactTime.hint": "Reference times for the phone number’s country, which may differ from the person’s actual location. Confirm the region in countries with multiple time zones. Dates, times and daylight saving use this device’s time zone data.",
+  "contactTime.reference": "Estimate",
+  "contactTime.multiple": "Multiple zones",
+  "contactTime.timeCount": "{count} local times",
 } as const;

@@ -1,7 +1,7 @@
 {
   "name": "wap-plus-crm",
   "private": true,
-  "version": "0.1.47",
+  "version": "0.1.48",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -22,9 +22,11 @@
     "@tauri-apps/plugin-shell": "^2.0.0",
     "@tauri-apps/plugin-updater": "^2.11.0",
     "clsx": "^2.1.1",
+    "countries-and-timezones": "^3.11.0",
     "drizzle-orm": "^0.45.3",
     "emoji-picker-react": "^4.18.0",
     "franc-min": "^6.2.0",
+    "libphonenumber-js": "^1.13.15",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

@@ -2379,4 +2379,8 @@ export default {
   "translation.restoreAuto": "恢复自动",
   "translation.shortcuts": "Ctrl/⌘⇧T 翻译 · Enter 发送",
   "translation.done": "已译成 {language}",
+  "contactTime.hint": "根据号码归属国家显示当地参考时间，不代表对方实际所在地。多时区国家需确认具体地区；日期、时间及夏令时由本机时区数据计算。",
+  "contactTime.reference": "参考",
+  "contactTime.multiple": "多时区",
+  "contactTime.timeCount": "{count} 个当地时间",
 } as const;

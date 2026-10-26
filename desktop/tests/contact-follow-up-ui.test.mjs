@@ -8,6 +8,7 @@ import fr from '../src/i18n/locales/fr.ts';
 
 const mocks = {
   "./ContactAvatar": "export const ContactAvatar=()=>null;",
+  "./ContactLocalTime": "export const ContactLocalTime=()=>null;",
   "./SalesStageField": "export const SalesStageField=()=>null;",
   react: `export const useRef = value => globalThis.followUpUiHooks.ref(value);
     export const useState = value => globalThis.followUpUiHooks.state(value);

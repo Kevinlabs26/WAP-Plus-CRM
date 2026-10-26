@@ -21,6 +21,7 @@ import {
 import { generateSuggestions, getSuggestionContextKey, hasRealAiKey, type SuggestResult } from "@/lib/aiSuggest";
 import type { Message, WhatsAppLabel } from "@/types/crm";
 import { ContactAvatar } from "./ContactAvatar";
+import { ContactLocalTime } from "./ContactLocalTime";
 import { Button, SectionLabel } from "@/components/ui/primitives";
 import { ContactTagsNotesEditor } from "./ContactTagsNotesEditor";
 import { PersonMultiAccountPanel } from "./PersonMultiAccountPanel";
@@ -551,6 +552,7 @@ export function CrmAiPanel() {
                 <div className="truncate text-2xs text-zinc-500">
                   {displayPhone(contact.phone) || t("crmPanel.whatsappLid")}
                 </div>
+                <ContactLocalTime contact={contact} />
                 <button
                   type="button"
                   onClick={() => {
