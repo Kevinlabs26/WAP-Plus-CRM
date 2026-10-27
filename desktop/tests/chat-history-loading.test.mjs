@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
+import { updateMessageIndex } from "../src/store/messageIndex.ts";
+import { applyMessagesAck } from "../src/store/bridgeIngestHelpers.ts";
 
 const mocks = {
   react: "export const useRef = current => ({current}); export const useCallback = fn => fn; export const useEffect = fn => { globalThis.historyCleanup = fn(); };",
@@ -129,4 +131,31 @@ test("browser history requests still run without SQLite; page errors stay retrya
     globalThis.historyLoad = async () => { throw Error("Disk failed"); };
     await assert.rejects(loadOlder("chat", null), /Disk failed/);
   } finally { env.cleanup(); }
+});
+
+test("opening, focus and visibility history refreshes cannot move an outgoing message below its later reply", async () => {
+  for (const diskHasDuplicates of [false, true]) {
+    const outgoing = message("out", { direction: "out", sentAt: "2026-10-27T11:27:09.181Z", waMessageId: "wa-out", deliveryStatus: "sent" });
+    const incoming = message("reply", { direction: "in", sentAt: "2026-10-27T11:27:25.000Z" });
+    const liveArrivalOrder = [incoming, outgoing];
+    const env = setup(liveArrivalOrder);
+    try {
+      const chronological = [outgoing, incoming];
+      globalThis.historyState.messagesByChatId.chat = chronological;
+      globalThis.historyLoad = async () => page(diskHasDuplicates ? [outgoing, incoming] : []);
+      useChatHistory("chat", "wa-a", "wa-a"); await settle();
+      assert.deepEqual(globalThis.historyState.messagesByChatId.chat, chronological);
+      assert.equal(globalThis.historyState.messagesByChatId.chat, chronological, "keep the already correct visible bucket");
+      for (const event of ["focus", "visibilitychange"]) {
+        env.listeners.get(event)(); await settle();
+        assert.deepEqual(globalThis.historyState.messagesByChatId.chat.map(m => m.id), ["out", "reply"]);
+      }
+      const state = globalThis.historyState;
+      const acked = applyMessagesAck(state.messages, [{ id: "wa-out", ack: "read" }], undefined, "wa-a");
+      const index = updateMessageIndex(acked, state.messagesByChatId);
+      assert.deepEqual(index.chat.map(m => m.id), ["out", "reply"]);
+      assert.equal(index.chat[0].sentAt, outgoing.sentAt);
+      assert.equal(index.chat[1], incoming);
+    } finally { env.cleanup(); }
+  }
 });

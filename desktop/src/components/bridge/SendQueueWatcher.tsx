@@ -12,6 +12,7 @@ import {
   resolveWaSendAccountId,
 } from "@/lib/accountConnection";
 import { canSendAutoReply } from "@/lib/aiSafety";
+import { currentAutoReplyContext, hashAiReplyContext } from "@/lib/aiReplyContext";
 import { translateCurrent } from "@/i18n";
 
 const MAX_AUTO_RETRIES = 5;
@@ -68,24 +69,43 @@ export function SendQueueWatcher() {
 
     const flushOne = async (queued: Message) => {
       // 前一条的网络请求期间，用户可能取消、删除或推迟了本条消息。
-      const state = useAppStore.getState();
-      const msg = state.messages.find((item) => item.id === queued.id);
+      let state = useAppStore.getState();
+      let msg = state.messages.find((item) => item.id === queued.id);
       if (!msg || !isRetryableOutgoing(msg)) return;
       if (state.settings.scheduledMessages?.some(
-        (task) => task.messageId === msg.id && task.status === "cancelled"
+        (task) => task.messageId === queued.id && task.status === "cancelled"
       )) return;
       if (inflight.current.has(msg.id)) return;
       if (!msg.phoneE164 || !msg.body) return;
       // 媒体由聊天面板按原 data URL 重试，不能退化成占位文本发送。
       if (msg.mediaType) return;
 
-      const settings = state.settings;
-      if (msg.systemKind === "ai_auto_reply" && !canSendAutoReply(settings, state.messages, msg)) {
-        state.updateMessageDelivery(msg.id, {
-          deliveryStatus: "failed", retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined,
-          lastError: "自动回复已停止或上下文已更新，请人工确认",
-        });
-        return;
+      let settings = state.settings;
+      const aiContextKey = msg.systemKind === "ai_auto_reply" ? currentAutoReplyContext(state, msg) : null;
+      if (msg.systemKind === "ai_auto_reply") {
+        let verified = false;
+        if (aiContextKey && msg.aiReplyContextHash && canSendAutoReply(settings, state.messages, msg)) {
+          try { verified = await hashAiReplyContext(aiContextKey) === msg.aiReplyContextHash; }
+          catch { /* 无法校验时交给人工，不能每轮重试未知的自动回复。 */ }
+        }
+        if (cancelled) return;
+        const latest = useAppStore.getState();
+        const current = latest.messages.find((item) => item.id === queued.id);
+        // 摘要校验会让出执行权；不能复活期间取消、删除或推迟的消息。
+        if (!current || !isRetryableOutgoing(current) || current.body !== msg.body ||
+            current.phoneE164 !== msg.phoneE164 || current.accountId !== msg.accountId || current.channelId !== msg.channelId ||
+            current.aiReplyContextHash !== msg.aiReplyContextHash ||
+            latest.settings.scheduledMessages?.some(task => task.messageId === current.id && task.status === "cancelled")) return;
+        if (!verified || currentAutoReplyContext(latest, current) !== aiContextKey) {
+          latest.updateMessageDelivery(current.id, {
+            deliveryStatus: "failed", retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined,
+            lastError: "自动回复无法验证当前配置和上下文，请重新生成或手动撰写回复",
+          });
+          return;
+        }
+        state = latest;
+        msg = current;
+        settings = latest.settings;
       }
       const channelId = normalizeChannelId(
         msg.channelId || settings.sendChannel
@@ -124,6 +144,7 @@ export function SendQueueWatcher() {
         return;
       }
 
+      if (!msg.phoneE164 || !msg.body) return;
       inflight.current.add(msg.id);
       const attempt = (msg.retryCount ?? 0) + 1;
       state.updateMessageDelivery(msg.id, {
@@ -148,6 +169,7 @@ export function SendQueueWatcher() {
               const latest = useAppStore.getState();
               const message = latest.messages.find((item) => item.id === msg.id);
               return !!message && message.deliveryStatus === "pending" &&
+                currentAutoReplyContext(latest, message) === aiContextKey &&
                 canSendAutoReply(latest.settings, latest.messages, message);
             } : undefined,
             rateLimitEnabled: settings.rateLimitEnabled !== false,

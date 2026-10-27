@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
+import { getSuggestionContextKey } from "../src/lib/aiSuggest.ts";
 
 const result = await build({
   stdin: { contents: 'export * from "./src/components/bridge/ScheduledMessageWatcher.tsx"; export * from "./src/components/bridge/SendQueueWatcher.tsx";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
@@ -10,9 +12,9 @@ const result = await build({
   plugins: [{ name: "watcher-boundaries", setup(b) {
     b.onResolve({ filter: /^(react|@\/store\/appStore|@\/channels)$/ }, (a) => ({ path: a.path, namespace: "mock" }));
     b.onLoad({ filter: /.*/, namespace: "mock" }, (a) => ({ contents:
-      a.path === "react" ? "export const useRef = (current) => ({current}); export const useEffect = (effect) => effect(); export const useCallback = (fn) => fn;" :
+      a.path === "react" ? "export const useRef = (current) => ({current}); export const useEffect = (effect) => { globalThis.__watcherCleanup = effect(); }; export const useCallback = (fn) => fn;" :
       a.path === "@/store/appStore" ? "export const useAppStore = {getState: () => globalThis.__watcherState};" :
-      'export const normalizeChannelId = (id) => id; export const dispatchSendText = async (request) => { globalThis.__sentRequests.push(request); await globalThis.__waitSend?.(request); return {ok:true}; };'
+      'export const normalizeChannelId = (id) => id; export const dispatchSendText = async (request, runtime) => { await globalThis.__beforeDispatch?.(); if (runtime?.canSend && !runtime.canSend()) return {ok:false,error:"automation_cancelled"}; globalThis.__sentRequests.push(request); await globalThis.__waitSend?.(request); return {ok:true}; };'
     }));
   } }],
 });
@@ -22,6 +24,7 @@ function setup(accountId = "wa-a") {
   globalThis.window = { setInterval() {}, clearInterval() {} };
   globalThis.__sentRequests = [];
   globalThis.__waitSend = undefined;
+  globalThis.__beforeDispatch = undefined;
   const task = { id: "task", status: "pending", accountId, dueAt: new Date(0).toISOString(), chatId: "chat", contactId: "c", text: "Hello", recipient: "+12025550100", channelId: "baileys" };
   const state = {
     settings: { scheduledMessages: [task], waAccounts: [{ id: "wa-b", status: "connected" }], liveBaileysAccountId: "wa-b", sendChannel: "baileys" },
@@ -126,4 +129,63 @@ test('queued retries limit concurrent accounts and media placeholders cannot sta
  assert.deepEqual(globalThis.__sentRequests.map(r=>r.accountId),['a','b','c','d']);
  releases.b();releases.c();await new Promise(resolve=>setImmediate(resolve));
  assert.equal(globalThis.__sentRequests.some(r=>r.text==='[image]'),false);
+});
+
+function queuedAi() {
+ const state=setup('wa-b');state.chats[0].accountId='wa-b';state.contacts[0].accountId='wa-b';
+ Object.assign(state.settings,{aiReplyMode:'auto',aiAutoReplyManualChatIds:[],aiProvider:'custom',customAiBaseUrl:'https://example.invalid/v1',customAiModel:'model',customAiKey:'fake'});
+ const inbound={id:'in',chatId:'chat',contactId:'c',accountId:'wa-b',body:'Hello',direction:'in',sentAt:new Date(Date.now()-2000).toISOString()};
+ const key=getSuggestionContextKey(state.contacts[0],[inbound],state.settings,'wa-b',{auto:true});
+ const reply={id:'reply',chatId:'chat',contactId:'c',accountId:'wa-b',body:'Hello there',direction:'out',sentAt:new Date(Date.now()-1000).toISOString(),phoneE164:'+12025550100',channelId:'baileys',systemKind:'ai_auto_reply',deliveryStatus:'queued',aiReplyContextHash:createHash('sha256').update(key).digest('hex')};
+ state.messages=[inbound,reply];return {state,reply};
+}
+async function waitForAiQueue(reply) {
+ const deadline=Date.now()+2000;
+ while(['queued','pending'].includes(reply.deliveryStatus)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,1));
+}
+
+test('queued AI replies preserve matching context and block changed model, identity, account, channel or missing generation metadata',async()=>{
+ for(const kind of ['unchanged','model','identity','stage','account','channel','legacy']){
+  const {state,reply}=queuedAi();
+  if(kind==='model')state.settings.customAiModel='other';
+  if(kind==='identity')state.settings.aiSystemPromptByAccountId={'wa-b':'Different identity'};
+  if(kind==='stage')state.contacts[0].stage='won';
+  if(kind==='account')state.chats[0].accountId='wa-a';
+  if(kind==='channel')state.settings.sendChannel='android_bridge';
+  if(kind==='legacy')delete reply.aiReplyContextHash;
+  SendQueueWatcher();await waitForAiQueue(reply);
+  assert.equal(globalThis.__sentRequests.length,kind==='unchanged'?1:0,kind);
+  assert.equal(reply.deliveryStatus,kind==='unchanged'?'sent':'failed',kind);
+ }
+});
+
+test('queued AI dispatch rechecks configuration after waiting in the send gate',async()=>{
+ const {state,reply}=queuedAi();
+ globalThis.__beforeDispatch=()=>{state.settings={...state.settings,customAiModel:'changed-while-waiting'};};
+ SendQueueWatcher();await waitForAiQueue(reply);
+ assert.deepEqual(globalThis.__sentRequests,[]);assert.equal(reply.deliveryStatus,'failed');
+});
+
+test('AI hash verification cannot revive a cancelled, deleted or postponed queued reply',async t=>{
+ const original=crypto.subtle.digest.bind(crypto.subtle);
+ for(const kind of ['cancel','delete','postpone','unmount']){
+  const {state,reply}=queuedAi();let release,finish;
+  const gate=new Promise(resolve=>{release=resolve;}),done=new Promise(resolve=>{finish=resolve;});
+  const mock=t.mock.method(crypto.subtle,'digest',async(...args)=>{await gate;const result=await original(...args);finish();return result;});
+  SendQueueWatcher();
+  if(kind==='cancel')state.updateMessageDelivery(reply.id,{deliveryStatus:'failed',nextAttemptAt:undefined});
+  if(kind==='delete')state.messages=state.messages.filter(m=>m.id!==reply.id);
+  if(kind==='postpone')state.updateMessageDelivery(reply.id,{nextAttemptAt:new Date(Date.now()+60000).toISOString()});
+  if(kind==='unmount')globalThis.__watcherCleanup();
+  release();await done;await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(globalThis.__sentRequests,[],kind);
+  assert.notEqual(reply.deliveryStatus,'pending',kind);mock.mock.restore();
+ }
+});
+
+test('unavailable digest verification stops an AI retry without sending or entering an endless retry loop',async t=>{
+ const {reply}=queuedAi();t.mock.method(crypto.subtle,'digest',async()=>{throw new Error('digest unavailable');});
+ SendQueueWatcher();await waitForAiQueue(reply);
+ assert.deepEqual(globalThis.__sentRequests,[]);assert.equal(reply.deliveryStatus,'failed');
+ assert.equal(reply.nextAttemptAt,undefined);assert.equal(reply.retryCount,5);
 });

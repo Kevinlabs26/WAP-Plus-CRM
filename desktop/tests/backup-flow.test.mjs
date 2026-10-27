@@ -73,6 +73,15 @@ test('restoring contacts preserves selected time zones while rejecting invalid i
     assert.equal(rows.find(c => c.id === 'bad-type').timeZone, undefined);
   }
 });
+
+test('backup restore preserves valid AI context digests and rejects malformed values', async () => {
+  const {get}=setup(); const hash='a'.repeat(64);
+  const messages=[{...backup.messages[0],id:'valid-ai',systemKind:'ai_auto_reply',aiReplyContextHash:hash},
+    {...backup.messages[0],id:'invalid-ai',systemKind:'ai_auto_reply',aiReplyContextHash:'not-a-digest'}];
+  assert.equal((await get().importBackup({...backup,messages})).ok,true);
+  assert.equal(get().messages.find(m=>m.id==='valid-ai').aiReplyContextHash,hash);
+  assert.equal(get().messages.find(m=>m.id==='invalid-ai').aiReplyContextHash,undefined);
+});
 test('media write failure stops restore before writing the database', async () => {
   const { get } = setup(); globalThis.restoreMediaFail = true;
   assert.equal((await get().importBackup(backup)).ok, false);

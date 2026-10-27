@@ -22,10 +22,14 @@ export function updateMessageIndex(messages: Message[], previous: Record<string,
     if (!changed.has(id) && length !== bucket.length) changed.set(id, bucket.slice(0, length));
   }
   if (!changed.size) return previous;
-  const next = { ...previous };
+  let next = previous;
   for (const [id, bucket] of changed) {
+    bucket.sort((a, b) => (a.sentAt || "").localeCompare(b.sentAt || ""));
+    const old = Object.hasOwn(previous, id) ? previous[id] : undefined;
+    if (old?.length === bucket.length && bucket.every((message, index) => message === old[index])) continue;
+    if (next === previous) next = { ...previous };
     if (!bucket.length) delete next[id];
-    else Object.defineProperty(next, id, { value: bucket.sort((a, b) => (a.sentAt || "").localeCompare(b.sentAt || "")), enumerable: true, configurable: true, writable: true });
+    else Object.defineProperty(next, id, { value: bucket, enumerable: true, configurable: true, writable: true });
   }
   return next;
 }

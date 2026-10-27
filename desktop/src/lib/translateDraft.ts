@@ -333,12 +333,28 @@ export interface TranslateResult {
 
 const cache = new Map<
   string,
-  { text: string; at: number; source?: TranslateResult["source"] }
+  { text: string; at: number; source: TranslateResult["source"] }
 >();
 const CACHE_MS = 10 * 60_000;
+const inFlight = new Map<string, Promise<TranslateResult>>();
 
-function cacheKey(text: string, to: string) {
-  return `${to}::${text.trim()}`;
+function cacheKey(text: string, to: string, settings: AppSettings) {
+  const service = settings.translateService || "auto";
+  const ready = hasKey(settings);
+  const google = service === "google" || (service === "auto" && !ready);
+  const config = google ? null : getOpenAiCompatibleConfig(settings);
+  return JSON.stringify([to, text, service, google ? "google" : settings.aiProvider,
+    google ? "" : config?.model || settings.aiModel || "",
+    google ? "" : config?.baseUrl || (settings.aiProvider === "ollama" ? settings.ollamaUrl : ""),
+    google || ready]);
+}
+
+function rememberTranslation(key: string, text: string, source: TranslateResult["source"]) {
+  const now = Date.now();
+  for (const [oldKey, entry] of cache) if (now - entry.at >= CACHE_MS) cache.delete(oldKey);
+  cache.delete(key);
+  cache.set(key, { text, source, at: now });
+  while (cache.size > 128) cache.delete(cache.keys().next().value!);
 }
 
 /** 校验译文是否符合用户选择的目标语言；短名称、号码和链接允许原样保留。 */
@@ -506,22 +522,32 @@ export async function translateDraftText(
     };
   }
 
-  const ck = cacheKey(src, to);
+  const ck = cacheKey(src, to, settings);
   const hit = cache.get(ck);
   if (
     hit &&
     Date.now() - hit.at < CACHE_MS &&
     translationMatchesTarget(src, hit.text, to)
   ) {
+    cache.delete(ck);
+    cache.set(ck, hit);
     return {
       text: hit.text,
-      source: hit.source || (settings.aiProvider === "mock" ? "mock" : settings.aiProvider),
+      source: hit.source,
       fallback: false,
       targetLang: to,
     };
   }
   if (hit) cache.delete(ck);
+  const pending = inFlight.get(ck);
+  if (pending) return pending;
+  const request = translateDraftTextUncached(src, to, settings, ck);
+  inFlight.set(ck, request);
+  try { return await request; }
+  finally { if (inFlight.get(ck) === request) inFlight.delete(ck); }
+}
 
+async function translateDraftTextUncached(src: string, to: string, settings: AppSettings, ck: string): Promise<TranslateResult> {
   const provider = settings.aiProvider;
   const service = settings.translateService || "auto";
   const hasAiKey = hasKey(settings);
@@ -534,7 +560,7 @@ export async function translateDraftText(
       if (!translationMatchesTarget(src, textOut, to)) {
         throw new Error(`Google 翻译未返回${LANG_NAME[to]}译文`);
       }
-      cache.set(ck, { text: textOut, at: Date.now() });
+      rememberTranslation(ck, textOut, "google");
       return {
         text: textOut,
         source: "google",
@@ -604,7 +630,7 @@ export async function translateDraftText(
       if (!translationMatchesTarget(src, googleText, to)) {
         throw new Error(`翻译服务未返回${langName}译文`);
       }
-      cache.set(ck, { text: googleText, at: Date.now(), source: "google" });
+      rememberTranslation(ck, googleText, "google");
       return {
         text: googleText,
         source: "google",
@@ -615,11 +641,7 @@ export async function translateDraftText(
     if (!translationMatchesTarget(src, textOut, to)) {
       throw new Error(`AI 未返回${langName}译文，请重试`);
     }
-    cache.set(ck, {
-      text: textOut,
-      at: Date.now(),
-      source: provider as TranslateResult["source"],
-    });
+    rememberTranslation(ck, textOut, provider as TranslateResult["source"]);
     return {
       text: textOut,
       source: provider as TranslateResult["source"],

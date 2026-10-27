@@ -27,3 +27,14 @@ test('imported chat IDs cannot change the index object prototype',()=>{
  const message=row('one','__proto__');const index=updateMessageIndex([message],{});
  assert.deepEqual(index.__proto__,[message]);assert.equal(Object.getPrototypeOf(index),Object.prototype);
 });
+
+test('out-of-order live buffers do not rebuild unrelated sorted buckets on every receipt',()=>{
+ const late=row('late','a','2026-10-27T11:27:25.000Z'),early=row('early','a','2026-10-27T11:27:09.181Z');
+ const other=row('other','b','2026-10-27T11:28:00.000Z');
+ const messages=[late,early,other],index=updateMessageIndex(messages,{});
+ assert.equal(updateMessageIndex([...messages],index),index,'identical rows retain the index even if arrival order differs');
+ const next=updateMessageIndex([late,early,{...other,deliveryStatus:'read'}],index);
+ assert.equal(next.a,index.a,'receipt in B cannot refresh A');
+ assert.notEqual(next.b,index.b);
+ assert.deepEqual(next.a,[early,late]);
+});

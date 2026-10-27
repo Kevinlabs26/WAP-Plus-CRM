@@ -15,8 +15,8 @@ const customerCard = await readFile(
 );
 
 assert.match(gemini, /maxOutputTokens/);
-assert.match(suggestions, /max_tokens: opts\.auto \? 160 : 300/);
-assert.match(suggestions, /num_predict: auto \? 160 : 300/);
+assert.match(suggestions, /max_tokens: opts\.auto \|\| opts\.replyTo \? 160 : 300/);
+assert.match(suggestions, /num_predict: auto \|\| replyTo \? 160 : 300/);
 assert.equal(
   [...suggestions.matchAll(/signal: AbortSignal\.timeout\(60_000\)/g)].length,
   2

@@ -18,7 +18,8 @@ import {
   baileysLabels,
   baileysSetChatLabel,
 } from "@/lib/baileys";
-import { generateSuggestions, getSuggestionContextKey, hasRealAiKey, type SuggestResult } from "@/lib/aiSuggest";
+import { generateSuggestions, getSuggestionContextKey, hasRealAiKey } from "@/lib/aiSuggest";
+import { createSuggestionCache, isManualSuggestionContext } from "@/lib/aiSuggestionCache";
 import type { Message, WhatsAppLabel } from "@/types/crm";
 import { ContactAvatar } from "./ContactAvatar";
 import { ContactLocalTime } from "./ContactLocalTime";
@@ -60,10 +61,12 @@ function threadForContact(
 export function CrmAiPanel() {
   const { t } = useI18n();
   const contacts = useAppStore((state) => state.contacts);
-  const messagesByChatId = useAppStore((state) => state.messagesByChatId);
   const followUps = useAppStore((state) => state.followUps);
   const selectedContactId = useAppStore((state) => state.selectedContactId);
   const selectedChatId = useAppStore((state) => state.selectedChatId);
+  const threadBucket = useAppStore((state) =>
+    selectedChatId ? state.messagesByChatId[selectedChatId] : undefined
+  );
   const selectedThreadAccount = useAppStore(
     (state) => state.selectedThreadAccount
   );
@@ -111,9 +114,7 @@ export function CrmAiPanel() {
   const [aiSource, setAiSource] = useState<string>(settings.aiProvider);
   const [aiError, setAiError] = useState("");
   const generation = useRef(0);
-  const suggestionCache = useRef(
-    new Map<string, { suggestions: SuggestResult[]; source: string }>()
-  );
+  const [suggestionCache] = useState(createSuggestionCache);
 
   const contact = contacts.find((item) => item.id === selectedContactId);
   const threadAccountId =
@@ -125,20 +126,15 @@ export function CrmAiPanel() {
     chats.find((chat) => chat.id === selectedChatId)?.accountId ||
     contact?.accountId;
   const thread = useMemo(() => {
-    if (collapsed) return [];
     // 用 messagesByChatId 索引桶（已按 chatId 分组 + sentAt 排序），避免全量扫 messages
-    const bucket = selectedChatId
-      ? messagesByChatId[selectedChatId]
-      : undefined;
-    if (!bucket?.length) return [];
+    if (!threadBucket?.length) return [];
     return filterMessagesForAccount(
-      threadForContact(bucket, selectedContactId, selectedChatId),
+      threadForContact(threadBucket, selectedContactId, selectedChatId),
       threadAccountId,
       settings.liveBaileysAccountId
     );
   }, [
-    collapsed,
-    messagesByChatId,
+    threadBucket,
     selectedChatId,
     selectedContactId,
     threadAccountId,
@@ -148,6 +144,10 @@ export function CrmAiPanel() {
     () => [...thread].reverse().find((message) => message.direction === "in"),
     [thread]
   );
+  // 排队/发送中的回复也暂停建议；发送失败后仍可继续为未回复的消息生成。
+  const awaitingReply = useMemo(() => [...thread].reverse().find((message) =>
+    message.direction === "in" || !["failed", "local"].includes(message.deliveryStatus || "")
+  )?.direction === "in", [thread]);
   const activeOrder = useMemo(
     () =>
       [...thread]
@@ -208,29 +208,13 @@ export function CrmAiPanel() {
     [settings.quickReplies, settings.quickReplyCustomCategories]
   );
 
-  const suggestionKey = useMemo(() => JSON.stringify([
-    selectedChatId || "", selectedContactId || "",
-    getSuggestionContextKey(contact, thread, settings, aiAccountId),
-  ]), [selectedChatId, selectedContactId, contact, thread, settings, aiAccountId]);
+  const suggestionKey = useMemo(() => getSuggestionContextKey(contact, thread, settings, aiAccountId),
+    [selectedChatId, selectedContactId, contact, thread, settings, aiAccountId]);
   const latestSuggestionKey = useRef(suggestionKey);
   latestSuggestionKey.current = suggestionKey;
 
-  const rememberSuggestions = (key: string, result: {
-    suggestions: SuggestResult[];
-    source: string;
-    fallback?: boolean;
-  }) => {
-    if (result.fallback) return;
-    suggestionCache.current.set(key, {
-      suggestions: result.suggestions,
-      source: result.source,
-    });
-    while (suggestionCache.current.size > 24) {
-      const oldest = suggestionCache.current.keys().next().value;
-      if (!oldest) break;
-      suggestionCache.current.delete(oldest);
-    }
-  };
+  const requestSuggestions = (key: string, force = false) => suggestionCache.request(key,
+    () => generateSuggestions(contact, thread, settings, { accountId: aiAccountId }), force);
 
   useEffect(() => {
     if (
@@ -322,14 +306,11 @@ export function CrmAiPanel() {
     setLoading(true);
     setAiError("");
     try {
-      const result = await generateSuggestions(contact, thread, settings, {
-        accountId: aiAccountId,
-      });
+      const result = await requestSuggestions(key, true);
       if (request !== generation.current || latestSuggestionKey.current !== key) return;
       useAppStore.setState({ aiSuggestions: result.suggestions });
       setAiSource(result.source === "mock" ? t("crmPanel.localTemplate") : result.source);
       setAiError(result.error || "");
-      rememberSuggestions(key, result);
       pushToast(
         result.fallback ? result.error || "API \u4e0d\u53ef\u7528" : "\u5df2\u751f\u6210\u56de\u590d\u5efa\u8bae",
         result.fallback ? "error" : "success"
@@ -346,15 +327,21 @@ export function CrmAiPanel() {
     const request = ++generation.current;
     const key = suggestionKey;
     useAppStore.setState({ aiSuggestions: [] });
-    if (collapsed || !contact || !thread.length || !aiReady) {
+    setAiError("");
+    if (collapsed || panelTab !== "customer" || !contact || !thread.length || !aiReady) {
       setLoading(false);
       return () => { generation.current++; };
     }
-    const cached = suggestionCache.current.get(key);
+    const entry = suggestionCache.get(key);
+    const cached = entry?.result;
     if (cached) {
       useAppStore.setState({ aiSuggestions: cached.suggestions });
       setAiSource(cached.source === "mock" ? t("crmPanel.localTemplate") : cached.source);
       setAiError("");
+      setLoading(false);
+      return () => { generation.current++; };
+    }
+    if (!awaitingReply || isManualSuggestionContext(key)) {
       setLoading(false);
       return () => { generation.current++; };
     }
@@ -363,32 +350,32 @@ export function CrmAiPanel() {
     setAiError("");
     const timer = window.setTimeout(() => {
       if (request !== generation.current || latestSuggestionKey.current !== key) return;
-      void generateSuggestions(contact, thread, settings, {
-        accountId: aiAccountId,
-      })
+      if (isManualSuggestionContext(key)) { setLoading(false); return; }
+      void requestSuggestions(key)
         .then((result) => {
           if (cancelled || request !== generation.current || latestSuggestionKey.current !== key) return;
           useAppStore.setState({ aiSuggestions: result.suggestions });
           setAiSource(result.source === "mock" ? t("crmPanel.localTemplate") : result.source);
           setAiError(result.error || "");
-          rememberSuggestions(key, result);
           setLoading(false);
         })
         .catch(() => {
           if (!cancelled && request === generation.current && latestSuggestionKey.current === key) setLoading(false);
         });
-    }, 350);
+    }, suggestionCache.get(key) ? 0 : 800);
     return () => {
       cancelled = true;
       generation.current++;
       window.clearTimeout(timer);
     };
-    // 回执不改变 key；发言、转写、备注、身份或模型变化才重新生成。
+    // 仅为未回复的消息自动生成，完整上下文仍用于手动刷新和缓存隔离。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     collapsed,
+    panelTab,
     suggestionKey,
     aiReady,
+    awaitingReply,
   ]);
 
   const refreshLabels = async () => {

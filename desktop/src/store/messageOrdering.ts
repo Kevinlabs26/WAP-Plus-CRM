@@ -19,10 +19,15 @@ export function mergeMessagesByTime(
   const kept = existing.filter(
     (message) => !isHiddenProtocolMessageBody(message.body)
   );
+  // 实时缓存按到达顺序追加；空页/重复历史页也必须保持时间顺序，避免覆盖正确的会话索引。
+  const alreadySorted = kept.every((message, index) => index === 0 ||
+    (kept[index - 1]!.sentAt || "") <= (message.sentAt || ""));
+  if (!alreadySorted) kept.sort((a, b) => (a.sentAt || "").localeCompare(b.sentAt || ""));
+  const unchanged = alreadySorted && kept.length === existing.length;
   const added = incoming.filter(
     (message) => !isHiddenProtocolMessageBody(message.body)
   );
-  if (!added.length) return kept.length === existing.length ? existing : kept;
+  if (!added.length) return unchanged ? existing : kept;
   const seen = new Set<string>();
   const addIdentity = (message: Message) => {
     const owner = message.accountId || message.deviceId || "";
@@ -44,7 +49,7 @@ export function mergeMessagesByTime(
     identities.forEach((value) => seen.add(value));
     return true;
   });
-  if (!unique.length) return kept.length === existing.length ? existing : kept;
+  if (!unique.length) return unchanged ? existing : kept;
   unique.sort((a, b) => (a.sentAt || "").localeCompare(b.sentAt || ""));
 
   const merged: Message[] = [];

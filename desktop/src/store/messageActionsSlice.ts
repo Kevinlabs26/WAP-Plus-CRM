@@ -67,6 +67,7 @@ export function createMessageActionsSlice({
         accountId,
         accountPhoneE164: state.settings.waAccounts?.find(a => a.id === accountId)?.historyPhoneE164,
         systemKind: input.systemKind,
+        aiReplyContextHash: input.aiReplyContextHash,
       };
       set((state) => ({
         messages: [...state.messages, msg],

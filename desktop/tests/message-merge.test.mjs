@@ -47,3 +47,26 @@ test("mergeMessagesByTime drops WhatsApp pin protocol bodies", () => {
   assert.deepEqual(mergeMessagesByTime([pin], []), []);
   assert.deepEqual(mergeMessagesByTime([], [pin]), []);
 });
+
+test("mergeMessagesByTime repairs live arrival order even when a disk page is empty or contains only duplicates", () => {
+  const outgoing = message("outgoing", "2026-10-27T11:27:09.181Z");
+  const incoming = message("incoming", "2026-10-27T11:27:25.000Z");
+  const existing = [incoming, outgoing];
+  for (const page of [[], [outgoing, incoming]]) {
+    const merged = mergeMessagesByTime(existing, page);
+    assert.deepEqual(merged, [outgoing, incoming]);
+    assert.equal(merged[0], outgoing);
+    assert.equal(merged[1], incoming);
+    assert.deepEqual(existing, [incoming, outgoing], "do not mutate the live input array");
+  }
+});
+
+test("new history merges correctly into an unsorted multi-account live buffer without changing timestamps", () => {
+  const before = { ...message("before", "2026-10-27T11:26:00.000Z"), accountId: "a" };
+  const out = { ...message("out", "2026-10-27T11:27:09.181Z"), accountId: "a" };
+  const reply = { ...message("reply", "2026-10-27T11:27:25.000Z"), accountId: "a" };
+  const other = { ...message("other", "2026-10-27T11:27:15.000Z"), accountId: "b" };
+  const merged = mergeMessagesByTime([reply, out], [other, before]);
+  assert.deepEqual(merged, [before, out, other, reply]);
+  assert.equal(mergeMessagesByTime(merged, []), merged, "keep stable references for an already ordered buffer");
+});

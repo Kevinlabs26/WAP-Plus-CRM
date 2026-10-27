@@ -2,12 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
+import { getSuggestionContextKey } from "../src/lib/aiSuggest.ts";
+import { markManualSuggestionContext, isManualSuggestionContext } from "../src/lib/aiSuggestionCache.ts";
+globalThis.getFlowContextKey = getSuggestionContextKey;
+globalThis.isFlowManualContext = isManualSuggestionContext;
 const mocks = {
   "@/store/appStore": "export const useAppStore = { getState: () => globalThis.flowState };",
   "@/lib/utils": "export const resolveSendTarget = () => '12025550100';",
-  "@/lib/aiSuggest": "export const hasRealAiKey = () => true; export const generateSuggestions = (...args) => globalThis.generateFlow(...args);",
+  "@/lib/aiSuggest": `export const getSuggestionContextKey = (...args) => globalThis.getFlowContextKey(...args);
+    export const hasRealAiKey = () => true; export const generateSuggestions = (...args) => globalThis.generateFlow(...args);`,
   "@/lib/accountConnection": "export const isWaAccountConnected = () => true;",
-  "@/components/chat/sendTextMessage": "export const sendTextMessage = async (opts) => { if (opts.canSend && !opts.canSend()) { opts.updateMessageDelivery(opts.msgId, { deliveryStatus: 'failed' }); return; } globalThis.sentFlow.push(opts.text); opts.updateMessageDelivery(opts.msgId, { deliveryStatus: 'sent' }); };",
+  "@/lib/aiSuggestionCache": "export const isManualSuggestionContext = (...args) => globalThis.isFlowManualContext(...args);",
+  "@/components/chat/sendTextMessage": "export const sendTextMessage = async (opts) => { await globalThis.beforeAutoGate?.(); if (opts.canSend && !opts.canSend()) { opts.updateMessageDelivery(opts.msgId, { deliveryStatus: 'failed' }); return; } globalThis.sentFlow.push(opts.text); opts.updateMessageDelivery(opts.msgId, { deliveryStatus: 'sent' }); };",
   "@/lib/desktopNotify": "export const showDesktopNotify = async (opts) => { globalThis.notificationFlow.push(opts); return true; };",
 };
 const built = await build({
@@ -21,6 +27,7 @@ const built = await build({
 const { autoReplyInbound, notifyInboundMessages } = await import("data:text/javascript;base64," + Buffer.from(built.outputFiles[0].text).toString("base64"));
 function setup(chatId) {
   globalThis.sentFlow = [];
+  globalThis.beforeAutoGate = undefined;
   const inbound = { id: chatId + "-in", chatId, contactId: "c", accountId: "wa", body: "Hello", direction: "in", sentAt: new Date().toISOString() };
   globalThis.flowState = {
     settings: { aiReplyMode: "auto", aiAutoReplyManualChatIds: [], aiAutoReplyIntervalMs: 5000, sendChannel: "baileys", liveBaileysAccountId: "wa", activeAccountId: "wa", waAccounts: [] },
@@ -36,7 +43,7 @@ function setup(chatId) {
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
 const reply = { source: "openai", suggestions: [{ text: "Hello there" }] };
 test("AI completion observes current automation, takeover, provider and newest context", async () => {
-  for (const mode of ["disabled", "manual-only", "manual-reply", "new-inbound", "endpoint"]) {
+  for (const mode of ["disabled", "manual-only", "manual-reply", "new-inbound", "endpoint", "identity", "account-identity", "model", "stage", "manual-ai"]) {
     const inbound = setup(mode);
     const ai = deferred(); globalThis.generateFlow = () => ai.promise;
     const running = autoReplyInbound(inbound);
@@ -44,6 +51,11 @@ test("AI completion observes current automation, takeover, provider and newest c
     if (mode === "disabled") state.settings = { ...state.settings, aiReplyMode: "semi" };
     if (mode === "manual-only") state.settings = { ...state.settings, aiAutoReplyManualChatIds: [inbound.chatId] };
     if (mode === "endpoint") state.settings = { ...state.settings, customAiBaseUrl: "https://changed.invalid" };
+    if (mode === "identity") state.settings = { ...state.settings, aiSystemPrompt: "Different identity" };
+    if (mode === "account-identity") state.settings = { ...state.settings, aiSystemPromptByAccountId: { wa: "Different account identity" } };
+    if (mode === "model") state.settings = { ...state.settings, aiModel: "different-model" };
+    if (mode === "stage") state.contacts = state.contacts.map(c => ({ ...c, stage: "won" }));
+    if (mode === "manual-ai") markManualSuggestionContext(getSuggestionContextKey(state.contacts[0], state.messages, state.settings, "wa"));
     if (mode === "manual-reply" || mode === "new-inbound") state.messages.push({ ...inbound, id: "new", direction: mode === "manual-reply" ? "out" : "in", sentAt: new Date(Date.now() + 1).toISOString() });
     ai.resolve(reply); await running;
     assert.deepEqual(globalThis.sentFlow, [], mode);
@@ -98,6 +110,33 @@ test("old manual history outside the context window does not prevent a fresh rep
     return reply;
   };
   await autoReplyInbound(inbound);
+  assert.deepEqual(globalThis.sentFlow, ["Hello there"]);
+});
+
+test("identity and model changes while waiting to dispatch block the old reply; receipt updates do not", async () => {
+  for (const kind of ["identity", "model", "stage", "receipt"]) {
+    const inbound = setup(`before-gate-${kind}`);
+    globalThis.generateFlow = async () => reply;
+    globalThis.beforeAutoGate = () => {
+      const state = globalThis.flowState;
+      if (kind === "identity") state.settings = { ...state.settings, aiSystemPrompt: "New role" };
+      if (kind === "model") state.settings = { ...state.settings, customAiModel: "different-model" };
+      if (kind === "stage") state.contacts = state.contacts.map(c => ({ ...c, stage: "won" }));
+      if (kind === "receipt") state.messages[0].deliveryStatus = "read";
+    };
+    await autoReplyInbound(inbound);
+    assert.deepEqual(globalThis.sentFlow, kind === "receipt" ? ["Hello there"] : [], kind);
+  }
+});
+
+test("indexed auto-reply context avoids scanning unrelated conversations without removing dispatch safety checks", async () => {
+  const inbound = setup("indexed-context"), state = globalThis.flowState;
+  state.messagesByChatId = { [inbound.chatId]: [inbound] };
+  let scans = 0;
+  Object.defineProperty(state.messages, "filter", { value(...args) { scans++; return Array.prototype.filter.apply(this, args); } });
+  globalThis.generateFlow = async (_contact, context) => { assert.deepEqual(context, [inbound]); return reply; };
+  await autoReplyInbound(inbound);
+  assert.equal(scans, 1, "the remaining collection scan is the dispatch safety decision");
   assert.deepEqual(globalThis.sentFlow, ["Hello there"]);
 });
 

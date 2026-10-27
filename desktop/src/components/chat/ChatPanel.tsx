@@ -82,6 +82,7 @@ import { useChatExport } from "./useChatExport";
 import { useSaveContact } from "./useSaveContact";
 import { useForwardMessage } from "./useForwardMessage";
 import { useMessageActions } from "./useMessageActions";
+import { useAiMessageReply } from "./useAiMessageReply";
 const ProductPicker = lazy(() =>
   import("./ProductPicker").then((m) => ({ default: m.ProductPicker }))
 );
@@ -444,6 +445,11 @@ export function ChatPanel() {
   const mentionTrackerRef = useRef<
     { token: string; jid: string; everyone?: boolean }[]
   >([]);
+  const { aiReply, aiReplyingId } = useAiMessageReply({
+    chatId: selectedChatId, contact: activeContact, accountId: chatAccountId,
+    messages: chatMessages, getDraft: readComposerDraft, editingId, replyTo,
+    setDraftReply, setReplyTo,
+  });
 
   useEffect(() => {
     void loadStickerFavorites().then(setFavoriteStickers);
@@ -1789,6 +1795,15 @@ export function ChatPanel() {
           setReplyTo={setReplyTo}
           setDraftReply={setDraftReply}
           onForward={setForwardMessage}
+          aiReplyingId={aiReplyingId}
+          onAiReply={(message) => {
+            void aiReply(message).then((filled) => {
+              if (filled) {
+                setMsgMenu((current) => current?.messageId === message.id ? null : current);
+                document.querySelector<HTMLTextAreaElement>('[data-composer-input="true"]')?.focus({ preventScroll: true });
+              }
+            });
+          }}
         />
       )}
       {forwardMessage && (

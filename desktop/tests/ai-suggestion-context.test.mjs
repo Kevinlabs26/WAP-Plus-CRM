@@ -59,6 +59,7 @@ test("suggestion keys follow replies, edits, transcripts, notes, account and mod
     assert.notEqual(getSuggestionContextKey(contact, history, { ...settings, ...patch }), key);
   }
   assert.notEqual(getSuggestionContextKey({ ...contact, notes: "new note" }, history, settings), key);
+  assert.notEqual(getSuggestionContextKey({ ...contact, stage: "won" }, history, settings), key);
   assert.notEqual(getSuggestionContextKey(contact, history, settings, "b"), key);
   assert.ok(!key.includes("secret-key"));
 });

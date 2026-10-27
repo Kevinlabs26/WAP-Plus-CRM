@@ -14,6 +14,8 @@ import { SavedMessageMenuActions } from "./SavedMessageMenuActions";
 import { messagePlainText } from "./chatPanelHelpers";
 import { inferMediaType } from "./messageMediaUtils";
 import { resolveMessageKeyFrom } from "./resolveMessageKey";
+import { Sparkles } from "lucide-react";
+import { useI18n } from "@/i18n";
 
 type ReplyTarget = {
   id: string;
@@ -39,6 +41,8 @@ type Props = {
   setReplyTo: (value: ReplyTarget | null) => void;
   setDraftReply: (text: string) => void;
   onForward: (m: Message) => void;
+  onAiReply: (m: Message) => void;
+  aiReplyingId: string | null;
 };
 
 export function ChatPanelMessageMenu({
@@ -59,7 +63,10 @@ export function ChatPanelMessageMenu({
   setReplyTo,
   setDraftReply,
   onForward,
+  onAiReply,
+  aiReplyingId,
 }: Props) {
+  const { t } = useI18n();
   const contacts = useAppStore((s) => s.contacts);
   const selectedContactId = useAppStore((s) => s.selectedContactId);
   // 朗读语言：联系人手动指定（ContactEditor「语言（朗读）」）优先，否则自动探测
@@ -154,6 +161,17 @@ export function ChatPanelMessageMenu({
         setDraftReply={setDraftReply}
         onClose={onClose}
       />
+      {m.direction === "in" && (
+        <button
+          type="button"
+          disabled={Boolean(aiReplyingId)}
+          className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] text-zinc-200 hover:bg-zinc-800 disabled:cursor-wait disabled:opacity-50"
+          onClick={() => onAiReply(m)}
+        >
+          <Sparkles className="h-3.5 w-3.5 text-brand" />
+          {aiReplyingId === m.id ? t("crmPanel.generating") : t("messageMenu.aiReply")}
+        </button>
+      )}
       <MessageForwardMenuAction
         isBaileys={isBaileys}
         canProto={canProto}

@@ -387,6 +387,8 @@ function sanitizeMessage(raw: unknown): Message | null {
     senderName: str(m.senderName, 200) || undefined,
     senderAvatarUrl: sanitizeMediaUrl(m.senderAvatarUrl) || undefined,
     systemKind: str(m.systemKind, 80) || undefined,
+    aiReplyContextHash: typeof m.aiReplyContextHash === "string" && /^[a-f0-9]{64}$/.test(m.aiReplyContextHash)
+      ? m.aiReplyContextHash : undefined,
     systemAction: str(m.systemAction, 80) || undefined,
     mentionedJids: Array.isArray(m.mentionedJids)
       ? m.mentionedJids

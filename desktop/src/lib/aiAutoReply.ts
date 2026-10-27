@@ -2,7 +2,9 @@ import type { ChannelId } from "@/channels";
 import type { ChatPreview, Contact, Message } from "@/types/crm";
 import { useAppStore } from "@/store/appStore";
 import { resolveSendTarget } from "@/lib/utils";
-import { generateSuggestions, hasRealAiKey } from "@/lib/aiSuggest";
+import { generateSuggestions, getSuggestionContextKey, hasRealAiKey } from "@/lib/aiSuggest";
+import { isManualSuggestionContext } from "@/lib/aiSuggestionCache";
+import { currentAutoReplyContext, hashAiReplyContext } from "@/lib/aiReplyContext";
 import { sendTextMessage } from "@/components/chat/sendTextMessage";
 import {
   canSendAutoReply,
@@ -190,7 +192,7 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
     return;
   }
 
-  const conversation = state.messages
+  const conversation = state.messagesByChatId?.[m.chatId] || state.messages
     .filter((x) => x.chatId === m.chatId)
     .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
   const thread = conversation.slice(-14);
@@ -220,6 +222,8 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
     }
     return;
   }
+  const contextKey = getSuggestionContextKey(contact, conversation, settings, accountId, { auto: true });
+  if (isManualSuggestionContext(getSuggestionContextKey(contact, conversation, settings, accountId))) return;
   const result = await generateSuggestions(contact, conversation, settings, {
     auto: true,
     accountId,
@@ -236,16 +240,18 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
   }
   // 生成期间用户可能接管、关闭自动回复，或收到更新的消息。
   const fresh = useAppStore.getState();
-  const freshThread = fresh.messages.filter((x) => x.chatId === m.chatId)
+  const freshThread = fresh.messagesByChatId?.[m.chatId] || fresh.messages.filter((x) => x.chatId === m.chatId)
     .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
   const latestInbound = freshThread.filter((x) => x.direction === "in").at(-1);
   const freshContact = fresh.contacts.find((x) => x.id === contact.id);
   const freshChat = fresh.chats.find((x) => x.id === chat.id);
-  const originalIds = new Set(state.messages.filter((x) => x.chatId === m.chatId).map((x) => x.id));
+  const originalIds = new Set(conversation.map((x) => x.id));
   if (fresh.settings.aiReplyMode !== "auto" ||
       fresh.settings.aiAutoReplyManualChatIds.includes(m.chatId) ||
       pendingByChat.has(m.chatId) || latestInbound?.id !== m.id ||
       !freshContact || !freshChat || freshChat.localOnly ||
+      getSuggestionContextKey(freshContact, freshThread, fresh.settings, accountId, { auto: true }) !== contextKey ||
+      isManualSuggestionContext(getSuggestionContextKey(freshContact, freshThread, fresh.settings, accountId)) ||
       freshThread.some((x) => x.direction === "out" && !x.systemKind && !originalIds.has(x.id)) ||
       fresh.settings.sendChannel !== settings.sendChannel ||
       fresh.settings.aiProvider !== settings.aiProvider ||
@@ -273,6 +279,7 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
     channelId,
     phoneId: freshChat.phoneId,
     inboundId: m.id,
+    contextKey,
   });
   logAutoDecision(
     contact.id,
@@ -285,13 +292,14 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
 export async function sendAutoReplyText(opts: {
   text: string;
   inboundId?: string;
+  contextKey?: string;
   contact: Contact;
   chat: ChatPreview | undefined;
   accountId?: string;
   channelId: ChannelId;
   phoneId?: string;
 }): Promise<boolean> {
-  const state = useAppStore.getState();
+  let state = useAppStore.getState();
   if (state.settings.aiReplyMode !== "auto" || !opts.chat ||
       state.settings.aiAutoReplyManualChatIds.includes(opts.chat.id)) return false;
   const isBaileys = opts.channelId === "baileys";
@@ -302,6 +310,14 @@ export async function sendAutoReplyText(opts: {
     entityId: isBaileys ? opts.contact.id : undefined,
   });
   if (!recipient || !opts.chat) return false;
+  const pendingContext = { id: "", chatId: opts.chat.id, contactId: opts.contact.id,
+    accountId: opts.accountId, channelId: opts.channelId };
+  const contextKey = currentAutoReplyContext(state, pendingContext);
+  if (!contextKey || (opts.contextKey && opts.contextKey !== contextKey)) return false;
+  const aiReplyContextHash = await hashAiReplyContext(contextKey);
+  state = useAppStore.getState();
+  if (state.settings.aiReplyMode !== "auto" || currentAutoReplyContext(state, pendingContext) !== contextKey ||
+      state.settings.aiAutoReplyManualChatIds.includes(opts.chat.id)) return false;
 
   const draftBefore = state.draftReply;
   const msgId = state.enqueueOutgoingMessage({
@@ -314,6 +330,7 @@ export async function sendAutoReplyText(opts: {
     accountId: opts.accountId,
     deliveryStatus: "pending",
     systemKind: "ai_auto_reply",
+    aiReplyContextHash,
   });
   if (!msgId) return false;
   // enqueueOutgoingMessage 会清空 draftReply，恢复用户在其它会话正在打的草稿
@@ -327,10 +344,11 @@ export async function sendAutoReplyText(opts: {
     canSend: () => {
       const latest = useAppStore.getState();
       const message = latest.messages.find((item) => item.id === msgId);
-      return !!message && message.deliveryStatus === "pending" &&
-        latest.settings.sendChannel === opts.channelId &&
+      if (!message || message.deliveryStatus !== "pending") return false;
+      return latest.settings.sendChannel === opts.channelId &&
         latest.chats.some((item) => item.id === message.chatId && !item.localOnly) &&
         latest.contacts.some((item) => item.id === message.contactId) &&
+        currentAutoReplyContext(latest, message) === contextKey &&
         canSendAutoReply(latest.settings, latest.messages, message, opts.inboundId);
     },
     text: opts.text,
