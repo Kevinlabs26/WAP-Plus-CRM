@@ -37,22 +37,38 @@ if (-not (Test-Path -LiteralPath $sidecarPath -PathType Leaf)) {
 }
 
 $application = $null
+$databasePath = Join-Path $dataDirectory "wap-plus.db"
+$stdoutPath = Join-Path $env:RUNNER_TEMP "wap-plus-startup.stdout.log"
+$stderrPath = Join-Path $env:RUNNER_TEMP "wap-plus-startup.stderr.log"
 try {
   Write-Host "Launching the installed application"
-  $application = Start-Process -FilePath $applicationPath -WindowStyle Hidden -PassThru
-  Start-Sleep -Seconds 15
-  $application.Refresh()
+  $application = Start-Process -FilePath $applicationPath -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+  $deadline = [DateTime]::UtcNow.AddSeconds(90)
+  do {
+    Start-Sleep -Seconds 1
+    $application.Refresh()
+    if ($application.HasExited) {
+      throw "The installed application exited during startup with code $($application.ExitCode)"
+    }
+  } while (-not (Test-Path -LiteralPath $databasePath -PathType Leaf) -and [DateTime]::UtcNow -lt $deadline)
 
+  Start-Sleep -Seconds 3
+  $application.Refresh()
   if ($application.HasExited) {
     throw "The installed application exited during startup with code $($application.ExitCode)"
   }
 
-  $databasePath = Join-Path $dataDirectory "wap-plus.db"
   if (-not (Test-Path -LiteralPath $databasePath -PathType Leaf)) {
     throw "The installed application did not initialize its database at $databasePath"
   }
 
   Write-Host "Installer smoke test passed"
+}
+catch {
+  foreach ($log in @($stdoutPath, $stderrPath)) {
+    if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 60 | Write-Host }
+  }
+  throw
 }
 finally {
   if ($application -and -not $application.HasExited) {

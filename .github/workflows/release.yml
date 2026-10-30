@@ -2,6 +2,11 @@ name: Publish Windows release
 
 on:
   workflow_dispatch:
+    inputs:
+      verify_existing:
+        description: Verify and publish an already built draft without rebuilding identical app sources
+        type: boolean
+        default: false
   push:
     tags:
       - "v*"
@@ -11,6 +16,7 @@ permissions:
 
 jobs:
   publish-windows:
+    if: ${{ !inputs.verify_existing }}
     runs-on: windows-latest
 
     steps:
@@ -77,6 +83,36 @@ jobs:
         shell: pwsh
         run: .github/scripts/smoke-windows-installer.ps1
 
+      - name: Publish verified release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$env:RELEASE_TAG" --draft=false
+
+  verify-existing:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_existing }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - name: Download previously built draft with identical application sources
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $config = Get-Content desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $releaseTag = "v$($config.version)"
+          git diff --quiet $releaseTag HEAD -- desktop shared android package.json package-lock.json
+          if ($LASTEXITCODE -ne 0) { throw 'Application sources differ from the release tag; rebuild instead' }
+          $bundleDirectory = 'desktop/src-tauri/target/release/bundle/nsis'
+          New-Item -ItemType Directory -Force -Path $bundleDirectory | Out-Null
+          gh release download $releaseTag --pattern "*$($config.version)*x64-setup.exe" --dir $bundleDirectory
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot download the existing release installer' }
+          "RELEASE_TAG=$releaseTag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Smoke test packaged Windows installer
+        shell: pwsh
+        run: .github/scripts/smoke-windows-installer.ps1
       - name: Publish verified release
         shell: pwsh
         env:
