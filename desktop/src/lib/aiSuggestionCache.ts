@@ -2,7 +2,9 @@ import type { GenerateSuggestionsResult } from "./aiSuggest";
 
 /** 当前界面的短期缓存；只保存真实成功结果，不落盘。 */
 export function createSuggestionCache() {
-  type Entry = { result?: GenerateSuggestionsResult; promise: Promise<GenerateSuggestionsResult> };
+  type Progress = (result: GenerateSuggestionsResult) => void;
+  type Entry = { result?: GenerateSuggestionsResult; promise: Promise<GenerateSuggestionsResult>;
+    updates: { latest?: GenerateSuggestionsResult; listeners: Set<Progress> } };
   const entries = new Map<string, Entry>();
   const get = (key: string) => {
     const entry = entries.get(key);
@@ -11,17 +13,30 @@ export function createSuggestionCache() {
   };
   return {
     get,
-    request(key: string, generate: () => Promise<GenerateSuggestionsResult>, force = false) {
+    request(key: string, generate: (publish: Progress) => Promise<GenerateSuggestionsResult>, force = false, onProgress?: Progress) {
       const existing = get(key);
-      if (existing && (!force || !existing.result)) return existing.promise;
+      if (existing && (!force || !existing.result)) {
+        if (onProgress && !existing.result) {
+          existing.updates.listeners.add(onProgress);
+          if (existing.updates.latest) onProgress(existing.updates.latest);
+        }
+        return existing.promise;
+      }
+      const updates: Entry["updates"] = { listeners: new Set(onProgress ? [onProgress] : []) };
       const entry: Entry = {
-        promise: generate().then((result) => {
+        updates,
+        promise: generate(result => {
+          updates.latest = result;
+          for (const listener of updates.listeners) listener(result);
+        }).then((result) => {
+          updates.listeners.clear();
           if (entries.get(key) === entry) {
             if (result.fallback || result.source === "mock") entries.delete(key);
             else entry.result = result;
           }
           return result;
         }, (error: unknown) => {
+          updates.listeners.clear();
           if (entries.get(key) === entry) entries.delete(key);
           throw error;
         }),

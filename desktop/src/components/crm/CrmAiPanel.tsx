@@ -20,7 +20,7 @@ import {
   baileysLabels,
   baileysSetChatLabel,
 } from "@/lib/baileys";
-import { generateSuggestions, getSuggestionContextKey, hasRealAiKey } from "@/lib/aiSuggest";
+import { generateSuggestions, getSuggestionContextKey, hasRealAiKey, type GenerateSuggestionsResult } from "@/lib/aiSuggest";
 import { createSuggestionCache, isManualSuggestionContext } from "@/lib/aiSuggestionCache";
 import type { Message, WhatsAppLabel } from "@/types/crm";
 import { ContactAvatar } from "./ContactAvatar";
@@ -218,8 +218,14 @@ export function CrmAiPanel() {
   const latestSuggestionKey = useRef(suggestionKey);
   latestSuggestionKey.current = suggestionKey;
 
-  const requestSuggestions = (key: string, force = false) => suggestionCache.request(key,
-    () => generateSuggestions(contact, thread, settings, { accountId: aiAccountId }), force);
+  const requestSuggestions = (key: string, force = false, onProgress?: (result: GenerateSuggestionsResult) => void) => suggestionCache.request(key,
+    publish => generateSuggestions(contact, thread, settings, { accountId: aiAccountId, onProgress: publish }), force, onProgress);
+
+  const showProgress = (key: string, request: number) => (result: GenerateSuggestionsResult) => {
+    if (request !== generation.current || latestSuggestionKey.current !== key) return;
+    useAppStore.setState({ aiSuggestions: result.suggestions });
+    setAiSource(result.source);
+  };
 
   useEffect(() => {
     if (
@@ -312,7 +318,7 @@ export function CrmAiPanel() {
     setLoading(true);
     setAiError("");
     try {
-      const result = await requestSuggestions(key, true);
+      const result = await requestSuggestions(key, true, showProgress(key, request));
       if (request !== generation.current || latestSuggestionKey.current !== key) return;
       useAppStore.setState({ aiSuggestions: result.suggestions });
       setAiSource(result.source === "mock" ? t("crmPanel.localTemplate") : result.source);
@@ -357,7 +363,7 @@ export function CrmAiPanel() {
     const timer = window.setTimeout(() => {
       if (request !== generation.current || latestSuggestionKey.current !== key) return;
       if (isManualSuggestionContext(key)) { setLoading(false); return; }
-      void requestSuggestions(key)
+      void requestSuggestions(key, false, showProgress(key, request))
         .then((result) => {
           if (cancelled || request !== generation.current || latestSuggestionKey.current !== key) return;
           useAppStore.setState({ aiSuggestions: result.suggestions });
@@ -368,7 +374,7 @@ export function CrmAiPanel() {
         .catch(() => {
           if (!cancelled && request === generation.current && latestSuggestionKey.current === key) setLoading(false);
         });
-    }, suggestionCache.get(key) ? 0 : 800);
+    }, suggestionCache.get(key) ? 0 : 200);
     return () => {
       cancelled = true;
       generation.current++;
@@ -919,7 +925,7 @@ export function CrmAiPanel() {
           </div>
         ) : (
           <>
-            {!loading && aiSuggestions.length > 0 && (
+            {aiSuggestions.length > 0 && (
               <p className="mb-1.5 break-words text-[10px] leading-3 text-zinc-600">{t("crmPanel.suggestionHint")}</p>
             )}
             <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
@@ -928,7 +934,7 @@ export function CrmAiPanel() {
                   {t("crmPanel.suggestionError", { error: aiError })}
                 </p>
               )}
-              {!loading && aiSuggestions.map((suggestion) => (
+              {aiSuggestions.map((suggestion) => (
                 <div
                   key={suggestion.id}
                   className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-2.5 transition-colors hover:border-brand/30 hover:bg-zinc-900"

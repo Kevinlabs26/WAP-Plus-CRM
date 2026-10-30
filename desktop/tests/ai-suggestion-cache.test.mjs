@@ -34,3 +34,22 @@ test('manual suppression is bounded and applies only to an identical context', (
   assert.equal(isManualSuggestionContext('manual-24'), true);
   assert.equal(isManualSuggestionContext('new-context'), false);
 });
+
+test('pending cache replays streaming progress to returning consumers without another request', async () => {
+  const cache = createSuggestionCache(); let publish, resolve;
+  const firstUpdates = [], returningUpdates = [];
+  const pending = cache.request('stream', notify => {
+    publish = notify; return new Promise(done => { resolve = done; });
+  }, false, value => firstUpdates.push(value));
+  publish(result);
+  assert.equal(cache.request('stream', () => { throw new Error('duplicate request'); }, true,
+    value => returningUpdates.push(value)), pending);
+  assert.deepEqual(returningUpdates, [result]);
+  const next = { ...result, suggestions: [{ text: 'second' }] };
+  publish(next);
+  assert.equal(firstUpdates.at(-1), next);
+  assert.equal(returningUpdates.at(-1), next);
+  resolve(next); await pending;
+  publish(result);
+  assert.equal(returningUpdates.length, 2, 'finished requests release progress subscribers');
+});

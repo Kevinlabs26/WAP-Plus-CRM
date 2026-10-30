@@ -11,9 +11,10 @@ async function geminiPost(
   apiKey: string,
   model: string,
   body: Record<string, unknown>,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onText?: (text: string) => void
 ): Promise<string> {
-  const url = `${GEMINI_BASE}/models/${model}:generateContent`;
+  const url = `${GEMINI_BASE}/models/${model}:${onText ? "streamGenerateContent?alt=sse" : "generateContent"}`;
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -32,6 +33,47 @@ async function geminiPost(
       /* ignore */
     }
     throw new Error(`Gemini ${res.status}: ${detail}`);
+  }
+  if (onText) {
+    if (!res.body) throw new Error("Gemini 空响应");
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "", text = "", bytes = 0;
+    const consume = (event: string) => {
+      const data = event.split(/\r?\n/).filter(line => line.startsWith("data:"))
+        .map(line => line.slice(5).trimStart()).join("\n");
+      if (!data || data === "[DONE]") return;
+      const chunk = JSON.parse(data);
+      if (chunk.error) throw new Error("Gemini 流式响应失败");
+      const candidate = chunk.candidates?.[0];
+      if (chunk.promptFeedback?.blockReason || (candidate?.finishReason && !["STOP", "MAX_TOKENS"].includes(candidate.finishReason))) {
+        throw new Error("Gemini 回复被阻止或未正常完成");
+      }
+      const delta = candidate?.content?.parts?.filter((part: { text?: string; thought?: boolean }) => !part.thought)
+        .map((part: { text?: string }) => part.text || "").join("") || "";
+      if (delta) { text += delta; onText(text); }
+    };
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > 1_000_000) throw new Error("Gemini 回复过大");
+        buffer += decoder.decode(value, { stream: true });
+        let boundary;
+        while ((boundary = /\r?\n\r?\n/.exec(buffer))) {
+          consume(buffer.slice(0, boundary.index));
+          buffer = buffer.slice(boundary.index + boundary[0].length);
+        }
+      }
+      buffer += decoder.decode();
+      if (buffer.trim()) consume(buffer);
+      if (!text.trim()) throw new Error("Gemini 空响应");
+      return text;
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
   }
   const data = (await res.json()) as {
     candidates?: { content?: { parts?: { text?: string }[] } }[];
@@ -54,6 +96,7 @@ export async function geminiGenerate(opts: {
   json?: boolean;
   maxOutputTokens?: number;
   signal?: AbortSignal;
+  onText?: (text: string) => void;
 }): Promise<string> {
   const model = opts.model || GEMINI_DEFAULT_MODEL;
   const generationConfig: Record<string, unknown> = {
@@ -70,7 +113,7 @@ export async function geminiGenerate(opts: {
   if (opts.system?.trim()) {
     body.systemInstruction = { parts: [{ text: opts.system }] };
   }
-  return geminiPost(opts.apiKey, model, body, opts.signal);
+  return geminiPost(opts.apiKey, model, body, opts.signal, opts.onText);
 }
 
 /** 语音转写：把音频 base64 内联给 Gemini，输出纯文本转写 */

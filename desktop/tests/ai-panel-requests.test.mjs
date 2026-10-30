@@ -95,6 +95,23 @@ function harness() {
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const reply = text => ({ source: "custom", suggestions: [{ id: text, text }] });
 
+test("streamed candidates appear while loading and cannot leak across conversations or unmount", async () => {
+  const h = harness(); await h.mount(); h.fireTimers();
+  const progressA = h.requests[0].args[3].onProgress;
+  progressA(reply("First completed A candidate"));
+  assert.equal(h.state.aiSuggestions[0].text, "First completed A candidate");
+  assert.ok(JSON.stringify(h.render()).includes("First completed A candidate"), "candidate is visible before completion");
+  Object.assign(h.state, { selectedContactId: "b", selectedChatId: "b" }); h.render(); h.fireTimers();
+  progressA(reply("STALE A progress"));
+  assert.deepEqual(h.state.aiSuggestions, []);
+  Object.assign(h.state, { selectedContactId: "a", selectedChatId: "a" }); h.render(); h.fireTimers();
+  assert.equal(h.requests.length, 2, "returning reuses the pending A request");
+  assert.equal(h.state.aiSuggestions[0].text, "STALE A progress", "progress is replayed only into its own conversation");
+  h.unmount(); progressA(reply("AFTER UNMOUNT"));
+  assert.notEqual(h.state.aiSuggestions[0].text, "AFTER UNMOUNT");
+  h.requests[0].resolve(reply("done A")); h.requests[1].resolve(reply("done B")); await settle();
+});
+
 test("manual and automatic requests cannot put an old contact's suggestion into a new conversation", async () => {
   for (const manual of [false, true]) {
     const h = harness(); await h.mount();

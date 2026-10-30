@@ -84,7 +84,7 @@ export async function generateSuggestions(
   contact: Contact | undefined,
   recent: Message[],
   settings: AppSettings,
-  opts?: { auto?: boolean; accountId?: string; replyTo?: Message; signal?: AbortSignal }
+  opts?: { auto?: boolean; accountId?: string; replyTo?: Message; signal?: AbortSignal; onProgress?: (result: GenerateSuggestionsResult) => void }
 ): Promise<GenerateSuggestionsResult> {
   const name = contact?.name ?? "there";
   const sorted = [...recent].sort((a, b) => a.sentAt.localeCompare(b.sentAt));
@@ -166,7 +166,8 @@ export async function generateSuggestions(
         effectiveSettings,
         opts?.auto,
         opts?.replyTo,
-        opts?.signal
+        opts?.signal,
+        opts?.onProgress
       );
       return { suggestions, source: "gemini", fallback: false };
     }
@@ -422,8 +423,10 @@ async function geminiSuggest(
   settings: AppSettings,
   auto?: boolean,
   replyTo?: Message,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onProgress?: (result: GenerateSuggestionsResult) => void
 ): Promise<SuggestResult[]> {
+  let published = 0;
   const content = await geminiGenerate({
     apiKey: settings.geminiKey,
     model: settings.aiModel.trim() || undefined,
@@ -433,8 +436,35 @@ async function geminiSuggest(
     json: true,
     maxOutputTokens: auto || replyTo ? 160 : 300,
     signal,
+    onText: onProgress ? raw => {
+      const suggestions = completedGeminiSuggestions(raw);
+      if (suggestions.length > published) {
+        published = suggestions.length;
+        onProgress({ suggestions, source: "gemini", fallback: false });
+      }
+    } : undefined,
   });
   return parseSuggestionsJson(content, "Gemini", auto || replyTo ? 1 : 3);
+}
+
+function completedGeminiSuggestions(raw: string): SuggestResult[] {
+  const start = raw.indexOf("[");
+  if (start < 0) return [];
+  let quoted = false, escaped = false, depth = 0, end = -1;
+  for (let i = start + 1; i < raw.length; i++) {
+    const char = raw[i];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') quoted = false;
+    } else if (char === '"') quoted = true;
+    else if (char === "{") depth++;
+    else if (char === "}" && --depth === 0) end = i;
+  }
+  if (end < 0) return [];
+  try {
+    return parseSuggestionsJson(raw.slice(start, end + 1) + "]", "Gemini");
+  } catch { return []; }
 }
 
 async function ollamaSuggest(
