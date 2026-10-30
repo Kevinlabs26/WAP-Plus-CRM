@@ -988,7 +988,7 @@ export default {
   "autoReplyScope.auto": "自动回复",
   "autoReplyScope.manual": "仅人工",
   "autoReplyScope.chatHint": "仅设置当前账号下的这个会话；个人设置优先于文件夹",
-  "autoReplyScope.folderMode": "文件夹自动回复",
+  "autoReplyScope.folderMode": "回复模式",
   "autoReplyScope.folderRuleFor": "文件夹「{name}」的回复规则",
   "autoReplyScope.defaultShort": "默认",
   "autoReplyScope.folderHint": "应用于本文件夹中的私聊；个人设置优先。冲突时优先人工。",

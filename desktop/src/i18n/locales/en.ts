@@ -988,7 +988,7 @@ export default {
   "autoReplyScope.auto": "Auto reply",
   "autoReplyScope.manual": "Manual only",
   "autoReplyScope.chatHint": "This conversation on this account only; overrides folder rules",
-  "autoReplyScope.folderMode": "Folder auto replies",
+  "autoReplyScope.folderMode": "Reply mode",
   "autoReplyScope.folderRuleFor": "Reply rule for folder “{name}”",
   "autoReplyScope.defaultShort": "Default",
   "autoReplyScope.folderHint": "Private chats in this folder; conversation overrides win. Conflicts use manual mode.",

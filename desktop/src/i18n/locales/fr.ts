@@ -988,7 +988,7 @@ export default {
   "autoReplyScope.auto": "Réponse automatique",
   "autoReplyScope.manual": "Manuel uniquement",
   "autoReplyScope.chatHint": "Cette conversation sur ce compte uniquement ; prioritaire sur les dossiers",
-  "autoReplyScope.folderMode": "Réponses du dossier",
+  "autoReplyScope.folderMode": "Mode de réponse",
   "autoReplyScope.folderRuleFor": "Règle de réponse du dossier « {name} »",
   "autoReplyScope.defaultShort": "Défaut",
   "autoReplyScope.folderHint": "Conversations privées du dossier ; réglage individuel prioritaire. En cas de conflit, mode manuel.",

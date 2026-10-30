@@ -7,10 +7,11 @@ import { translate } from "../src/i18n/core.ts";
 const mocks = {
   react: "export const useState=v=>globalThis.dragHooks.state(v); export const useRef=v=>globalThis.dragHooks.ref(v); export const useEffect=(f,d)=>globalThis.dragHooks.effect(f,d); export const useMemo=f=>f(); export const memo=f=>f;",
   "react/jsx-runtime": "export const jsx=(type,props,key)=>({type,props,key}); export const jsxs=jsx;",
+  "react-dom": "export const createPortal=children=>children;",
   "@/store/appStore": "export const useAppStore=Object.assign(f=>f(globalThis.dragStore),{getState:()=>globalThis.dragStore});",
   "zustand/react/shallow": "export const useShallow=f=>f;",
   "@/i18n": "export const useI18n=()=>({t:(k,p)=>globalThis.dragTranslate(k,p)});",
-  "lucide-react": ["BellOff", "Copy", "MoreVertical", "Pin", "ChevronDown", "ChevronRight", "Folder", "FolderPlus", "Link2", "GripVertical", "LayoutGrid", "MoreHorizontal", "Pencil", "Trash2", "Upload", "Users", "UserRoundX", "Archive", "CalendarDays", "Inbox"].map(n=>`export const ${n}=()=>null;`).join(""),
+  "lucide-react": ["Check", "BellOff", "Copy", "MoreVertical", "Pin", "ChevronDown", "ChevronRight", "Folder", "FolderPlus", "Link2", "GripVertical", "LayoutGrid", "MoreHorizontal", "Pencil", "Trash2", "Upload", "Users", "UserRoundX", "Archive", "CalendarDays", "Inbox"].map(n=>`export const ${n}=()=>null;`).join(""),
   "@/components/ui/Avatar": "export const Avatar=()=>null;",
   "@/components/chat/Ticks": "export const Ticks=()=>null;",
   "@/components/ui/primitives": "export const Badge='badge', ListRow='button';",
@@ -212,7 +213,7 @@ test("nested folder headers offer child creation and keep indentation within the
     const props={folderId:"deep",name:"Deep",collapsed:false,depth:8,total:0,unread:0,onCreateChild:()=>created++};
     let tree=FolderHeaderRow(props);
     assert.equal(tree.props.style.marginLeft,72);
-    nodes(tree).find(n=>n.props["aria-label"]==="分组操作").props.onClick({clientX:50,clientY:100});
+    nodes(tree).find(n=>n.props["aria-label"]==="分组操作").props.onClick({clientX:50,clientY:100,currentTarget:{getBoundingClientRect:()=>({left:50,bottom:100})}});
     ui.render();tree=FolderHeaderRow(props);
     const create=nodes(tree).find(n=>n.props.role==="menuitem"&&n.props.children?.includes?.("新建子分组"));
     assert.ok(create);create.props.onClick();assert.equal(created,1);
@@ -250,27 +251,18 @@ test("collapsed folder and ungrouped controls describe current location, exact u
   }finally{ui.close();}
 });
 
-test("folder reply rule is directly editable without expanding the folder or changing unrelated actions",()=>{
+test("folder headers leave room for names and keep reply settings inside the action menu",()=>{
   const ui=fixture();try {
     const changes=[];let toggles=0;
     const props={folderId:"a",name:"A",collapsed:true,depth:0,total:3,unread:1,onToggle:()=>toggles++,onAutoReplyModeChange:mode=>changes.push(mode)};
     for(const mode of [undefined,"auto","manual"]) {
       const tree=FolderHeaderRow({...props,autoReplyMode:mode});
-      const select=nodes(tree).find(n=>n.type==="select");
-      assert.ok(select);assert.equal(select.props.value,mode||"inherit");
-      assert.equal(select.props["aria-label"],"文件夹「A」的回复规则");
-      assert.match(select.props.title,/个人设置优先/);
-      assert.deepEqual(nodes(select).filter(n=>n.type==="option").map(n=>n.props.value),["inherit","auto","manual"]);
-      select.props.onChange({target:{value:"auto"}});
-      select.props.onChange({target:{value:"manual"}});
-      select.props.onChange({target:{value:"inherit"}});
-      select.props.onChange({target:{value:"invalid"}});
-      assert.equal(toggles,0);
+      assert.equal(nodes(tree).some(n=>n.type==="select"||n.props.role==="menuitemradio"),false);
       nodes(tree).find(n=>n.props["aria-expanded"]===false).props.onClick();
       assert.equal(toggles,1);
       toggles=0;
     }
-    assert.deepEqual(changes,["auto","manual",undefined,"auto","manual",undefined,"auto","manual",undefined]);
+    assert.deepEqual(changes,[]);
     assert.equal(nodes(FolderHeaderRow({...props,onAutoReplyModeChange:undefined})).some(n=>n.type==="select"),false);
   }finally{ui.close();}
 });
