@@ -109,6 +109,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path $bundleDirectory | Out-Null
           gh release download $releaseTag --pattern "*$($config.version)*x64-setup.exe" --dir $bundleDirectory
           if ($LASTEXITCODE -ne 0) { throw 'Cannot download the existing release installer' }
+          $downloaded = @(Get-ChildItem -LiteralPath $bundleDirectory -Filter "*$($config.version)*x64-setup.exe")
+          if ($downloaded.Count -ne 1) { throw 'Expected exactly one Windows installer' }
+          Rename-Item -LiteralPath $downloaded[0].FullName -NewName "$($config.productName)_$($config.version)_x64-setup.exe"
           "RELEASE_TAG=$releaseTag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Smoke test packaged Windows installer
         shell: pwsh
