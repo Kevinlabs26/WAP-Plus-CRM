@@ -42,7 +42,12 @@ jobs:
         run: npm run check
 
       - name: Run Rust tests
-        run: cargo test --locked --manifest-path desktop/src-tauri/Cargo.toml
+        run: cargo test --locked --lib --tests --manifest-path desktop/src-tauri/Cargo.toml
+
+      - name: Validate Google login release configuration
+        env:
+          GOOGLE_DESKTOP_CLIENT_JSON: ${{ secrets.GOOGLE_DESKTOP_CLIENT_JSON }}
+        run: node --experimental-strip-types .github/scripts/prepare-google-client.mjs
 
       - name: Resolve and validate release tag
         shell: pwsh

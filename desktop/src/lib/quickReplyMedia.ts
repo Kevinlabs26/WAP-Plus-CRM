@@ -6,6 +6,7 @@ export type QuickReplyMediaSelection = {
   caption?: string;
   token: string;
   target?: "main" | "multi";
+  chatId?: string;
 };
 
 const listeners = new Set<(selection: QuickReplyMediaSelection) => void>();

@@ -1,3 +1,4 @@
+import { resolveAutoReplyScope, type AutoReplyScopeSettings } from "./autoReplyScope.ts";
 export const MANUAL_TAKEOVER_WINDOW_MS = 30 * 60 * 1000;
 
 export interface AiAutoReplyPolicy {
@@ -266,12 +267,12 @@ export function parseAutoReplyReplay(
 
 /** 发送门闸和重试队列共享复核，防止排队期间自动模式或上下文改变。 */
 export function canSendAutoReply(
-  settings: { aiReplyMode: string; aiAutoReplyManualChatIds: string[]; aiAutoReplyPolicy: unknown; aiAutoReplyPolicyByAccountId: unknown },
+  settings: AutoReplyScopeSettings & { aiAutoReplyPolicy: unknown; aiAutoReplyPolicyByAccountId: unknown },
   messages: readonly (AutoReplySafetyMessage & { id: string; chatId: string; accountId?: string })[],
   reply: { id: string; chatId: string; body: string; sentAt: string; accountId?: string },
   inboundId?: string
 ): boolean {
-  if (settings.aiReplyMode !== "auto" || settings.aiAutoReplyManualChatIds.includes(reply.chatId)) return false;
+  if (resolveAutoReplyScope(settings, reply.chatId).mode !== "auto") return false;
   const thread = messages.filter((item) => item.chatId === reply.chatId)
     .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
   const inbound = thread.filter((item) => item.direction === "in").at(-1);

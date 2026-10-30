@@ -1,18 +1,19 @@
+import { MultiWindowReplyControls } from "@/features/multiWindow/components/MultiWindowReplyControls";
+import { useComposerMedia } from "@/components/chat/useComposerMedia";
+import { useVoiceRecording } from "@/components/chat/useVoiceRecording";
+import { useMessageActions } from "@/components/chat/useMessageActions";
+import { useMultiWindowDraftTranslation } from "@/features/multiWindow/hooks/useMultiWindowDraftTranslation";
 import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from "react";
 import {
-  Check,
-  ChevronDown,
-  ChevronUp,
+  ArrowDown,
+  ChevronRight,
   FileText,
-  GripVertical,
   Image as ImageIcon,
   Loader2,
-  Maximize2,
+  Languages,
   Mic,
   Pin,
   RotateCcw,
-  RefreshCw,
-  X,
 } from "lucide-react";
 import { Avatar } from "@/components/ui/Avatar";
 import { useAppStore } from "@/store/appStore";
@@ -36,12 +37,16 @@ import { createStickerFavoriteActions } from "@/components/chat/stickerFavoriteA
 import { retryMessage } from "@/components/chat/retryMessageAction";
 import { loadStickerFavorites } from "@/lib/stickerFavorites";
 import { titleOf } from "@/features/multiWindow/identity";
+import { useMultiWindowScroll } from "@/features/multiWindow/hooks/useMultiWindowScroll";
 import { MultiWindowComposer } from "@/features/multiWindow/components/MultiWindowComposer";
-import { MultiWindowConnectionBadge } from "@/features/multiWindow/components/MultiWindowConnectionBadge";
+import { MultiWindowCardMenu } from "@/features/multiWindow/components/MultiWindowCardMenu";
+import { GoogleSheetInfo } from "@/components/crm/GoogleSheetInfo";
+import { useGoogleSheets } from "@/lib/googleSheets";
 import { MultiWindowMessageMenu } from "@/features/multiWindow/components/MultiWindowMessageMenu";
 import { useMultiWindowMessageActions } from "@/features/multiWindow/hooks/useMultiWindowMessageActions";
 import type { ChatPreview, Contact, Message } from "@/types/crm";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { windowWorkStatus } from "@/features/multiWindow/lib/workflow";
 
 function messageLabel(message: Message, t: (key: TranslationKey) => string) {
   if (message.body?.trim()) return message.body;
@@ -80,6 +85,8 @@ export function MultiWindowCard({
   onSelectAccount,
   onClose,
   onMarkRead,
+  onComplete,
+  hasNext = false,
   onLoadOlder,
   historyLoading,
   hasMoreHistory,
@@ -113,6 +120,8 @@ export function MultiWindowCard({
   onSelectAccount?: (chatId: string) => void;
   onClose: () => void;
   onMarkRead: () => void;
+  onComplete?: () => void;
+  hasNext?: boolean;
   onLoadOlder?: () => void;
   historyLoading?: boolean;
   hasMoreHistory?: boolean;
@@ -150,6 +159,8 @@ export function MultiWindowCard({
   const baileysConnection = useAppStore((s) => s.baileysUi.connection);
   const [mediaBusyId, setMediaBusyId] = useState<string | null>(null);
   const [mediaSending, setMediaSending] = useState(false);
+  const [sheetInfoOpen, setSheetInfoOpen] = useState(false);
+  const hasSheetConfig = useGoogleSheets(state => !!state.email && !!state.config);
   const [messageMenu, setMessageMenu] = useState<{
     x: number;
     y: number;
@@ -167,6 +178,7 @@ export function MultiWindowCard({
     entityId: contact?.id || chat.id,
   });
   const recentMessages = messages;
+  const { scrollRef, awayFromBottom, onScroll, scrollToLatest, onMediaLoad } = useMultiWindowScroll(messages, collapsed);
 
   useEffect(() => {
     let cancelled = false;
@@ -247,6 +259,7 @@ export function MultiWindowCard({
     chatConnected,
     setBaileysLoginOpen,
     setDraftReply: () => undefined,
+    getDraft,
     enqueueOutgoingMessage,
     chatId: chat.id,
     patchMessage,
@@ -264,13 +277,40 @@ export function MultiWindowCard({
       }),
     toStickerDataUrl: imageToStickerDataUrl,
   });
-  const attachFile = async (file: File) => {
-    const caption = draft.trim();
-    const result = file.type.toLowerCase().startsWith("image/")
-      ? await mediaSend.sendImage(file, false, caption)
-      : await mediaSend.sendFile(file, caption);
-    if (result) setDraftReply("");
-  };
+  const voice = useVoiceRecording({
+    chatId: chat.id,
+    isBaileys: sendChannel !== "android_bridge",
+    sending: mediaSending || textSending,
+    chatConnected,
+    pushToast, setBaileysLoginOpen, setSending: setMediaSending,
+    resolveRecipient: () => ({ contact: contact || null, recipient }),
+    channelId: sendChannel,
+    selectedPhoneId: chat.phoneId || contact?.boundPhoneId || null,
+    chatAccountId, enqueueOutgoingMessage, patchMessage, updateMessageDelivery,
+    guardBlockedSend: () => true, stickToBottom: scrollToLatest,
+  });
+  useEffect(() => { if (collapsed) voice.resetVoice(); }, [collapsed]);
+  const draftTranslation = useMultiWindowDraftTranslation({
+    chatId: chat.id, contact, draft, getDraft, setDraft: setDraftReply,
+    lastInboundBody: [...messages].reverse().find(message => message.direction === "in" && message.body?.trim())?.body,
+  });
+  const { translate: translateMessage, translatingId } = useMessageActions({ patchMessage, pushToast });
+  const media = useComposerMedia({
+    chatKey: `multi:${chat.id}`,
+    sendContextKey: `${chat.id}:${chatAccountId}:${sendChannel}`,
+    readDraft: getDraft,
+    setDraftLocal: setDraftReply,
+    flushDraftNow: setDraftReply,
+    onSendImage: (file, caption) => mediaSend.sendImage(file, false, caption),
+    onSendAudio: mediaSend.sendAudio,
+    onSendFile: mediaSend.sendFile,
+    onSendGif: mediaSend.sendGif,
+    onSendSticker: file => mediaSend.sendImage(file, true),
+    onError: message => pushToast(message, "error"),
+  });
+  useEffect(() => {
+    if (media.pendingMedia.length) media.setMediaCaption(draft);
+  }, [draft, media.pendingMedia.length]);
 
   const retry = (id: string) => {
     void retryMessage({
@@ -339,50 +379,46 @@ export function MultiWindowCard({
     }
   }, [mediaKey, messages, reloadMedia]);
 
+  const workStatus = windowWorkStatus(chat, [...messages].reverse().find(message => !message.systemKind && message.mediaType !== "system")?.direction);
+  const unfinished = !!draft.trim() || !!editingId || !!replyTo || voice.recording || !!voice.preview || media.pendingMedia.length > 0 || mediaSending || textSending;
+
   return (
-    <article ref={cardRef} tabIndex={-1} data-collapsed={collapsed ? "true" : "false"} className={cn("flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-zinc-900/45 shadow-lg shadow-black/10 transition-opacity", collapsed && "self-start", unread ? "border-brand/55 shadow-brand/10" : "border-zinc-800/90", dragging && "opacity-50")} onDragOver={reorderEnabled ? onDragOver : undefined} onDrop={reorderEnabled ? onDrop : undefined} onDragEnd={reorderEnabled ? onDragEnd : undefined} aria-label={`${title}${unread ? `, ${t("multi.unreadCount", { count: unreadCount ?? chat.unread })}` : ""}`}>
-      <header className={cn("flex shrink-0 items-center gap-2 border-b px-3", compact ? "h-10" : "h-12", unread ? "border-brand/25 bg-brand/5" : "border-zinc-800/80 bg-zinc-900/80")}>
-        <Avatar name={title} seed={contact?.phone || contact?.id || chat.id} src={contact?.avatarUrl} size="sm" />
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-1.5">
-            {reorderEnabled && (
-              <span
-                draggable
-                role="button"
-                tabIndex={0}
-                aria-label={t("multi.reorderAria")}
-                title={t("multi.reorderTitle")}
-                onDragStart={onDragStart}
-                onKeyDown={onReorderKeyDown}
-                className="inline-flex h-5 w-4 shrink-0 cursor-grab items-center justify-center text-zinc-600 hover:text-zinc-300 active:cursor-grabbing"
-              >
-                <GripVertical className="h-3.5 w-3.5" />
-              </span>
-            )}
-            <div className={cn("truncate text-[12px] font-semibold", unread ? "text-brand" : "text-zinc-100")}>{title}</div>
-            {accountCount && accountCount > 1 && <span className="shrink-0 rounded-full bg-sky-500/15 px-1.5 py-0.5 text-[9px] text-sky-300">{t("multi.accountCount", { count: accountCount })}</span>}
-            <MultiWindowConnectionBadge channel={sendChannel} connected={chatConnected} onOpenDevices={onOpenDevices} />
-            {accountOptions && accountOptions.length > 1 && onSelectAccount && (
-              <select value={chat.id} onChange={(event) => onSelectAccount(event.target.value)} className="ui-control h-6 max-w-36 shrink-0 px-1.5 text-[9px]" aria-label={t("multi.selectReplyAccount")}>
-                {accountOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-              </select>
-            )}
-          </div>
-          <div className="truncate text-2xs text-zinc-600">{contact?.phone || contact?.channelAddress || t("multi.whatsappChat")}</div>
+    <article ref={cardRef} tabIndex={-1} data-unfinished={unfinished ? "true" : "false"} data-collapsed={collapsed ? "true" : "false"} className={cn("flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-zinc-900/45 shadow-lg shadow-black/10 transition-opacity", collapsed && "self-start", unread ? "border-brand/55 shadow-brand/10" : "border-zinc-800/90", dragging && "opacity-50")} onDragOver={reorderEnabled ? onDragOver : undefined} onDrop={reorderEnabled ? onDrop : undefined} onDragEnd={reorderEnabled ? onDragEnd : undefined} aria-label={`${title}${unread ? `, ${t("multi.unreadCount", { count: unreadCount ?? chat.unread })}` : ""}`}>
+      <header className={cn("flex shrink-0 flex-col gap-1.5 border-b px-3 py-2", unread ? "border-brand/25 bg-brand/5" : "border-zinc-800/80 bg-zinc-900/80")}>
+        <div className="flex w-full min-w-0 items-center gap-2">
+          <span draggable={reorderEnabled || undefined} role={reorderEnabled ? "button" : undefined} tabIndex={reorderEnabled ? 0 : undefined}
+            aria-label={reorderEnabled ? t("multi.reorderAria") : undefined} title={reorderEnabled ? t("multi.reorderTitle") : undefined}
+            onDragStart={reorderEnabled ? onDragStart : undefined} onKeyDown={reorderEnabled ? onReorderKeyDown : undefined}
+            className={cn("shrink-0", reorderEnabled && "cursor-grab active:cursor-grabbing")}>
+            <Avatar name={title} seed={contact?.phone || contact?.id || chat.id} src={contact?.avatarUrl} size="sm" />
+          </span>
+          <button type="button" onClick={onMaximize} title={[title, contact?.phone || contact?.channelAddress || t("multi.whatsappChat"), t("multi.maximize")].join(" · ")}
+            aria-label={t("multi.openConversation", { name: title })} className={cn("flex min-w-0 flex-1 items-center gap-1 text-left text-[13px] font-semibold hover:underline", unread ? "text-brand" : "text-zinc-100")}>
+            <span className="truncate">{title}</span>{pinned && <Pin aria-hidden="true" className="h-3 w-3 shrink-0 fill-current text-brand" />}
+          </button>
+          {unread && <span className="inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-emerald-700 px-1.5 text-[10px] font-bold tabular-nums text-white dark:bg-emerald-600">{t("multi.unread")} {(unreadCount ?? chat.unread) > 99 ? "99+" : (unreadCount ?? chat.unread)}</span>}
+          <MultiWindowCardMenu title={title} actions={[
+            ...(hasSheetConfig && contact && !contact.isGroup ? [{ label: t("sheets.info"), onSelect: () => setSheetInfoOpen(value => !value) }] : []),
+            { label: t("multi.maximize"), onSelect: onMaximize },
+            { label: t("multi.markRead"), onSelect: onMarkRead, disabled: !unread },
+            ...(onTogglePinned ? [{ label: t(pinned ? "multi.unpin" : "multi.pin"), onSelect: onTogglePinned }] : []),
+            ...(onRefresh ? [{ label: t("multi.refreshWindow"), onSelect: onRefresh, disabled: refreshing }] : []),
+            ...(onToggleCollapsed ? [{ label: t(collapsed ? "multi.expandWindow" : "multi.collapseWindow"), onSelect: onToggleCollapsed }] : []),
+            ...(onOpenDevices ? [{ label: t("multi.connectionDetails"), onSelect: onOpenDevices }] : []),
+            { label: t("multi.removeWindow"), onSelect: onClose, destructive: true },
+          ]} />
         </div>
-        {unread && <>
-          <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-700 px-1.5 text-[10px] font-bold tabular-nums text-white shadow-2xs dark:bg-emerald-600">{t("multi.unread")} {(unreadCount ?? chat.unread) > 99 ? "99+" : (unreadCount ?? chat.unread)}</span>
-          <button type="button" className="rounded p-1.5 text-zinc-600 hover:bg-zinc-800 hover:text-zinc-200" title={t("multi.markRead")} aria-label={t("multi.markContactRead", { title })} onClick={onMarkRead}><Check className="h-3.5 w-3.5" /></button>
-        </>}
-        <button type="button" className="rounded p-1.5 text-zinc-600 hover:bg-zinc-800 hover:text-zinc-200" title={t("multi.maximize")} onClick={onMaximize}><Maximize2 className="h-3.5 w-3.5" /></button>
-        {onTogglePinned && <button type="button" className={cn("rounded p-1.5 transition-colors", pinned ? "text-brand hover:bg-brand/10" : "text-zinc-600 hover:bg-zinc-800 hover:text-zinc-200")} title={pinned ? t("multi.unpin") : t("multi.pin")} aria-label={pinned ? t("multi.unpinContact", { title }) : t("multi.pinContact", { title })} onClick={onTogglePinned}><Pin className={cn("h-3.5 w-3.5", pinned && "fill-current")} /></button>}
-        {onRefresh && <button type="button" disabled={refreshing} className="rounded p-1.5 text-zinc-600 hover:bg-zinc-800 hover:text-zinc-200 disabled:cursor-wait disabled:opacity-50" title={t("multi.refreshWindow")} aria-label={t("multi.refreshContact", { title })} onClick={onRefresh}><RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin text-brand")} /></button>}
-        {onToggleCollapsed && <button type="button" className="rounded p-1.5 text-zinc-600 hover:bg-zinc-800 hover:text-zinc-200" title={collapsed ? t("multi.expandWindow") : t("multi.collapseWindow")} aria-label={collapsed ? t("multi.expandContact", { title }) : t("multi.collapseContact", { title })} onClick={onToggleCollapsed}>{collapsed ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}</button>}
-        <button type="button" className="rounded p-1.5 text-zinc-600 hover:bg-zinc-800 hover:text-zinc-200" title={t("multi.removeWindow")} onClick={onClose}><X className="h-3.5 w-3.5" /></button>
+        <MultiWindowReplyControls chat={chat} contact={contact} messages={messages} accountId={chatAccountId} connected={chatConnected}
+          accountOptions={accountOptions} accountCount={accountCount} onSelectAccount={onSelectAccount} onOpenDevices={onOpenDevices} workStatus={workStatus}>
+          {onComplete && <button type="button" onClick={onComplete} disabled={unfinished || (workStatus === "done" && !hasNext)} title={unfinished ? t("multi.finishDraftFirst") : t("multi.completeNext")} aria-label={t("multi.completeContact", { name: title })} className="inline-flex shrink-0 items-center gap-0.5 whitespace-nowrap rounded-md border border-brand/30 px-2 py-1 text-[11px] text-brand hover:bg-brand/10 disabled:cursor-not-allowed disabled:opacity-35">{t("multi.complete")}<ChevronRight className="h-3 w-3" /></button>}
+        </MultiWindowReplyControls>
       </header>
       {!collapsed && <>
+      {sheetInfoOpen && contact && <div className="max-h-48 shrink-0 overflow-y-auto p-2"><GoogleSheetInfo contact={contact} open /></div>}
       {loadError && <div className="mx-2.5 mt-2 flex items-center justify-between gap-2 rounded-lg border border-rose-400/20 bg-rose-500/5 px-2.5 py-1.5 text-[10px] text-rose-200/80"><span className="min-w-0 truncate" title={loadError}>{t("multi.loadFailed")}</span>{onRefresh && <button type="button" onClick={onRefresh} disabled={refreshing} className="shrink-0 text-rose-300 underline underline-offset-2 hover:text-rose-100 disabled:opacity-50">{t("common.retry")}</button>}</div>}
-      <div className={cn("chat-canvas min-h-0 flex-1 overflow-y-auto", compact ? "space-y-1 px-2 py-1.5" : "space-y-1.5 px-2.5 py-2.5")}>
+      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div ref={scrollRef} onScroll={onScroll} onLoadCapture={onMediaLoad} className="chat-canvas min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]">
+        <div className={cn("min-h-full", compact ? "space-y-1 px-2 py-1.5" : "space-y-1.5 px-2.5 py-2.5")}>
         {(hasMoreHistory || historyLoading) && onLoadOlder && (
           <button
             type="button"
@@ -406,20 +442,46 @@ export function MultiWindowCard({
               event.stopPropagation();
               setMessageMenu({ x: event.clientX, y: event.clientY, messageId: message.id });
             }}
-            className={cn("w-fit min-w-0 max-w-[88%] rounded-lg leading-[1.35]", compact ? "px-2 py-1 text-[10px]" : "px-2.5 py-1.5 text-[11px]", message.direction === "out" ? "ml-auto bg-brand/20 text-zinc-100" : "mr-auto bg-zinc-800/90 text-zinc-300")}
+            className={cn("w-fit min-w-0 max-w-[88%] rounded-lg leading-[1.35]", compact ? "px-2 py-1 text-[12px]" : "px-2.5 py-1.5 text-[13px]", message.direction === "out" ? "ml-auto bg-brand/20 text-zinc-100" : "mr-auto bg-zinc-800/90 text-zinc-300")}
           >
             {media}
             {message.body?.trim() && mediaType !== "audio" ? <div className="min-w-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere]" title={message.body}>{message.body}</div> : !media ? <div className="whitespace-pre-wrap break-words">{messageLabel(message, t)}</div> : null}
-            <div className="mt-0.5 flex justify-end gap-1.5 text-[9px] text-zinc-600"><span>{(message.sentAt || "").slice(11, 16)}</span>{status && <span className={message.deliveryStatus === "failed" ? "text-rose-400" : ""}>{status}</span>}</div>
+            {message.translation && <div className="mt-1 border-t border-zinc-500/20 pt-1 text-[12px] text-zinc-500"><span className="mr-1 text-[10px]">{t("tooltip.translatedText")}</span>{message.translation}</div>}
+            <div className="mt-0.5 flex justify-end gap-1.5 text-[9px] text-zinc-600">{message.body?.trim() && mediaType !== "audio" && <button type="button" disabled={!!translatingId} onClick={() => void translateMessage(message.id)} className="mr-auto inline-flex items-center gap-1 text-[10px] text-zinc-500 hover:text-brand disabled:opacity-50" title={t("tooltip.translateMessage")} aria-label={t("tooltip.translateMessage")}>{translatingId === message.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Languages className="h-3 w-3" />}{t("tooltip.translate")}</button>}<span>{message.sentAt ? new Date(message.sentAt).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : ""}</span>{status && <span className={message.deliveryStatus === "failed" ? "text-rose-400" : ""}>{status}</span>}</div>
           </div>;
         })}
+        </div>
+      </div>
+      {awayFromBottom && <button type="button" onClick={scrollToLatest} className="absolute bottom-2 right-3 flex items-center gap-1 rounded-full border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-brand shadow-md" aria-label={t("multi.scrollLatest")}><ArrowDown className="h-3.5 w-3.5" />{t("multi.scrollLatest")}</button>}
       </div>
       <MultiWindowComposer
+        chatId={chat.id}
         value={draft}
-        onChange={setDraftReply}
+        onChange={draftTranslation.changeDraft}
         onSend={() => void sendText()}
         onEditLatest={editLatestMessage}
-        onAttach={!editingId && !replyTo ? (file) => void attachFile(file) : undefined}
+        onBeginVoice={sendChannel !== "android_bridge" && !editingId && !replyTo ? () => void voice.beginVoice() : undefined}
+        voice={voice.recording || voice.preview ? {
+          seconds: voice.recordSec, paused: voice.voicePaused, sending: mediaSending, readLevel: voice.readVoiceLevel,
+          onDelete: () => void voice.endVoice(false), onTogglePause: voice.toggleVoicePause, onSend: () => void voice.endVoice(true),
+          onPreview: () => void voice.preparePreview(), previewUrl: voice.preview?.dataUrl,
+        } : undefined}
+        translation={{
+          visible: !!draft.trim() && !editingId && !voice.recording,
+          hasDraft: !!draft.trim(), translateOriginal: draftTranslation.original, translating: draftTranslation.translating,
+          translateLang: draftTranslation.target.code, source: draftTranslation.target.source,
+          onTranslateLangChange: draftTranslation.changeLanguage, onRestoreAuto: () => draftTranslation.changeLanguage("auto"),
+          onTranslate: () => void draftTranslation.translate(), onRestore: draftTranslation.restore, recording: false, recordSec: 0,
+        }}
+        media={!editingId && !replyTo ? {
+          items: media.pendingMedia, sendingIndex: media.mediaSendingIndex,
+          onRemove: media.removeMedia, onClose: media.closeMediaPreview,
+          onSend: () => void media.sendPendingMedia(),
+        } : undefined}
+        onAttach={!editingId && !replyTo ? (file, caption) => {
+          if (caption !== undefined) setDraftReply(caption);
+          media.stageMedia([file]);
+        } : undefined}
         ariaLabel={t("multi.messageFor", { title })}
         disabled={mediaSending || textSending}
         compact={compact}
@@ -450,6 +512,8 @@ export function MultiWindowCard({
         replyTo={replyTo}
         onClose={() => setMessageMenu(null)}
         onCopy={(text) => void copyText(text)}
+        onTranslate={(id) => void translateMessage(id)}
+        translatingId={translatingId}
         onReload={(message) => void reloadMedia(message)}
         onToggleSticker={stickerFavoriteActions.toggle}
         onRetry={retry}

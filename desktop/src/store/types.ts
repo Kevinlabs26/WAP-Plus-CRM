@@ -381,6 +381,8 @@ export interface AppState extends PersistSlice {
     note?: string
   ) => number;
   updateSettings: (patch: Partial<AppSettings>) => void;
+  secretSaveStatus: "idle" | "saving" | "failed";
+  retrySecretSave: () => Promise<boolean>;
   deleteSalesStage: (stageId: SalesStage, targetId: SalesStage) => boolean;
   createChatFolder: (name: string, parentId?: string | null) => string | null;
   renameChatFolder: (folderId: string, name: string) => void;

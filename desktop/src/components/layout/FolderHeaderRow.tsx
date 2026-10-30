@@ -1,3 +1,4 @@
+import type { AutoReplyMode } from "@/lib/autoReplyScope";
 import { useEffect, useState } from "react";
 import {
   ChevronDown,
@@ -28,6 +29,8 @@ type FolderHeaderRowProps = {
   dropActive: boolean;
   folderDropActive: boolean;
   dragging: boolean;
+  autoReplyMode?: AutoReplyMode;
+  onAutoReplyModeChange?: (mode: AutoReplyMode | undefined) => void;
   onToggle: () => void;
   onStartDrag: (event: React.PointerEvent) => void;
   onCreateChild: () => void;
@@ -51,6 +54,8 @@ export function FolderHeaderRow({
   dropActive,
   folderDropActive,
   dragging,
+  autoReplyMode,
+  onAutoReplyModeChange,
   onToggle,
   onStartDrag,
   onCreateChild,
@@ -86,18 +91,23 @@ export function FolderHeaderRow({
   const openMenu = (x: number, y: number) => {
     setMenu({
       x: Math.max(8, Math.min(x, window.innerWidth - 248)),
-      y: Math.max(8, Math.min(y, window.innerHeight - 312)),
+      y: Math.max(8, Math.min(y, window.innerHeight - 390)),
     });
   };
   const run = (action: () => void) => {
     setMenu(null);
     action();
   };
+  const changeReplyMode = (mode: string) => {
+    if (onAutoReplyModeChange && ["inherit", "auto", "manual"].includes(mode)) {
+      run(() => onAutoReplyModeChange(mode === "inherit" ? undefined : mode as AutoReplyMode));
+    }
+  };
   const itemClass =
     "flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] text-zinc-200 hover:bg-zinc-800";
 
   return (
-    <div className={cn("mb-0.5 px-1", depth > 0 && "ml-3")}>
+    <div className="mb-0.5 px-1" style={{ marginLeft: Math.min(depth, 6) * 12 }}>
       <div
         data-chat-folder-drop={folderId}
         data-folder-reorder-target={folderId}
@@ -139,6 +149,22 @@ export function FolderHeaderRow({
             </span>
           )}
         </button>
+        {onAutoReplyModeChange && (
+          <select
+            value={autoReplyMode || "inherit"}
+            aria-label={t("autoReplyScope.folderRuleFor", { name })}
+            title={`${t("autoReplyScope.folderMode")} · ${t("autoReplyScope.folderHint")}`}
+            className={cn(
+              "ui-control h-6 min-h-6 w-[4.5rem] shrink-0 rounded px-1 py-0.5 text-[11px] focus-visible:ring-2 focus-visible:ring-brand/50",
+              autoReplyMode === "auto" ? "text-brand" : "text-zinc-400"
+            )}
+            onChange={event => changeReplyMode(event.target.value)}
+          >
+            <option value="inherit">{t("autoReplyScope.defaultShort")}</option>
+            <option value="auto">{t("multi.replyMode.auto")}</option>
+            <option value="manual">{t("multi.replyMode.manual")}</option>
+          </select>
+        )}
         <button
           type="button"
           title={t("folder.dragOrder")}
@@ -173,21 +199,33 @@ export function FolderHeaderRow({
           data-folder-action-menu
           role="menu"
           aria-label={t("folder.actionsFor", { name })}
-          className="fixed z-[9999] min-w-[15rem] overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/50"
+          className="fixed z-[9999] min-w-[15rem] max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/50"
           style={{ left: menu.x, top: menu.y }}
           onContextMenu={(event) => event.preventDefault()}
         >
-          {depth === 0 && (
-            <button
-              type="button"
-              role="menuitem"
-              className={itemClass}
-              onClick={() => run(onCreateChild)}
+          {onAutoReplyModeChange && <label className="block border-b border-zinc-800 px-3 py-2 text-[12px] text-zinc-400">
+            {t("autoReplyScope.folderMode")}
+            <select
+              value={autoReplyMode || "inherit"}
+              aria-label={t("autoReplyScope.folderMode")}
+              className="ui-control mt-1 w-full text-xs"
+              onChange={event => changeReplyMode(event.target.value)}
             >
-              <FolderPlus className="h-3.5 w-3.5 text-zinc-500" />
-              {t("folder.createChild")}
-            </button>
-          )}
+              <option value="inherit">{t("autoReplyScope.inheritDefault")}</option>
+              <option value="auto">{t("autoReplyScope.auto")}</option>
+              <option value="manual">{t("autoReplyScope.manual")}</option>
+            </select>
+            <p className="mt-1 text-[10px]">{t("autoReplyScope.folderHint")}</p>
+          </label>}
+          <button
+            type="button"
+            role="menuitem"
+            className={itemClass}
+            onClick={() => run(onCreateChild)}
+          >
+            <FolderPlus className="h-3.5 w-3.5 text-zinc-500" />
+            {t("folder.createChild")}
+          </button>
           <button
             type="button"
             role="menuitem"

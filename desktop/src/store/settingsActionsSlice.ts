@@ -22,6 +22,7 @@ export function createSettingsActionsSlice({
 }: SliceContext): Pick<
   AppState,
   | "updateSettings"
+  | "retrySecretSave"
   | "deleteSalesStage"
   | "importPhonesToFolder"
   | "exportBackup"
@@ -32,7 +33,36 @@ export function createSettingsActionsSlice({
   | "cancelScheduledMessage"
   | "removeScheduledMessage"
 > {
+  let secretSaveTail: Promise<boolean> = Promise.resolve(true);
+  let secretSaveGeneration = 0;
+  const saveCurrentSecrets = () => {
+    const generation = ++secretSaveGeneration;
+    const next = get().settings;
+    const snapshot = {
+      openaiKey: next.openaiKey, groqKey: next.groqKey, geminiKey: next.geminiKey,
+      deepseekKey: next.deepseekKey, qwenKey: next.qwenKey, zhipuKey: next.zhipuKey,
+      openrouterKey: next.openrouterKey, customAiKey: next.customAiKey,
+      transcriptionApiKey: next.transcriptionApiKey, bridgeToken: next.bridgeToken,
+    };
+    set({ secretSaveStatus: "saving" });
+    const run = secretSaveTail.then(() => saveSecureSecrets(snapshot)).catch(() => false).then(ok => {
+      if (generation === secretSaveGeneration) {
+        set({ secretSaveStatus: ok ? "idle" : "failed" });
+        if (!ok && Date.now() - lastSecretSaveErrorAt > 10_000) {
+          lastSecretSaveErrorAt = Date.now();
+          get().pushToast("敏感配置安全保存失败，请在设置中点击重试", "error");
+        }
+      }
+      return ok;
+    });
+    secretSaveTail = run;
+    return run;
+  };
   return {
+    retrySecretSave: async () => {
+      if (isDataRestoreActive() || getStorageEngine() !== "sqlite") return false;
+      return saveCurrentSecrets();
+    },
     deleteSalesStage: (stageId, targetId) => {
       if (isDataRestoreActive()) return false;
       let deleted = false;
@@ -85,39 +115,14 @@ export function createSettingsActionsSlice({
             : {}),
         };
       });
+      const secretPatch = patch.openaiKey !== undefined || patch.groqKey !== undefined ||
+        patch.geminiKey !== undefined || patch.deepseekKey !== undefined || patch.qwenKey !== undefined ||
+        patch.zhipuKey !== undefined || patch.openrouterKey !== undefined || patch.customAiKey !== undefined ||
+        patch.transcriptionApiKey !== undefined || patch.bridgeToken !== undefined;
+      if (getStorageEngine() === "sqlite" && secretPatch && (changed || get().secretSaveStatus === "failed")) {
+        void saveCurrentSecrets();
+      }
       if (changed) {
-        const next = get().settings;
-        if (
-          getStorageEngine() === "sqlite" &&
-          (patch.openaiKey !== undefined ||
-            patch.groqKey !== undefined ||
-            patch.geminiKey !== undefined ||
-            patch.deepseekKey !== undefined ||
-            patch.qwenKey !== undefined ||
-            patch.zhipuKey !== undefined ||
-            patch.openrouterKey !== undefined ||
-            patch.customAiKey !== undefined ||
-            patch.transcriptionApiKey !== undefined ||
-            patch.bridgeToken !== undefined)
-        ) {
-          void saveSecureSecrets({
-            openaiKey: next.openaiKey,
-            groqKey: next.groqKey,
-            geminiKey: next.geminiKey,
-            deepseekKey: next.deepseekKey,
-            qwenKey: next.qwenKey,
-            zhipuKey: next.zhipuKey,
-            openrouterKey: next.openrouterKey,
-            customAiKey: next.customAiKey,
-            transcriptionApiKey: next.transcriptionApiKey,
-            bridgeToken: next.bridgeToken,
-          }).then((ok) => {
-            if (!ok && Date.now() - lastSecretSaveErrorAt > 10_000) {
-              lastSecretSaveErrorAt = Date.now();
-              get().pushToast("敏感配置安全保存失败，请稍后重试", "error");
-            }
-          });
-        }
         // 分组和销售阶段属于用户明确维护的结构数据，不能等防抖计时器；
         // 否则用户马上刷新时，内存里的新分组会被旧数据库覆盖回来。
         const structureChanged =

@@ -441,36 +441,44 @@ export function createBootSlice({
 
     clearData: async () => {
       if (getRestoreBusy()) throw new Error("正在恢复备份，请等待完成");
-      const currentSettings = get().settings;
-      const folderRefs = pruneChatFolderRefs(
-        currentSettings.chatFolders || [],
-        currentSettings.chatFolderClones || [],
-        new Set()
-      );
-      const settings = {
-        ...currentSettings,
-        chatFolders: folderRefs.folders,
-        chatFolderClones: folderRefs.clones,
-        scheduledMessages: [],
-        internalNotesByKey: {},
-        personPrimaryAccountByKey: {},
-      };
-      await clearAppState();
-      clearTrendBuckets();
-      const base = blankData(settings);
-      set({
-        ...base,
-        stats: calcStats(base.chats, base.followUps, base.contacts, base.messages),
-        selectedPhoneId: base.phones[0]?.id ?? null,
-        selectedContactId: null,
-        selectedChatId: null,
-        aiSuggestions: [],
-        draftReply: "",
-        draftReplyByChatId: {},
-        activeNav: "chats",
-        hydrated: true,
-      });
-      await saveAppState(base, { force: true });
+      const pendingSave = flushPersist(get);
+      const finishClear = beginDataRestore();
+      try {
+        await Promise.all([pendingSave, waitForPendingSends()]);
+        const currentSettings = get().settings;
+        const folderRefs = pruneChatFolderRefs(
+          currentSettings.chatFolders || [],
+          currentSettings.chatFolderClones || [],
+          new Set()
+        );
+        const settings = {
+          ...currentSettings,
+          chatFolders: folderRefs.folders,
+          chatFolderClones: folderRefs.clones,
+          scheduledMessages: [],
+          internalNotesByKey: {},
+          personPrimaryAccountByKey: {},
+        };
+        await clearAppState();
+        clearTrendBuckets();
+        const base = blankData(settings);
+        set({
+          ...base,
+          stats: calcStats(base.chats, base.followUps, base.contacts, base.messages),
+          selectedPhoneId: base.phones[0]?.id ?? null,
+          selectedContactId: null,
+          selectedChatId: null,
+          aiSuggestions: [],
+          draftReply: "",
+          draftReplyByChatId: {},
+          activeNav: "chats",
+          hydrated: true,
+        });
+        await saveAppState(base, { force: true });
+        primePersistBaseline(get);
+      } finally {
+        finishClear();
+      }
     },
 
     importBackup: async (bundle) => {

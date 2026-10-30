@@ -1501,6 +1501,11 @@ export function PhoneSidebar() {
                     <FolderHeaderRow
                       name={it.name}
                       folderId={folder.id}
+                      autoReplyMode={folder.autoReplyMode}
+                      onAutoReplyModeChange={mode => {
+                        const current = useAppStore.getState();
+                        current.updateSettings({ chatFolders: current.settings.chatFolders.map(item => item.id === folder.id ? { ...item, autoReplyMode: mode } : item) });
+                      }}
                       collapsed={it.collapsed}
                       depth={it.depth}
                       total={it.total}
@@ -1565,9 +1570,9 @@ export function PhoneSidebar() {
                 return (
                   <div
                     data-chat-folder-drop={inFolder ? it.folderId : it.folderId === null ? "__ungrouped" : undefined}
+                    style={{ marginLeft: inFolder ? Math.min(it.folderDepth || 0, 6) * 12 : 0 }}
                     className={cn(
                       "pl-1 pr-0",
-                      inFolder && it.folderDepth === 1 && "ml-3",
                       dropTarget && dropTarget === (it.folderId === null ? "__ungrouped" : it.folderId) && "rounded-md bg-brand/10 ring-1 ring-inset ring-brand/40"
                     )}
                   >

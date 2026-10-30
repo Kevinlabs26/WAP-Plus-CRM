@@ -1,3 +1,4 @@
+import { resolveAutoReplyScope } from "./autoReplyScope";
 import type { ChannelId } from "@/channels";
 import type { ChatPreview, Contact, Message } from "@/types/crm";
 import { useAppStore } from "@/store/appStore";
@@ -85,7 +86,7 @@ export async function autoReplyInbound(m: Message): Promise<void> {
       const settings = useAppStore.getState().settings;
       const wait = (lastReplyAt.get(m.chatId) || 0) +
         Math.max(5000, Number(settings.aiAutoReplyIntervalMs) || 30000) - Date.now();
-      if (settings.aiReplyMode === "auto" && wait > 0) {
+      if (resolveAutoReplyScope(settings, m.chatId).mode === "auto" && wait > 0) {
         pendingByChat.set(m.chatId, next);
         cooldownTimers.set(m.chatId, setTimeout(() => { void autoReplyInbound(next); }, wait));
         break;
@@ -107,7 +108,14 @@ export async function autoReplyInbound(m: Message): Promise<void> {
 async function autoReplyInboundOnce(m: Message): Promise<void> {
   const state = useAppStore.getState();
   const settings = state.settings;
-  if (settings.aiReplyMode !== "auto") return;
+  const scope = resolveAutoReplyScope(settings, m.chatId);
+  if (scope.mode !== "auto") {
+    if (m.contactId && (scope.source === "chat" || scope.source === "folder")) {
+      logAutoSkipOnce(m.chatId, m.contactId, `scope:${scope.source}`, "自动回复：仅人工",
+        scope.source === "folder" ? `来自文件夹「${scope.folderName}」` : "该会话已设置为只人工处理");
+    }
+    return;
+  }
   if (m.isGroup) return; // 仅私聊
   if (!m.chatId || !m.contactId) return;
 
@@ -133,7 +141,7 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
 
   const contact = state.contacts.find((c) => c.id === m.contactId);
   const chat = state.chats.find((c) => c.id === m.chatId);
-  if (!contact || !chat) return;
+  if (!contact || !chat || contact.isGroup || chat.isGroup) return;
   const accountId =
     m.accountId ||
     chat.accountId ||
@@ -141,13 +149,6 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
     settings.liveBaileysAccountId ||
     settings.activeAccountId;
   if (chat.localOnly) return; // 本地会话不自动回
-  if (settings.aiAutoReplyManualChatIds.includes(m.chatId)) {
-    if (lastTakeoverLogByChat.get(m.chatId) !== "manual-only") {
-      lastTakeoverLogByChat.set(m.chatId, "manual-only");
-      logAutoDecision(contact.id, "自动回复：仅人工", "该会话已设置为只人工处理");
-    }
-    return;
-  }
 
   const channelId: ChannelId =
     settings.sendChannel === "android_bridge" ? "android_bridge" : "baileys";
@@ -246,8 +247,7 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
   const freshContact = fresh.contacts.find((x) => x.id === contact.id);
   const freshChat = fresh.chats.find((x) => x.id === chat.id);
   const originalIds = new Set(conversation.map((x) => x.id));
-  if (fresh.settings.aiReplyMode !== "auto" ||
-      fresh.settings.aiAutoReplyManualChatIds.includes(m.chatId) ||
+  if (resolveAutoReplyScope(fresh.settings, m.chatId).mode !== "auto" ||
       pendingByChat.has(m.chatId) || latestInbound?.id !== m.id ||
       !freshContact || !freshChat || freshChat.localOnly ||
       getSuggestionContextKey(freshContact, freshThread, fresh.settings, accountId, { auto: true }) !== contextKey ||
@@ -300,8 +300,7 @@ export async function sendAutoReplyText(opts: {
   phoneId?: string;
 }): Promise<boolean> {
   let state = useAppStore.getState();
-  if (state.settings.aiReplyMode !== "auto" || !opts.chat ||
-      state.settings.aiAutoReplyManualChatIds.includes(opts.chat.id)) return false;
+  if (!opts.chat || resolveAutoReplyScope(state.settings, opts.chat.id).mode !== "auto") return false;
   const isBaileys = opts.channelId === "baileys";
   const recipient = resolveSendTarget({
     phone: opts.contact.phone,
@@ -316,8 +315,7 @@ export async function sendAutoReplyText(opts: {
   if (!contextKey || (opts.contextKey && opts.contextKey !== contextKey)) return false;
   const aiReplyContextHash = await hashAiReplyContext(contextKey);
   state = useAppStore.getState();
-  if (state.settings.aiReplyMode !== "auto" || currentAutoReplyContext(state, pendingContext) !== contextKey ||
-      state.settings.aiAutoReplyManualChatIds.includes(opts.chat.id)) return false;
+  if (resolveAutoReplyScope(state.settings, opts.chat.id).mode !== "auto" || currentAutoReplyContext(state, pendingContext) !== contextKey) return false;
 
   const draftBefore = state.draftReply;
   const msgId = state.enqueueOutgoingMessage({

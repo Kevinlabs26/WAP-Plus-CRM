@@ -322,10 +322,11 @@ for (const provider of ["custom", "gemini", "ollama"]) {
       { id: "out", direction: "out", body: "Salut, ça marche !", sentAt: "2026-01-01T00:00:00Z" },
       { id: "in", direction: "in", body: "Je t'ai envoyé le document.", sentAt: "2026-01-01T00:01:00Z" },
     ];
-    for (const mode of ["manual", "account", "auto"]) {
-      const auto = mode === "auto";
+    for (const mode of ["manual", "account", "auto", "account-auto"]) {
+      const auto = mode === "auto" || mode === "account-auto";
+      const accountProfile = mode === "account" || mode === "account-auto";
       replyCount = auto ? 1 : 3;
-      const result = await generateSuggestions(contact, recent, mode === "account" ? {
+      const result = await generateSuggestions(contact, recent, accountProfile ? {
         ...settings, aiSystemPrompt: "GLOBAL PROFILE",
         aiSystemPromptByAccountId: { personal: "Réponds en français avec un ton formel." },
       } : settings, { auto });
@@ -338,13 +339,17 @@ for (const provider of ["custom", "gemini", "ollama"]) {
       assert.match(system, /Do not recap/);
       assert.match(system, /Do not invent facts/);
       assert.match(system, /Use the customer's language/);
+      assert.match(system, /Do not assume a customer-service role/);
+      assert.match(system, /do not by themselves mean the conversation has ended/);
+      assert.match(system, /When the user's profile calls for proactive conversation/);
+      assert.match(system, /respect an explicit wish to stop/);
       assert.doesNotMatch(system, /upsell|advance the deal/);
       assert.match(system, new RegExp(`exactly ${replyCount} object`));
       assert.ok(user.includes(`Me: ${JSON.stringify("Salut, ça marche !")}`));
       assert.ok(user.includes(`Customer: ${JSON.stringify("Je t'ai envoyé le document.")}`));
-      if (auto) assert.match(system, /DIRECTLY to the customer as an AI assistant/);
+      if (auto) assert.match(system, /DIRECTLY to the other person as an AI assistant/);
       else assert.match(system, /not three paraphrases/);
-      if (mode === "account") {
+      if (accountProfile) {
         assert.match(system, /overrides the general defaults/);
         assert.ok(system.includes("Réponds en français avec un ton formel."));
         assert.doesNotMatch(system, /GLOBAL PROFILE/);

@@ -117,6 +117,16 @@ function ensureActionListener() {
   });
 }
 
+export async function getNotifyPermission(): Promise<"granted" | "not-granted" | "unavailable"> {
+  const plugin = await loadPlugin();
+  if (plugin) {
+    try { return await plugin.isPermissionGranted() ? "granted" : "not-granted"; }
+    catch { return "unavailable"; }
+  }
+  if (typeof Notification === "undefined") return "unavailable";
+  return Notification.permission === "granted" ? "granted" : "not-granted";
+}
+
 export async function ensureNotifyPermission(): Promise<boolean> {
   const plugin = await loadPlugin();
   if (plugin) {

@@ -179,6 +179,46 @@ test("folder selection follows merged account members and explicit copies, and i
   assert.equal(sidebarModel({showArchived:true}).some(i=>i.kind==="folder_header"||i.kind==="ungrouped_header"),false);
 });
 
+test("deep folder trees render every level, aggregate descendants, collapse and reveal matching search paths",()=>{
+  const folders=[{id:"root",name:"Root",chatIds:["two"],sort:0},
+    ...Array.from({length:8},(_,i)=>({id:`level-${i}`,name:`Level ${i}`,parentId:i?`level-${i-1}`:"root",sort:i+1,chatIds:i===7?["one"]:[]}))];
+  const original=structuredClone(folders);
+  const items=sidebarModel({chatFolders:folders});
+  const headers=items.filter(i=>i.kind==="folder_header");
+  assert.deepEqual(headers.map(i=>i.depth),[0,1,2,3,4,5,6,7,8]);
+  assert.equal(headers[0].total,2);assert.equal(headers[0].unread,2);
+  assert.ok(headers.every(i=>i.containsSelected));
+  assert.equal(items.find(i=>i.kind==="chat"&&i.chat.id==="one").folderDepth,8);
+  assert.equal(new Set(items.map(i=>i.id)).size,items.length);
+  const collapsed=folders.map(f=>f.id==="level-2"?{...f,collapsed:true}:f);
+  const hidden=sidebarModel({chatFolders:collapsed});
+  assert.equal(hidden.some(i=>i.folderId==="level-3"),false);
+  assert.equal(hidden.find(i=>i.folderId==="level-2").containsSelected,true);
+  const search=sidebarModel({chatFolders:collapsed,query:"Hello",filteredChats:[{id:"one",contactId:"c-one",lastMessage:"Hello",unread:3}]});
+  assert.equal(search.filter(i=>i.kind==="folder_header").length,9);
+  assert.equal(search.find(i=>i.kind==="chat").folderDepth,8);
+  assert.deepEqual(folders,original);
+});
+
+test("empty nested folders keep their hierarchy and only leaves display an empty hint",()=>{
+  const items=sidebarModel({filteredChats:[],chatFolders:[{id:"a",name:"A",chatIds:[]},{id:"b",parentId:"a",name:"B",chatIds:[]},{id:"c",parentId:"b",name:"C",chatIds:[]}]});
+  assert.deepEqual(items.filter(i=>i.kind==="folder_header").map(i=>i.folderId),["a","b","c"]);
+  assert.deepEqual(items.filter(i=>i.kind==="folder_empty"&&i.folderId!=="__ungrouped").map(i=>i.folderId),["c"]);
+});
+
+test("nested folder headers offer child creation and keep indentation within the sidebar",()=>{
+  const ui=fixture();try {
+    let created=0;
+    const props={folderId:"deep",name:"Deep",collapsed:false,depth:8,total:0,unread:0,onCreateChild:()=>created++};
+    let tree=FolderHeaderRow(props);
+    assert.equal(tree.props.style.marginLeft,72);
+    nodes(tree).find(n=>n.props["aria-label"]==="分组操作").props.onClick({clientX:50,clientY:100});
+    ui.render();tree=FolderHeaderRow(props);
+    const create=nodes(tree).find(n=>n.props.role==="menuitem"&&n.props.children?.includes?.("新建子分组"));
+    assert.ok(create);create.props.onClick();assert.equal(created,1);
+  }finally{ui.close();}
+});
+
 test("folder badges count unread conversations rather than messages, including children and ungrouped rows",()=>{
   const chats=Array.from({length:5},(_,i)=>({id:`chat-${i}`,contactId:`person-${i}`,unread:[10,50,0,0,0][i]}));
   let items=sidebarModel({filteredChats:chats,chatFolders:[{id:"all",name:"All",chatIds:chats.map(c=>c.id),collapsed:true}]});
@@ -207,6 +247,31 @@ test("collapsed folder and ungrouped controls describe current location, exact u
     assert.ok(nodes(ungrouped).some(n=>n.props["aria-label"]==="123 个会话有未读消息"&&n.props.children==="99+"));
     const cleared=SidebarSpecialItem({item:{...item,unread:0,containsSelected:false}});
     assert.equal(nodes(cleared).some(n=>n.props.title==="当前打开的会话在此分组中"||n.props["aria-label"]==="0 个会话有未读消息"),false);
+  }finally{ui.close();}
+});
+
+test("folder reply rule is directly editable without expanding the folder or changing unrelated actions",()=>{
+  const ui=fixture();try {
+    const changes=[];let toggles=0;
+    const props={folderId:"a",name:"A",collapsed:true,depth:0,total:3,unread:1,onToggle:()=>toggles++,onAutoReplyModeChange:mode=>changes.push(mode)};
+    for(const mode of [undefined,"auto","manual"]) {
+      const tree=FolderHeaderRow({...props,autoReplyMode:mode});
+      const select=nodes(tree).find(n=>n.type==="select");
+      assert.ok(select);assert.equal(select.props.value,mode||"inherit");
+      assert.equal(select.props["aria-label"],"文件夹「A」的回复规则");
+      assert.match(select.props.title,/个人设置优先/);
+      assert.deepEqual(nodes(select).filter(n=>n.type==="option").map(n=>n.props.value),["inherit","auto","manual"]);
+      select.props.onChange({target:{value:"auto"}});
+      select.props.onChange({target:{value:"manual"}});
+      select.props.onChange({target:{value:"inherit"}});
+      select.props.onChange({target:{value:"invalid"}});
+      assert.equal(toggles,0);
+      nodes(tree).find(n=>n.props["aria-expanded"]===false).props.onClick();
+      assert.equal(toggles,1);
+      toggles=0;
+    }
+    assert.deepEqual(changes,["auto","manual",undefined,"auto","manual",undefined,"auto","manual",undefined]);
+    assert.equal(nodes(FolderHeaderRow({...props,onAutoReplyModeChange:undefined})).some(n=>n.type==="select"),false);
   }finally{ui.close();}
 });
 

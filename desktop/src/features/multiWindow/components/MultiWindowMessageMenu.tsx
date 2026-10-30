@@ -1,3 +1,5 @@
+import { Languages } from "lucide-react";
+import { useI18n } from "@/i18n";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAppStore } from "@/store/appStore";
@@ -29,6 +31,8 @@ type Props = {
   replyTo: ComposerReplyTo | null;
   onClose: () => void;
   onCopy: (text: string) => void;
+  onTranslate: (id: string) => void;
+  translatingId: string | null;
   onReload: (message: Message) => void;
   onToggleSticker: (source: string) => Promise<void>;
   onRetry: (id: string) => void;
@@ -51,6 +55,8 @@ export function MultiWindowMessageMenu({
   replyTo,
   onClose,
   onCopy,
+  onTranslate,
+  translatingId,
   onReload,
   onToggleSticker,
   onRetry,
@@ -60,6 +66,7 @@ export function MultiWindowMessageMenu({
   getDraft,
   onForward,
 }: Props) {
+  const { t } = useI18n();
   const contacts = useAppStore((state) => state.contacts);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
@@ -132,6 +139,7 @@ export function MultiWindowMessageMenu({
       onContextMenu={(event) => event.preventDefault()}
     >
       <MessageCopyMenuAction text={plain} onCopy={onCopy} onClose={onClose} />
+      {message.body?.trim() && mediaKind !== "audio" && <button type="button" disabled={!!translatingId} onClick={() => { onClose(); onTranslate(message.id); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"><Languages className="h-3.5 w-3.5" />{t("tooltip.translate")}</button>}
       <SpeakMessageMenuAction text={plain} lang={speakingLang} />
       {canReloadMedia && (
         <MessageReloadMediaMenuAction

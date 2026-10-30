@@ -29,6 +29,7 @@ type BeginVoiceRecordingDeps = {
     recipient: string | null;
   };
   voicePressRef: MutableRefObject<boolean>;
+  voiceRequestRef: MutableRefObject<number>;
   voiceSessionRef: MutableRefObject<VoiceSession | null>;
   voiceTimerRef: MutableRefObject<number | null>;
   setRecording: (recording: boolean) => void;
@@ -65,10 +66,11 @@ export async function beginVoiceRecording(deps: BeginVoiceRecordingDeps) {
     deps.pushToast(translateCurrent("runtime.noRecipient"), "error");
     return;
   }
+  const request = ++deps.voiceRequestRef.current;
   try {
     deps.voicePressRef.current = true;
     const session = await startVoiceRecording();
-    if (!deps.voicePressRef.current) {
+    if (!deps.voicePressRef.current || request !== deps.voiceRequestRef.current) {
       session.cancel();
       return;
     }
@@ -81,6 +83,7 @@ export async function beginVoiceRecording(deps: BeginVoiceRecordingDeps) {
       deps.setRecordSec(session.durationSec());
     }, 200);
   } catch (e) {
+    if (request !== deps.voiceRequestRef.current) return;
     deps.voicePressRef.current = false;
     deps.setRecording(false);
     deps.setVoicePaused(false);

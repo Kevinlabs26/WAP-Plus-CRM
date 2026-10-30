@@ -1,11 +1,11 @@
 import { useAppStore } from "@/store/appStore";
-import { Input, SectionLabel } from "@/components/ui/primitives";
+import { SectionLabel } from "@/components/ui/primitives";
+import { SettingsNumberInput } from "./SettingsNumberInput";
 import {
   DEFAULT_FOLLOW_UP_RULES,
   DEFAULT_FOLLOW_UP_RULE_SETTINGS,
   type FollowUpRuleSetting,
 } from "@/lib/followUpRules";
-import { VOICE_INPUT_LANGUAGES } from "@/lib/voiceInputLanguage";
 import { useI18n, type TranslationKey } from "@/i18n";
 
 const FOLLOW_UP_I18N: Record<string, { title: TranslationKey; note: TranslationKey }> = {
@@ -60,16 +60,17 @@ export function SettingsMessagingPanel() {
         <p className="mt-2 text-[11px] text-zinc-600">
           {t("settingsMessaging.rateLimitHint")}
         </p>
-        <div
+        <fieldset disabled={settings.rateLimitEnabled === false}
           className={
             settings.rateLimitEnabled === false
-              ? "pointer-events-none opacity-40"
+              ? "opacity-40"
               : ""
           }
         >
           <div className="mt-3 grid grid-cols-3 gap-3">
             <NumberSetting
               label={t("settingsMessaging.perMinute")}
+              min={1} integer
               value={settings.ratePerMinute ?? 8}
               onChange={(value) =>
                 updateSettings({ ratePerMinute: Math.max(1, value || 8) })
@@ -77,6 +78,7 @@ export function SettingsMessagingPanel() {
             />
             <NumberSetting
               label={t("settingsMessaging.perHour")}
+              min={1} integer
               value={settings.ratePerHour ?? 80}
               onChange={(value) =>
                 updateSettings({ ratePerHour: Math.max(1, value || 80) })
@@ -84,6 +86,7 @@ export function SettingsMessagingPanel() {
             />
             <NumberSetting
               label={t("settingsMessaging.minInterval")}
+              min={0}
               value={settings.rateMinIntervalSec ?? 4}
               onChange={(value) =>
                 updateSettings({ rateMinIntervalSec: Math.max(0, value || 0) })
@@ -93,6 +96,7 @@ export function SettingsMessagingPanel() {
           <div className="mt-3 grid grid-cols-2 gap-3">
             <NumberSetting
               label={t("settingsMessaging.jitter")}
+              min={0} max={30}
               value={settings.rateJitterSec ?? 2}
               onChange={(value) =>
                 updateSettings({
@@ -102,6 +106,7 @@ export function SettingsMessagingPanel() {
             />
             <NumberSetting
               label={t("settingsMessaging.globalGap")}
+              min={0} max={60}
               value={settings.globalMinGapSec ?? 2}
               onChange={(value) =>
                 updateSettings({
@@ -110,7 +115,7 @@ export function SettingsMessagingPanel() {
               }
             />
           </div>
-        </div>
+        </fieldset>
         {settings.rateLimitEnabled === false && (
           <p className="mt-3 text-[11px] text-amber-300/80">
             {t("settingsMessaging.rateLimitOff")}
@@ -135,73 +140,7 @@ export function SettingsMessagingPanel() {
       </section>
 
       <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
-        <SectionLabel>{t("settingsMessaging.notifications")}</SectionLabel>
-        <p className="mt-2 text-[11px] text-zinc-600">
-          {t("settingsMessaging.notificationsHint")}
-        </p>
-        <label className="mt-3 flex cursor-pointer items-start gap-2 text-[12px] text-zinc-300">
-          <input
-            type="checkbox"
-            className="mt-0.5 rounded border-zinc-600"
-            checked={settings.desktopNotifyEnabled !== false}
-            onChange={(e) => {
-              updateSettings({ desktopNotifyEnabled: e.target.checked });
-              if (e.target.checked) {
-                void import("@/lib/desktopNotify").then((m) =>
-                  m.ensureNotifyPermission()
-                );
-              }
-            }}
-          />
-          <span>
-            <span className="font-medium">{t("settingsMessaging.newMessageNotification")}</span>
-            <span className="mt-0.5 block text-2xs leading-4 text-zinc-600">
-              {t("settingsMessaging.newMessageNotificationHint")}
-            </span>
-          </span>
-        </label>
-
-        <label className="mt-3 block max-w-sm text-2xs text-zinc-500">
-          {t("settingsMessaging.notificationPrivacy")}
-          <select
-            value={settings.notificationPrivacy}
-            onChange={(event) => updateSettings({ notificationPrivacy: event.target.value as typeof settings.notificationPrivacy })}
-            className="ui-control mt-1 w-full px-2.5 text-[13px]"
-          >
-            <option value="full">{t("settingsMessaging.privacyFull")}</option>
-            <option value="name">{t("settingsMessaging.privacyName")}</option>
-            <option value="hidden">{t("settingsMessaging.privacyHidden")}</option>
-          </select>
-        </label>
-        <div
-          className={
-            settings.desktopNotifyEnabled === false
-              ? "mt-3 space-y-2 opacity-40 pointer-events-none"
-              : "mt-3 space-y-2"
-          }
-        >
-          <label className="flex cursor-pointer items-center gap-2 text-[12px] text-zinc-300">
-            <input
-              type="checkbox"
-              className="rounded border-zinc-600"
-              checked={settings.notifyFollowUpEnabled !== false}
-              onChange={(e) =>
-                updateSettings({ notifyFollowUpEnabled: e.target.checked })
-              }
-            />
-            <span className="font-medium">{t("settingsMessaging.followUpNotification")}</span>
-          </label>
-          <label className="flex cursor-pointer items-center gap-2 text-[12px] text-zinc-300">
-            <input
-              type="checkbox"
-              className="rounded border-zinc-600"
-              checked={settings.notifyGroupMessagesEnabled === true}
-              onChange={(e) =>
-                updateSettings({ notifyGroupMessagesEnabled: e.target.checked })
-              }
-            />
-            <span className="font-medium">{t("settingsMessaging.groupNotification")}</span>
-          </label>
+<SectionLabel>{t("settingsMessaging.conversationBehavior")}</SectionLabel>
           <label className="flex cursor-pointer items-center gap-2 text-[12px] text-zinc-300">
             <input
               type="checkbox"
@@ -216,7 +155,6 @@ export function SettingsMessagingPanel() {
           <p className="text-[11px] text-zinc-600">
             {t("settingsMessaging.autoReadGroupsHint")}
           </p>
-        </div>
       </section>
 
       <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
@@ -240,10 +178,11 @@ export function SettingsMessagingPanel() {
           </label>
         </div>
 
+        <fieldset disabled={settings.autoFollowUpEnabled === false}>
         <ul
           className={
             settings.autoFollowUpEnabled === false
-              ? "mt-3 space-y-2 opacity-40 pointer-events-none"
+              ? "mt-3 space-y-2 opacity-40"
               : "mt-3 space-y-2"
           }
         >
@@ -274,21 +213,12 @@ export function SettingsMessagingPanel() {
                 </label>
                 <label className="flex items-center gap-1.5 text-[11px] text-zinc-500">
                   {t("settingsMessaging.timeout")}
-                  <Input
-                    type="number"
+                  <SettingsNumberInput
                     min={1}
                     max={168}
-                    size="sm"
                     value={s.afterHours}
                     disabled={s.enabled === false}
-                    onChange={(e) =>
-                      patchRule(rule.id, {
-                        afterHours: Math.max(
-                          1,
-                          Math.min(168, Number(e.target.value) || 1)
-                        ),
-                      })
-                    }
+                    onCommit={afterHours => patchRule(rule.id, { afterHours })}
                     className="w-16 text-center text-[12px]"
                   />
                   {t("settingsMessaging.hours")}
@@ -297,77 +227,13 @@ export function SettingsMessagingPanel() {
             );
           })}
         </ul>
+        </fieldset>
+        {settings.autoFollowUpEnabled === false && <p className="mt-2 text-xs text-zinc-500">{t("settingsMessaging.followUpDisabledHint")}</p>}
       </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
-        <SectionLabel>{t("settingsMessaging.inputTranslation")}</SectionLabel>
-        <p className="mt-2 text-[11px] text-zinc-600">
-          {t("settingsMessaging.inputTranslationHint")}
-        </p>
-        <label className="mt-3 block max-w-sm text-2xs text-zinc-500">
-          {t("settingsMessaging.defaultTargetLanguage")}
-          <select
-            value={settings.translateTargetLang || "en"}
-            onChange={(event) =>
-              updateSettings({ translateTargetLang: event.target.value })
-            }
-            className="ui-control mt-1 w-full px-2.5 text-[13px]"
-          >
-            <option value="en">English</option>
-            <option value="zh">中文</option>
-            <option value="fr">Français</option>
-            <option value="es">Español</option>
-            <option value="de">Deutsch</option>
-            <option value="pt">Português</option>
-            <option value="ru">Русский</option>
-            <option value="ar">العربية</option>
-            <option value="ja">日本語</option>
-            <option value="ko">한국어</option>
-          </select>
-        </label>
-      </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
-        <SectionLabel>{t("settingsMessaging.voiceInput")}</SectionLabel>
-        <p className="mt-2 text-[11px] text-zinc-600">
-          {t("settingsMessaging.voiceInputHint")}
-        </p>
-        <label className="mt-3 block max-w-sm text-2xs text-zinc-500">
-          {t("settingsMessaging.spokenLanguage")}
-          <select
-            value={settings.voiceInputLang || ""}
-            onChange={(event) =>
-              updateSettings({ voiceInputLang: event.target.value })
-            }
-            className="ui-control mt-1 w-full px-2.5 text-[13px]"
-          >
-            {VOICE_INPUT_LANGUAGES.map((language) => (
-              <option key={language.value || "auto"} value={language.value}>
-                {language.value
-                  ? language.label
-                  : t("settingsMessaging.voiceLanguageAuto")}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="mt-3 block max-w-sm text-2xs text-zinc-500">
-          {t("settingsMessaging.recognitionEngine")}
-          <select
-            value={settings.voiceInputEngine || "auto"}
-            onChange={(event) =>
-              updateSettings({
-                voiceInputEngine: event.target
-                  .value as typeof settings.voiceInputEngine,
-              })
-            }
-            className="ui-control mt-1 w-full px-2.5 text-[13px]"
-          >
-            <option value="auto">{t("settingsMessaging.engineAuto")}</option>
-            <option value="browser">{t("settingsMessaging.engineBrowser")}</option>
-            <option value="ai">{t("settingsMessaging.engineAi")}</option>
-          </select>
-        </label>
-      </section>
+
+
     </div>
   );
 }
@@ -376,18 +242,20 @@ function NumberSetting({
   label,
   value,
   onChange,
+  min, max, integer,
 }: {
   label: string;
   value: number;
   onChange: (value: number) => void;
+  min: number; max?: number; integer?: boolean;
 }) {
   return (
     <label className="block text-2xs text-zinc-500">
       {label}
-      <Input
-        type="number"
+      <SettingsNumberInput
+        min={min} max={max} integer={integer}
         value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
+        onCommit={onChange}
         className="mt-1"
       />
     </label>

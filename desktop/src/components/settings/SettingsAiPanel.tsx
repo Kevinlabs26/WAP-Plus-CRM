@@ -1,15 +1,14 @@
 import { useAppStore } from "@/store/appStore";
 import { Input, SectionLabel } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   listProviderModels,
   type ModelOption,
 } from "@/lib/listModels";
 import type { AppSettings } from "@/store/appStore";
-import { hasAiCredentials } from "@/lib/aiProviders.ts";
+import { getOpenAiCompatibleConfig, hasAiCredentials } from "@/lib/aiProviders.ts";
 import { useI18n } from "@/i18n";
-import { TRANSCRIPTION_DEFAULTS, type TranscriptionProvider } from "@/lib/transcriptionConfig";
 
 export function SettingsAiPanel() {
   const { t } = useI18n();
@@ -126,6 +125,15 @@ export function SettingsAiPanel() {
             />
           )}
 
+
+        </div>
+        <p className="mt-3 text-2xs text-zinc-600">{t("settingsAi.keyHint")}</p>
+      </section>
+
+
+      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+<SectionLabel>{t("settings.translation")}</SectionLabel>
+<div className="mt-3 grid grid-cols-2 gap-3">
           <label className="col-span-2 block text-2xs text-zinc-500">
             {t("settingsAi.translationService")}
             <select
@@ -158,43 +166,34 @@ export function SettingsAiPanel() {
               <option value="ko">한국어</option>
             </select>
           </label>
-        </div>
-        <p className="mt-3 text-2xs text-zinc-600">{t("settingsAi.keyHint")}</p>
+</div>
       </section>
-
       <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
-        <SectionLabel>{t("settingsAi.speechService")}</SectionLabel>
-        <p className="mt-2 text-xs leading-relaxed text-zinc-500">{t("settingsAi.speechHint")}</p>
-        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <label className="block text-2xs text-zinc-500 sm:col-span-2">
-            {t("settingsAi.speechProvider")}
-            <select value={settings.transcriptionProvider} className="ui-control mt-1 w-full px-2.5 text-[13px]"
-              onChange={(event) => {
-                const provider = event.target.value as TranscriptionProvider;
-                updateSettings({ transcriptionProvider: provider, transcriptionApiKey: "",
-                  transcriptionBaseUrl: TRANSCRIPTION_DEFAULTS[provider].baseUrl,
-                  transcriptionModel: TRANSCRIPTION_DEFAULTS[provider].model });
-              }}>
-              <option value="none">{t("settingsAi.speechDisabled")}</option>
-              <option value="openai">OpenAI</option>
-              <option value="groq">Groq</option>
-              <option value="gemini">Gemini</option>
-              <option value="custom">{t("settingsAi.provider.custom")}</option>
-            </select>
-          </label>
-          {settings.transcriptionProvider !== "none" && <>
-            {settings.transcriptionProvider !== "gemini" && <label className="block text-2xs text-zinc-500 sm:col-span-2">
-              {t("settingsAi.speechBaseUrl")}
-              <Input value={settings.transcriptionBaseUrl} onChange={(event) => updateSettings({ transcriptionBaseUrl: event.target.value })} className="mt-1" placeholder="https://your-speech-service.example/v1" />
-            </label>}
-            <SecretInput label={t("settingsAi.speechKey")} value={settings.transcriptionApiKey} placeholder="…" onChange={(value) => updateSettings({ transcriptionApiKey: value })} />
-            <label className="block text-2xs text-zinc-500">
-              {t("settingsAi.speechModel")}
-              <Input value={settings.transcriptionModel} onChange={(event) => updateSettings({ transcriptionModel: event.target.value })} className="mt-1" placeholder={TRANSCRIPTION_DEFAULTS[settings.transcriptionProvider].model || "whisper-large-v3"} />
-            </label>
-          </>}
-        </div>
-        <p className="mt-3 text-xs leading-relaxed text-zinc-500">{t("settingsAi.speechLocalHint")}</p>
+        <SectionLabel>{t("settingsMessaging.inputTranslation")}</SectionLabel>
+        <p className="mt-2 text-[11px] text-zinc-600">
+          {t("settingsMessaging.inputTranslationHint")}
+        </p>
+        <label className="mt-3 block max-w-sm text-2xs text-zinc-500">
+          {t("settingsMessaging.defaultTargetLanguage")}
+          <select
+            value={settings.translateTargetLang || "en"}
+            onChange={(event) =>
+              updateSettings({ translateTargetLang: event.target.value })
+            }
+            className="ui-control mt-1 w-full px-2.5 text-[13px]"
+          >
+            <option value="en">English</option>
+            <option value="zh">中文</option>
+            <option value="fr">Français</option>
+            <option value="es">Español</option>
+            <option value="de">Deutsch</option>
+            <option value="pt">Português</option>
+            <option value="ru">Русский</option>
+            <option value="ar">العربية</option>
+            <option value="ja">日本語</option>
+            <option value="ko">한국어</option>
+          </select>
+        </label>
       </section>
     </div>
   );
@@ -236,45 +235,36 @@ function ModelPicker({
   const [error, setError] = useState("");
   const [manual, setManual] = useState(false);
   const [loadedFor, setLoadedFor] = useState("");
+  const requestGeneration = useRef(0);
 
   const hasKey = hasAiCredentials(settings);
+  const providerConfig = getOpenAiCompatibleConfig(settings);
 
   const load = useCallback(async () => {
+    const generation = ++requestGeneration.current;
+    setModels([]); setLoadedFor("");
+    if (!hasKey) { setError(""); setLoading(false); return; }
     setLoading(true);
     setError("");
     try {
       const list = await listProviderModels(settings.aiProvider, settings);
+      if (generation !== requestGeneration.current) return;
       setModels(list);
       setLoadedFor(settings.aiProvider);
     } catch (e) {
+      if (generation !== requestGeneration.current) return;
       setModels([]);
       setError(e instanceof Error ? e.message : t("settingsAi.modelListFailed"));
     } finally {
-      setLoading(false);
+      if (generation === requestGeneration.current) setLoading(false);
     }
-  }, [settings.aiProvider, settings]);
+  }, [settings.aiProvider, hasKey, providerConfig?.apiKey, providerConfig?.baseUrl, settings.geminiKey, settings.ollamaUrl, t]);
 
   useEffect(() => {
-    if (hasKey) {
-      setLoading(true);
-      setError("");
-      listProviderModels(settings.aiProvider, settings)
-        .then((list) => {
-          setModels(list);
-          setLoadedFor(settings.aiProvider);
-        })
-        .catch((e) => {
-          setModels([]);
-          setError(e instanceof Error ? e.message : t("settingsAi.modelListFailed"));
-        })
-        .finally(() => setLoading(false));
-    } else {
-      setModels([]);
-      setError("");
-    }
-    // 仅在提供商 / 是否有 Key 变化时重新读取
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.aiProvider, hasKey]);
+    setManual(false);
+    void load();
+    return () => { requestGeneration.current++; };
+  }, [load]);
 
   const value = settings.aiModel || "";
   const isManualChosen =
@@ -293,6 +283,7 @@ function ModelPicker({
       ) : (
         <div className="mt-1 flex gap-2">
           <select
+            disabled={loading}
             value={value}
             onChange={(event) => {
               if (event.target.value === "__manual__") {

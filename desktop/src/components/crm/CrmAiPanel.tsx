@@ -1,3 +1,4 @@
+import { resolveAutoReplyScope, type AutoReplyMode } from "@/lib/autoReplyScope";
 import {
   CalendarPlus,
   Check,
@@ -22,6 +23,7 @@ import { generateSuggestions, getSuggestionContextKey, hasRealAiKey } from "@/li
 import { createSuggestionCache, isManualSuggestionContext } from "@/lib/aiSuggestionCache";
 import type { Message, WhatsAppLabel } from "@/types/crm";
 import { ContactAvatar } from "./ContactAvatar";
+import { GoogleSheetInfo } from "./GoogleSheetInfo";
 import { ContactLocalTime } from "./ContactLocalTime";
 import { Button, SectionLabel } from "@/components/ui/primitives";
 import { ContactTagsNotesEditor } from "./ContactTagsNotesEditor";
@@ -188,9 +190,10 @@ export function CrmAiPanel() {
     ? baileysUi.labelsByAccountId[labelAccountId] || []
     : [];
   const aiReady = hasRealAiKey(settings);
-  const manualOnly = Boolean(
-    selectedChatId && settings.aiAutoReplyManualChatIds.includes(selectedChatId)
-  );
+  const replyOverride = selectedChatId && settings.aiAutoReplyManualChatIds?.includes(selectedChatId)
+    ? "manual" : settings.aiAutoReplyModeByChatId?.[selectedChatId || ""] || "inherit";
+  const replyScope = resolveAutoReplyScope(settings, selectedChatId || "");
+  const groupChat = contact?.isGroup || chats.find(chat => chat.id === selectedChatId)?.isGroup;
   const filteredQuickReplies = useMemo(
     () =>
       filterQuickReplies(
@@ -225,13 +228,14 @@ export function CrmAiPanel() {
     }
   }, [availableQuickCategories, quickCategory]);
 
-  const setManualOnly = (enabled: boolean) => {
-    if (!selectedChatId) return;
-    const current = settings.aiAutoReplyManualChatIds;
+  const setReplyMode = (mode: string) => {
+    if (!selectedChatId || !["inherit", "auto", "manual"].includes(mode)) return;
+    const modes = { ...settings.aiAutoReplyModeByChatId };
+    if (mode === "inherit") delete modes[selectedChatId];
+    else modes[selectedChatId] = mode as AutoReplyMode;
     updateSettings({
-      aiAutoReplyManualChatIds: enabled
-        ? [...new Set([...current, selectedChatId])]
-        : current.filter((id) => id !== selectedChatId),
+      aiAutoReplyModeByChatId: modes,
+      aiAutoReplyManualChatIds: (settings.aiAutoReplyManualChatIds || []).filter(id => id !== selectedChatId),
     });
   };
 
@@ -766,6 +770,8 @@ export function CrmAiPanel() {
               }}
             />
 
+            <GoogleSheetInfo contact={contact} />
+
             {!contact.isGroup && (
               <CommonGroupsPanel
                 contact={contact}
@@ -866,12 +872,14 @@ export function CrmAiPanel() {
             <label className="shrink-0 flex items-center gap-1 text-[10px] text-zinc-500">
               {t("crmPanel.autoMode")}
               <select
-                value={manualOnly ? "manual" : "auto"}
-                onChange={(event) => setManualOnly(event.target.value === "manual")}
+                value={replyOverride}
+                disabled={!!groupChat}
+                onChange={(event) => setReplyMode(event.target.value)}
                 className="ui-control h-7 px-1.5 text-[10px]"
-                title={t("crmPanel.manualTitle")}
+                title={t("autoReplyScope.chatHint")}
               >
-                <option value="auto">{t("crmPanel.followGlobal")}</option>
+                <option value="inherit">{t("autoReplyScope.inherit")}</option>
+                <option value="auto">{t("autoReplyScope.auto")}</option>
                 <option value="manual">{t("crmPanel.manualOnly")}</option>
               </select>
             </label>
@@ -883,6 +891,12 @@ export function CrmAiPanel() {
             </Button>
           )}
         </div>
+        {selectedChatId && <p className="my-2 text-[11px] leading-4 text-zinc-500">
+          {groupChat ? t("autoReplyScope.privateOnly") : t("autoReplyScope.effective", {
+            mode: t(replyScope.mode === "auto" ? "autoReplyScope.auto" : "autoReplyScope.manual"),
+            source: replyScope.source === "folder" ? t("autoReplyScope.folderSource", { name: replyScope.folderName || "" }) : t(`autoReplyScope.source.${replyScope.source}`),
+          })}
+        </p>}
         {!aiReady ? (
           <div className="flex min-h-36 flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
             <p className="text-[12px] font-medium text-zinc-300">

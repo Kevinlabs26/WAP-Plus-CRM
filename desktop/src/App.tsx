@@ -7,6 +7,7 @@ import {
   useState,
   type ComponentType,
 } from "react";
+import { donationAvailable } from "@/lib/githubStars";
 import { TopBar } from "@/components/layout/TopBar";
 import { StatsBar } from "@/components/layout/StatsBar";
 import { ConfirmHost } from "@/components/ui/ConfirmHost";
@@ -19,6 +20,7 @@ import { useI18n } from "@/i18n";
 import { ChatWelcome } from "@/components/chat/ChatWelcome";
 import { VoicePlaybackHost } from "@/components/chat/VoiceBubble";
 import { AutomaticBackupWatcher } from "@/components/bridge/AutomaticBackupWatcher";
+import { GoogleSheetsWatcher } from "@/components/bridge/GoogleSheetsWatcher";
 import { useAppStore } from "@/store/appStore";
 import { flushPersist, primePersistBaseline } from "@/store/persist";
 import { setBaileysAccountIdResolver, setBaileysSessionResolver } from "@/lib/baileys";
@@ -440,6 +442,7 @@ function DeferredWatchers({ interactive }: { interactive: boolean }) {
       <AiAutoReplier />
       <UpdateWatcher />
       <AutomaticBackupWatcher />
+      <GoogleSheetsWatcher />
     </Suspense>
   );
 }
@@ -562,6 +565,14 @@ function NavBody({ interactive }: { interactive: boolean }) {
 }
 
 export default function App() {
+  const [showDonation, setShowDonation] = useState(false);
+  useEffect(() => {
+    let active = true;
+    const check = () => { void donationAvailable().then((available) => { if (active) setShowDonation(available); }); };
+    check();
+    const timer = window.setInterval(check, 60 * 60 * 1000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
   const { t } = useI18n();
   const activeNav = useAppStore((s) => s.activeNav);
   const hydrate = useAppStore((s) => s.hydrate);
@@ -812,7 +823,7 @@ export default function App() {
           }
           aria-hidden={showSplash || undefined}
         >
-          <TopBar />
+          <TopBar showDonation={showDonation} />
           {activeNav !== "today" && <StatsBar />}
           <div className="flex min-h-0 flex-1 overflow-hidden">
             <NavBody interactive={interactive} />
@@ -861,7 +872,7 @@ export default function App() {
         </div>
       )}
 
-      <UpdateCompleteModal ready={interactive} />
+      <UpdateCompleteModal ready={interactive} showDonation={showDonation} />
     </ErrorBoundary>
   );
 }

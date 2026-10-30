@@ -203,7 +203,7 @@ pub fn typing_diagnostic_write(
 }
 
 #[cfg(windows)]
-fn protect_secrets(value: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn protect_secrets(value: &[u8]) -> Result<Vec<u8>, String> {
     let input = DataBlob { cb_data: value.len() as u32, pb_data: value.as_ptr() as *mut u8 };
     let mut output = DataBlob { cb_data: 0, pb_data: std::ptr::null_mut() };
     let ok = unsafe { CryptProtectData(&input, std::ptr::null(), std::ptr::null(), std::ptr::null_mut(), std::ptr::null_mut(), 0, &mut output) };
@@ -214,7 +214,7 @@ fn protect_secrets(value: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(windows)]
-fn unprotect_secrets(value: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn unprotect_secrets(value: &[u8]) -> Result<Vec<u8>, String> {
     let input = DataBlob { cb_data: value.len() as u32, pb_data: value.as_ptr() as *mut u8 };
     let mut output = DataBlob { cb_data: 0, pb_data: std::ptr::null_mut() };
     let ok = unsafe { CryptUnprotectData(&input, std::ptr::null_mut(), std::ptr::null(), std::ptr::null_mut(), std::ptr::null_mut(), 0, &mut output) };

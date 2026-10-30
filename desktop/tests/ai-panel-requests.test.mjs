@@ -1,3 +1,4 @@
+import { resolveAutoReplyScope } from "../src/lib/autoReplyScope.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
@@ -61,7 +62,7 @@ function harness() {
   globalThis.panelHooks = hooks;
   globalThis.panelBindings = {
     useAppStore: store, hasRealAiKey: () => true,
-    createSuggestionCache, isManualSuggestionContext,
+    resolveAutoReplyScope, createSuggestionCache, isManualSuggestionContext,
     getSuggestionContextKey: (...args) => { contextReads++; return getSuggestionContextKey(...args); },
     generateSuggestions: (...args) => new Promise(resolve => requests.push({ args, resolve })),
     useI18n: () => ({ t: key => key }), getQuickReplyCategories: () => [], filterQuickReplies: () => [],
@@ -227,4 +228,15 @@ test("manual drafting prevents an unstarted automatic request, while explicit re
     id: "new-turn", chatId: "a", accountId: "a", direction: "in", body: "New question", sentAt: "2026-01-01T01:00:00Z",
   }] }; h.render(); h.fireTimers(); assert.equal(h.requests.length, 2);
   h.requests[1].resolve(reply("new turn")); await settle(); h.unmount();
+});
+
+test("conversation reply mode saves explicit overrides and can return to folder inheritance",async()=>{
+ const h=harness();h.state.settings.aiReplyMode="semi";h.state.settings.chatFolders=[{id:"f",name:"F",chatIds:["a"],autoReplyMode:"auto"}];
+ h.state.updateSettings=patch=>Object.assign(h.state.settings,patch);await h.mount();
+ const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
+ const selector=()=>nodes(h.render()).find(node=>node.type==="select"&&node.props.title==="autoReplyScope.chatHint");
+ assert.equal(selector().props.value,"inherit");selector().props.onChange({target:{value:"manual"}});assert.equal(h.state.settings.aiAutoReplyModeByChatId.a,"manual");
+ assert.equal(selector().props.value,"manual");selector().props.onChange({target:{value:"auto"}});assert.equal(resolveAutoReplyScope(h.state.settings,"a").source,"chat");
+ selector().props.onChange({target:{value:"inherit"}});assert.equal(h.state.settings.aiAutoReplyModeByChatId.a,undefined);assert.equal(resolveAutoReplyScope(h.state.settings,"a").source,"folder");
+ h.unmount();
 });

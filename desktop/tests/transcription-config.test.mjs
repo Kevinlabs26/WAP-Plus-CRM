@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { translate } from '../src/i18n/core.ts';
 
 const mocks={
-  react:'export const useState=v=>[typeof v==="function"?v():v,()=>{}];export const useEffect=()=>{};export const useCallback=f=>f;',
+  "./SettingsLocalSpeechPanel":"export const SettingsLocalSpeechPanel=()=>null;",
+  react:'export const useState=v=>[typeof v==="function"?v():v,()=>{}];export const useRef=v=>({current:v});export const useEffect=()=>{};export const useCallback=f=>f;',
   'react/jsx-runtime':'export const jsx=(type,props,key)=>({type,props,key});export const jsxs=jsx;export const Fragment="fragment";',
   '@/store/appStore':'export const useAppStore=f=>f(globalThis.speechState);useAppStore.getState=()=>globalThis.speechState;',
   '@/components/ui/primitives':'export const Input="input",SectionLabel="h4";',
@@ -13,13 +14,13 @@ const mocks={
   './localSpeech':'export const findReadyLocalModel=async()=>globalThis.speechLocal?{name:"local"}:null;export const localTranscribe=async()=>"local transcript";',
   '@/lib/mediaBlob':'export const mediaUrlToBlob=async()=>new Blob(["audio"],{type:"audio/ogg"});',
   './gemini.ts':'export const GEMINI_DEFAULT_MODEL="gemini-default";export const geminiGenerate=async()=>"unused";export const geminiTranscribeAudio=async opts=>{globalThis.speechGemini=opts;return "gemini transcript";};',
-  '@/lib/storage':'export const getStorageEngine=()=>"sqlite"; export const canPersistRowDeltas=()=>false;export const saveSecureSecrets=async s=>{globalThis.speechSaves.push(s);return !globalThis.speechSaveFail;};export const loadSecureSecrets=async()=>globalThis.speechSecrets;export const loadAppState=async()=>globalThis.speechSnapshot;export const saveAppState=async()=>{};export const clearAppState=async()=>{};export const registerChatMessageReplacements=()=>{};',
+  '@/lib/storage':'export const getStorageEngine=()=>"sqlite"; export const canPersistRowDeltas=()=>false;export const saveSecureSecrets=async s=>{globalThis.speechSaves.push(s);await globalThis.speechSaveWait?.();return !globalThis.speechSaveFail;};export const loadSecureSecrets=async()=>globalThis.speechSecrets;export const loadAppState=async()=>globalThis.speechSnapshot;export const saveAppState=async()=>{};export const clearAppState=async()=>{};export const registerChatMessageReplacements=()=>{};',
   './persist':'export const persist=()=>{};export const flushPersist=async get=>{globalThis.speechFlushed=get().settings;};export const primePersistBaseline=()=>{};export const buildPersistSlice=s=>s;',
   './exportDataActions':'export const exportBackup=()=>{};export const exportContactsCsv=()=>{};',
   '@/channels/sendGate':'export const waitForPendingSends=async()=>{};',
   '@/lib/mediaCache':'export const cacheMediaUrl=async()=>{};export const readMediaCache=async()=>null;export const dropMediaCache=async()=>{};',
 };
-const built=await build({stdin:{contents:`export * from './src/lib/transcriptionConfig.ts';export {defaultSettings,normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {transcribeVoice} from './src/lib/transcribeVoice.ts';export {useMessageActions} from './src/components/chat/useMessageActions.ts';export {SettingsAiPanel} from './src/components/settings/SettingsAiPanel.tsx';export {createSettingsActionsSlice} from './src/store/settingsActionsSlice.ts';export {createBootSlice} from './src/store/bootSlice.ts';`,resolveDir:fileURLToPath(new URL('../',import.meta.url))},
+const built=await build({stdin:{contents:`export * from './src/lib/transcriptionConfig.ts';export {defaultSettings,normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {transcribeVoice} from './src/lib/transcribeVoice.ts';export {useMessageActions} from './src/components/chat/useMessageActions.ts';export {SettingsAiPanel} from './src/components/settings/SettingsAiPanel.tsx';export {SettingsSpeechPanel} from './src/components/settings/SettingsSpeechPanel.tsx';export {createSettingsActionsSlice} from './src/store/settingsActionsSlice.ts';export {createBootSlice} from './src/store/bootSlice.ts';`,resolveDir:fileURLToPath(new URL('../',import.meta.url))},
   bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},
   plugins:[{name:'speech-config-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}],
 });
@@ -99,15 +100,15 @@ test('missing speech credentials and invalid endpoint protocols fail without upl
   }finally{ui.close();}
 });
 
-test('the settings page separates speech fields; changing text presets leaves speech intact and provider switching clears the old speech key',()=>{
+test('the settings page separates speech fields; changing text presets leaves speech intact and provider switching clears the old speech key',async()=>{
   const ui=fixture({aiProvider:'custom',customAiKey:'text-key',customAiBaseUrl:'https://text.invalid/v1',customAiModel:'text-model',transcriptionProvider:'custom',transcriptionApiKey:'speech-key',transcriptionBaseUrl:'https://speech.invalid/v1',transcriptionModel:'speech-model'});
   try {
-    let tree=ui.render();assert.ok(text(tree).includes('语音转文字'));assert.ok(text(tree).includes('文字 AI'));assert.ok(!text(tree).includes('共用的模型服务'));
+    let tree=[ui.render(),mod.SettingsSpeechPanel()];assert.ok(text(tree).includes('语音转文字'));assert.ok(text(tree).includes('文字 AI'));assert.ok(!text(tree).includes('共用的模型服务'));
     const before=mod.resolveTranscriptionConfig(speechState.settings);field(tree,'常用预设').props.onChange({target:{value:'deepseek'}});assert.deepEqual(mod.resolveTranscriptionConfig(speechState.settings),before);
     field(tree,'语音转写模型').props.onChange({target:{value:'audio-updated'}});assert.equal(speechState.settings.customAiModel,'deepseek-chat');assert.equal(speechState.settings.transcriptionModel,'audio-updated');
-    const secret=nodes(tree).find(n=>n.props.label==='语音服务 API Key');assert.equal(nodes(secret.type(secret.props)).find(n=>n.type==='input').props.type,'password');
-    secret.props.onChange('separate-key');assert.equal(speechSaves.at(-1).transcriptionApiKey,'separate-key');assert.equal(speechState.settings.customAiKey,'text-key');
-    field(tree,'语音服务提供商').props.onChange({target:{value:'groq'}});tree=ui.render();assert.equal(speechState.settings.transcriptionApiKey,'');assert.equal(speechState.settings.transcriptionModel,'whisper-large-v3-turbo');assert.equal(field(tree,'语音服务 Base URL').props.value,'https://api.groq.com/openai/v1');
+    const secret=field(tree,'语音服务 API Key');assert.equal(secret.props.type,'password');
+    secret.props.onChange({target:{value:'separate-key'}});await new Promise(resolve=>setImmediate(resolve));assert.equal(speechSaves.at(-1).transcriptionApiKey,'separate-key');assert.equal(speechState.settings.customAiKey,'text-key');
+    field(tree,'语音服务提供商').props.onChange({target:{value:'groq'}});tree=mod.SettingsSpeechPanel();assert.equal(speechState.settings.transcriptionApiKey,'');assert.equal(speechState.settings.transcriptionModel,'whisper-large-v3-turbo');assert.equal(field(tree,'语音服务 Base URL').props.value,'https://api.groq.com/openai/v1');await new Promise(resolve=>setImmediate(resolve));
   }finally{ui.close();}
 });
 
@@ -126,4 +127,29 @@ test('failed speech-key migration stops hydration before saving the independent 
     speechSnapshot={phones:[],contacts:[],chats:[],messages:[],followUps:[],settings:{aiProvider:'openai'}};speechSecrets={openaiKey:'old-key',groqKey:'',transcriptionApiKey:''};speechSaveFail=true;
     await assert.rejects(speechState.hydrate(),/语音转写密钥安全迁移失败/);assert.equal(speechFlushed,null);assert.notEqual(speechState.hydrated,true);
   }finally{ui.close();}
+});
+
+test('failed secure writes can retry an unchanged key or retry explicitly without editing it',async()=>{
+ const ui=fixture();
+ try {
+  speechSaveFail=true;
+  speechState.updateSettings({openaiKey:'fictional-retry-key'});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(speechState.secretSaveStatus,'failed');assert.equal(speechSaves.length,1);
+  speechState.updateSettings({openaiKey:'fictional-retry-key'});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(speechSaves.length,2);
+  speechSaveFail=false;
+  assert.equal(await speechState.retrySecretSave(),true);assert.equal(speechSaves.length,3);assert.equal(speechState.secretSaveStatus,'idle');
+ }finally{ui.close();}
+});
+
+test('secure writes are serialized and a later edit wins when an earlier save is slow',async()=>{
+ const ui=fixture();let release;
+ globalThis.speechSaveWait=()=>new Promise(resolve=>{release=resolve;globalThis.speechSaveWait=undefined;});
+ try {
+  speechState.updateSettings({openaiKey:'fictional-first'});await new Promise(resolve=>setImmediate(resolve));
+  speechState.updateSettings({openaiKey:'fictional-latest'});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(speechSaves.length,1);assert.equal(speechState.secretSaveStatus,'saving');
+  release();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(speechSaves.length,2);assert.equal(speechSaves.at(-1).openaiKey,'fictional-latest');assert.equal(speechState.secretSaveStatus,'idle');
+ }finally{delete globalThis.speechSaveWait;ui.close();}
 });

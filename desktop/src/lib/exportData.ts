@@ -85,6 +85,9 @@ export type SettingsSafeExport = {
   followUpRuleSettings: AppSettings["followUpRuleSettings"];
   /** AI 回复模式与人设（此前导出丢失，跨机恢复后全部回落默认） */
   aiReplyMode: AppSettings["aiReplyMode"];
+  aiAutoReplyPaused: boolean;
+  aiAutoReplyModeByChatId: AppSettings["aiAutoReplyModeByChatId"];
+  aiAutoReplyManualChatIds: string[];
   aiAutoReplyIntervalMs: number;
   aiAutoReplyPolicy: AppSettings["aiAutoReplyPolicy"];
   aiAutoReplyPolicyByAccountId: AppSettings["aiAutoReplyPolicyByAccountId"];
@@ -157,6 +160,9 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     autoFollowUpEnabled: settings.autoFollowUpEnabled !== false,
     followUpRuleSettings: settings.followUpRuleSettings,
     aiReplyMode: settings.aiReplyMode,
+    aiAutoReplyPaused: settings.aiAutoReplyPaused,
+    aiAutoReplyModeByChatId: settings.aiAutoReplyModeByChatId || {},
+    aiAutoReplyManualChatIds: settings.aiAutoReplyManualChatIds || [],
     aiAutoReplyIntervalMs: settings.aiAutoReplyIntervalMs,
     aiAutoReplyPolicy: settings.aiAutoReplyPolicy,
     aiAutoReplyPolicyByAccountId: settings.aiAutoReplyPolicyByAccountId || {},
@@ -636,6 +642,13 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
       allowed.filter((key) => Object.hasOwn(settingsSafe!, key))
         .map((key) => [key, (settingsSafe as Record<string, unknown>)[key]])
     ) as Partial<SettingsSafeExport>;
+    if (Array.isArray(settingsSafe.chatFolders)) {
+      settingsSafe.chatFolders = settingsSafe.chatFolders.map(folder => {
+        if (!folder || typeof folder !== "object") return folder;
+        const { autoReplyMode: _automation, ...rest } = folder;
+        return rest;
+      });
+    }
     if (Array.isArray(settingsSafe.scheduledMessages)) {
       settingsSafe.scheduledMessages = settingsSafe.scheduledMessages.map((task) =>
         task && (task.status === "pending" || task.status === "queued")

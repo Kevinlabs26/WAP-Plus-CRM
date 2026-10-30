@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Coffee, Settings, Search } from "lucide-react";
+import { ChevronDown, Coffee, Star, Settings, Search } from "lucide-react";
 import { useAppStore, type NavId } from "@/store/appStore";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/primitives";
 import { DonateModal } from "@/components/DonateModal";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
+import { isTauri } from "@/lib/bridge";
 import { WapPlusMark } from "@/components/brand/WapPlusMark";
 import { AccountSwitcherMenu } from "./AccountSwitcherMenu";
 import { MessageInbox } from "./MessageInbox";
@@ -25,11 +27,12 @@ const MORE_NAV: { id: NavId; labelKey: TranslationKey }[] = [
   { id: "phones", labelKey: "nav.phones" },
 ];
 
-export function TopBar() {
+export function TopBar({ showDonation = false }: { showDonation?: boolean } = {}) {
   const [donateOpen, setDonateOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const starOpening = useRef(false);
   const { t } = useI18n();
   const activeNav = useAppStore((s) => s.activeNav);
   const setActiveNav = useAppStore((s) => s.setActiveNav);
@@ -255,12 +258,32 @@ export function TopBar() {
           type="button"
           title={t("nav.supportTitle")}
           aria-label={t("nav.supportTitle")}
-          onClick={() => { setMoreOpen(false); setDonateOpen(true); }}
+          onClick={async (event) => {
+            if (starOpening.current || event.detail > 1) return;
+            starOpening.current = true;
+            setMoreOpen(false);
+            try {
+              if (isTauri()) await openExternal("https://github.com/Kevinlabs26/WAP-Plus-CRM");
+              else window.open("https://github.com/Kevinlabs26/WAP-Plus-CRM", "_blank", "noopener,noreferrer");
+            } catch {
+              useAppStore.getState().pushToast(t("nav.openLinkFailed"), "error");
+            } finally { starOpening.current = false; }
+          }}
+          className="ui-btn-secondary !min-h-8 gap-1.5 px-2 text-zinc-300 hover:text-brand"
+        >
+          <Star className="h-4 w-4 text-brand" />
+          <span className="hidden text-[12px] xl:inline">{t("nav.support")}</span>
+        </button>
+        {showDonation && <button
+          type="button"
+          title={t("donate.title")}
+          aria-label={t("donate.title")}
+          onClick={() => setDonateOpen(true)}
           className="ui-btn-secondary !min-h-8 gap-1.5 px-2 text-zinc-300 hover:text-brand"
         >
           <Coffee className="h-4 w-4 text-brand" />
-          <span className="hidden text-[12px] xl:inline">{t("nav.support")}</span>
-        </button>
+          <span className="hidden text-[12px] xl:inline">{t("donate.title")}</span>
+        </button>}
         <Button
           variant="ghost"
           className="!min-h-8 w-8 !px-0"
@@ -285,7 +308,7 @@ export function TopBar() {
           </span>
         </Button>
       </div>
-      {donateOpen && <DonateModal onClose={() => setDonateOpen(false)} />}
+      {showDonation && donateOpen && <DonateModal onClose={() => setDonateOpen(false)} />}
     </header>
   );
 }

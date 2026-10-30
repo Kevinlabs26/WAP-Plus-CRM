@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { clearSheetConfig } from "@/lib/googleSheets";
 import { useAppStore } from "@/store/appStore";
 import { Button, SectionLabel } from "@/components/ui/primitives";
 import { getDbInfo, getStorageEngine, resolveStorageEngine } from "@/lib/storage";
@@ -12,6 +13,7 @@ import { isTauri } from "@/lib/bridge";
 import { runAutomaticBackup, type AutomaticBackupStatus } from "@/lib/automaticBackup";
 
 export function SettingsDataPanel() {
+  const [dataPage, setDataPage] = useState<"backup" | "storage">("backup");
   const { t } = useI18n();
   const automaticBackupEnabled = useAppStore((s) => s.settings.automaticBackupEnabled !== false);
   const updateSettings = useAppStore((s) => s.updateSettings);
@@ -136,6 +138,14 @@ export function SettingsDataPanel() {
         </p>
       </header>
 
+      <nav aria-label={t("settingsData.pages")} className="flex gap-1 rounded-lg border border-zinc-800 bg-zinc-950/35 p-1">
+        {(["backup", "storage"] as const).map(page => <button key={page} type="button" aria-current={dataPage === page ? "page" : undefined} disabled={importing || exporting || automaticBusy || clearingData || clearingMedia || releasingHistory}
+          className={`flex-1 rounded-md px-3 py-2 text-xs ${dataPage === page ? "bg-zinc-800 font-medium text-zinc-100" : "text-zinc-500 hover:text-zinc-300"}`}
+          onClick={() => setDataPage(page)}>{t(page === "backup" ? "settingsData.backupPage" : "settingsData.storagePage")}</button>)}
+      </nav>
+
+      <div hidden={dataPage !== "backup"} className="space-y-6">
+
       {isTauri() && <section className="rounded-lg border border-zinc-800 p-4 text-[12px]">
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={automaticBackupEnabled} onChange={(e) => updateSettings({ automaticBackupEnabled: e.target.checked })} />
@@ -255,6 +265,9 @@ export function SettingsDataPanel() {
       </section>
 
       <ContactImportModal open={importOpen} onClose={() => setImportOpen(false)} />
+      </div>
+
+      <div hidden={dataPage !== "storage"} className="space-y-6">
 
       <section className="rounded-xl border border-amber-900/50 bg-amber-950/10 p-4">
         <SectionLabel>{t("settingsData.releaseHistory")}</SectionLabel>
@@ -384,6 +397,7 @@ export function SettingsDataPanel() {
               setClearingData(true);
               try {
                 await clearData();
+                await clearSheetConfig();
                 pushToast(t("settingsData.cleared"), "success");
               } catch (e) {
                 pushToast(e instanceof Error ? e.message : t("settingsData.clearFailed"), "error");
@@ -396,6 +410,7 @@ export function SettingsDataPanel() {
           {clearingData ? t("settingsData.clearingData") : t("settingsData.clearLocal")}
         </Button>
       </section>
+      </div>
     </div>
   );
 }

@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChannelId } from "@/channels";
 import type { AppState } from "@/store/appStore";
+import { translateCurrent } from "@/i18n";
 import {
   beginVoiceRecording,
   clearVoiceTimer,
   type VoiceSession,
 } from "./beginVoiceRecording";
 import { finishVoiceRecording } from "./endVoiceRecording";
+import type { VoiceRecordResult } from "@/lib/voiceRecord";
 
 type UseVoiceRecordingOptions = {
+  chatId?: string;
   isBaileys: boolean;
   sending: boolean;
   chatConnected: boolean;
@@ -37,21 +40,31 @@ export function useVoiceRecording(opts: UseVoiceRecordingOptions) {
   const voiceSessionRef = useRef<VoiceSession | null>(null);
   const voiceTimerRef = useRef<number | null>(null);
   const voicePressRef = useRef(false);
+  const voiceRequestRef = useRef(0);
+  const finishingRef = useRef(false);
+  const [preview, setPreview] = useState<VoiceRecordResult | null>(null);
   const [recording, setRecording] = useState(false);
   const [voicePaused, setVoicePaused] = useState(false);
   const [recordSec, setRecordSec] = useState(0);
 
   useEffect(() => {
     return () => {
+      voiceRequestRef.current++;
+      voicePressRef.current = false;
       voiceSessionRef.current?.cancel();
       voiceSessionRef.current = null;
+      setPreview(null);
+      setRecording(false);
+      setVoicePaused(false);
+      setRecordSec(0);
       if (voiceTimerRef.current != null) {
         window.clearInterval(voiceTimerRef.current);
       }
     };
-  }, []);
+  }, [opts.chatId, opts.chatAccountId, opts.channelId, opts.selectedPhoneId]);
 
   const beginVoice = () => {
+    if (preview || finishingRef.current) return;
     if (!opts.guardBlockedSend()) return;
     return beginVoiceRecording({
       isBaileys: opts.isBaileys,
@@ -62,6 +75,7 @@ export function useVoiceRecording(opts: UseVoiceRecordingOptions) {
       setBaileysLoginOpen: opts.setBaileysLoginOpen,
       resolveRecipient: opts.resolveRecipient,
       voicePressRef,
+      voiceRequestRef,
       voiceSessionRef,
       voiceTimerRef,
       setRecording,
@@ -85,13 +99,25 @@ export function useVoiceRecording(opts: UseVoiceRecordingOptions) {
     }
   };
 
-  const endVoice = (send: boolean) => {
+  const endVoice = async (send: boolean, previewOnly = false) => {
+    if (finishingRef.current) return;
+    if (send && preview && !previewOnly) {
+      if (!opts.guardBlockedSend()) return;
+      if (!opts.chatConnected) {
+        opts.pushToast(translateCurrent("chat.connectFirst"), "error");
+        opts.setBaileysLoginOpen(true);
+        return;
+      }
+    }
+    finishingRef.current = true;
+    const request = ++voiceRequestRef.current;
     voicePressRef.current = false;
-    const session = voiceSessionRef.current;
+    const session = voiceSessionRef.current || preview;
     voiceSessionRef.current = null;
     clearVoiceTimer(voiceTimerRef);
     setVoicePaused(false);
-    return finishVoiceRecording(send, session, {
+    setPreview(null);
+    try { await finishVoiceRecording(send, session, {
       pushToast: opts.pushToast,
       setRecording,
       setRecordSec,
@@ -101,16 +127,21 @@ export function useVoiceRecording(opts: UseVoiceRecordingOptions) {
       enqueueOutgoingMessage: opts.enqueueOutgoingMessage,
       patchMessage: opts.patchMessage,
       updateMessageDelivery: opts.updateMessageDelivery,
+      chatId: opts.chatId,
       channelId: opts.channelId,
       selectedPhoneId: opts.selectedPhoneId,
       chatAccountId: opts.chatAccountId,
-    });
+      onPreview: previewOnly ? result => {
+        if (request === voiceRequestRef.current) setPreview(result);
+      } : undefined,
+    }); } finally { finishingRef.current = false; }
   };
 
   const readVoiceLevel = () => voiceSessionRef.current?.level() || 0;
 
   /** 切换会话时重置 */
   const resetVoice = () => {
+    voiceRequestRef.current++;
     voicePressRef.current = false;
     voiceSessionRef.current?.cancel();
     voiceSessionRef.current = null;
@@ -118,10 +149,13 @@ export function useVoiceRecording(opts: UseVoiceRecordingOptions) {
     setRecording(false);
     setVoicePaused(false);
     setRecordSec(0);
+    setPreview(null);
   };
 
   return {
     recording,
+    preview,
+    preparePreview: () => endVoice(true, true),
     voicePaused,
     recordSec,
     beginVoice,

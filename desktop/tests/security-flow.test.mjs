@@ -160,3 +160,24 @@ test("dispatch rechecks automation after waiting behind an account send", async 
   const [, cancelled] = await Promise.all([first, second]);
   assert.equal(sends, 1); assert.equal(cancelled.error, "automation_cancelled"); assert.equal(cancelled.status, "failed");
 });
+
+test("scoped automation works under a manual default and rechecks changed rules after generation", async () => {
+ for (const mode of ["send", "pause", "folder-manual", "chat-manual", "removed"]) {
+  const inbound = setup("scoped-" + mode), state = globalThis.flowState;
+  Object.assign(state.settings, { aiReplyMode: "semi", chatFolders: [{ id:"f",name:"Customers",chatIds:[inbound.chatId],autoReplyMode:"auto" }] });
+  const ai=deferred();globalThis.generateFlow=()=>ai.promise;
+  const running=autoReplyInbound(inbound);
+  if(mode==="pause")state.settings.aiAutoReplyPaused=true;
+  if(mode==="folder-manual")state.settings.chatFolders[0].autoReplyMode="manual";
+  if(mode==="chat-manual")state.settings.aiAutoReplyModeByChatId={[inbound.chatId]:"manual"};
+  if(mode==="removed")state.settings.chatFolders[0].chatIds=[];
+  ai.resolve(reply);await running;
+  assert.equal(globalThis.sentFlow.length,mode==="send"?1:0,mode);
+ }
+});
+test("a single conversation override does not enable another conversation",async()=>{
+ const inbound=setup("individual"),state=globalThis.flowState;Object.assign(state.settings,{aiReplyMode:"semi",aiAutoReplyModeByChatId:{individual:"auto"}});
+ globalThis.generateFlow=async()=>reply;await autoReplyInbound(inbound);assert.equal(globalThis.sentFlow.length,1);
+ const other=setup("individual-other");Object.assign(globalThis.flowState.settings,{aiReplyMode:"semi",aiAutoReplyModeByChatId:{individual:"auto"}});
+ await autoReplyInbound(other);assert.equal(globalThis.sentFlow.length,0);
+});

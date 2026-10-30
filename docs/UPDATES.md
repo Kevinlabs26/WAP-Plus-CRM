@@ -10,17 +10,20 @@ WAP Plus CRM 使用 Tauri updater，通过 GitHub Release 分发 Windows 更新�
 3. 在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 新建：
    - `TAURI_SIGNING_PRIVATE_KEY`：粘贴 `desktop/.tauri/wap-plus-crm.key` 的完整内容
    - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：本项目生成的密钥没有密码，留空即可
+   - `GOOGLE_DESKTOP_CLIENT_JSON`：Google OAuth“桌面应用”客户端 JSON 文件的完整内容，用于软件统一的 Google 登录。不要提交该 JSON 文件。
+
+发布工作流会校验 Google 配置并写入 runner 临时目录，通过 `WAP_GOOGLE_CLIENT_PATH` 供构建读取。缺少或格式错误会停止发布。普通用户不需要准备此文件；Google 项目的 API 启用和应用验证仍需单独完成。
 
 公钥已经写入 `desktop/src-tauri/tauri.conf.json`，可以提交；私钥只能放在本机或 GitHub Actions Secret。
 
 ## 发布更新
 
-1. 同步递增根目录与 `desktop/package.json`、`desktop/src-tauri/tauri.conf.json`、`desktop/src-tauri/Cargo.toml` 的版本，并更新 `package-lock.json`、`desktop/src-tauri/Cargo.lock`。当前版本为 `0.1.43`，变更见 [CHANGELOG.md](../CHANGELOG.md)。
+1. 同步递增根目录与 `desktop/package.json`、`desktop/src-tauri/tauri.conf.json`、`desktop/src-tauri/Cargo.toml` 的版本，并更新 `package-lock.json`、`desktop/src-tauri/Cargo.lock`。当前版本为 `0.1.51`，变更见 [CHANGELOG.md](../CHANGELOG.md)。
 2. 提交并推送版本标签：
 
    ```bash
-   git tag v0.1.43
-   git push origin v0.1.43
+   git tag v0.1.51
+   git push origin v0.1.51
    ```
 
 3. GitHub Actions 先运行前端、sidecar、Bridge 检查和 Rust 测试，再构建签名安装包及 `latest.json`，创建 Draft Release。

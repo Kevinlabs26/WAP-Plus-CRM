@@ -19,7 +19,7 @@ type PendingUpdate = {
   version?: string;
 };
 
-export function UpdateCompleteModal({ ready }: { ready: boolean }) {
+export function UpdateCompleteModal({ ready, showDonation = false }: { ready: boolean; showDonation?: boolean }) {
   const { t } = useI18n();
   const [version, setVersion] = useState("");
   const [visible, setVisible] = useState(false);
@@ -121,7 +121,7 @@ export function UpdateCompleteModal({ ready }: { ready: boolean }) {
             <h2 id="update-complete-title" className="mt-3 text-2xl font-semibold tracking-tight text-zinc-100">{t("updateComplete.title")}</h2>
             <p className="mt-2 text-sm text-zinc-500">{t("updateComplete.description")}</p>
           </div>
-          <div className="px-6 pb-5">
+          {showDonation && <div className="px-6 pb-5">
             <button
               type="button"
               aria-expanded={supportOpen}
@@ -189,7 +189,7 @@ export function UpdateCompleteModal({ ready }: { ready: boolean }) {
               })}
               <p className="mt-2 text-center text-2xs leading-relaxed text-zinc-500">{t("donate.footer")}</p>
             </div>}
-          </div>
+          </div>}
         </div>
         <div className="shrink-0 border-t border-zinc-800/70 bg-zinc-900 px-6 py-4">
           <button

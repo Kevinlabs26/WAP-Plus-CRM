@@ -8,6 +8,7 @@ import {
 import { useI18n } from "@/i18n";
 
 type Props = {
+  compact?: boolean;
   /** 显示条件由父组件外推（有草稿/翻译原文且非录音/非编辑） */
   visible: boolean;
   hasDraft: boolean;
@@ -27,6 +28,7 @@ type Props = {
  * 输入区底部横条：翻译语言选择 / 翻译按钮 / 还原原文 / 快捷键提示。
  */
 export function TranslateBar({
+  compact = false,
   visible,
   hasDraft,
   translateOriginal,
@@ -63,11 +65,11 @@ export function TranslateBar({
         >
           {TRANSLATE_LANGS.map((l) => (
             <option key={l.code} value={l.code}>
-              {l.native} · {l.label}
+              {compact ? l.native : `${l.native} · ${l.label}`}
             </option>
           ))}
         </select>
-        <span className="text-2xs text-zinc-300">{sourceLabel}</span>
+        {!compact && <span className="text-2xs text-zinc-300">{sourceLabel}</span>}
         {source === "preferred" && (
           <button
             type="button"
@@ -116,11 +118,11 @@ export function TranslateBar({
         <span className="text-2xs tabular-nums text-rose-300/90">
           {recordSec}s
         </span>
-      ) : (
+      ) : !compact ? (
         <span className="shrink-0 text-2xs text-zinc-600">
           {t("translation.shortcuts")}
         </span>
-      )}
+      ) : null}
     </div>
   );
 }

@@ -4,11 +4,12 @@ import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import zh from "../src/i18n/locales/zh-CN.ts";
 
-const panels = ["Connection", "Messaging", "Ai", "AutoReply", "QuickReplies", "Data", "Blocklist", "Appearance", "LocalSpeech", "ScheduledMessages", "Update"];
+const panels = ["Connection", "Messaging", "Ai", "AutoReply", "QuickReplies", "Data", "Blocklist", "Appearance", "Speech", "Notifications", "ScheduledMessages", "Update"];
 const mocks = {
-  react: "export const memo=fn=>fn; export const useState=initial=>[typeof initial==='function'?initial():initial,()=>{}]; export const useRef=()=>({current:null}); export const useEffect=fn=>globalThis.settingsEffects.push(fn);",
+  "./SettingsGoogleSheets": "export const SettingsGoogleSheets=()=>null;",
+  react: "export const memo=fn=>fn; export const useState=initial=>globalThis.settingsHookState?globalThis.settingsHookState(initial):[typeof initial==='function'?initial():initial,()=>{}]; export const useRef=value=>globalThis.settingsHookRef?globalThis.settingsHookRef(value):({current:null}); export const useEffect=fn=>globalThis.settingsEffects.push(fn);",
   "react/jsx-runtime": "export const jsx=(type,props,key)=>({type,props,key}); export const jsxs=jsx;",
-  "lucide-react": "export const AudioLines=()=>null, Bot=AudioLines, Clock3=AudioLines, Database=AudioLines, Info=AudioLines, MessageSquareText=AudioLines, Palette=AudioLines, Radio=AudioLines, ShieldBan=AudioLines, Workflow=AudioLines, X=AudioLines, Zap=AudioLines, Activity=AudioLines, AlertTriangle=AudioLines, CheckCircle2=AudioLines, Flame=AudioLines;",
+  "lucide-react": "export const AudioLines=()=>null, Bell=AudioLines, TableProperties=AudioLines, Bot=AudioLines, Clock3=AudioLines, Database=AudioLines, Info=AudioLines, MessageSquareText=AudioLines, Palette=AudioLines, Radio=AudioLines, ShieldBan=AudioLines, Workflow=AudioLines, X=AudioLines, Zap=AudioLines, Activity=AudioLines, AlertTriangle=AudioLines, CheckCircle2=AudioLines, Flame=AudioLines;",
   "@/store/appStore": "export const useAppStore=selector=>selector(globalThis.settingsState);",
   "@/i18n": "export const useI18n=()=>({t:globalThis.settingsTranslate});",
   ...Object.fromEntries(panels.map(name => [`./Settings${name}Panel`, `export const Settings${name}Panel=()=>null;`])),
@@ -27,6 +28,50 @@ const nodes = tree => Array.isArray(tree) ? tree.flatMap(nodes) : tree?.props ? 
 const text = tree => Array.isArray(tree) ? tree.map(text).join("") : tree?.props ? text(tree.props.children) : typeof tree === "string" || typeof tree === "number" ? String(tree) : "";
 const translate = (key, params = {}) => String(zh[key] || key).replace(/\{(\w+)\}/g, (_, key) => params[key] ?? `{${key}}`);
 const health = { accountId: "wa-a", level: "green", score: 100, sentLastHour: 0, sentLastDay: 0, newChatsLastDay: 0, caps: { perHour: 100, perDaySoft: 800 } };
+
+test("unsaved sheet settings guard close, keep editing, failed save and successful save", async () => {
+  const cells=[],changes=[];let index=0;
+  globalThis.settingsHookState=initial=>{const n=index++;cells[n]??={value:typeof initial==='function'?initial():initial};return[cells[n].value,next=>cells[n].value=typeof next==='function'?next(cells[n].value):next];};
+  globalThis.settingsHookRef=value=>cells[index++]??={current:value};
+  globalThis.settingsTranslate=translate;globalThis.settingsEffects=[];
+  globalThis.settingsState={settingsOpen:true,settingsCategory:'google-sheets',setSettingsCategory:()=>{},setSettingsOpen:value=>changes.push(value)};
+  const render=()=>{index=0;return SettingsModal();};
+  const find=(tree,key)=>nodes(tree).find(node=>node.type==='button'&&text(node)===zh[key]);
+  const register=guard=>{const tree=render();nodes(tree).find(node=>node.props.onCloseGuardChange).props.onCloseGuardChange(guard);};
+  try {
+    register({dirty:true,busy:false,canSave:true,save:async()=>false});
+    let tree=render();tree.props.onClick();tree=render();
+    assert.ok(nodes(tree).some(node=>node.props.role==='alertdialog'));assert.deepEqual(changes,[]);
+    find(tree,'settings.keepEditing').props.onClick();tree=render();
+    assert.ok(!nodes(tree).some(node=>node.props.role==='alertdialog'));
+    tree.props.onClick();tree=render();await find(tree,'settings.saveClose').props.onClick();
+    assert.deepEqual(changes,[], 'a failed save keeps settings open');
+    register({dirty:true,busy:true,canSave:true,save:async()=>true});tree=render();tree.props.onClick();tree=render();
+    assert.equal(find(tree,'settings.discardClose').props.disabled,true);
+    register({dirty:true,busy:false,canSave:true,save:async()=>true});tree=render();
+    assert.equal(find(tree,'settings.discardClose').props.disabled,false, 'buttons recover after background work completes');
+    await find(tree,'settings.saveClose').props.onClick();assert.deepEqual(changes,[false]);
+    changes.length=0;tree=render();find(tree,'settings.discardClose').props.onClick();assert.deepEqual(changes,[false]);
+  } finally {for(const key of ['settingsHookState','settingsHookRef','settingsTranslate','settingsEffects','settingsState'])delete globalThis[key];}
+});
+
+test("Google Sheets has its own settings category and opens its dedicated panel", () => {
+  const selected = [];
+  globalThis.settingsTranslate = translate;
+  globalThis.settingsEffects = [];
+  globalThis.settingsState = { settingsOpen: true, settingsCategory: "google-sheets", setSettingsCategory: value => selected.push(value) };
+  try {
+    const all = nodes(SettingsModal());
+    const categories = all.filter(node => node.type === "button" && text(node).includes(zh["settings.googleSheetsDesc"]));
+    assert.equal(categories.length, 1);
+    assert.equal(categories[0].props["aria-current"], "page");
+    categories[0].props.onClick();
+    assert.deepEqual(selected, ["google-sheets"]);
+    assert.ok(all.some(node => node.props.active === true && node.props.Panel?.name === "SettingsGoogleSheets"));
+  } finally {
+    for (const key of ["settingsTranslate", "settingsEffects", "settingsState"]) delete globalThis[key];
+  }
+});
 
 test("disconnected, pairing, reconnecting and idle accounts have no misleading health score", () => {
   globalThis.settingsTranslate = translate;

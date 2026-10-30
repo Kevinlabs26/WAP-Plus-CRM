@@ -1,4 +1,3 @@
-import { Smartphone, Wifi, WifiOff } from "lucide-react";
 import { useI18n } from "@/i18n";
 
 export function MultiWindowConnectionBadge({
@@ -11,24 +10,10 @@ export function MultiWindowConnectionBadge({
   onOpenDevices?: () => void;
 }) {
   const { t } = useI18n();
-  if (channel === "android_bridge") {
-    return (
-      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-sky-500/10 px-1.5 py-0.5 text-[9px] text-sky-300" title={t("multi.phoneBridgeTitle")}>
-        <Smartphone className="h-2.5 w-2.5" />
-        {t("multi.phoneBridge")}
-      </span>
-    );
-  }
-
-  return connected ? (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[9px] text-emerald-300" title={t("multi.connectedTitle")}>
-      <Wifi className="h-2.5 w-2.5" />
-      {t("multi.connected")}
-    </span>
-  ) : (
-    <button type="button" onClick={onOpenDevices} className="inline-flex shrink-0 items-center gap-1 rounded-full bg-rose-500/10 px-1.5 py-0.5 text-[9px] text-rose-300 transition-colors hover:bg-rose-500/20" title={t("multi.disconnectedTitle")}>
-      <WifiOff className="h-2.5 w-2.5" />
-      {t("multi.disconnected")}
-    </button>
-  );
+  if (connected) return null;
+  const label = t(channel === "android_bridge" ? "multi.bridgeOffline" : "multi.accountOffline");
+  const dot = <span aria-hidden="true" className="block h-1.5 w-1.5 rounded-full bg-rose-500" />;
+  const actionLabel = `${label} · ${t("multi.connectionDetails")}`;
+  return onOpenDevices ? <button type="button" onClick={onOpenDevices} title={actionLabel} aria-label={actionLabel} className="shrink-0 rounded p-1.5 hover:bg-rose-500/10">{dot}</button>
+    : <span role="img" title={label} aria-label={label} className="shrink-0 p-1.5">{dot}</span>;
 }

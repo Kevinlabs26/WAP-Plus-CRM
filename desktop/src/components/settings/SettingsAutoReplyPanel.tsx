@@ -150,8 +150,14 @@ export function SettingsAutoReplyPanel() {
         </p>
       </header>
 
+      <label className="flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950/35 p-4 text-sm">
+        {t("autoReplyScope.pauseAll")}
+        <input type="checkbox" checked={settings.aiAutoReplyPaused} onChange={event => updateSettings({ aiAutoReplyPaused: event.target.checked })} />
+      </label>
+      <p className="text-xs text-zinc-500">{t("autoReplyScope.defaultHint")}</p>
+
       <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
-        <SectionLabel>{t("settingsAutoReply.mode")}</SectionLabel>
+        <SectionLabel>{t("autoReplyScope.defaultMode")}</SectionLabel>
         <div className="mt-3 grid grid-cols-2 gap-3">
           <button
             type="button"
@@ -165,7 +171,7 @@ export function SettingsAutoReplyPanel() {
           >
             <span className="text-[13px] font-medium text-zinc-100">{t("settingsAutoReply.semi")}</span>
             <span className="text-2xs leading-4 text-zinc-500">
-              {t("settingsAutoReply.semiHint")}
+              {t("autoReplyScope.defaultManualHint")}
             </span>
           </button>
           <button
@@ -180,14 +186,13 @@ export function SettingsAutoReplyPanel() {
           >
             <span className="text-[13px] font-medium text-zinc-100">{t("settingsAutoReply.auto")}</span>
             <span className="text-2xs leading-4 text-zinc-500">
-              {t("settingsAutoReply.autoHint")}
+              {t("autoReplyScope.defaultAutoHint")}
             </span>
           </button>
         </div>
       </section>
 
-      {settings.aiReplyMode === "auto" && (
-        <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
           <SectionLabel>{t("settingsAutoReply.behavior")}</SectionLabel>
           <label className="mt-3 block text-2xs text-zinc-500">
             {t("settingsAutoReply.minInterval")}
@@ -205,8 +210,7 @@ export function SettingsAutoReplyPanel() {
           <p className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-2xs leading-4 text-amber-100">
             {t("settingsAutoReply.warning")}
           </p>
-        </section>
-      )}
+      </section>
 
       <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
         <SectionLabel

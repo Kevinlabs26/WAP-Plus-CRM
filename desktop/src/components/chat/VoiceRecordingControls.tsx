@@ -1,4 +1,4 @@
-import { Pause, Play, Send, Trash2 } from "lucide-react";
+import { Pause, Play, Send, Square, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useI18n } from "@/i18n";
 
@@ -10,6 +10,8 @@ type Props = {
   onDelete: () => void;
   onTogglePause: () => void;
   onSend: () => void;
+  onPreview?: () => void;
+  previewUrl?: string;
 };
 
 function formatDuration(seconds: number) {
@@ -25,12 +27,14 @@ export function VoiceRecordingControls({
   onDelete,
   onTogglePause,
   onSend,
+  onPreview,
+  previewUrl,
 }: Props) {
   const { t } = useI18n();
   const [levels, setLevels] = useState<number[]>(() => Array(30).fill(0));
 
   useEffect(() => {
-    if (paused) return;
+    if (paused || previewUrl) return;
     const sample = () => {
       const next = Math.max(0, Math.min(1, readLevel()));
       setLevels((current) => [...current.slice(1), next]);
@@ -38,7 +42,7 @@ export function VoiceRecordingControls({
     sample();
     const timer = window.setInterval(sample, 80);
     return () => window.clearInterval(timer);
-  }, [paused, readLevel]);
+  }, [paused, previewUrl, readLevel]);
 
   const recentPeak = Math.max(...levels.slice(-12));
   const signalOk = recentPeak >= 0.04;
@@ -63,7 +67,7 @@ export function VoiceRecordingControls({
         <Trash2 className="h-4 w-4" />
       </button>
 
-      <div className="flex min-w-0 flex-1 items-center gap-2">
+      {previewUrl ? <audio controls src={previewUrl} preload="metadata" className="h-9 min-w-0 flex-1" aria-label={t("voice.previewAudio")} /> : <div className="flex min-w-0 flex-1 items-center gap-2">
         <span
           className={
             paused
@@ -101,9 +105,9 @@ export function VoiceRecordingControls({
         >
           {status}
         </span>
-      </div>
+      </div>}
 
-      <button
+      {!previewUrl && <button
         type="button"
         title={paused ? t("voice.resume") : t("voice.pause")}
         aria-label={paused ? t("voice.resume") : t("voice.pause")}
@@ -112,17 +116,17 @@ export function VoiceRecordingControls({
         onClick={onTogglePause}
       >
         {paused ? <Play className="h-5 w-5" /> : <Pause className="h-5 w-5" />}
-      </button>
+      </button>}
 
       <button
         type="button"
-        title={t("tooltip.sendVoice")}
-        aria-label={t("tooltip.sendVoice")}
+        title={onPreview && !previewUrl ? t("voice.finishPreview") : t("tooltip.sendVoice")}
+        aria-label={onPreview && !previewUrl ? t("voice.finishPreview") : t("tooltip.sendVoice")}
         disabled={sending}
         className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-brand text-[var(--brand-foreground)] hover:brightness-110 disabled:opacity-40"
-        onClick={onSend}
+        onClick={onPreview && !previewUrl ? onPreview : onSend}
       >
-        <Send className="h-5 w-5" />
+        {onPreview && !previewUrl ? <Square className="h-4 w-4" /> : <Send className="h-5 w-5" />}
       </button>
     </div>
   );

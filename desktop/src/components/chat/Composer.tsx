@@ -20,6 +20,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import type { Contact } from "@/types/crm";
 import { useAppStore, type AppSettings } from "@/store/appStore";
 import { useShallow } from "zustand/react/shallow";
@@ -245,6 +246,7 @@ function ComposerInner({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const emojiPanelRef = useRef<HTMLDivElement | null>(null);
   const voiceLanguageRef = useRef<HTMLDivElement | null>(null);
+  const voiceLanguageMenuRef = useRef<HTMLDivElement | null>(null);
   const lastLatencyLogAt = useRef(0);
   const { emitComposing, scheduleComposing } = useComposerPresence({
     isBaileys,
@@ -636,12 +638,26 @@ function ComposerInner({
   useEffect(() => {
     if (!voiceLanguageOpen) return;
     const closeOnOutsideClick = (event: PointerEvent) => {
-      if (!voiceLanguageRef.current?.contains(event.target as Node)) {
+      if (!voiceLanguageRef.current?.contains(event.target as Node) &&
+          !voiceLanguageMenuRef.current?.contains(event.target as Node)) {
         setVoiceLanguageOpen(false);
       }
     };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setVoiceLanguageOpen(false);
+        voiceLanguageRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+      }
+    };
+    const closeOnResize = () => setVoiceLanguageOpen(false);
     document.addEventListener("pointerdown", closeOnOutsideClick);
-    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("resize", closeOnResize);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("resize", closeOnResize);
+    };
   }, [voiceLanguageOpen]);
 
   const handleTranslateLangChange = (lang: string) => {
@@ -1318,6 +1334,7 @@ function ComposerInner({
                 disabled={recording || sending || inputLocked}
                 onContextMenu={(event) => {
                   event.preventDefault();
+                  event.stopPropagation();
                   if (voiceInputOpen || voiceInputBusy) return;
                   setVoiceLanguageOpen((open) => !open);
                 }}
@@ -1340,16 +1357,35 @@ function ComposerInner({
                 ) : (
                   <Captions className="h-4 w-4" />
                 )}
-                <span className="absolute -bottom-0.5 -right-0.5 rounded bg-zinc-800 px-0.5 text-[7px] font-semibold leading-3 text-brand ring-1 ring-zinc-950">
+              </button>
+              <button
+                type="button"
+                aria-label={t("voice.selectLanguage")}
+                title={t("voice.selectLanguage")}
+                aria-expanded={voiceLanguageOpen}
+                aria-controls="voice-input-language-menu"
+                disabled={recording || sending || inputLocked || voiceInputOpen || voiceInputBusy}
+                onClick={() => setVoiceLanguageOpen((open) => !open)}
+                className="absolute -bottom-1 -right-1 min-w-5 rounded bg-zinc-800 px-1 py-0.5 text-[9px] font-semibold leading-3 text-brand ring-1 ring-zinc-950 disabled:opacity-40"
+              >
                   {VOICE_INPUT_LANGUAGES.find(
                     (language) => language.value === settings.voiceInputLang
                   )?.short || "AUTO"}
-                </span>
               </button>
-              {voiceLanguageOpen && (
-                <div className="absolute bottom-11 right-0 z-50 w-44 overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 p-1 shadow-xl shadow-black/50">
+              {voiceLanguageOpen && createPortal(
+                <div
+                  ref={voiceLanguageMenuRef}
+                  id="voice-input-language-menu"
+                  role="group"
+                  aria-label={t("voice.selectLanguage")}
+                  style={{
+                    right: Math.max(8, window.innerWidth - (voiceLanguageRef.current?.getBoundingClientRect().right ?? 0)),
+                    bottom: Math.max(8, window.innerHeight - (voiceLanguageRef.current?.getBoundingClientRect().top ?? 0) + 8),
+                  }}
+                  className="fixed z-[300] w-44 max-h-[80dvh] overflow-y-auto rounded-xl border border-zinc-700 bg-zinc-900 p-1 shadow-xl shadow-black/50"
+                >
                   <div className="px-2 py-1 text-[10px] text-zinc-500">
-                    选择语音识别语言
+                    {t("voice.selectLanguage")}
                   </div>
                   <div className="max-h-64 overflow-y-auto">
                     {VOICE_INPUT_LANGUAGES.map((language) => {
@@ -1359,6 +1395,7 @@ function ComposerInner({
                         <button
                           key={language.value || "auto"}
                           type="button"
+                          aria-pressed={selected}
                           onClick={() => {
                             useAppStore.getState().updateSettings({
                               voiceInputLang: language.value,
@@ -1378,7 +1415,8 @@ function ComposerInner({
                       );
                     })}
                   </div>
-                </div>
+                </div>,
+                document.body
               )}
             </div>
           </div>

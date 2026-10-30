@@ -145,8 +145,12 @@ async function waitForAiQueue(reply) {
 }
 
 test('queued AI replies preserve matching context and block changed model, identity, account, channel or missing generation metadata',async()=>{
- for(const kind of ['unchanged','model','identity','stage','account','channel','legacy']){
+ for(const kind of ['unchanged','model','identity','stage','account','channel','legacy','paused','chat-manual','folder-manual','scoped-auto']){
   const {state,reply}=queuedAi();
+  if(kind==='paused')state.settings.aiAutoReplyPaused=true;
+  if(kind==='chat-manual')state.settings.aiAutoReplyModeByChatId={chat:'manual'};
+  if(kind==='folder-manual')state.settings.chatFolders=[{id:'f',name:'F',chatIds:['chat'],autoReplyMode:'manual'}];
+  if(kind==='scoped-auto'){state.settings.aiReplyMode='semi';state.settings.aiAutoReplyModeByChatId={chat:'auto'};}
   if(kind==='model')state.settings.customAiModel='other';
   if(kind==='identity')state.settings.aiSystemPromptByAccountId={'wa-b':'Different identity'};
   if(kind==='stage')state.contacts[0].stage='won';
@@ -154,8 +158,8 @@ test('queued AI replies preserve matching context and block changed model, ident
   if(kind==='channel')state.settings.sendChannel='android_bridge';
   if(kind==='legacy')delete reply.aiReplyContextHash;
   SendQueueWatcher();await waitForAiQueue(reply);
-  assert.equal(globalThis.__sentRequests.length,kind==='unchanged'?1:0,kind);
-  assert.equal(reply.deliveryStatus,kind==='unchanged'?'sent':'failed',kind);
+  assert.equal(globalThis.__sentRequests.length,['unchanged','scoped-auto'].includes(kind)?1:0,kind);
+  assert.equal(reply.deliveryStatus,['unchanged','scoped-auto'].includes(kind)?'sent':'failed',kind);
  }
 });
 
@@ -188,4 +192,10 @@ test('unavailable digest verification stops an AI retry without sending or enter
  SendQueueWatcher();await waitForAiQueue(reply);
  assert.deepEqual(globalThis.__sentRequests,[]);assert.equal(reply.deliveryStatus,'failed');
  assert.equal(reply.nextAttemptAt,undefined);assert.equal(reply.retryCount,5);
+});
+
+test('queued scoped replies stop when their folder is disabled in the send gate',async()=>{
+ const {state,reply}=queuedAi();state.settings.aiReplyMode='semi';state.settings.chatFolders=[{id:'f',name:'F',chatIds:['chat'],autoReplyMode:'auto'}];
+ globalThis.__beforeDispatch=()=>{state.settings.chatFolders[0].autoReplyMode='manual';};
+ SendQueueWatcher();await waitForAiQueue(reply);assert.deepEqual(globalThis.__sentRequests,[]);assert.equal(reply.deliveryStatus,'failed');
 });

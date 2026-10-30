@@ -1410,6 +1410,7 @@ export function ChatPanel() {
     readVoiceLevel,
     resetVoice,
   } = useVoiceRecording({
+    chatId: selectedChatId || undefined,
     isBaileys,
     sending,
     chatConnected,

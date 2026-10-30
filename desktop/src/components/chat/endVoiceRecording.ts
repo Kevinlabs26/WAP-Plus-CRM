@@ -4,6 +4,7 @@ import { baileysSendVoice } from "@/lib/baileys";
 import type { AppState } from "@/store/appStore";
 import { translateCurrent } from "@/i18n";
 import type { VoiceSession } from "./beginVoiceRecording";
+import type { VoiceRecordResult } from "@/lib/voiceRecord";
 
 type FinishVoiceRecordingDeps = {
   pushToast: AppState["pushToast"];
@@ -18,14 +19,16 @@ type FinishVoiceRecordingDeps = {
   enqueueOutgoingMessage: AppState["enqueueOutgoingMessage"];
   patchMessage: AppState["patchMessage"];
   updateMessageDelivery: AppState["updateMessageDelivery"];
+  chatId?: string;
   channelId: ChannelId;
   selectedPhoneId: string | null;
   chatAccountId: string | null | undefined;
+  onPreview?: (result: VoiceRecordResult) => void;
 };
 
 export async function finishVoiceRecording(
   send: boolean,
-  session: VoiceSession | null,
+  session: VoiceSession | VoiceRecordResult | null,
   deps: FinishVoiceRecordingDeps
 ) {
   if (!session) {
@@ -34,7 +37,7 @@ export async function finishVoiceRecording(
     return;
   }
   if (!send) {
-    session.cancel();
+    if ("cancel" in session) session.cancel();
     deps.setRecording(false);
     deps.setRecordSec(0);
     deps.pushToast(translateCurrent("runtime.recordCancelled"), "info");
@@ -43,7 +46,7 @@ export async function finishVoiceRecording(
   deps.setSending(true);
   let msgId: string | null = null;
   try {
-    const result = await session.stop();
+    const result = "stop" in session ? await session.stop() : session;
     deps.setRecording(false);
     if (result.durationSec < 1 || result.byteLength < 200) {
     deps.pushToast(translateCurrent("runtime.recordTooShort"), "info");
@@ -51,6 +54,10 @@ export async function finishVoiceRecording(
     }
     if (result.durationSec > 120) {
     deps.pushToast(translateCurrent("runtime.recordTooLong"), "error");
+      return;
+    }
+    if (deps.onPreview) {
+      deps.onPreview(result);
       return;
     }
     const { contact, recipient } = deps.resolveRecipient();
@@ -61,6 +68,7 @@ export async function finishVoiceRecording(
     deps.stickToBottom();
     const body = `[语音 ${result.durationSec}s]`;
     msgId = deps.enqueueOutgoingMessage({
+      chatId: deps.chatId,
       body,
       phoneE164: recipient,
       contactId: contact.id,

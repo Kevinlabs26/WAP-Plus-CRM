@@ -11,11 +11,13 @@ import { useI18n, type TranslationKey } from "@/i18n";
 import { emitQuickReplyMedia } from "@/lib/quickReplyMedia";
 
 export function MultiWindowQuickReplies({
+  chatId,
   onPick,
   onClose,
   variant = "popover",
   title,
 }: {
+  chatId: string;
   onPick: (text: string) => void;
   onClose?: () => void;
   variant?: "popover" | "panel";
@@ -120,6 +122,7 @@ export function MultiWindowQuickReplies({
                   caption: reply.body,
                   token: `${reply.id}-${Date.now()}`,
                   target: "multi",
+                  chatId,
                 });
               }
             }}

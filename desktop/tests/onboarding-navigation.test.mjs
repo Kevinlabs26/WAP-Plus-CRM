@@ -4,8 +4,9 @@ import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import { translate } from "../src/i18n/core.ts";
 
-const icons = ["Search", "Users", "Smartphone", "RefreshCw", "ChevronDown", "Coffee", "Settings", "AlertTriangle", "CalendarCheck", "CheckCircle2", "Clock", "LayoutGrid", "List", "Radio", "Send"];
+const icons = ["Search", "Users", "Smartphone", "RefreshCw", "ChevronDown", "Star", "Coffee", "Settings", "AlertTriangle", "CalendarCheck", "CheckCircle2", "Clock", "LayoutGrid", "List", "Radio", "Send"];
 const mocks = {
+  "@/lib/bridge": "export const isTauri=()=>true;",
   react: "export const useMemo=fn=>fn(); export const useState=value=>globalThis.onboardingHooks.state(value); export const useRef=value=>globalThis.onboardingHooks.ref(value); export const useEffect=()=>{};",
   "react/jsx-runtime": "export const jsx=(type,props,key)=>({type,props,key}); export const jsxs=jsx;",
   "lucide-react": icons.map(name => `export const ${name}=()=>null;`).join(""),
@@ -15,6 +16,7 @@ const mocks = {
   "@/components/ui/Avatar": "export const Avatar=()=>null;",
   "@/components/brand/WapPlusMark": "export const WapPlusMark=()=>null;",
   "@/components/DonateModal": "export const DonateModal=()=>null;",
+  "@tauri-apps/plugin-shell": "export const open=url=>{ globalThis.starUrl=url; return Promise.resolve(); };",
   "./AccountSwitcherMenu": "export const AccountSwitcherMenu=()=>null;",
   "./MessageInbox": "export const MessageInbox=()=>null;",
   "@/components/crm/FollowUpWorkRow": "export const FollowUpWorkRow=()=>null; export const buildContactWorkCard=()=>({});",
@@ -53,7 +55,7 @@ function fixture({ settings = {}, ...overrides } = {}) {
     setActiveNav: value => calls.push(["nav", value]), setCommandOpen: value => calls.push(["search", value]),
     goToChats: value => calls.push(["chats", value]), ...overrides,
   };
-  return { calls, render(Component) { cursor = 0; return Component(); },
+  return { calls, render(Component, props) { cursor = 0; return Component(props); },
     close() { for (const key of ["onboardingHooks", "onboardingTranslate", "onboardingState"]) delete globalThis[key]; } };
 }
 const primary = tree => nodes(tree).find(node => node.type === "button" && node.props.variant === "primary");
@@ -115,14 +117,15 @@ test("broadcast has a direct navigation entry and supporting pages remain availa
   const ui = fixture();
   try {
     let tree = ui.render(TopBar); assert.ok(text(tree).includes("Ctrl+K"));
-    const support = button(tree, "支持作者"); assert.ok(support, "Support must be available before opening More");
-    support.props.onClick(); tree = ui.render(TopBar);
-    const donation = nodes(tree).find(node => typeof node.props.onClose === "function"); assert.ok(donation);
-    donation.props.onClose(); tree = ui.render(TopBar);
+    const support = nodes(tree).find(node => node.type === "button" && text(node) === "点击 Star");
+    assert.ok(support);
+    support.props.onClick({ detail: 1 });
+    assert.equal(globalThis.starUrl, "https://github.com/Kevinlabs26/WAP-Plus-CRM");
+    delete globalThis.starUrl;
     button(tree, "群发").props.onClick(); assert.deepEqual(ui.calls, [["nav", "broadcast"]]);
     nodes(tree).find(node => node.props["aria-controls"] === "topbar-more-nav").props.onClick(); tree = ui.render(TopBar);
     for (const label of ["星标", "统计", "监测", "设备"]) assert.ok(button(tree, label), label);
-    assert.equal(button(nodes(tree).find(node => node.props.id === "topbar-more-nav"), "支持作者"), undefined);
+    assert.equal(button(nodes(tree).find(node => node.props.id === "topbar-more-nav"), "点击 Star"), undefined);
     assert.equal(nodes(tree).filter(node => node.type === "button" && text(node) === "群发").length, 1);
     button(tree, "监测").props.onClick(); assert.deepEqual(ui.calls.at(-1), ["nav", "monitor"]);
   } finally { ui.close(); }
@@ -130,4 +133,16 @@ test("broadcast has a direct navigation entry and supporting pages remain availa
 
 test("saved-message placeholders have no unfilled interpolation tokens in any locale", () => {
   for (const locale of ["zh-CN", "en", "fr"]) assert.equal(/\{\w+\}/.test(translate(locale, "chat.selfDraft")), false);
+});
+
+test("donation is available only after the star threshold", () => {
+  const ui = fixture();
+  try {
+    assert.equal(button(ui.render(TopBar), "支持作者"), undefined);
+    let tree = ui.render(TopBar, { showDonation: true });
+    button(tree, "支持作者").props.onClick();
+    tree = ui.render(TopBar, { showDonation: true });
+    assert.ok(nodes(tree).find(node => typeof node.props.onClose === "function"));
+    assert.equal(button(ui.render(TopBar, { showDonation: false }), "支持作者"), undefined);
+  } finally { ui.close(); }
 });

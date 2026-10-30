@@ -30,7 +30,7 @@ export function MultiWindowLayoutControls({
 }) {
   const { t } = useI18n();
   return (
-    <div className="hidden shrink-0 items-center gap-0.5 rounded-lg border border-zinc-800 bg-zinc-900/50 p-0.5 md:flex" aria-label={t("multi.layout")}>
+    <div className="flex shrink-0 items-center gap-0.5 rounded-lg border border-zinc-800 bg-zinc-900/50 p-0.5" aria-label={t("multi.layout")}>
       <select
         value={layoutMode}
         onChange={(event) => onLayoutChange(event.target.value as LayoutMode)}

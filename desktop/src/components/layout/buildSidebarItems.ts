@@ -34,6 +34,7 @@ export type SidebarVirtItem =
       kind: "folder_empty";
       id: string;
       folderId: string;
+      folderDepth?: number;
     }
   | {
       kind: "lead_date_header";
@@ -213,6 +214,16 @@ export function buildSidebarItems({
       else clonesByFolder.set(cl.folderId, [cl]);
     }
     const folderById = new Map(chatFolders.map((folder) => [folder.id, folder]));
+    const childrenByParent = new Map<string, ChatFolder[]>();
+    for (const folder of chatFolders) {
+      if (!folder.parentId || !folderById.has(folder.parentId)) continue;
+      const children = childrenByParent.get(folder.parentId) || [];
+      children.push(folder);
+      childrenByParent.set(folder.parentId, children);
+    }
+    for (const children of childrenByParent.values()) {
+      children.sort((a, b) => (b.sort || 0) - (a.sort || 0));
+    }
     const allAccountDisplayChats = isAllAccountsView
       ? collapseAllAccountFolderChats(filteredChats, contactById)
       : [];
@@ -280,10 +291,8 @@ export function buildSidebarItems({
       if (visiting.has(folderId)) return { total: 0, unread: 0, containsSelected: false };
       visiting.add(folderId);
       const own = ownFolderStats.get(folderId) || { total: 0, unread: 0, containsSelected: false };
-      const folder = folderById.get(folderId);
       const result = { ...own };
-      for (const child of chatFolders) {
-        if (child.parentId !== folder?.id) continue;
+      for (const child of childrenByParent.get(folderId) || []) {
         const childStats = getFolderStats(child.id, new Set(visiting));
         result.total += childStats.total;
         result.unread += childStats.unread;
@@ -293,7 +302,10 @@ export function buildSidebarItems({
       return result;
     };
     for (const folder of chatFolders) getFolderStats(folder.id);
-    const appendChildFolder = (folder: ChatFolder) => {
+    const renderedFolders = new Set<string>();
+    const appendFolder = (folder: ChatFolder, depth: number) => {
+      if (renderedFolders.has(folder.id)) return;
+      renderedFolders.add(folder.id);
       const primaryChats = folder.chatIds
         .map((id) => chatById.get(id))
         .filter((chat): chat is ChatPreview => !!chat);
@@ -316,16 +328,19 @@ export function buildSidebarItems({
         unread,
         containsSelected: stats.containsSelected,
         collapsed: !searchActive && !!folder.collapsed,
-        depth: 1,
+        depth,
       });
       if (!searchActive && folder.collapsed) return;
+      for (const child of childrenByParent.get(folder.id) || []) {
+        appendFolder(child, depth + 1);
+      }
       for (const item of primaryDisplayChats) {
         items.push({
           kind: "chat",
           id: item.chat.id,
           chat: item.chat,
           folderId: folder.id,
-          folderDepth: 1,
+          folderDepth: depth,
           accountCount: item.accountCount,
           memberChatIds: item.memberChatIds,
         });
@@ -337,85 +352,21 @@ export function buildSidebarItems({
           chat,
           cloneId: cl.id,
           folderId: folder.id,
-          folderDepth: 1,
+          folderDepth: depth,
         });
       }
-      if (total === 0 && !searchActive) {
+      if (total === 0 && !searchActive && !childrenByParent.has(folder.id)) {
         items.push({
           kind: "folder_empty",
           id: `fe-${folder.id}`,
           folderId: folder.id,
+          folderDepth: depth,
         });
       }
     };
 
-    for (const folder of chatFolders.filter((folder) => !folder.parentId)) {
-      const primaryChats: ChatPreview[] = [];
-      for (const id of folder.chatIds) {
-        const ch = chatById.get(id);
-        if (ch) primaryChats.push(ch);
-      }
-      const primaryDisplayChats = displayChats(folder, primaryChats);
-      const cloneEntries = clonesByFolder.get(folder.id) || [];
-      const cloneChats = cloneEntries
-        .map((cl) => ({
-          cl,
-          chat: chatById.get(cl.sourceChatId),
-        }))
-        .filter(
-          (x): x is { cl: ChatFolderClone; chat: ChatPreview } =>
-            !!x.chat
-        );
-      const stats = folderStats.get(folder.id) || { total: 0, unread: 0, containsSelected: false };
-      const { total, unread } = stats;
-      if (searchActive && total === 0) continue;
-      items.push({
-        kind: "folder_header",
-        id: `fh-${folder.id}`,
-        folderId: folder.id,
-        name: folderDisplayName(folder),
-        total,
-        unread,
-        containsSelected: stats.containsSelected,
-        collapsed: !searchActive && !!folder.collapsed,
-        depth: 0,
-      });
-      if (searchActive || !folder.collapsed) {
-        for (const child of chatFolders
-          .filter((candidate) => candidate.parentId === folder.id)
-          .slice()
-          .sort((a, b) => (b.sort || 0) - (a.sort || 0))) {
-          appendChildFolder(child);
-        }
-        for (const item of primaryDisplayChats) {
-          items.push({
-            kind: "chat",
-            id: item.chat.id,
-            chat: item.chat,
-            folderId: folder.id,
-            folderDepth: 0,
-            accountCount: item.accountCount,
-            memberChatIds: item.memberChatIds,
-          });
-        }
-        for (const { cl, chat } of cloneChats) {
-          items.push({
-            kind: "chat",
-            id: `clone-${cl.id}`,
-            chat,
-            cloneId: cl.id,
-            folderId: folder.id,
-            folderDepth: 0,
-          });
-        }
-        if (total === 0 && !chatFolders.some((child) => child.parentId === folder.id)) {
-          items.push({
-            kind: "folder_empty",
-            id: `fe-${folder.id}`,
-            folderId: folder.id,
-          });
-        }
-      }
+    for (const folder of chatFolders) {
+      if (!folder.parentId || !folderById.has(folder.parentId)) appendFolder(folder, 0);
     }
     const ungroupedDisplayChats = isAllAccountsView
       ? allAccountDisplayChats.filter(

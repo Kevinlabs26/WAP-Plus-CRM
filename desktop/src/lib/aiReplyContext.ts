@@ -1,3 +1,4 @@
+import { resolveAutoReplyScope } from "./autoReplyScope";
 import type { AppState } from "@/store/appStore";
 import type { Message } from "@/types/crm";
 import { getSuggestionContextKey, hasRealAiKey } from "@/lib/aiSuggest";
@@ -13,9 +14,10 @@ export function currentAutoReplyContext(
   state: Pick<AppState, "settings" | "contacts" | "chats" | "messages" | "messagesByChatId">,
   reply: Pick<Message, "id" | "chatId" | "contactId" | "accountId" | "channelId">
 ): string | null {
+  if (resolveAutoReplyScope(state.settings, reply.chatId).mode !== "auto") return null;
   const contact = state.contacts.find(item => item.id === reply.contactId);
   const chat = state.chats.find(item => item.id === reply.chatId);
-  if (!contact || !chat || chat.localOnly || !reply.accountId ||
+  if (!contact || !chat || contact.isGroup || chat.isGroup || chat.localOnly || !reply.accountId ||
       state.settings.sendChannel !== reply.channelId || !hasRealAiKey(state.settings) ||
       (chat.accountId || contact.accountId || state.settings.liveBaileysAccountId || state.settings.activeAccountId) !== reply.accountId) return null;
   const context = (state.messagesByChatId?.[reply.chatId] || state.messages)

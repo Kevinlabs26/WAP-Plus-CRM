@@ -28,7 +28,7 @@ export function createChatFolderActions({
         return null;
       }
       const folders = getSettings().chatFolders || [];
-      const id = `folder-${Date.now().toString(36)}`;
+      const id = `folder-${crypto.randomUUID()}`;
       const nextSort =
         folders.reduce((max, folder) => Math.max(max, folder.sort || 0), -1) + 1;
       const settings = getSettings();
@@ -42,13 +42,13 @@ export function createChatFolderActions({
       const parent = parentId
         ? folders.find((folder) => folder.id === parentId)
         : undefined;
-      if (parent?.parentId) {
-        pushToast(t("folder.toastNestedLimit"), "info");
+      if (parentId && !parent) {
+        pushToast(t("folder.toastNotFound"), "error");
         return null;
       }
       updateSettings({
         chatFolders: [
-          ...folders,
+          ...folders.map(folder => folder.id === parent?.id ? { ...folder, collapsed: false } : folder),
           {
             id,
             name: title,
@@ -56,7 +56,7 @@ export function createChatFolderActions({
             sort: nextSort,
             collapsed: false,
             chatIds: [],
-            scope,
+            scope: parent?.scope || scope,
           },
         ],
       });

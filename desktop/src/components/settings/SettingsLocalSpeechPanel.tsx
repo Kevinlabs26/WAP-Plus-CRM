@@ -28,7 +28,7 @@ import { useI18n } from "@/i18n";
  * 本地语音识别模型管理：下载 / 就绪状态 / 删除。
  * 模型就绪后，语音消息「转文字」自动优先离线识别（零 Key 零配额）。
  */
-export function SettingsLocalSpeechPanel() {
+export function SettingsLocalSpeechPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useI18n();
   const modelCopy = (id: string) => id.includes("tiny")
     ? { label: t("settingsSpeech.modelTiny"), detail: t("settingsSpeech.modelTinyDetail") }
@@ -84,12 +84,12 @@ export function SettingsLocalSpeechPanel() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
-      <div>
+      {!embedded && <div>
         <h3 className="text-[15px] font-semibold text-zinc-100">{t("settingsSpeech.title")}</h3>
         <p className="mt-1 text-xs leading-relaxed text-zinc-500">
           {t("settingsSpeech.description")}
         </p>
-      </div>
+      </div>}
 
       <section>
         <SectionLabel>{t("settingsSpeech.presets")}</SectionLabel>

@@ -6,6 +6,7 @@ mod bridge;
 #[cfg(windows)]
 mod clipboard;
 mod commands;
+mod google_sheets;
 mod db;
 mod protocol;
 mod speech_archive;
@@ -82,6 +83,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(BridgeState::default())
         .manage(BaileysState::default())
+        .manage(google_sheets::GoogleState::default())
         .setup(|app| {
             let conn = db::open_db(app.handle())?;
             app.manage(DbState(Mutex::new(conn)));
@@ -181,6 +183,10 @@ pub fn run() {
             commands::db_search_messages,
             commands::db_get_message,
             commands::secure_load_secrets,
+            google_sheets::google_sheets_status,
+            google_sheets::google_sheets_connect,
+            google_sheets::google_sheets_disconnect,
+            google_sheets::google_sheets_read,
             commands::secure_save_secrets,
             commands::typing_diagnostic_write,
             voice::list_speech_models,

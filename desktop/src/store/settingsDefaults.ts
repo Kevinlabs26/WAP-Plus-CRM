@@ -1,3 +1,4 @@
+import type { AutoReplyMode } from "@/lib/autoReplyScope";
 import {
   normalizeQuickReplyCategory,
   QUICK_REPLY_CATEGORIES,
@@ -46,12 +47,13 @@ import {
 export interface SettingsChatFolder {
   id: string;
   name: string;
-  /** 可选父分组；仅支持一层嵌套，避免侧栏树无限展开 */
+  /** 可选父分组，支持多层嵌套。 */
   parentId?: string;
   sort: number;
   collapsed?: boolean;
   /** 主归属成员 chatId，在同一 scope 内互斥 */
   chatIds: string[];
+  autoReplyMode?: AutoReplyMode;
   /**
    * 号内分组 or 全部视图跨号分组。
    * 缺省视为默认账号号内分组（兼容旧数据）。
@@ -146,10 +148,12 @@ export interface SettingsShape {
   /** 当前提供商选的模型（OpenAI / Groq / Gemini / Ollama 共用）；空 = 用提供商默认 */
   aiModel: string;
   /**
-   * AI 回复模式：semi=只出建议（手动点发）；auto=自动回复入站私聊。
+   * 默认 AI 回复模式：semi=只出建议；auto=自动回复私聊；会话和文件夹可覆盖。
    * 自动模式按 aiSystemPrompt 适配身份与说话偏好。
    */
   aiReplyMode: "semi" | "auto";
+  aiAutoReplyPaused: boolean;
+  aiAutoReplyModeByChatId: Record<string, AutoReplyMode>;
   /** 自动回复防刷屏：同一会话两次自动回复的最小间隔（毫秒） */
   aiAutoReplyIntervalMs: number;
   /** 单独交给人工处理的会话 id；全局自动回复仍可保留 */
@@ -314,6 +318,8 @@ export const defaultSettings: SettingsShape = {
   transcriptionModel: "",
   aiModel: "",
   aiReplyMode: "semi",
+  aiAutoReplyPaused: false,
+  aiAutoReplyModeByChatId: {},
   aiAutoReplyIntervalMs: 30000,
   aiAutoReplyManualChatIds: [],
   aiAutoReplyPolicy: { ...DEFAULT_AUTO_REPLY_POLICY },
@@ -561,6 +567,11 @@ export function normalizeLoadedSettings(
   merged.aiAutoReplyManualChatIds = Array.isArray(merged.aiAutoReplyManualChatIds)
     ? [...new Set(merged.aiAutoReplyManualChatIds.map((id) => String(id || "").trim()).filter(Boolean))]
     : [];
+  merged.aiAutoReplyPaused = merged.aiAutoReplyPaused === true;
+  merged.aiAutoReplyModeByChatId = Object.fromEntries(
+    Object.entries(merged.aiAutoReplyModeByChatId && typeof merged.aiAutoReplyModeByChatId === "object" ? merged.aiAutoReplyModeByChatId : {})
+      .filter(([id, mode]) => id.trim() && (mode === "auto" || mode === "manual"))
+  );
   merged.aiAutoReplyPolicy = normalizeAutoReplyPolicy(merged.aiAutoReplyPolicy);
   {
     const raw =
@@ -854,6 +865,7 @@ export function normalizeLoadedSettings(
           : {}),
         sort,
         collapsed: !!f?.collapsed,
+        ...(f?.autoReplyMode === "auto" || f?.autoReplyMode === "manual" ? { autoReplyMode: f.autoReplyMode } : {}),
         chatIds,
         scope,
       };

@@ -15,6 +15,7 @@ type Props = {
   sendingIndex: number;
   onRemove: (id: string) => void;
   onClose: () => void;
+  compact?: boolean;
 };
 
 export function MediaSendPreview({
@@ -22,24 +23,26 @@ export function MediaSendPreview({
   sendingIndex,
   onRemove,
   onClose,
+  compact = false,
 }: Props) {
   const { t } = useI18n();
   const sending = sendingIndex >= 0;
 
   return (
-    <div className="mb-2 rounded-2xl border border-zinc-700/80 bg-zinc-900/90 p-2 shadow-sm shadow-black/20">
-      <div className="flex items-center justify-between px-1 pb-1.5">
-        <div className="text-[11px] font-medium text-zinc-300">
+    <div className={`${compact ? "mb-1 flex items-start gap-2 rounded-xl" : "mb-2 rounded-2xl"} border border-zinc-700/80 bg-zinc-900/90 p-2 shadow-sm shadow-black/20`}>
+      <div className={compact ? "order-2 flex min-w-0 flex-1 items-start justify-between gap-2" : "flex items-center justify-between px-1 pb-1.5"}>
+        <div className="min-w-0 text-[11px] font-medium text-zinc-300">
           {t("mediaPreview.title")} <span className="text-zinc-500">· {t("mediaPreview.count", { count: items.length })}</span>
+          {compact && <div className="truncate text-[10px] font-normal text-zinc-500" title={items.map(item => item.file.name).join(", ")}>{items.map(item => item.file.name).join(", ")}</div>}
         </div>
         <button type="button" disabled={sending} onClick={onClose} className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-30" aria-label={t("mediaPreview.close")}>
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
 
-      <div className="flex gap-2 overflow-x-auto pb-0.5">
+      <div className={compact ? "order-1 flex max-w-[50%] shrink-0 gap-2 overflow-x-auto" : "flex gap-2 overflow-x-auto pb-0.5"}>
         {items.map((item, index) => (
-          <div key={item.id} className="relative flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-zinc-700 bg-zinc-950 sm:h-28 sm:w-28">
+          <div key={item.id} className={`relative flex shrink-0 items-center justify-center overflow-hidden rounded-xl border border-zinc-700 bg-zinc-950 ${compact ? "h-16 w-16" : "h-24 w-24 sm:h-28 sm:w-28"}`}>
             {item.previewUrl ? (
               <img src={item.previewUrl} alt={item.file.name} className="h-full w-full object-contain" />
             ) : (
@@ -70,7 +73,7 @@ export function MediaSendPreview({
           </div>
           ))}
       </div>
-      <div className="px-1 pt-1 text-[10px] text-zinc-500">{t("mediaPreview.captionPlaceholder")}</div>
+      {!compact && <div className="px-1 pt-1 text-[10px] text-zinc-500">{t("mediaPreview.captionPlaceholder")}</div>}
     </div>
   );
 }

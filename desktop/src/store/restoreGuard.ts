@@ -1,4 +1,4 @@
-// 恢复时暂存接收事件和自动保存，完成或失败后按顺序继续。
+// 恢复或清空时暂存接收事件和自动保存，完成或失败后按顺序继续。
 let restoring = false;
 let restoreGeneration = 0;
 let deferred: (() => void)[] = [];

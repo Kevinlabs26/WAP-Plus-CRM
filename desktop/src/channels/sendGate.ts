@@ -106,7 +106,7 @@ export function assertSendGate(
   config: SendGateConfig = {}
 ): SendGateOk | SendGateBlock {
   if (isDataRestoreActive()) {
-    return { ok: false, error: "send_paused", reason: "正在恢复备份，请完成后再发送", queueable: false };
+    return { ok: false, error: "send_paused", reason: "正在处理本地数据，请完成后再发送", queueable: false };
   }
   const accountId = (input.accountId || "").trim();
   const paused = config.sendPausedAccountIds || [];

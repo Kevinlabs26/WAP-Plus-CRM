@@ -3,7 +3,7 @@ import test from "node:test";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 const mocks = {
-  "@/lib/storage": "export const getStorageEngine = () => 'sqlite'; export const canPersistRowDeltas=()=>false; export const saveAppState = async (value) => { await globalThis.restoreBeforeSave?.(); if (globalThis.restoreFail) { globalThis.restoreFail = false; throw new Error('Disk full'); } globalThis.restoreSaved = value; }; export const loadAppState = async () => null; export const clearAppState = async () => {}; export const registerChatMessageReplacements = () => {}; export const clearStoredRemoteMessages = async () => {}; export const deleteStoredMessagesByKeys = async () => {}; export const updateStoredMessageAcks = async (items, accountId) => { globalThis.syncAckWritten = { items, accountId }; await globalThis.syncAckWait?.(); }; export const loadSecureSecrets = async () => null; export const saveSecureSecrets = async () => true;",
+  "@/lib/storage": "export const getStorageEngine = () => 'sqlite'; export const canPersistRowDeltas=()=>false; export const saveAppState = async (value) => { await globalThis.restoreBeforeSave?.(); if (globalThis.restoreFail) { globalThis.restoreFail = false; throw new Error('Disk full'); } globalThis.restoreSaved = value; }; export const loadAppState = async () => null; export const clearAppState = async () => { globalThis.auditClearCalls++; if(globalThis.auditClearFail) throw new Error('Clear failed'); }; export const registerChatMessageReplacements = () => {}; export const clearStoredRemoteMessages = async () => {}; export const deleteStoredMessagesByKeys = async () => {}; export const updateStoredMessageAcks = async (items, accountId) => { globalThis.syncAckWritten = { items, accountId }; await globalThis.syncAckWait?.(); }; export const loadSecureSecrets = async () => null; export const saveSecureSecrets = async () => true;",
   "@/lib/mediaCache": "export const bridgeMessageMediaCacheId = (id, accountId) => accountId + ':' + id; export const readMediaCache = async id => globalThis.restoreMedia.get(id); export const cacheMediaUrl = async (id, url) => { if (globalThis.restoreMediaFail) throw new Error('Media disk full'); globalThis.restoreMedia.set(id, url); }; export const dropMediaCache = async id => { globalThis.restoreMedia.delete(id); };",
   "@/lib/composerActivity": "export const isComposerTypingBusy = () => globalThis.restoreTyping === true;",
   "@/lib/syncDebug": "export const noteMainThreadWork = () => {}; export const syncLog = () => {}; export const isSyncDebugEnabled = () => false;",
@@ -21,6 +21,7 @@ const built = await build({
 });
 const { createBootSlice, createIngestSlice, defaultSettings, isDataRestoreActive, persist, assertSendGate, withSendGate } = await import("data:text/javascript;base64," + Buffer.from(built.outputFiles[0].text).toString("base64"));
 function setup() {
+  globalThis.auditClearCalls=0;globalThis.auditClearFail=false;
   globalThis.restoreTyping = false;
   globalThis.syncAckWritten = undefined; globalThis.syncAckWait = undefined;
   globalThis.window = { setTimeout, requestIdleCallback: undefined };
@@ -175,6 +176,31 @@ test('restore waits for an existing send and blocks a new send', async () => {
   releaseSend();
   await pending;
   assert.equal((await restoring).ok, true);
+});
+
+test('clear waits for an in-flight send, blocks new sends and replays new inbound data after clearing', async()=>{
+ const {get}=setup();let release,entered;
+ const ready=new Promise(resolve=>{entered=resolve;});
+ const pending=withSendGate({accountId:'clearing'}, {rateLimitEnabled:false,blockSendWhenOverheated:false},async()=>{entered();await new Promise(resolve=>release=resolve);});
+ await ready;
+ const clearing=get().clearData();
+ assert.equal(isDataRestoreActive(),true);assert.equal(auditClearCalls,0);
+ const denied=await withSendGate({accountId:'other'}, {}, async()=>{throw new Error('must not send');});
+ assert.equal(denied.ok,false);
+ const inbound=get().ingestBridgeEvents([{type:'messages.sync',deviceId:'wa',ts:Date.now(),payload:{live:true,items:[{id:'new-during-clear',phone:'+12025550123',body:'arrived while clearing',direction:'in',sentAt:new Date().toISOString()}]}}]);
+ assert.equal(get().messages.some(message=>message.body==='arrived while clearing'),false);
+ release();await pending;await clearing;await inbound;
+ assert.equal(isDataRestoreActive(),false);assert.equal(auditClearCalls,1);
+ assert.equal(get().contacts.some(contact=>contact.id==='original'),false);
+ assert.equal(get().messages.some(message=>message.body==='arrived while clearing'),true);
+ await persist(get,true);
+});
+
+test('a failed clear releases the operation guard and preserves the original in-memory records',async()=>{
+ const {get}=setup();const original=get().contacts;
+ auditClearFail=true;
+ await assert.rejects(get().clearData(),/Clear failed/);
+ assert.equal(isDataRestoreActive(),false);assert.equal(get().contacts,original);
 });
 
 test('an already sliced sync pauses its remaining slices during restore', async () => {
