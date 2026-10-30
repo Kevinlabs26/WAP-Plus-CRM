@@ -19,6 +19,15 @@ function setup(tasks = []) {
 }
 const draft = { text: "Hello", dueAt: new Date(Date.now() + 3600000).toISOString(), contactName: "Example", recipient: "+12025550100", chatId: "chat", contactId: "c", channelId: "baileys", accountId: "wa-a" };
 
+test('expired schedules survive restart and require a confirmed future time without adopting another account',()=>{
+ const item={...draft,id:'expired',status:'expired',messageId:'old-out',error:'expired'};
+ const {get}=setup([item]);assert.equal(normalizeLoadedSettings(get().settings).scheduledMessages[0].status,'expired');
+ for(const dueAt of ['bad',new Date(Date.now()-1000).toISOString()])assert.equal(get().updateScheduledMessage(item.id,{dueAt}),false);
+ const future=new Date(Date.now()+60000).toISOString();assert.equal(get().updateScheduledMessage(item.id,{dueAt:future,text:'New message'}),true);
+ const saved=get().settings.scheduledMessages[0];assert.equal(saved.status,'pending');assert.equal(saved.accountId,'wa-a');assert.equal(saved.messageId,undefined);assert.equal(saved.error,undefined);assert.equal(saved.text,'New message');
+ assert.equal(get().updateScheduledMessage(item.id,{dueAt:new Date(Date.now()+120000).toISOString()}),false,'pending tasks cannot bypass confirmation by this path');
+});
+
 test("task 201 is rejected without removing any pending task", () => {
   const { get } = setup(Array.from({ length: 200 }, (_,i) => ({ id: `task-${i}`, status: "pending" })));
   const before = get().settings.scheduledMessages;

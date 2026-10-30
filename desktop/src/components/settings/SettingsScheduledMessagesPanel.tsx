@@ -4,10 +4,12 @@ import { Button, EmptyState, SectionLabel } from "@/components/ui/primitives";
 import { useAppStore } from "@/store/appStore";
 import type { ScheduledMessage, ScheduledMessageStatus } from "@/types/crm";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { ChatScheduledMessageDialog } from "@/components/chat/ChatScheduledMessageDialog";
 
 type Filter = "all" | "active" | "failed" | "history";
 
 const STATUS_LABEL: Record<ScheduledMessageStatus, TranslationKey> = {
+  expired: "scheduled.needsConfirmation",
   pending: "settingsScheduled.status.pending",
   queued: "settingsScheduled.status.queued",
   sent: "settingsScheduled.status.sent",
@@ -29,6 +31,7 @@ function formatDueAt(value: string, locale: string, invalid: string): string {
 function statusClass(status: ScheduledMessageStatus): string {
   if (status === "pending") return "border-brand/30 bg-brand/10 text-brand";
   if (status === "queued") return "border-sky-500/25 bg-sky-500/10 text-sky-300";
+  if (status === "expired") return "border-amber-500/25 bg-amber-500/10 text-amber-500";
   if (status === "failed") return "border-rose-500/25 bg-rose-500/10 text-rose-300";
   if (status === "sent") return "border-zinc-700 bg-zinc-800/70 text-zinc-400";
   return "border-zinc-800 bg-zinc-900 text-zinc-600";
@@ -36,7 +39,7 @@ function statusClass(status: ScheduledMessageStatus): string {
 
 function matchesFilter(task: ScheduledMessage, filter: Filter): boolean {
   if (filter === "active") return task.status === "pending" || task.status === "queued";
-  if (filter === "failed") return task.status === "failed";
+  if (filter === "failed") return task.status === "failed" || task.status === "expired";
   if (filter === "history") return task.status === "sent" || task.status === "cancelled";
   return true;
 }
@@ -53,6 +56,7 @@ export function SettingsScheduledMessagesPanel() {
   const requestConfirm = useAppStore((state) => state.requestConfirm);
   const pushToast = useAppStore((state) => state.pushToast);
   const [filter, setFilter] = useState<Filter>("active");
+  const [rescheduling, setRescheduling] = useState<ScheduledMessage | null>(null);
 
   const visibleTasks = useMemo(
     () =>
@@ -101,19 +105,29 @@ export function SettingsScheduledMessagesPanel() {
   const counts = useMemo(
     () => ({
       active: tasks.filter((task) => task.status === "pending" || task.status === "queued").length,
-      failed: tasks.filter((task) => task.status === "failed").length,
+      failed: tasks.filter((task) => task.status === "failed" || task.status === "expired").length,
     }),
     [tasks]
   );
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
+      {rescheduling && <ChatScheduledMessageDialog contactName={rescheduling.contactName} initialText={rescheduling.text}
+        onClose={() => setRescheduling(null)} onSubmit={(dueAt, text) => {
+          if (useAppStore.getState().updateScheduledMessage(rescheduling.id, { dueAt, text })) {
+            setRescheduling(null); setFilter("active"); pushToast(t("scheduled.replanned"), "success");
+          } else pushToast(t("scheduled.replanFailed"), "error");
+        }} />}
       <header>
         <h3 className="text-lg font-semibold text-zinc-100">{t("settingsScheduled.title")}</h3>
         <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
           {t("settingsScheduled.description")}
         </p>
       </header>
+      {tasks.some(task => task.status === "expired") && <button type="button" onClick={() => setFilter("failed")}
+        className="w-full rounded-lg border border-amber-500/25 p-3 text-left text-sm text-amber-500">
+        {t("scheduled.expiredCount", { count: tasks.filter(task => task.status === "expired").length })}
+      </button>}
 
       <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
         <SectionLabel
@@ -190,6 +204,7 @@ export function SettingsScheduledMessagesPanel() {
                       <XCircle className="mr-1 h-3 w-3" />{t("common.cancel")}
                     </Button>
                   )}
+                  {task.status === "expired" && <Button size="xs" onClick={() => setRescheduling(task)}>{t("scheduled.replan")}</Button>}
                   {task.status !== "pending" && task.status !== "queued" && (
                     <Button type="button" size="xs" variant="ghost" className="text-rose-300 hover:text-rose-200" onClick={() => void deleteTask(task)}>
                       <Trash2 className="mr-1 h-3 w-3" />{t("settingsScheduled.deleteRecord")}

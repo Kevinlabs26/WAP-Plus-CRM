@@ -18,7 +18,7 @@ assert.match(gemini, /maxOutputTokens/);
 assert.match(suggestions, /max_tokens: opts\.auto \|\| opts\.replyTo \? 160 : 300/);
 assert.match(suggestions, /num_predict: auto \|\| replyTo \? 160 : 300/);
 assert.equal(
-  [...suggestions.matchAll(/signal: AbortSignal\.timeout\(60_000\)/g)].length,
+  [...suggestions.matchAll(/signal: .*AbortSignal\.timeout\(60_000\)/g)].length,
   2
 );
 assert.equal(

@@ -6,6 +6,19 @@ import { resolveAutoReplyScope } from '../src/lib/autoReplyScope.ts';
 const result=await build({stdin:{contents:`export {normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {buildSettingsSafe,parseBackupJson} from './src/lib/exportData.ts';`,resolveDir:fileURLToPath(new URL('../',import.meta.url))},bundle:true,write:false,format:'esm',platform:'node',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))}});
 const {normalizeLoadedSettings,buildSettingsSafe,parseBackupJson}=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].text).toString('base64'));
 const folder=(id,mode,chatIds=['a'])=>({id,name:id,chatIds,autoReplyMode:mode,sort:0});
+
+test('nested folders inherit the nearest explicit rule while individual settings and conflicting paths keep precedence',()=>{
+ const parent=folder('parent','manual',[]),child={...folder('child',undefined,['a']),parentId:'parent'};
+ const settings={aiReplyMode:'auto',chatFolders:[parent,child]};
+ assert.deepEqual(resolveAutoReplyScope(settings,'a'),{mode:'manual',source:'folder',folderName:'parent'});
+ child.autoReplyMode='auto';assert.equal(resolveAutoReplyScope(settings,'a').mode,'auto');
+ settings.chatFolders.push(folder('other','manual',['a']));assert.equal(resolveAutoReplyScope(settings,'a').mode,'manual');
+ settings.aiAutoReplyModeByChatId={a:'auto'};assert.equal(resolveAutoReplyScope(settings,'a').source,'chat');
+ delete settings.aiAutoReplyModeByChatId;settings.chatFolders=[{...parent,parentId:'child',autoReplyMode:undefined},{...child,autoReplyMode:undefined}];
+ assert.equal(resolveAutoReplyScope(settings,'a').source,'default','cycles terminate safely');
+ settings.chatFolders=[parent,{...child,autoReplyMode:undefined,chatIds:[]}];settings.chatFolderClones=[{sourceChatId:'a',folderId:'child'}];
+ assert.equal(resolveAutoReplyScope(settings,'a').folderName,'parent','cloned membership inherits too');
+});
 test('manual defaults, individual overrides, folder inheritance and conflicts have stable precedence',()=>{
  const settings={aiReplyMode:'semi',chatFolders:[folder('auto','auto')],chatFolderClones:[]};
  assert.deepEqual(resolveAutoReplyScope(settings,'a'),{mode:'auto',source:'folder',folderName:'auto'});

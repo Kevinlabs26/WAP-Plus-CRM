@@ -28,6 +28,7 @@ export interface GenerateSuggestionsResult {
   /** true = 请求了真 API 但失败后回退 mock */
   fallback: boolean;
   error?: string;
+  retryable?: boolean;
 }
 
 const STAGE_HINT: Record<string, string> = {
@@ -83,7 +84,7 @@ export async function generateSuggestions(
   contact: Contact | undefined,
   recent: Message[],
   settings: AppSettings,
-  opts?: { auto?: boolean; accountId?: string; replyTo?: Message }
+  opts?: { auto?: boolean; accountId?: string; replyTo?: Message; signal?: AbortSignal }
 ): Promise<GenerateSuggestionsResult> {
   const name = contact?.name ?? "there";
   const sorted = [...recent].sort((a, b) => a.sentAt.localeCompare(b.sentAt));
@@ -153,7 +154,8 @@ export async function generateSuggestions(
         sorted,
         effectiveSettings,
         opts?.auto,
-        opts?.replyTo
+        opts?.replyTo,
+        opts?.signal
       );
       return { suggestions, source: "ollama", fallback: false };
     }
@@ -163,7 +165,8 @@ export async function generateSuggestions(
         sorted,
         effectiveSettings,
         opts?.auto,
-        opts?.replyTo
+        opts?.replyTo,
+        opts?.signal
       );
       return { suggestions, source: "gemini", fallback: false };
     }
@@ -180,19 +183,23 @@ export async function generateSuggestions(
         settings: effectiveSettings,
         auto: opts?.auto,
         replyTo: opts?.replyTo,
+        signal: opts?.signal,
       });
       return { suggestions, source: provider as AiSource, fallback: false };
     }
   } catch (e) {
+    if (opts?.signal?.aborted) throw e;
     const msg = e instanceof Error ? e.message : String(e);
+    const retryable = !/\b(?:400|401|403|404|422)\b/.test(msg) && /\b(?:408|429|5\d\d)\b|fetch|network|timeout|timed out|网络|超时|空响应/i.test(msg);
     if (prompt) {
-      return { suggestions: [], source: "mock", fallback: true, error: msg };
+      return { suggestions: [], source: "mock", fallback: true, error: msg, retryable };
     }
     return {
       suggestions: mockSuggestions(name, cue),
       source: "mock",
       fallback: true,
       error: msg,
+      retryable,
     };
   }
 
@@ -361,11 +368,12 @@ async function openAiCompatibleSuggest(opts: {
   settings?: AppSettings;
   auto?: boolean;
   replyTo?: Message;
+  signal?: AbortSignal;
 }): Promise<SuggestResult[]> {
   const url = `${opts.baseUrl.replace(/\/$/, "")}/chat/completions`;
   const res = await fetch(url, {
     method: "POST",
-    signal: AbortSignal.timeout(60_000),
+    signal: opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${opts.apiKey}`,
@@ -413,7 +421,8 @@ async function geminiSuggest(
   messages: Message[],
   settings: AppSettings,
   auto?: boolean,
-  replyTo?: Message
+  replyTo?: Message,
+  signal?: AbortSignal
 ): Promise<SuggestResult[]> {
   const content = await geminiGenerate({
     apiKey: settings.geminiKey,
@@ -423,6 +432,7 @@ async function geminiSuggest(
     temperature: 0.7,
     json: true,
     maxOutputTokens: auto || replyTo ? 160 : 300,
+    signal,
   });
   return parseSuggestionsJson(content, "Gemini", auto || replyTo ? 1 : 3);
 }
@@ -433,11 +443,12 @@ async function ollamaSuggest(
   messages: Message[],
   settings?: AppSettings,
   auto?: boolean,
-  replyTo?: Message
+  replyTo?: Message,
+  signal?: AbortSignal
 ): Promise<SuggestResult[]> {
   const res = await fetch(`${base.replace(/\/$/, "")}/api/chat`, {
     method: "POST",
-    signal: AbortSignal.timeout(60_000),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: settings?.aiModel.trim() || "llama3.2",

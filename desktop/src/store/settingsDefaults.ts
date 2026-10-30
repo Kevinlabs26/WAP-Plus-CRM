@@ -542,6 +542,7 @@ export function normalizeLoadedSettings(
             value.status === "queued" ||
             value.status === "sent" ||
             value.status === "failed" ||
+            value.status === "expired" ||
             value.status === "cancelled"
               ? value.status
               : "pending",

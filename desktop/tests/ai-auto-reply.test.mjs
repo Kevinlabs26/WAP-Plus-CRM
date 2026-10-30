@@ -28,6 +28,19 @@ test("hasRealAiKey rejects mock / missing-key configs", () => {
   assert.equal(hasRealAiKey({ aiProvider: "groq", groqKey: "" }), false);
 });
 
+for(const provider of ['custom','gemini','ollama'])test(`${provider} generation honors cancellation instead of returning a fallback reply`,async(t)=>{
+ const controller=new AbortController();let seen;
+ t.mock.method(globalThis,'fetch',async(_url,options)=>{seen=options.signal;return new Promise((_,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')),{once:true}));});
+ const settings={aiProvider:provider,aiModel:'test',geminiKey:'key',customAiKey:'key',customAiBaseUrl:'https://example.invalid',customAiModel:'test',ollamaUrl:'http://127.0.0.1:11434'};
+ const running=generateSuggestions(undefined,[],settings,{auto:true,signal:controller.signal});controller.abort();await assert.rejects(running,/Aborted/);assert.equal(seen.aborted,true);
+});
+
+test('temporary model errors are retryable while invalid credentials are not',async(t)=>{
+ let status=503;t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({error:{message:'request failed'}}),{status}));
+ const settings={aiProvider:'custom',customAiKey:'key',customAiBaseUrl:'https://example.invalid',customAiModel:'test'};
+ assert.equal((await generateSuggestions(undefined,[],settings,{auto:true})).retryable,true);status=401;assert.equal((await generateSuggestions(undefined,[],settings,{auto:true})).retryable,false);
+});
+
 test("hasRealAiKey accepts configured real providers", () => {
   assert.equal(hasRealAiKey({ aiProvider: "openai", openaiKey: "sk-x" }), true);
   assert.equal(hasRealAiKey({ aiProvider: "groq", groqKey: "gsk-x" }), true);
@@ -200,7 +213,7 @@ test("consecutive inbound messages keep only the latest item per chat", () => {
   assert.deepEqual(latest.map((message) => message.id), ["a2", "b1"]);
 });
 
-test("manual reply pauses automation only for the current conversation turn", () => {
+test("manual reply pauses automation for the configured duration across conversation turns", () => {
   const manual = {
     id: "manual-1",
     direction: "out",
@@ -224,6 +237,9 @@ test("manual reply pauses automation only for the current conversation turn", ()
     )?.id,
     "manual-1"
   );
+  const next={...inbound,id:'in-3',sentAt:'2026-01-01T00:07:00.000Z'};
+  assert.equal(getRecentManualTakeover([manual,inbound,next],next,Date.parse('2026-01-01T00:10:00.000Z'))?.id,'manual-1');
+  assert.equal(getRecentManualTakeover([{...manual,deliveryStatus:'queued'},inbound],inbound,Date.parse('2026-01-01T00:10:00.000Z'))?.id,'manual-1');
   assert.equal(
     getRecentManualTakeover(
       [manual, inbound],
@@ -232,6 +248,11 @@ test("manual reply pauses automation only for the current conversation turn", ()
     ),
     null
   );
+});
+
+test('ordinary social words do not trigger financial or pricing rules, while explicit risks remain blocked',()=>{
+ for(const text of ['I will return from church tomorrow.','I like your costume.','J’aime les avocats.','We sang in the choir.','好的，谢谢'])assert.equal(getAutoReplyBlockReason(text),null,text);
+ for(const text of ['Please return my order','I need a refund','Call my lawyer','Je dois consulter un avocat','What is the price?','验证码是 123456'])assert.ok(getAutoReplyBlockReason(text),text);
 });
 
 test("chat replay parses roles and uses the same automatic decision", () => {

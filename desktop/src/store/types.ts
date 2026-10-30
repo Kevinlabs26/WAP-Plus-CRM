@@ -370,7 +370,7 @@ export interface AppState extends PersistSlice {
   }) => string | null;
   updateScheduledMessage: (
     id: string,
-    patch: Partial<Pick<ScheduledMessage, "status" | "messageId" | "error">>
+    patch: Partial<Pick<ScheduledMessage, "status" | "messageId" | "error" | "dueAt" | "text">>
   ) => boolean;
   cancelScheduledMessage: (id: string) => boolean;
   removeScheduledMessage: (id: string) => boolean;

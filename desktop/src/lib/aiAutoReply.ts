@@ -14,6 +14,8 @@ import {
   resolveAutoReplyPolicy,
 } from "@/lib/aiSafety";
 import { isWaAccountConnected } from "@/lib/accountConnection";
+import { abortable } from "./abortable";
+import { setAutoReplyRuntime, useAutoReplyRuntime, type AutoReplyPhase } from "./autoReplyRuntime";
 
 /**
  * 实时入站消息事件总线：ingestSlice 在 live 消息入库后 emit，
@@ -49,6 +51,32 @@ const lastSkipLogByChat = new Map<string, string>();
 const inFlightChats = new Set<string>();
 const pendingByChat = new Map<string, Message>();
 const cooldownTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const debounceTimers = new Map<string, { message: Message; timer: ReturnType<typeof setTimeout> }>();
+const activeRequests = new Map<string, { id: string; sentAt: string; controller: AbortController }>();
+const retries = new Map<string, { id: string; attempts: number; startedAt: number }>();
+const mediaResyncAt = new Map<string, number>();
+const mediaInFlight = new Set<string>();
+
+/** Live short messages share a 1.2-second quiet period before generating. */
+export function scheduleAutoReplyInbound(message: Message): void {
+  if ((activeRequests.get(message.chatId)?.sentAt || "") > message.sentAt ||
+      (debounceTimers.get(message.chatId)?.message.sentAt || "") > message.sentAt) return;
+  activeRequests.get(message.chatId)?.controller.abort();
+  const previous = debounceTimers.get(message.chatId);
+  if (previous) clearTimeout(previous.timer);
+  setAutoReplyRuntime(message.chatId, { phase: "waiting", inboundId: message.id, accountId: message.accountId });
+  debounceTimers.set(message.chatId, { message, timer: setTimeout(() => {
+    debounceTimers.delete(message.chatId);
+    return autoReplyInbound(message);
+  }, 1200) });
+}
+
+export function stopAutoReplies(): void {
+  for (const timer of [...Array.from(debounceTimers.values(), item => item.timer), ...cooldownTimers.values()]) clearTimeout(timer);
+  for (const request of activeRequests.values()) request.controller.abort();
+  debounceTimers.clear(); cooldownTimers.clear(); pendingByChat.clear(); retries.clear();
+  useAutoReplyRuntime.setState({ byChat: {} });
+}
 
 function logAutoDecision(
   contactId: string,
@@ -72,8 +100,13 @@ function logAutoSkipOnce(
 
 export async function autoReplyInbound(m: Message): Promise<void> {
   if (!m.chatId) return;
+  const active = activeRequests.get(m.chatId);
+  if (active && (active.id === m.id || active.sentAt > m.sentAt)) return;
   const pending = pendingByChat.get(m.chatId);
+  if (pending && pending.sentAt > m.sentAt) return;
   if (!pending || m.sentAt >= pending.sentAt) pendingByChat.set(m.chatId, m);
+  setAutoReplyRuntime(m.chatId, { phase: "waiting", inboundId: m.id, accountId: m.accountId });
+  active?.controller.abort();
   if (inFlightChats.has(m.chatId)) return;
   const timer = cooldownTimers.get(m.chatId);
   if (timer) clearTimeout(timer);
@@ -83,18 +116,51 @@ export async function autoReplyInbound(m: Message): Promise<void> {
     while (pendingByChat.has(m.chatId)) {
       const next = pendingByChat.get(m.chatId)!;
       pendingByChat.delete(m.chatId);
+      const recovery = retries.get(m.chatId);
+      if (recovery?.id === next.id && Date.now() - recovery.startedAt >= 5 * 60_000) {
+        retries.delete(m.chatId);
+        if (next.contactId) logAutoDecision(next.contactId, "自动回复：需要人工处理", "等待超过 5 分钟，停止恢复旧消息");
+        setAutoReplyRuntime(m.chatId, { phase: "human", inboundId: next.id, accountId: next.accountId, reason: "等待超过 5 分钟" }, next.id);
+        continue;
+      }
       const settings = useAppStore.getState().settings;
       const wait = (lastReplyAt.get(m.chatId) || 0) +
         Math.max(5000, Number(settings.aiAutoReplyIntervalMs) || 30000) - Date.now();
       if (resolveAutoReplyScope(settings, m.chatId).mode === "auto" && wait > 0) {
         pendingByChat.set(m.chatId, next);
-        cooldownTimers.set(m.chatId, setTimeout(() => { void autoReplyInbound(next); }, wait));
+        cooldownTimers.set(m.chatId, setTimeout(() => autoReplyInbound(next), wait));
         break;
       }
-      try { await autoReplyInboundOnce(next); }
+      const controller = new AbortController();
+      activeRequests.set(m.chatId, { id: next.id, sentAt: next.sentAt, controller });
+      let retry = false;
+      try { retry = await autoReplyInboundOnce(next, controller.signal) === "retry"; }
       catch (error) {
-        if (next.contactId) logAutoDecision(next.contactId, "自动回复：未发送", error instanceof Error ? error.message : String(error));
+        if (!controller.signal.aborted) {
+          const reason = error instanceof Error ? error.message : String(error);
+          if (next.contactId) logAutoDecision(next.contactId, "自动回复：未发送", reason);
+          setAutoReplyRuntime(m.chatId, { phase: "human", inboundId: next.id, accountId: next.accountId, reason }, next.id);
+        }
+      } finally { activeRequests.delete(m.chatId); }
+      if (retry && !controller.signal.aborted && !pendingByChat.has(m.chatId)) {
+        const previous = retries.get(m.chatId);
+        const attempt = previous?.id === next.id ? previous : { id: next.id, attempts: 0, startedAt: Date.now() };
+        // shortcut: pre-send recovery is memory-only and expires after five minutes; no delivery is replayed here.
+        if (attempt.attempts < 3 && Date.now() - attempt.startedAt < 5 * 60_000) {
+          const delay = 10_000 * 2 ** attempt.attempts++;
+          retries.set(m.chatId, attempt);
+          cooldownTimers.set(m.chatId, setTimeout(() => autoReplyInbound(next), delay));
+          setAutoReplyRuntime(m.chatId, { phase: "retry", inboundId: next.id, accountId: next.accountId, retryAt: Date.now() + delay,
+            reason: useAutoReplyRuntime.getState().byChat[m.chatId]?.reason }, next.id);
+          if (next.contactId) logAutoDecision(next.contactId, "自动回复：等待重试", `${Math.ceil(delay / 1000)} 秒后重新检查，最多重试 3 次`);
+          break;
+        }
+        if (next.contactId) logAutoDecision(next.contactId, "自动回复：需要人工处理", "重试次数或等待时间已达上限");
+        setAutoReplyRuntime(m.chatId, { phase: "human", inboundId: next.id, accountId: next.accountId, reason: "重试次数或等待时间已达上限" }, next.id);
       }
+      const runtime = useAutoReplyRuntime.getState().byChat[m.chatId];
+      if (!controller.signal.aborted && runtime?.inboundId === next.id && runtime.phase !== "human") setAutoReplyRuntime(m.chatId, null, next.id);
+      retries.delete(m.chatId);
     }
   } finally {
     inFlightChats.delete(m.chatId);
@@ -105,8 +171,8 @@ export async function autoReplyInbound(m: Message): Promise<void> {
  * 自动回复一条实时入站私聊消息。
  * 非适用场景（未开启、群聊）保持安静；可诊断的跳过原因写入联系人活动记录。
  */
-async function autoReplyInboundOnce(m: Message): Promise<void> {
-  const state = useAppStore.getState();
+async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"retry" | void> {
+  let state = useAppStore.getState();
   const settings = state.settings;
   const scope = resolveAutoReplyScope(settings, m.chatId);
   if (scope.mode !== "auto") {
@@ -118,6 +184,11 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
   }
   if (m.isGroup) return; // 仅私聊
   if (!m.chatId || !m.contactId) return;
+  let conversation = state.messagesByChatId?.[m.chatId] || state.messages.filter(x => x.chatId === m.chatId).sort((a, b) => a.sentAt.localeCompare(b.sentAt));
+  if (conversation.filter(x => x.direction === "in").at(-1)?.id !== m.id ||
+      conversation.some(x => x.direction === "out" && x.systemKind === "ai_auto_reply" && x.sentAt >= m.sentAt &&
+        (x.deliveryStatus !== "failed" || x.deliveryUncertain))) return;
+  m = conversation.find(x => x.id === m.id) || m;
 
   const interval = Math.max(
     5000,
@@ -131,7 +202,7 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
     );
     logAutoSkipOnce(
       m.chatId,
-      m.contactId,
+      m.contactId!,
       `cooldown:${Math.floor(now / interval)}`,
       "自动回复：冷却中",
       `同会话最小间隔尚未结束，约 ${remaining} 秒后再处理`
@@ -148,6 +219,7 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
     contact.accountId ||
     settings.liveBaileysAccountId ||
     settings.activeAccountId;
+  const runtime = (phase: AutoReplyPhase, reason?: string) => setAutoReplyRuntime(m.chatId, { phase, inboundId: m.id, accountId, reason }, m.id);
   if (chat.localOnly) return; // 本地会话不自动回
 
   const channelId: ChannelId =
@@ -166,9 +238,9 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
         contact.id,
         `offline:${accountId || "default"}`,
         "自动回复：未发送",
-        "WhatsApp 账号未连接，消息会保留给人工处理"
+        "WhatsApp 账号未连接，将限次重试并重新核对上下文"
       );
-      return;
+      return "retry";
     }
   } else {
     if (!state.bridge.connected) {
@@ -177,9 +249,9 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
         contact.id,
         "bridge-offline",
         "自动回复：未发送",
-        "手机桥接未连接，消息会保留给人工处理"
+        "手机桥接未连接，将限次重试并重新核对上下文"
       );
-      return;
+      return "retry";
     }
   }
   if (!hasRealAiKey(settings)) {
@@ -193,16 +265,45 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
     return;
   }
 
-  const conversation = state.messagesByChatId?.[m.chatId] || state.messages
-    .filter((x) => x.chatId === m.chatId)
-    .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
-  const thread = conversation.slice(-14);
-  const policy = resolveAutoReplyPolicy(
-    settings.aiAutoReplyPolicy,
-    settings.aiAutoReplyPolicyByAccountId,
-    accountId
-  );
-  const decision = evaluateAutoReplyDecision(thread, m, Date.now(), policy);
+  const policy = resolveAutoReplyPolicy(settings.aiAutoReplyPolicy, settings.aiAutoReplyPolicyByAccountId, accountId);
+  const beforeVoice = evaluateAutoReplyDecision(conversation, m, Date.now(), policy);
+  if (!beforeVoice.allow && (beforeVoice.kind !== "risk" || !["audio", "ptt"].includes(m.mediaType || "") || !!m.transcript)) {
+    logAutoSkipOnce(m.chatId, contact.id, `decision:${beforeVoice.kind}`, "自动回复：暂停", beforeVoice.reason);
+    return;
+  }
+  const lastOut = conversation.map(x => x.direction).lastIndexOf("out");
+  const voices = ["audio", "ptt"].includes(m.mediaType || "")
+    ? conversation.slice(lastOut + 1).filter(x => x.direction === "in" && ["audio", "ptt"].includes(x.mediaType || "") && !x.transcript) : [];
+  for (const voice of voices) {
+    if (signal.aborted) return;
+    runtime("transcribing");
+    if (!voice.mediaUrl) {
+      const { reloadMedia } = await import("@/components/chat/reloadMediaAction");
+      const { resolveMessageKeyFrom } = await import("@/components/chat/resolveMessageKey");
+      await abortable(reloadMedia({ message: voice, sourceMessage: voice, isBaileys: channelId === "baileys", chatConnected: true,
+        chatAccountId: accountId || "", activeContactName: contact.name, mediaResyncAt, mediaInFlight,
+        setMediaBusyId: () => {}, resolveMessageKey: message => resolveMessageKeyFrom(message, [contact], contact.id),
+        updateMessageDelivery: state.updateMessageDelivery, pushToast: () => {}, quiet: true, signal }), signal);
+    }
+    if (signal.aborted) return;
+    const current = useAppStore.getState().messages.find(x => x.id === voice.id);
+    if (!current?.mediaUrl) return "retry";
+    const { transcribeVoice } = await import("@/lib/transcribeVoice");
+    const result = await abortable(transcribeVoice(current.mediaUrl, current.mediaMime || "audio/ogg", settings, { signal, language: "" }), signal);
+    if (signal.aborted || !useAppStore.getState().messages.some(x => x.id === voice.id && x.chatId === m.chatId)) return;
+    if (result.fallback || !result.text.trim()) {
+      logAutoDecision(contact.id, "自动回复：语音未识别", result.error || "转写为空，请人工处理");
+      runtime("human", result.error || "语音转写为空");
+      return /正在转写|fetch|network|timeout|超时|\b(?:429|5\d\d)\b/i.test(result.error || "") ? "retry" : undefined;
+    }
+    useAppStore.getState().patchMessage(voice.id, { transcript: result.text.trim() });
+  }
+  if (signal.aborted) return;
+  state = useAppStore.getState();
+  conversation = state.messagesByChatId?.[m.chatId] || state.messages.filter(x => x.chatId === m.chatId).sort((a, b) => a.sentAt.localeCompare(b.sentAt));
+  m = conversation.find(x => x.id === m.id) || m;
+  if (resolveAutoReplyScope(state.settings, m.chatId).mode !== "auto") return;
+  const decision = evaluateAutoReplyDecision(conversation, m, Date.now(), policy);
   if (!decision.allow) {
     if (
       decision.kind !== "manual_takeover" ||
@@ -225,18 +326,23 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
   }
   const contextKey = getSuggestionContextKey(contact, conversation, settings, accountId, { auto: true });
   if (isManualSuggestionContext(getSuggestionContextKey(contact, conversation, settings, accountId))) return;
+  runtime("generating");
   const result = await generateSuggestions(contact, conversation, settings, {
     auto: true,
     accountId,
+    signal,
   });
+  if (signal.aborted) return;
   // API 失败回退的本地模板绝不能自动发给真实客户
   if (result.fallback || result.source === "mock") {
     logAutoDecision(contact.id, "自动回复：未发送", result.error || "AI 不可用");
-    return;
+    runtime("human", result.error || "AI 不可用");
+    return result.retryable ? "retry" : undefined;
   }
   const reply = result.suggestions[0]?.text?.trim();
   if (!reply) {
     logAutoDecision(contact.id, "自动回复：未发送", "AI 没有返回有效内容");
+    runtime("human", "AI 没有返回有效内容");
     return;
   }
   // 生成期间用户可能接管、关闭自动回复，或收到更新的消息。
@@ -267,6 +373,7 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
   });
   if (outputBlockReason) {
     logAutoDecision(contact.id, "自动回复：输出转人工", outputBlockReason);
+    runtime("human", outputBlockReason);
     return;
   }
   lastReplyAt.set(m.chatId, Date.now());
@@ -281,6 +388,7 @@ async function autoReplyInboundOnce(m: Message): Promise<void> {
     inboundId: m.id,
     contextKey,
   });
+  if (!queued) runtime("human", "收件人、会话或发送状态需要检查");
   logAutoDecision(
     contact.id,
     queued ? "自动回复：已加入发送队列" : "自动回复：发送失败",

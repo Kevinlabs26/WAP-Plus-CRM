@@ -40,7 +40,18 @@ test('takeover expires with time and AI replies do not count as manual takeover'
   assert.equal(status(settings(), messages).status, 'takeover');
   assert.equal(status(settings(), messages, true, now + 30 * 60000).status, 'auto');
   assert.equal(status(settings(), [messages[0], { ...messages[1], systemKind: 'ai_auto_reply' }]).status, 'auto');
+  assert.equal(status(settings(), [messages[0], { ...messages[1], systemKind: 'scheduled_message' }]).status, 'auto');
   assert.equal(status(settings(), [{ ...messages[1], chatId: 'other-chat' }]).status, 'auto');
+});
+
+test('runtime status belongs to the latest incoming message and respects manual and account boundaries',()=>{
+ const incoming=message('in',1,'hello',{id:'latest'});
+ for(const phase of ['waiting','transcribing','generating','retry','human']){
+  const runtime={phase,inboundId:'latest',accountId:'account-a'};
+  const check=(config=settings(),event=incoming,state=runtime)=>multiWindowReplyStatus(config,chat,contact,[event],'account-a',true,now,state).status;
+  assert.equal(check(),phase);assert.equal(check({...settings(),aiReplyMode:'semi'}),'manual');
+  assert.equal(check(settings(),incoming,{...runtime,inboundId:'old'}),'auto');assert.equal(check(settings(),incoming,{...runtime,accountId:'account-b'}),'auto');
+ }
 });
 
 test('account hours and risk restrictions use the same safety policy as automatic sending', () => {
@@ -59,6 +70,7 @@ const mocks = {
   react: 'export const useState=v=>[v,()=>{}];export const useEffect=()=>{};',
   'react/jsx-runtime': 'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
   '@/store/appStore': 'export const useAppStore=fn=>fn(globalThis.replyControlState);',
+  '@/lib/autoReplyRuntime': 'export const useAutoReplyRuntime=fn=>fn({byChat:globalThis.replyRuntime||{}});',
   '@/i18n': 'export const useI18n=()=>({t:(...a)=>globalThis.replyControlTranslate("zh-CN",...a)});',
   '@/lib/utils': 'export const cn=(...a)=>a.filter(Boolean).join(" ");',
 };
@@ -104,4 +116,17 @@ test('the compact row keeps account count in its tooltip and combines mode with 
   assert.match(sender.props.title, /2 个账号/);
   assert.equal(tree.find(n => n.props.role === 'status').props.children, '人工 · 等客户回复');
   assert.equal(tree.some(n => n.props.children === '回复账号'), false);
+});
+
+test('cards expose runtime labels and retry details without showing another message or accounts progress',()=>{
+ const incoming=message('in',1,'hello',{id:'in-runtime'});
+ try{
+  for(const [phase,label]of [['transcribing','正在转写'],['generating','正在生成'],['retry','等待重试'],['human','需人工处理']]){
+   globalThis.replyRuntime={[chat.id]:{phase,inboundId:incoming.id,accountId:'account-a',reason:'controlled reason',retryAt:now+10000}};
+   const badge=render({messages:[incoming]}).find(n=>n.props.role==='status');assert.equal(badge.props.children,label);assert.match(badge.props.title,/controlled reason/);assert.match(badge.props.title,/重试时间/);
+   assert.equal(render({messages:[{...incoming,id:'newer'}]}).find(n=>n.props.role==='status').props.children,'自动');
+   assert.equal(render({messages:[incoming]},{aiReplyMode:'semi'}).find(n=>n.props.role==='status').props.children,'人工');
+   globalThis.replyRuntime[chat.id].accountId='other';assert.equal(render({messages:[incoming]}).find(n=>n.props.role==='status').props.children,'自动');
+  }
+ }finally{delete globalThis.replyRuntime;}
 });

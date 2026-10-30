@@ -5181,7 +5181,7 @@ dependencies = [
 
 [[package]]
 name = "wap-plus-crm"
-version = "0.1.53"
+version = "0.1.54"
 dependencies = [
  "base64 0.22.1",
  "bzip2",

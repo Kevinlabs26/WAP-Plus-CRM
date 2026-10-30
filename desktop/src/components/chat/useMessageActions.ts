@@ -30,7 +30,8 @@ export function useMessageActions(opts: {
         const result = await transcribeVoice(
           message.mediaUrl,
           message.mediaMime || "audio/webm",
-          useAppStore.getState().settings
+          useAppStore.getState().settings,
+          message.direction === "in" ? { language: "" } : undefined
         );
         if (result.fallback || result.error || !result.text.trim()) {
           opts.pushToast(`语音转写失败：${result.error || "识别结果为空，请重试"}`, "error");

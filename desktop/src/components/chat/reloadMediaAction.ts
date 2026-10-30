@@ -57,6 +57,7 @@ type ReloadMediaActionDeps = {
   pushToast: AppState["pushToast"];
   /** 静默补拉（打开会话自动预取）：不 set mediaBusyId，避免 itemContent 全列表重渲染闪烁 */
   quiet?: boolean;
+  signal?: AbortSignal;
 };
 
 export async function reloadMedia({
@@ -73,7 +74,9 @@ export async function reloadMedia({
   updateMessageDelivery,
   pushToast,
   quiet,
+  signal,
 }: ReloadMediaActionDeps) {
+  if (signal?.aborted) return;
   if (quiet) pushToast = () => undefined;
   const mediaCacheId = sourceMessage.id;
   const cacheIds = [
@@ -88,6 +91,7 @@ export async function reloadMedia({
     cached = await readMediaCache(cacheId);
     if (cached) break;
   }
+  if (signal?.aborted) return;
   if (cached) {
     updateMessageDelivery(message.id, {
       mediaUrl: cached,
@@ -144,19 +148,24 @@ export async function reloadMedia({
     ? await acquireQuietMediaSlot()
     : () => undefined;
   try {
+    signal?.throwIfAborted();
     let res: Awaited<ReturnType<typeof baileysDownloadMedia>> | null = null;
     let lastDownloadError: unknown;
     let missingBridgeMessage = false;
-    const download = () =>
-      baileysDownloadMedia(key, {
+    const download = () => {
+      signal?.throwIfAborted();
+      return baileysDownloadMedia(key, {
         mediaType: sourceMessage.mediaType || inferMediaType(sourceMessage) || undefined,
         mimetype: sourceMessage.mediaMime,
         accountId: chatAccountId,
+        signal,
       });
+    };
     try {
       res = await download();
     } catch (error) {
       lastDownloadError = error;
+      signal?.throwIfAborted();
       missingBridgeMessage = shouldRetryMediaAfterSync(error);
       // The bridge can temporarily lose the in-memory message after restart.
       // A 404 is recoverable by syncing once and retrying the media request.
@@ -243,6 +252,7 @@ export async function reloadMedia({
       "success"
     );
   } catch (error) {
+    if (signal?.aborted) return;
     const messageText = error instanceof Error ? error.message : translateCurrent("runtime.mediaLoadFailed", { error: "" }).replace(/:\s*$/, "");
     updateMessageDelivery(message.id, {
       mediaError: messageText.slice(0, 240),

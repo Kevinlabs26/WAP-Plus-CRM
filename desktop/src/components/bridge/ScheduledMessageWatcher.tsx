@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { useAppStore } from "@/store/appStore";
 import type { Message } from "@/types/crm";
+import { scheduledMessageExpired } from "@/lib/scheduledMessageExpiry";
+import { translateCurrent } from "@/i18n";
 
 const POLL_MS = 2_000;
 
@@ -59,6 +61,11 @@ export function ScheduledMessageWatcher() {
           }
           if (dueAt > now) continue;
           const latest = useAppStore.getState();
+          if (scheduledMessageExpired(task, now)) {
+            latest.updateScheduledMessage(task.id, { status: "expired", error: translateCurrent("scheduled.expired") });
+            latest.pushToast(translateCurrent("scheduled.expired"), "info");
+            continue;
+          }
           const chat = latest.chats.find((item) => item.id === task.chatId);
           const contact = latest.contacts.find((item) => item.id === task.contactId);
           if (!chat || !contact) {
@@ -81,6 +88,7 @@ export function ScheduledMessageWatcher() {
             chatId: task.chatId,
             contactId: task.contactId,
             body: task.text,
+            systemKind: "scheduled_message",
             phoneE164: task.recipient,
             channelId: task.channelId,
             deviceId: task.deviceId,

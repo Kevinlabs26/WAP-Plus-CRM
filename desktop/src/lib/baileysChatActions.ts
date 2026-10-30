@@ -154,11 +154,12 @@ export const baileysDownloadMedia = (
     mediaType?: string;
     mimetype?: string;
     accountId?: string | null;
+    signal?: AbortSignal;
   }
 ) =>
   request<BaileysMediaResponse>("/message/media", {
     method: "POST",
-    signal: AbortSignal.timeout(120_000),
+    signal: opts?.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000),
     body: JSON.stringify({
       key,
       mediaType: opts?.mediaType,

@@ -22,6 +22,7 @@ export interface AutoReplySafetyMessage {
   body?: string;
   sentAt: string;
   systemKind?: string;
+  transcript?: string;
 }
 
 export interface AutoReplyReplayMessage extends AutoReplySafetyMessage {
@@ -112,28 +113,28 @@ function getAutoReplyRisk(text: string): AutoReplyRisk | null {
   if (!value) return { category: "empty", reason: "消息为空" };
 
   if (
-    /(验证码|一次性密码|密码|口令|token|otp|verification\s*code|password|mot\s*de\s*passe|contrasena|senha|passwort|code\s*de\s*verification|credit\s*card|银行卡|信用卡)/i.test(
+    /(验证码|一次性密码|密码|口令|银行卡|信用卡)|\b(?:tokens?|otp|verification\s*code|password|mot\s*de\s*passe|contrasena|senha|passwort|code\s*de\s*verification|credit\s*card)\b/i.test(
       value
     )
   ) {
     return { category: "sensitive", reason: "涉及账号或支付敏感信息" };
   }
   if (
-    /(退款|退货|付款|支付|转账|发票|合同|法律|律师|起诉|refund|return|payment|pay|transfer|invoice|contract|legal|lawyer|lawsuit|rembours\w*|paiement|payer|virement|facture|contrat|juridique|avocat|reembolso|pago|pagamento|transferencia|fatura|contrato|abogado|advogado|ruckerstattung|zahlung|uberweisung|rechnung|vertrag|anwalt)/i.test(
+    /(退款|退货|付款|支付|转账|发票|合同|法律|律师|起诉)|\b(?:refunds?|payments?|pay|paid|transfers?|invoices?|contracts?|legal|lawyers?|lawsuits?|rembours\w*|paiement|payer|virement|facture|contrat|juridique|reembolso|pago|pagamento|transferencia|fatura|contrato|abogado|advogado|ruckerstattung|zahlung|uberweisung|rechnung|vertrag|anwalt)\b|\breturn\s+(?:(?:an?|the|my|your|this|that|these|those)\s+)?(?:items?|orders?|products?|purchases?)\b|\b(?:contacter|consulter|appeler|mon|notre|votre)\s+(?:un\s+|une\s+)?avocat\b/i.test(
       value
     )
   ) {
     return { category: "financial", reason: "涉及付款、合同或法律事项" };
   }
   if (
-    /(价格|多少钱|报价|费用|折扣|price|quote|cost|how\s*much|discount|\bprix\b|devis|combien|cout|remise|precio|preco|cuanto|quanto|descuento|desconto|preis|kosten|rabatt)/i.test(
+    /(价格|多少钱|报价|费用|折扣)|\b(?:prices?|quotes?|costs?|how\s*much|discounts?|prix|devis|combien|cout|remise|precio|preco|cuanto|quanto|descuento|desconto|preis|kosten|rabatt)\b/i.test(
       value
     )
   ) {
     return { category: "pricing", reason: "涉及价格或商业承诺" };
   }
   if (
-    /(投诉|举报|骗子|诈骗|欺诈|生气|不满|complaint|scam|fraud|angry|plainte|reclamation|arnaque|escroquerie|furieux|queja|reclamacion|estafa|fraude|reclamacao|golpe|beschwerde|betrug)/i.test(
+    /(投诉|举报|骗子|诈骗|欺诈|生气|不满)|\b(?:complaints?|scams?|fraud|angry|plainte|reclamation|arnaque|escroquerie|furieux|queja|reclamacion|estafa|fraude|reclamacao|golpe|beschwerde|betrug)\b/i.test(
       value
     )
   ) {
@@ -183,20 +184,17 @@ export function latestMessagesPerChat<
 
 export function getRecentManualTakeover(
   thread: readonly AutoReplySafetyMessage[],
-  inbound: AutoReplySafetyMessage,
+  _inbound: AutoReplySafetyMessage,
   now = Date.now(),
   windowMs = MANUAL_TAKEOVER_WINDOW_MS
 ): AutoReplySafetyMessage | null {
-  const previousInbound = [...thread]
-    .reverse()
-    .find((message) => message.direction === "in" && message.sentAt < inbound.sentAt);
   const manual = [...thread]
     .reverse()
     .find(
       (message) =>
         message.direction === "out" &&
         !message.systemKind &&
-        (!previousInbound || message.sentAt > previousInbound.sentAt)
+        Date.parse(message.sentAt) <= now
     );
   if (!manual) return null;
   const sentAt = Date.parse(manual.sentAt);
@@ -230,7 +228,7 @@ export function evaluateAutoReplyDecision(
       takeoverKey: takeover.id || takeover.sentAt,
     };
   }
-  const risk = getAutoReplyRisk(inbound.body || "");
+  const risk = getAutoReplyRisk(inbound.transcript || inbound.body || "");
   if (risk && !(risk.category === "pricing" && policy.allowPricing)) {
     return { allow: false, kind: "risk", reason: risk.reason };
   }

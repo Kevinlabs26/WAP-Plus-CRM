@@ -25,7 +25,7 @@ function setup(accountId = "wa-a") {
   globalThis.__sentRequests = [];
   globalThis.__waitSend = undefined;
   globalThis.__beforeDispatch = undefined;
-  const task = { id: "task", status: "pending", accountId, dueAt: new Date(0).toISOString(), chatId: "chat", contactId: "c", text: "Hello", recipient: "+12025550100", channelId: "baileys" };
+  const task = { id: "task", status: "pending", accountId, dueAt: new Date(Date.now() - 1000).toISOString(), chatId: "chat", contactId: "c", text: "Hello", recipient: "+12025550100", channelId: "baileys" };
   const state = {
     settings: { scheduledMessages: [task], waAccounts: [{ id: "wa-b", status: "connected" }], liveBaileysAccountId: "wa-b", sendChannel: "baileys" },
     chats: [{ id: "chat", accountId: "wa-a" }], contacts: [{ id: "c", accountId: "wa-a" }],
@@ -83,6 +83,22 @@ test("valid task reaches dispatch with its original account", async () => {
   assert.equal(globalThis.__sentRequests.length, 1);
   assert.equal(globalThis.__sentRequests[0].accountId, "wa-b");
   assert.equal(state.messages[0].deliveryStatus, "sent");
+  assert.equal(state.messages[0].systemKind, "scheduled_message");
+});
+
+test('overdue tasks require confirmation before enqueue or after waiting offline',async()=>{
+ for(const stage of ['pending','queued','dispatch']){
+  const state=setup('wa-b'),task=state.settings.scheduledMessages[0];
+  const expire=()=>{task.dueAt=new Date(Date.now()-16*60_000).toISOString();};
+  if(stage==='pending')expire();
+  ScheduledMessageWatcher();
+  if(stage==='queued')expire();
+  if(stage==='dispatch')globalThis.__beforeDispatch=expire;
+  SendQueueWatcher();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(task.status,'expired',stage);assert.deepEqual(globalThis.__sentRequests,[],stage);
+  assert.equal(state.messages.length,stage==='pending'?0:1);
+  if(state.messages[0])assert.equal(state.messages[0].deliveryStatus,'failed');
+ }
 });
 
 test("cancelling or deleting a later item invalidates the queue's captured batch", async () => {

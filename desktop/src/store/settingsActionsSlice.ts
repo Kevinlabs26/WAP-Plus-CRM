@@ -177,6 +177,13 @@ export function createSettingsActionsSlice({
     },
 
     updateScheduledMessage: (id, patch) => {
+      if (patch.dueAt !== undefined) {
+        const current = get().settings.scheduledMessages.find(item => item.id === id);
+        const due = Date.parse(patch.dueAt);
+        const text = (patch.text ?? current?.text ?? "").trim();
+        if (!current || current.status !== "expired" || !Number.isFinite(due) || due <= Date.now() || !text || text.length > 4000) return false;
+        patch = { ...patch, dueAt: new Date(due).toISOString(), text, status: "pending", messageId: undefined, error: undefined };
+      }
       let changed = false;
       set((state) => {
         const current = state.settings.scheduledMessages || [];

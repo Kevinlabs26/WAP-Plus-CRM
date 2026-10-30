@@ -86,7 +86,7 @@ test('hover then click keeps the submenu open; keyboard navigation returns focus
   ui.open();ui.trigger.props.onMouseEnter(ui.event(ui.trigger));ui.render();ui.expand();assert.ok(ui.submenu);
   assert.equal(document.activeElement.node.props['aria-checked'],true);
   ui.key(ui.submenu,'ArrowDown');assert.ok(document.activeElement.node.props.children.includes('仅人工'));
-  ui.key(ui.submenu,'Home');assert.ok(document.activeElement.node.props.children.includes('跟随默认'));
+  ui.key(ui.submenu,'Home');assert.ok(document.activeElement.node.props.children.includes('继承父级 / 默认'));
   ui.key(ui.submenu,'End');assert.ok(document.activeElement.node.props.children.includes('仅人工'));
   ui.key(ui.submenu,'ArrowLeft');assert.equal(ui.submenu,undefined);assert.ok(ui.root);
   assert.equal(document.activeElement.node.props['aria-haspopup'],'menu');

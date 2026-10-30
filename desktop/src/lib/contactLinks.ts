@@ -13,7 +13,7 @@ export function buildContactLinks(contacts: readonly PastedContact[], rule: Cont
   let size = 0;
   return contacts.map((contact, index) => {
     if (normalizePastedPhone(contact.phone) !== contact.phone) throw new Error("phone");
-    const name = [singleLine(rule.prefix), singleLine(contact.name) || String(rule.start + index)].filter(Boolean).join(" ");
+    const name = [`${rule.start + index}.`, singleLine(rule.prefix), singleLine(contact.name)].filter(Boolean).join(" ");
     const url = `https://wa.me/${contact.phone.slice(1)}${query}`;
     size += name.length + url.length + 3;
     if (size > 1_000_000) throw new Error("length");

@@ -53,3 +53,8 @@ test('local transcription receives the selected language and stays offline', asy
     delete globalThis.localTranscriptionOptions;
   }
 });
+
+test('incoming audio independently detects language without changing the users dictation language',async()=>{
+ const settings={voiceInputLang:'zh'};const result=await transcribeVoice('incoming','audio/ogg',settings,{language:''});
+ assert.equal(result.source,'local');assert.equal(globalThis.localTranscriptionOptions.language,undefined);assert.equal(settings.voiceInputLang,'zh');
+});

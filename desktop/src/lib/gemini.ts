@@ -10,7 +10,8 @@ export const GEMINI_DEFAULT_MODEL = "gemini-2.0-flash";
 async function geminiPost(
   apiKey: string,
   model: string,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  signal?: AbortSignal
 ): Promise<string> {
   const url = `${GEMINI_BASE}/models/${model}:generateContent`;
   const res = await fetch(url, {
@@ -20,7 +21,7 @@ async function geminiPost(
       "x-goog-api-key": apiKey,
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(60_000),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
   });
   if (!res.ok) {
     let detail = res.statusText;
@@ -52,6 +53,7 @@ export async function geminiGenerate(opts: {
   temperature?: number;
   json?: boolean;
   maxOutputTokens?: number;
+  signal?: AbortSignal;
 }): Promise<string> {
   const model = opts.model || GEMINI_DEFAULT_MODEL;
   const generationConfig: Record<string, unknown> = {
@@ -68,7 +70,7 @@ export async function geminiGenerate(opts: {
   if (opts.system?.trim()) {
     body.systemInstruction = { parts: [{ text: opts.system }] };
   }
-  return geminiPost(opts.apiKey, model, body);
+  return geminiPost(opts.apiKey, model, body, opts.signal);
 }
 
 /** 语音转写：把音频 base64 内联给 Gemini，输出纯文本转写 */
@@ -77,6 +79,7 @@ export async function geminiTranscribeAudio(opts: {
   model?: string;
   mimeType: string;
   base64: string;
+  signal?: AbortSignal;
 }): Promise<string> {
   const model = opts.model || GEMINI_DEFAULT_MODEL;
   const body: Record<string, unknown> = {
@@ -92,5 +95,5 @@ export async function geminiTranscribeAudio(opts: {
       },
     ],
   };
-  return geminiPost(opts.apiKey, model, body);
+  return geminiPost(opts.apiKey, model, body, opts.signal);
 }

@@ -7,6 +7,7 @@ import { normalizeVoiceInputLanguage } from "@/lib/voiceInputLanguage";
 import { mediaUrlToBlob } from "@/lib/mediaBlob";
 import { geminiTranscribeAudio } from "./gemini.ts";
 import { resolveTranscriptionConfig } from "./transcriptionConfig";
+import { abortable } from "./abortable";
 
 export interface TranscriptResult {
   text: string;
@@ -30,6 +31,7 @@ async function postTranscription(opts: {
   settings: AppSettings;
   audioBlob: Blob;
   mimeType: string;
+  signal?: AbortSignal;
 }): Promise<string> {
   const { baseUrl, apiKey, model, provider } = opts.config;
   const url = new URL(baseUrl);
@@ -53,7 +55,7 @@ async function postTranscription(opts: {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}` },
     body: form,
-    signal: AbortSignal.timeout(90_000),
+    signal: opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(90_000)]) : AbortSignal.timeout(90_000),
   });
   if (!res.ok) {
     let detail = res.statusText;
@@ -92,35 +94,41 @@ let transcriptionInFlight = false;
 export async function transcribeVoice(
   dataUrl: string,
   mimeType: string,
-  settings: AppSettings
+  settings: AppSettings,
+  opts?: { signal?: AbortSignal; language?: string }
 ): Promise<TranscriptResult> {
+  opts?.signal?.throwIfAborted();
   if (transcriptionInFlight) return failedTranscript("正在转写另一条语音，请完成后重试");
   transcriptionInFlight = true;
-  try {
-    return await transcribeVoiceImpl(dataUrl, mimeType, settings);
-  } finally {
+  const effectiveSettings = opts?.language !== undefined ? { ...settings, voiceInputLang: normalizeVoiceInputLanguage(opts.language) } : settings;
+  const work = transcribeVoiceImpl(dataUrl, mimeType, effectiveSettings, opts?.signal).finally(() => {
     transcriptionInFlight = false;
-  }
+  });
+  return abortable(work, opts?.signal);
 }
 
 async function transcribeVoiceImpl(
   dataUrl: string,
   mimeType: string,
-  settings: AppSettings
+  settings: AppSettings,
+  signal?: AbortSignal
 ): Promise<TranscriptResult> {
   // ① 本地引擎优先：装了模型就离线转写，零 Key 零配额；失败静默回落云端
   try {
     const { findReadyLocalModel, localTranscribe } = await import("./localSpeech");
     const ready = await findReadyLocalModel();
+    signal?.throwIfAborted();
     if (ready) {
       const text = await localTranscribe({
         mediaUrl: dataUrl,
         model: ready.name,
         language: normalizeVoiceInputLanguage(settings.voiceInputLang) || undefined,
+        signal,
       });
       if (text.trim()) return { text: text.trim(), source: "local", fallback: false };
     }
   } catch (e) {
+    if (signal?.aborted) throw e;
     console.warn("[localSpeech] 本地转写失败，回落云端：", e);
   }
   const config = resolveTranscriptionConfig(settings);
@@ -129,15 +137,17 @@ async function transcribeVoiceImpl(
   if (!config.apiKey || !config.model || (provider !== "gemini" && !config.baseUrl))
     return failedTranscript("语音转写服务缺少 API Key、模型名或 Base URL，请检查独立的语音设置");
   try {
-    const blob = await mediaUrlToBlob(dataUrl, mimeType || "audio/webm");
+    const blob = await mediaUrlToBlob(dataUrl, mimeType || "audio/webm", signal);
     const mime = mimeType || blob.type || "audio/webm";
     if (provider === "gemini") {
       const base64 = await blobToBase64(blob);
+      signal?.throwIfAborted();
       const text = await geminiTranscribeAudio({
         apiKey: config.apiKey,
         model: config.model,
         mimeType: mime,
         base64,
+        signal,
       });
       if (!text.trim()) throw new Error("gemini 空转写");
       return { text: text.trim(), source: "gemini", fallback: false };
@@ -147,9 +157,11 @@ async function transcribeVoiceImpl(
       settings,
       audioBlob: blob,
       mimeType: mime,
+      signal,
     });
     return { text, source: provider, fallback: false };
   } catch (e) {
+    if (signal?.aborted) throw e;
     const error = e instanceof Error ? e.message : "转写失败";
     return failedTranscript(error);
   }

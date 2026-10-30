@@ -14,6 +14,7 @@ import {
 import { canSendAutoReply } from "@/lib/aiSafety";
 import { currentAutoReplyContext, hashAiReplyContext } from "@/lib/aiReplyContext";
 import { translateCurrent } from "@/i18n";
+import { scheduledMessageExpired } from "@/lib/scheduledMessageExpiry";
 
 const MAX_AUTO_RETRIES = 5;
 
@@ -81,6 +82,13 @@ export function SendQueueWatcher() {
       if (msg.mediaType) return;
 
       let settings = state.settings;
+      const scheduled = settings.scheduledMessages?.find(task => task.messageId === msg!.id);
+      if (scheduled && scheduledMessageExpired(scheduled)) {
+        const error = translateCurrent("scheduled.expired");
+        state.updateScheduledMessage(scheduled.id, { status: "expired", error });
+        state.updateMessageDelivery(msg.id, { deliveryStatus: "failed", lastError: error, retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined });
+        return;
+      }
       const aiContextKey = msg.systemKind === "ai_auto_reply" ? currentAutoReplyContext(state, msg) : null;
       if (msg.systemKind === "ai_auto_reply") {
         let verified = false;
@@ -165,13 +173,19 @@ export function SendQueueWatcher() {
           },
           {
             channelId,
-            canSend: msg.systemKind === "ai_auto_reply" ? () => {
+            canSend: () => {
               const latest = useAppStore.getState();
               const message = latest.messages.find((item) => item.id === msg.id);
+              const task = latest.settings.scheduledMessages?.find(item => item.messageId === msg.id);
+              if (task?.status === "queued" && scheduledMessageExpired(task)) {
+                latest.updateScheduledMessage(task.id, { status: "expired", error: translateCurrent("scheduled.expired") });
+                return false;
+              }
               return !!message && message.deliveryStatus === "pending" &&
-                currentAutoReplyContext(latest, message) === aiContextKey &&
-                canSendAutoReply(latest.settings, latest.messages, message);
-            } : undefined,
+                (!task || (task.status === "queued" && !scheduledMessageExpired(task))) &&
+                (msg.systemKind !== "ai_auto_reply" || (currentAutoReplyContext(latest, message) === aiContextKey &&
+                  canSendAutoReply(latest.settings, latest.messages, message)));
+            },
             rateLimitEnabled: settings.rateLimitEnabled !== false,
             rateLimits: {
               perPhonePerMinute: settings.ratePerMinute,

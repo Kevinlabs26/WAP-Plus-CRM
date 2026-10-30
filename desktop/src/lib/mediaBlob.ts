@@ -38,12 +38,14 @@ export function dataUrlToBlob(
 export async function mediaUrlToBlob(
   mediaUrl: string,
   fallbackMimeType = "application/octet-stream",
+  signal?: AbortSignal,
 ): Promise<Blob> {
+  signal?.throwIfAborted();
   if (mediaUrl.slice(0, 5).toLowerCase() === "data:") {
     return dataUrlToBlob(mediaUrl, fallbackMimeType);
   }
   const response = await fetch(mediaUrl, {
-    signal: AbortSignal.timeout(30_000),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`无法读取语音文件：HTTP ${response.status}`);
   if (Number(response.headers.get("content-length")) > MAX_AUDIO_BYTES) {

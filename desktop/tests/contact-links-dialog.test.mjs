@@ -34,9 +34,10 @@ test('contact links preview, copy, CSV and confirmed draft insertion use the sam
  try{
   let tree=ui.render(),inputs=tree.filter(n=>n.type==='input'),areas=tree.filter(n=>n.type==='textarea');
   change(inputs[0],'Team');change(inputs[1],'33');change(inputs[2],'5');change(areas[0],'Bonjour & merci');change(areas[1],'Jean Exemple\t06 00 00 00 01\n+12025550102');
-  tree=ui.render();assert.ok(text(tree).includes('Team 6'));assert.deepEqual(ui.inserted,[]);
-  await button(tree,'复制结果').props.onClick();assert.match(copied,/Team Jean Exemple\nhttps:\/\/wa.me\/33600000001\?text=Bonjour%20%26%20merci/);
-  button(tree,'导出 CSV').props.onClick();assert.equal(ui.downloads[0][0],'contact-links.csv');assert.match(ui.downloads[0][1],/Team 6/);
+  tree=ui.render();assert.ok(text(tree).includes('5. Team Jean Exemple'));assert.ok(text(tree).includes('6. Team'));assert.deepEqual(ui.inserted,[]);
+  await button(tree,'复制结果').props.onClick();assert.match(copied,/^5\. Team Jean Exemple\nhttps:\/\/wa.me\/33600000001\?text=Bonjour%20%26%20merci/);
+  assert.ok(copied.includes('\n\n6. Team\nhttps://wa.me/12025550102'));
+  button(tree,'导出 CSV').props.onClick();assert.equal(ui.downloads[0][0],'contact-links.csv');assert.match(ui.downloads[0][1],/"5\. Team Jean Exemple"/);assert.match(ui.downloads[0][1],/"6\. Team"/);
   assert.equal(ui.downloads[0][2],'text/csv;charset=utf-8');
   button(tree,'填入草稿').props.onClick();assert.deepEqual(ui.inserted,[copied]);assert.equal(ui.closed,1);
  }finally{ui.close();if(prior)Object.defineProperty(globalThis,'navigator',prior);else delete globalThis.navigator;}

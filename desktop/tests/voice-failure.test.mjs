@@ -80,6 +80,20 @@ test('real transcription returns empty text and an error for missing credentials
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test('incoming cloud audio omits dictation language and cancellation aborts the request without a fallback',async()=>{
+ const original=globalThis.fetch;let request,started=false;
+ try{
+  globalThis.fetch=async(_url,options)=>{request=options;return new Response(JSON.stringify({text:'bonjour'}),{status:200});};
+  const settings={transcriptionProvider:'custom',transcriptionApiKey:'fixture',transcriptionBaseUrl:'https://example.invalid/v1',transcriptionModel:'test',voiceInputLang:'zh'};
+  await transcribeVoice('audio','audio/ogg',settings,{language:''});assert.equal(request.body.has('language'),false);
+  await transcribeVoice('audio','audio/ogg',settings);assert.equal(request.body.get('language'),'zh');
+  const controller=new AbortController();globalThis.fetch=(_url,options)=>{request=options;started=true;return new Promise((_,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('Aborted','AbortError')),{once:true}));};
+  const cancelled=transcribeVoice('audio','audio/ogg',settings,{signal:controller.signal,language:''});while(!started)await new Promise(resolve=>setImmediate(resolve));controller.abort();await assert.rejects(cancelled,/abort/i);assert.equal(request.signal.aborted,true);
+  await new Promise(resolve=>setImmediate(resolve));globalThis.fetch=async()=>new Response(JSON.stringify({text:'retry succeeds'}),{status:200});
+  assert.equal((await transcribeVoice('audio','audio/ogg',settings,{language:''})).text,'retry succeeds');
+ }finally{globalThis.fetch=original;}
+});
+
 for (const result of [
   { text: '【转写失败】旧服务占位', fallback: true, error: 'controlled failure' },
   { text: '', fallback: false },

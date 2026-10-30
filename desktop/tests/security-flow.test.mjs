@@ -11,23 +11,26 @@ const mocks = {
   "@/lib/utils": "export const resolveSendTarget = () => '12025550100';",
   "@/lib/aiSuggest": `export const getSuggestionContextKey = (...args) => globalThis.getFlowContextKey(...args);
     export const hasRealAiKey = () => true; export const generateSuggestions = (...args) => globalThis.generateFlow(...args);`,
-  "@/lib/accountConnection": "export const isWaAccountConnected = () => true;",
+  "@/lib/accountConnection": "export const isWaAccountConnected = () => globalThis.connectedFlow !== false;",
+  "@/lib/transcribeVoice": "export const transcribeVoice = (...args) => globalThis.transcribeFlow(...args);",
+  "@/components/chat/reloadMediaAction": "export const reloadMedia = (...args) => globalThis.reloadFlow(...args);",
   "@/lib/aiSuggestionCache": "export const isManualSuggestionContext = (...args) => globalThis.isFlowManualContext(...args);",
   "@/components/chat/sendTextMessage": "export const sendTextMessage = async (opts) => { await globalThis.beforeAutoGate?.(); if (opts.canSend && !opts.canSend()) { opts.updateMessageDelivery(opts.msgId, { deliveryStatus: 'failed' }); return; } globalThis.sentFlow.push(opts.text); opts.updateMessageDelivery(opts.msgId, { deliveryStatus: 'sent' }); };",
   "@/lib/desktopNotify": "export const showDesktopNotify = async (opts) => { globalThis.notificationFlow.push(opts); return true; };",
 };
 const built = await build({
-  stdin: { contents: 'export * from "./src/lib/aiAutoReply.ts"; export * from "./src/lib/inboundMessageNotify.ts";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
+  stdin: { contents: 'export * from "./src/lib/aiAutoReply.ts"; export * from "./src/lib/autoReplyRuntime.ts"; export * from "./src/lib/inboundMessageNotify.ts";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
   bundle: true, format: "esm", platform: "browser", write: false,
   plugins: [{ name: "flow-mocks", setup(b) {
     b.onResolve({ filter: /.*/ }, args => mocks[args.path] ? { path: args.path, namespace: "mock" } : undefined);
     b.onLoad({ filter: /.*/, namespace: "mock" }, args => ({ contents: mocks[args.path], loader: "js" }));
   } }], alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) },
 });
-const { autoReplyInbound, notifyInboundMessages } = await import("data:text/javascript;base64," + Buffer.from(built.outputFiles[0].text).toString("base64"));
+const { autoReplyInbound, scheduleAutoReplyInbound, stopAutoReplies, useAutoReplyRuntime, notifyInboundMessages } = await import("data:text/javascript;base64," + Buffer.from(built.outputFiles[0].text).toString("base64"));
 function setup(chatId) {
   globalThis.sentFlow = [];
   globalThis.beforeAutoGate = undefined;
+  globalThis.connectedFlow = true;
   const inbound = { id: chatId + "-in", chatId, contactId: "c", accountId: "wa", body: "Hello", direction: "in", sentAt: new Date().toISOString() };
   globalThis.flowState = {
     settings: { aiReplyMode: "auto", aiAutoReplyManualChatIds: [], aiAutoReplyIntervalMs: 5000, sendChannel: "baileys", liveBaileysAccountId: "wa", activeAccountId: "wa", waAccounts: [] },
@@ -37,11 +40,111 @@ function setup(chatId) {
     logActivity() {}, pushToast() {}, setDraftReply(text) { this.draftReply = text; },
     enqueueOutgoingMessage(opts) { const id = chatId + "-out"; this.messages.push({ ...opts, id, direction: "out", sentAt: new Date().toISOString() }); this.draftReply = ""; return id; },
     updateMessageDelivery(id, patch) { Object.assign(globalThis.flowState.messages.find(x => x.id === id), patch); },
+    patchMessage(id, patch) { Object.assign(globalThis.flowState.messages.find(x => x.id === id), patch); },
   };
   return inbound;
 }
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
 const reply = { source: "openai", suggestions: [{ text: "Hello there" }] };
+
+function fakeTimers() {
+ const original={setTimeout,clearTimeout};let id=0;const timers=new Map();
+ globalThis.setTimeout=(callback,delay)=>{const key=++id;timers.set(key,{callback,delay});return key;};globalThis.clearTimeout=key=>timers.delete(key);
+ return {timers,async fire(){const [key,timer]=timers.entries().next().value;timers.delete(key);await timer.callback();},close(){stopAutoReplies();Object.assign(globalThis,original);}};
+}
+
+test('live short messages debounce and generate only for the newest complete context',async()=>{
+ const clock=fakeTimers();try{
+  const first=setup('debounce-live');let calls=0;globalThis.generateFlow=async()=>{calls++;return reply;};
+  scheduleAutoReplyInbound(first);const second={...first,id:'debounce-second',sentAt:new Date(Date.now()+1).toISOString(),body:'second sentence'};globalThis.flowState.messages.push(second);scheduleAutoReplyInbound(second);
+  assert.equal(calls,0);assert.equal(clock.timers.size,1);assert.equal([...clock.timers.values()][0].delay,1200);
+  await clock.fire();assert.equal(calls,1);assert.equal(globalThis.sentFlow.length,1);
+ }finally{clock.close();}
+});
+
+test('new incoming messages abort the old generation and send only a fresh reply',async()=>{
+ const first=setup('abort-old');let calls=0,oldSignal;
+ globalThis.generateFlow=(_contact,_thread,_settings,opts)=>{if(++calls===1){oldSignal=opts.signal;return new Promise((_,reject)=>opts.signal.addEventListener('abort',()=>reject(new DOMException('Cancelled','AbortError')),{once:true}));}return Promise.resolve(reply);};
+ const running=autoReplyInbound(first),second={...first,id:'abort-new',sentAt:new Date(Date.now()+1).toISOString()};globalThis.flowState.messages.push(second);await autoReplyInbound(second);await running;
+ assert.equal(oldSignal.aborted,true);assert.equal(calls,2);assert.deepEqual(globalThis.sentFlow,['Hello there']);
+});
+
+test('temporary AI failures retry before sending, stop after three retries and respect manual pause',async()=>{
+ const clock=fakeTimers();try{
+  let calls=0;globalThis.generateFlow=async()=>{calls++;return {source:'mock',fallback:true,retryable:true,error:'network unavailable',suggestions:[]};};
+  const inbound=setup('retry-limits');await autoReplyInbound(inbound);assert.equal(clock.timers.size,1);
+  for(let i=0;i<3;i++)await clock.fire();assert.equal(calls,4);assert.equal(clock.timers.size,0);assert.deepEqual(globalThis.sentFlow,[]);
+  const paused=setup('retry-paused');await autoReplyInbound(paused);globalThis.flowState.settings.aiReplyMode='semi';await clock.fire();assert.equal(clock.timers.size,0);assert.equal(calls,5);
+ }finally{clock.close();}
+});
+
+test('disconnected accounts recover without resending an existing outgoing message',async()=>{
+ const clock=fakeTimers();try{
+  const inbound=setup('retry-offline');globalThis.connectedFlow=false;let calls=0;globalThis.generateFlow=async()=>{calls++;return reply;};
+  await autoReplyInbound(inbound);assert.equal(calls,0);assert.equal(clock.timers.size,1);
+  globalThis.connectedFlow=true;await clock.fire();assert.equal(calls,1);assert.equal(globalThis.sentFlow.length,1);
+  assert.equal(clock.timers.size,0);
+ }finally{clock.close();}
+});
+
+test('recovery expires after sleep and never regenerates for a message already queued',async()=>{
+ const clock=fakeTimers(),now=Date.now;try{
+  const inbound=setup('retry-sleep');let calls=0;globalThis.generateFlow=async()=>{calls++;return {source:'mock',fallback:true,retryable:true,error:'network',suggestions:[]};};
+  await autoReplyInbound(inbound);Date.now=()=>now()+6*60_000;await clock.fire();assert.equal(calls,1);assert.equal(clock.timers.size,0);Date.now=now;
+  const waiting=setup('retry-already-queued');await autoReplyInbound(waiting);
+  globalThis.flowState.messages.push({...waiting,id:'already-out',direction:'out',systemKind:'ai_auto_reply',deliveryStatus:'queued',sentAt:new Date(now()+1).toISOString()});
+  await clock.fire();assert.equal(calls,2);assert.equal(clock.timers.size,0);
+ }finally{Date.now=now;clock.close();}
+});
+
+test('voice replies download missing media and transcribe before generation; failed recognition never invents a reply',async()=>{
+ const clock=fakeTimers();try{
+  const inbound=setup('voice-auto');inbound.mediaType='audio';inbound.body='';let transcribed=0;
+  globalThis.reloadFlow=async({message})=>{globalThis.flowState.patchMessage(message.id,{mediaUrl:'data:audio/ogg;base64,AA=='});};
+  globalThis.flowState.settings.voiceInputLang='zh';
+  globalThis.transcribeFlow=async(_url,_mime,_settings,opts)=>{transcribed++;assert.equal(opts.language,'');return {text:'Bonjour, comment allez-vous ?',fallback:false};};
+  globalThis.generateFlow=async(_contact,thread)=>{assert.equal(thread[0].transcript,'Bonjour, comment allez-vous ?');return reply;};
+  await autoReplyInbound(inbound);assert.equal(transcribed,1);assert.equal(globalThis.sentFlow.length,1);
+  const failed=setup('voice-failed');failed.mediaType='audio';failed.mediaUrl='data:audio/ogg;base64,AA==';failed.body='[语音]';
+  globalThis.transcribeFlow=async()=>({text:'',fallback:true,error:'未配置语音服务'});globalThis.generateFlow=()=>assert.fail('must not generate for unrecognized voice');
+  await autoReplyInbound(failed);assert.deepEqual(globalThis.sentFlow,[]);assert.equal(clock.timers.size,0);
+ }finally{clock.close();}
+});
+
+test('manual takeover prevents voice upload and model use across multiple incoming messages',async()=>{
+ const inbound=setup('voice-manual');inbound.mediaType='audio';inbound.body='[语音]';
+ globalThis.flowState.messages.unshift({...inbound,id:'manual-before',mediaType:undefined,direction:'out',systemKind:undefined,body:'Hi',sentAt:new Date(Date.now()-60000).toISOString()});
+ globalThis.transcribeFlow=()=>assert.fail('must not transcribe during takeover');globalThis.generateFlow=()=>assert.fail('must not generate during takeover');globalThis.reloadFlow=()=>assert.fail('must not fetch voice during takeover');
+ await autoReplyInbound(inbound);assert.deepEqual(globalThis.sentFlow,[]);
+});
+
+test('new text does not wait for old voice work, and cancelled voice never overwrites its runtime status',async()=>{
+ for(const stage of ['download','transcription']){
+  const voice=setup('cancel-voice-'+stage);voice.mediaType='audio';voice.body='[语音]';if(stage==='transcription')voice.mediaUrl='fixture';
+  let release,started=false,oldSignal;const work=new Promise(resolve=>{release=resolve;});
+  globalThis.reloadFlow=async opts=>{started=true;oldSignal=opts.signal;await work;};
+  globalThis.transcribeFlow=async(_url,_mime,_settings,opts)=>{started=true;oldSignal=opts.signal;return work;};
+  globalThis.generateFlow=async()=>reply;
+  const running=autoReplyInbound(voice);while(!started)await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(useAutoReplyRuntime.getState().byChat[voice.chatId].phase,'transcribing');
+  const latest={...voice,id:'new-text-'+stage,body:'A new question',mediaType:undefined,mediaUrl:undefined,sentAt:new Date(Date.now()+1).toISOString()};globalThis.flowState.messages.push(latest);
+  await autoReplyInbound(latest);await running;
+  assert.equal(oldSignal.aborted,true);assert.deepEqual(globalThis.sentFlow,['Hello there']);assert.equal(useAutoReplyRuntime.getState().byChat[voice.chatId],undefined);
+  release({text:'Old voice',fallback:false});await new Promise(resolve=>setImmediate(resolve));assert.equal(voice.transcript,undefined);assert.equal(globalThis.sentFlow.length,1);
+ }
+});
+
+test('runtime exposes generation, retry and permanent failure without retaining an old message status',async()=>{
+ const clock=fakeTimers();try{
+  const message=setup('runtime-states'),ai=deferred();globalThis.generateFlow=()=>ai.promise;
+  const running=autoReplyInbound(message);assert.equal(useAutoReplyRuntime.getState().byChat[message.chatId].phase,'generating');
+  ai.resolve({source:'mock',fallback:true,retryable:true,error:'503 unavailable',suggestions:[]});await running;
+  const retry=useAutoReplyRuntime.getState().byChat[message.chatId];assert.equal(retry.phase,'retry');assert.ok(retry.retryAt>Date.now());assert.match(retry.reason,/503/);
+  globalThis.generateFlow=async()=>({source:'mock',fallback:true,retryable:false,error:'401 invalid key',suggestions:[]});await clock.fire();
+  assert.equal(useAutoReplyRuntime.getState().byChat[message.chatId].phase,'human');assert.match(useAutoReplyRuntime.getState().byChat[message.chatId].reason,/401/);
+  stopAutoReplies();assert.deepEqual(useAutoReplyRuntime.getState().byChat,{});
+ }finally{clock.close();}
+});
 test("AI completion observes current automation, takeover, provider and newest context", async () => {
   for (const mode of ["disabled", "manual-only", "manual-reply", "new-inbound", "endpoint", "identity", "account-identity", "model", "stage", "manual-ai"]) {
     const inbound = setup(mode);

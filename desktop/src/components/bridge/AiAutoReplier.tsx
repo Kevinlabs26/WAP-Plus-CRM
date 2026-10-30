@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { onLiveInboundMessages, autoReplyInbound } from "@/lib/aiAutoReply";
+import { onLiveInboundMessages, scheduleAutoReplyInbound, stopAutoReplies } from "@/lib/aiAutoReply";
 import { latestMessagesPerChat } from "@/lib/aiSafety";
 
 /**
@@ -8,12 +8,13 @@ import { latestMessagesPerChat } from "@/lib/aiSafety";
  */
 export function AiAutoReplier() {
   useEffect(() => {
-    return onLiveInboundMessages((messages) => {
+    const unsubscribe = onLiveInboundMessages((messages) => {
       // 同批连续消息按会话合并，只回复该会话最新一条。
       for (const m of latestMessagesPerChat(messages)) {
-        void autoReplyInbound(m);
+        scheduleAutoReplyInbound(m);
       }
     });
+    return () => { unsubscribe(); stopAutoReplies(); };
   }, []);
 
   return null;

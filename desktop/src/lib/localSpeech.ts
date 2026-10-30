@@ -6,6 +6,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { mediaUrlToBlob } from "@/lib/mediaBlob";
+import { abortable } from "./abortable";
 
 export interface SpeechModelInfo {
   name: string;
@@ -97,8 +98,9 @@ export async function downloadSpeechModel(
 }
 
 /** 把任意音频 URL（data:/blob:/http:）解码并重采样成 16k 单声道 PCM i16 */
-async function decodeToMono16k(mediaUrl: string): Promise<Int16Array> {
-  const audioBuf = await (await mediaUrlToBlob(mediaUrl, "audio/webm")).arrayBuffer();
+async function decodeToMono16k(mediaUrl: string, signal?: AbortSignal): Promise<Int16Array> {
+  const audioBuf = await (await mediaUrlToBlob(mediaUrl, "audio/webm", signal)).arrayBuffer();
+  signal?.throwIfAborted();
   const ctx = new AudioContext();
   let decoded: AudioBuffer;
   try {
@@ -127,18 +129,33 @@ async function decodeToMono16k(mediaUrl: string): Promise<Int16Array> {
  * 本地转写一条语音。返回 null 表示没有就绪的本地模型（调用方回落云端）；
  * 模型存在但推理失败会抛错，由调用方决定是否回落。
  */
+let localJob: { mediaUrl: string; model: string; language?: string; running: boolean; work: Promise<string> } | undefined;
+
 export async function localTranscribe(opts: {
   mediaUrl: string;
   model: string;
   language?: string;
+  signal?: AbortSignal;
 }): Promise<string> {
-  const samples = await decodeToMono16k(opts.mediaUrl);
-  // JSON 数组对 1 分钟内的语音消息足够小（<4MB），先保简单
-  const result = await invoke<{ text: string }>("speech_transcribe", {
-    model: opts.model,
-    samples: Array.from(samples),
-    sampleRate: 16000,
-    language: opts.language?.split("-")[0]?.toLowerCase() ?? null,
-  });
-  return result.text.trim();
+  opts.signal?.throwIfAborted();
+  while (localJob) {
+    if (localJob.mediaUrl === opts.mediaUrl && localJob.model === opts.model && localJob.language === opts.language) return abortable(localJob.work, opts.signal);
+    if (!localJob.running) break;
+    await abortable(localJob.work.catch(() => ""), opts.signal);
+    opts.signal?.throwIfAborted();
+  }
+  // Native inference cannot be interrupted. Keep one result and serialize the next job.
+  const work = (async () => {
+    const samples = await decodeToMono16k(opts.mediaUrl, opts.signal);
+    opts.signal?.throwIfAborted();
+    const result = await invoke<{ text: string }>("speech_transcribe", {
+      model: opts.model, samples: Array.from(samples), sampleRate: 16000,
+      language: opts.language?.split("-")[0]?.toLowerCase() ?? null,
+    });
+    return result.text.trim();
+  })();
+  const job = { mediaUrl: opts.mediaUrl, model: opts.model, language: opts.language, running: true, work };
+  localJob = job;
+  work.then(() => { job.running = false; }, () => { job.running = false; if (localJob === job) localJob = undefined; });
+  return abortable(work, opts.signal);
 }

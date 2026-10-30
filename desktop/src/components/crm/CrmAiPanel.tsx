@@ -1,4 +1,5 @@
 import { resolveAutoReplyScope, type AutoReplyMode } from "@/lib/autoReplyScope";
+import { useAutoReplyRuntime } from "@/lib/autoReplyRuntime";
 import {
   CalendarPlus,
   Check,
@@ -66,6 +67,7 @@ export function CrmAiPanel() {
   const followUps = useAppStore((state) => state.followUps);
   const selectedContactId = useAppStore((state) => state.selectedContactId);
   const selectedChatId = useAppStore((state) => state.selectedChatId);
+  const autoRuntime = useAutoReplyRuntime(state => selectedChatId ? state.byChat[selectedChatId] : undefined);
   const threadBucket = useAppStore((state) =>
     selectedChatId ? state.messagesByChatId[selectedChatId] : undefined
   );
@@ -896,6 +898,11 @@ export function CrmAiPanel() {
             mode: t(replyScope.mode === "auto" ? "autoReplyScope.auto" : "autoReplyScope.manual"),
             source: replyScope.source === "folder" ? t("autoReplyScope.folderSource", { name: replyScope.folderName || "" }) : t(`autoReplyScope.source.${replyScope.source}`),
           })}
+          {!groupChat && replyScope.mode === "auto" && autoRuntime && autoRuntime.inboundId === lastIn?.id && (!autoRuntime.accountId || autoRuntime.accountId === aiAccountId) &&
+            <span role="status" title={autoRuntime.reason} className="ml-2 text-brand">
+              · {t(`multi.replyStatus.${autoRuntime.phase}`)}
+              {autoRuntime.retryAt && <span className="ml-1">{t("autoReplyRuntime.retryAt", { time: new Date(autoRuntime.retryAt).toLocaleTimeString() })}</span>}
+            </span>}
         </p>}
         {!aiReady ? (
           <div className="flex min-h-36 flex-1 flex-col items-center justify-center gap-2 px-4 text-center">

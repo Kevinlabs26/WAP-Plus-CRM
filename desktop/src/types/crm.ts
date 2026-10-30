@@ -311,6 +311,7 @@ export interface FollowUp {
 }
 
 export type ScheduledMessageStatus =
+  | "expired"
   | "pending"
   | "queued"
   | "sent"

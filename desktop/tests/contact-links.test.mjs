@@ -9,12 +9,21 @@ test('Excel names, accents, unnamed numbers and duplicates generate complete con
  assert.deepEqual(parsed.issues, []); assert.equal(parsed.duplicates, 1);
  const entries = buildContactLinks(parsed.contacts, { ...rule, prefix: '10/30', start: 5 });
  assert.deepEqual(entries, [
-  { name: '10/30 Jean Yonli', phone: '+22650789388', url: 'https://wa.me/22650789388' },
-  { name: '10/30 Nathalie Mère Brian', phone: '+24106539883', url: 'https://wa.me/24106539883' },
-  { name: '10/30 7', phone: '+18494416486', url: 'https://wa.me/18494416486' },
+  { name: '5. 10/30 Jean Yonli', phone: '+22650789388', url: 'https://wa.me/22650789388' },
+  { name: '6. 10/30 Nathalie Mère Brian', phone: '+24106539883', url: 'https://wa.me/24106539883' },
+  { name: '7. 10/30', phone: '+18494416486', url: 'https://wa.me/18494416486' },
  ]);
  assert.equal(contactLinksText(entries), entries.map(e => e.name + '\n' + e.url).join('\n\n'));
  assert.equal(parsed.contacts[0].name, 'Jean Yonli');
+});
+
+test('named contacts are numbered in outgoing text and CSV even without a name prefix', () => {
+ const contacts = [{name:'Jean Yonli',phone:'+22650789388'},{name:'Nathalie Mère Brian',phone:'+24106539883'},{name:'bedline',phone:'+18494416486'}];
+ const entries = buildContactLinks(contacts, rule);
+ assert.equal(contactLinksText(entries), '1. Jean Yonli\nhttps://wa.me/22650789388\n\n2. Nathalie Mère Brian\nhttps://wa.me/24106539883\n\n3. bedline\nhttps://wa.me/18494416486');
+ assert.ok(contactLinksCsv(entries).includes('"3. bedline","\'+18494416486","https://wa.me/18494416486"'));
+ assert.deepEqual(buildContactLinks(contacts,{...rule,start:10}).map(entry=>entry.name),['10. Jean Yonli','11. Nathalie Mère Brian','12. bedline']);
+ assert.equal(buildContactLinks([{name:'',phone:'+18494416486'}],rule)[0].name,'1.');
 });
 
 test('calling codes handle national prefixes without dropping meaningful zeros or changing explicit international numbers', () => {
@@ -39,8 +48,8 @@ test('preset messages are URL encoded and CSV preserves phone text and neutraliz
  assert.equal(url.searchParams.get('text'), message); assert.equal([...url.searchParams].length, 1);
  const csv = contactLinksCsv(entries);
  assert.ok(csv.startsWith('\uFEFFName,Phone,Link\r\n'));
- assert.ok(csv.includes('"\'=HYPERLINK(""bad"")"')); assert.ok(csv.includes('"\'+12025550101"'));
- assert.equal(buildContactLinks([{name:'Test\nBEGIN:bad',phone:'+12025550101'}],{...rule,prefix:' Team\nX '})[0].name,'Team X Test BEGIN:bad');
+ assert.ok(csv.includes('"1. =HYPERLINK(""bad"")"')); assert.ok(csv.includes('"\'+12025550101"'));
+ assert.equal(buildContactLinks([{name:'Test\nBEGIN:bad',phone:'+12025550101'}],{...rule,prefix:' Team\nX '})[0].name,'1. Team X Test BEGIN:bad');
 });
 
 test('malformed numbers, unsafe sequence values and oversized output are rejected', () => {
