@@ -1,3 +1,5 @@
+export const MAX_CHAT_DRAFT_LENGTH = 65_536;
+
 export function setChatDraftValue(
   drafts: Record<string, string>,
   chatId: string | null | undefined,
@@ -23,12 +25,12 @@ export function restoreChatDrafts(value: unknown, chats: { id: string }[]): Reco
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const ids = new Set(chats.map(chat => chat.id));
   return Object.fromEntries(Object.entries(value).filter(([id, text]) =>
-    ids.has(id) && typeof text === "string" && text.length > 0 && text.length <= 65_536
+    ids.has(id) && typeof text === "string" && text.length > 0 && text.length <= MAX_CHAT_DRAFT_LENGTH
   ));
 }
 
 export function assertChatDraftCapacity(drafts: Record<string, string>) {
-  if (Object.keys(drafts).length > 1000 || Object.values(drafts).some(text => typeof text !== "string" || text.length > 65_536)
+  if (Object.keys(drafts).length > 1000 || Object.values(drafts).some(text => typeof text !== "string" || text.length > MAX_CHAT_DRAFT_LENGTH)
     || new Blob([JSON.stringify(drafts)]).size > 2 * 1024 * 1024) {
     throw new Error("草稿未保存：单条最多 65,536 字符，最多 1,000 条、总量 2 MiB；请复制保留后缩短或清理草稿");
   }

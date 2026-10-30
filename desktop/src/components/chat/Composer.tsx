@@ -3,6 +3,7 @@ import {
   ContactRound,
   Image,
   Loader2,
+  Link2,
   Paperclip,
   Plus,
   Reply,
@@ -55,10 +56,12 @@ import { useComposerVoiceInput } from "./useComposerVoiceInput";
 import { useComposerDraftAutosave } from "./useComposerDraftAutosave";
 import { markComposerInput } from "@/lib/composerActivity";
 import { VOICE_INPUT_LANGUAGES } from "@/lib/voiceInputLanguage";
-import { getChatDraftValue } from "@/lib/chatDrafts";
+import { getChatDraftValue, MAX_CHAT_DRAFT_LENGTH } from "@/lib/chatDrafts";
 import { toggleComposerBold } from "@/lib/composerFormatting";
 import { useI18n } from "@/i18n";
 import { onQuickReplyMedia, quickReplyMediaToFile } from "@/lib/quickReplyMedia";
+import { ContactVcfDialog } from "./ContactVcfDialog";
+import { ContactLinksDialog } from "./ContactLinksDialog";
 
 const TYPING_DEBUG_ENABLED = isTypingDiagnosticsEnabled();
 const EmojiStickerGifPanel = lazy(() =>
@@ -206,6 +209,9 @@ function ComposerInner({
   })();
   const [dragOver, setDragOver] = useState(false);
   const [attachmentOpen, setAttachmentOpen] = useState(false);
+  const [vcfOpen, setVcfOpen] = useState(false);
+  const [linksOpen, setLinksOpen] = useState(false);
+  useEffect(() => { setVcfOpen(false); setLinksOpen(false); }, [resetKey, sendAccountId]);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionIdx, setMentionIdx] = useState(0);
@@ -812,6 +818,22 @@ function ComposerInner({
         if (files.length) stageMedia(files);
       }}
     >
+      {linksOpen && createPortal(<ContactLinksDialog key={`${resetKey}:${sendAccountId}`}
+        onClose={() => { setLinksOpen(false); textareaRef.current?.focus({ preventScroll: true }); }}
+        canInsert={!sending && !recording && !inputLocked && !editingId && pendingMedia.length === 0 && mediaSendingIndex < 0}
+        onInsert={text => {
+          if (sending || recording || inputLocked || editingId || pendingMedia.length || mediaSendingIndex >= 0) return false;
+          const current = readDraft();
+          const next = current.trim() ? `${current}\n\n${text}` : text;
+          if (next.length > MAX_CHAT_DRAFT_LENGTH) { pushToast(t("links.longDraft"), "error"); return false; }
+          flushDraftNow(next);
+          applyDraftToDom(next);
+          setTranslateOriginal(null);
+          return true;
+        }} />, document.body)}
+      {vcfOpen && createPortal(<ContactVcfDialog key={`${resetKey}:${sendAccountId}`} onClose={() => { setVcfOpen(false); textareaRef.current?.focus({ preventScroll: true }); }}
+        disabled={sending || recording || inputLocked || mediaSendingIndex >= 0 || pendingMedia.length >= 5}
+        onAttach={file => stageMedia([file], "file")} />, document.body)}
       {dragOver && (
         <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-lg border border-dashed border-brand/50 bg-zinc-950/80 text-[12px] text-brand">
           松开以发送图片 / 文件
@@ -1000,6 +1022,16 @@ function ComposerInner({
                   >
                     <ContactRound className="h-4 w-4 text-amber-400" />
                     {t("composer.contact")}
+                  </button>
+                  <button type="button" disabled={sending || recording || inputLocked || mediaSendingIndex >= 0 || pendingMedia.length >= 5}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+                    onClick={() => { setAttachmentOpen(false); setVcfOpen(true); }}>
+                    <Paperclip className="h-4 w-4 text-brand" />{t("vcf.menu")}
+                  </button>
+                  <button type="button" disabled={sending || recording || inputLocked}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+                    onClick={() => { setAttachmentOpen(false); setLinksOpen(true); }}>
+                    <Link2 className="h-4 w-4 text-brand" />{t("links.title")}
                   </button>
                 </div>
               )}

@@ -1,4 +1,5 @@
 import { isValidAccountId } from "@/types/account";
+import { escapeCsvCell } from "./csv.ts";
 import { getTimezone } from "countries-and-timezones";
 import type {
   Activity,
@@ -702,11 +703,6 @@ export function contactsToCsv(contacts: Contact[]): string {
     "nextFollowUpAt",
     "notes",
   ];
-  // 表格软件不能把客户输入当公式；手机号按文本保留前导零。
-  const esc = (v: string, phone = false) => {
-    if (phone || /^[\s\u0000-\u001f]*[=+\-@＝＋－＠]/u.test(v) || /^[\t\r\n]/.test(v)) v = "'" + v;
-    return `"${v.replace(/"/g, '""')}"`;
-  };
   const rows = contacts.map((c) =>
     [
       c.id,
@@ -723,7 +719,7 @@ export function contactsToCsv(contacts: Contact[]): string {
       c.nextFollowUpAt ?? "",
       c.notes ?? "",
     ]
-      .map((x, index) => esc(String(x), index === 2))
+      .map((x, index) => escapeCsvCell(String(x), index === 2))
       .join(",")
   );
   return [header.join(","), ...rows].join("\n");
