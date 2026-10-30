@@ -1260,6 +1260,14 @@
             <sha256 value="3edce6b711ba368efe16b9b7aacb0214fbd648414cb9b965953a2e7ed89a819a" origin="https://repo.maven.apache.org/maven2/com/google/errorprone/error_prone_annotations/2.3.1/error_prone_annotations-2.3.1.pom" />
          </artifact>
       </component>
+      <component group="com.google.errorprone" name="error_prone_annotations" version="2.50.0">
+         <artifact name="error_prone_annotations-2.50.0.jar">
+            <sha256 value="4667724877f1d37a689202da191e23efa7657c62eef93ccdac406eccfe5cdd0a" origin="https://repo.maven.apache.org/maven2/com/google/errorprone/error_prone_annotations/2.50.0/error_prone_annotations-2.50.0.jar" />
+         </artifact>
+         <artifact name="error_prone_annotations-2.50.0.pom">
+            <sha256 value="71a0680d277324bab46bec4b00f6f111c1b794a931d0d8cda79bcb9246982f92" origin="https://repo.maven.apache.org/maven2/com/google/errorprone/error_prone_annotations/2.50.0/error_prone_annotations-2.50.0.pom" />
+         </artifact>
+      </component>
       <component group="com.google.errorprone" name="error_prone_parent" version="2.18.0">
          <artifact name="error_prone_parent-2.18.0.pom">
             <sha256 value="47f22e99c7bf466391def16f8377985e5d3ba6f5bbcf65853644805513e15fad" origin="https://repo.maven.apache.org/maven2/com/google/errorprone/error_prone_parent/2.18.0/error_prone_parent-2.18.0.pom" />
@@ -1273,6 +1281,11 @@
       <component group="com.google.errorprone" name="error_prone_parent" version="2.3.1">
          <artifact name="error_prone_parent-2.3.1.pom">
             <sha256 value="767525d9a81129cd081968382980336327be4162b1e2251a182911daa733c123" origin="https://repo.maven.apache.org/maven2/com/google/errorprone/error_prone_parent/2.3.1/error_prone_parent-2.3.1.pom" />
+         </artifact>
+      </component>
+      <component group="com.google.errorprone" name="error_prone_parent" version="2.50.0">
+         <artifact name="error_prone_parent-2.50.0.pom">
+            <sha256 value="abf45a019db125b50ff55134ec2af94ae3519761038adf0a60b9bd7b4b8b6254" origin="https://repo.maven.apache.org/maven2/com/google/errorprone/error_prone_parent/2.50.0/error_prone_parent-2.50.0.pom" />
          </artifact>
       </component>
       <component group="com.google.flatbuffers" name="flatbuffers-java" version="1.12.0">
@@ -1291,12 +1304,28 @@
             <sha256 value="e96042ce78fecba0da2be964522947c87b40a291b5fd3cd672a434924103c4b9" origin="https://repo.maven.apache.org/maven2/com/google/guava/failureaccess/1.0.1/failureaccess-1.0.1.pom" />
          </artifact>
       </component>
+      <component group="com.google.guava" name="failureaccess" version="1.0.3">
+         <artifact name="failureaccess-1.0.3.jar">
+            <sha256 value="cbfc3906b19b8f55dd7cfd6dfe0aa4532e834250d7f080bd8d211a3e246b59cb" origin="https://repo.maven.apache.org/maven2/com/google/guava/failureaccess/1.0.3/failureaccess-1.0.3.jar" />
+         </artifact>
+         <artifact name="failureaccess-1.0.3.pom">
+            <sha256 value="c54beff37f6d42d43e14722d54a522c9ad51ef97fc5b79277e62a3ebf882f3bb" origin="https://repo.maven.apache.org/maven2/com/google/guava/failureaccess/1.0.3/failureaccess-1.0.3.pom" />
+         </artifact>
+      </component>
       <component group="com.google.guava" name="guava" version="32.0.1-jre">
          <artifact name="guava-32.0.1-jre.jar">
             <sha256 value="bd7fa227591fb8509677d0d1122cf95158f3b8a9f45653f58281d879f6dc48c5" origin="https://repo.maven.apache.org/maven2/com/google/guava/guava/32.0.1-jre/guava-32.0.1-jre.jar" />
          </artifact>
          <artifact name="guava-32.0.1-jre.pom">
             <sha256 value="42c257f7f736d377b31afeeee978ab26d730cd70af60dde7662e182352e2482a" origin="https://repo.maven.apache.org/maven2/com/google/guava/guava/32.0.1-jre/guava-32.0.1-jre.pom" />
+         </artifact>
+      </component>
+      <component group="com.google.guava" name="guava" version="33.7.2-jre">
+         <artifact name="guava-33.7.2-jre.jar">
+            <sha256 value="b530942257fb935f8b2cfaa5f8eb5bd59c555fd8e8d01b8ce98912e077ea606c" origin="https://repo.maven.apache.org/maven2/com/google/guava/guava/33.7.2-jre/guava-33.7.2-jre.jar" />
+         </artifact>
+         <artifact name="guava-33.7.2-jre.module">
+            <sha256 value="7170b42bdc6a9cbfd78a2142d6dfb423473503c584bedbae85d24359dca5029f" origin="https://repo.maven.apache.org/maven2/com/google/guava/guava/33.7.2-jre/guava-33.7.2-jre.module" />
          </artifact>
       </component>
       <component group="com.google.guava" name="guava-parent" version="26.0-android">
@@ -1307,6 +1336,16 @@
       <component group="com.google.guava" name="guava-parent" version="32.0.1-jre">
          <artifact name="guava-parent-32.0.1-jre.pom">
             <sha256 value="43ed0e36b353f41e5eb75cd756667c9e2df97cef06eb16066967158a1d034d2a" origin="https://repo.maven.apache.org/maven2/com/google/guava/guava-parent/32.0.1-jre/guava-parent-32.0.1-jre.pom" />
+         </artifact>
+      </component>
+      <component group="com.google.guava" name="guava-parent" version="33.4.0-android">
+         <artifact name="guava-parent-33.4.0-android.pom">
+            <sha256 value="7220ede61026596fbc720ee4b93246fa2d14f328058532b59ef053de397c7d83" origin="https://repo.maven.apache.org/maven2/com/google/guava/guava-parent/33.4.0-android/guava-parent-33.4.0-android.pom" />
+         </artifact>
+      </component>
+      <component group="com.google.guava" name="guava-parent" version="33.7.2-jre">
+         <artifact name="guava-parent-33.7.2-jre.pom">
+            <sha256 value="a81570d53c8710355e0216a4405afa93834b17c4cdd0ed9aa8beede3a132bbbe" origin="https://repo.maven.apache.org/maven2/com/google/guava/guava-parent/33.7.2-jre/guava-parent-33.7.2-jre.pom" />
          </artifact>
       </component>
       <component group="com.google.guava" name="listenablefuture" version="1.0">
@@ -1331,6 +1370,14 @@
          </artifact>
          <artifact name="j2objc-annotations-2.8.pom">
             <sha256 value="37f87798b18385113c918bfa9e1276fe50735ef8fa849b5800c519d54dbf11f8" origin="https://repo.maven.apache.org/maven2/com/google/j2objc/j2objc-annotations/2.8/j2objc-annotations-2.8.pom" />
+         </artifact>
+      </component>
+      <component group="com.google.j2objc" name="j2objc-annotations" version="3.1">
+         <artifact name="j2objc-annotations-3.1.jar">
+            <sha256 value="84d3a150518485f8140ea99b8a985656749629f6433c92b80c75b36aba3b099b" origin="https://repo.maven.apache.org/maven2/com/google/j2objc/j2objc-annotations/3.1/j2objc-annotations-3.1.jar" />
+         </artifact>
+         <artifact name="j2objc-annotations-3.1.pom">
+            <sha256 value="14570838500034fc1b47c8205ce1c9d6b255c1ccdd2d1afdcdcbf75e89b24a33" origin="https://repo.maven.apache.org/maven2/com/google/j2objc/j2objc-annotations/3.1/j2objc-annotations-3.1.pom" />
          </artifact>
       </component>
       <component group="com.google.jimfs" name="jimfs" version="1.1">
@@ -2134,6 +2181,9 @@
          </artifact>
       </component>
       <component group="org.checkerframework" name="checker-qual" version="2.5.8">
+         <artifact name="checker-qual-2.5.8.jar">
+            <sha256 value="bd655da535df1eeb96fc8874d05d0f7029209de95096e4f84bd07c66688a210d" origin="https://repo.maven.apache.org/maven2/org/checkerframework/checker-qual/2.5.8/checker-qual-2.5.8.jar" />
+         </artifact>
          <artifact name="checker-qual-2.5.8.pom">
             <sha256 value="33ac6a0f1341ae96647c7d4465f4aa3d24fe97d2697bcee2ceae6fc8b5ef2c3c" origin="https://repo.maven.apache.org/maven2/org/checkerframework/checker-qual/2.5.8/checker-qual-2.5.8.pom" />
          </artifact>
@@ -2737,6 +2787,14 @@
          </artifact>
          <artifact name="kotlinx-serialization-json-jvm-1.7.3.module">
             <sha256 value="0ff70e2131f2a6575822f7611c05e283c4ae08173303f410494cb41289bd3ef6" origin="https://repo.maven.apache.org/maven2/org/jetbrains/kotlinx/kotlinx-serialization-json-jvm/1.7.3/kotlinx-serialization-json-jvm-1.7.3.module" />
+         </artifact>
+      </component>
+      <component group="org.jspecify" name="jspecify" version="1.0.1">
+         <artifact name="jspecify-1.0.1.jar">
+            <sha256 value="070d75f261fe4c5b8202508366715f7f2d4660f88c8ef7e6d3575e48c9683b66" origin="https://repo.maven.apache.org/maven2/org/jspecify/jspecify/1.0.1/jspecify-1.0.1.jar" />
+         </artifact>
+         <artifact name="jspecify-1.0.1.module">
+            <sha256 value="6835d6ac762a99c85e6c3ba6c942be2c6997aaec98f07dedfe9917dae22bda96" origin="https://repo.maven.apache.org/maven2/org/jspecify/jspecify/1.0.1/jspecify-1.0.1.module" />
          </artifact>
       </component>
       <component group="org.junit" name="junit-bom" version="5.10.1">

@@ -12,5 +12,10 @@ fn main() {
         Err(_) => b"{}".to_vec(),
     };
     std::fs::write(std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("google-client.json"), client).unwrap();
-    tauri_build::build()
+    // Keep the pre-upgrade CRT linkage; Tauri's static CRT setting hangs this application's test startup.
+    tauri_build::try_build(
+        tauri_build::Attributes::new().windows_attributes(
+            tauri_build::WindowsAttributes::new().static_vc_runtime(false),
+        ),
+    ).expect("Tauri build failed")
 }

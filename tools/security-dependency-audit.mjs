@@ -41,27 +41,6 @@ for (const file of ['android/buildscript-gradle.lockfile', 'android/app/gradle.l
     if (match) android.push({ ecosystem: 'Maven', name: `${match[1]}:${match[2]}`, version: match[3], file, configurations: match[4].trim().split(',') });
   }
 }
-for (const file of ['docs/security/android-dependencies.log', 'docs/security/android-build-dependencies.log']) {
-  const androidTree = await fs.readFile(file, 'utf8').catch(error => {
-    if (error.code !== 'ENOENT') throw error;
-    return '';
-  });
-  for (const line of androidTree.split('\n')) {
-    const match = line.match(/--- ([\w.-]+):([\w.-]+)(?::([^\s]+))?(?: -> ([^\s]+))?/);
-    if (!match) continue;
-    let name = `${match[1]}:${match[2]}`;
-    let version = match[4] || match[3];
-    // Gradle prints rich constraints separately; resolved coordinates occur in the same tree.
-    if (version?.startsWith('{')) continue;
-    if (version?.includes(':')) {
-      const resolved = version.split(':');
-      name = resolved.slice(0, 2).join(':');
-      version = resolved[2];
-    }
-    if (!version || version.includes('FAILED')) throw new Error(`Unresolved Android dependency: ${name}`);
-    android.push({ ecosystem: 'Maven', name, version, file });
-  }
-}
 const packages = [...new Map([...npm, ...rust, ...android].map(p => [`${p.ecosystem}:${p.name}:${p.version}`, p])).values()];
 const cargoManifest = await fs.readFile('desktop/src-tauri/Cargo.toml', 'utf8');
 const rustDirect = [];

@@ -69,6 +69,7 @@ configurations.matching { it.name.startsWith("_internal-unified-test-platform-")
         val safeVersion = when {
             requested.group == "io.netty" && requested.version?.startsWith("4.1.") == true -> "4.1.137.Final"
             requested.group == "com.google.protobuf" -> "3.25.5"
+            requested.group == "com.google.guava" && requested.name == "guava" -> "33.7.2-jre"
             requested.group == "commons-io" -> "2.15.1"
             else -> null
         }
