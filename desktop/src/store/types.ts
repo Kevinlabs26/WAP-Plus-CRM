@@ -146,7 +146,7 @@ export interface AppState extends PersistSlice {
   /** 聊天页右侧客户工作台是否收起 */
   crmPanelCollapsed: boolean;
   /** 客户工作台当前页签 */
-  crmPanelTab: "customer" | "quick-replies";
+  crmPanelTab: "customer" | "quick-replies" | "images";
   chatListFilter: ChatListFilter;
   toasts: ToastItem[];
   /** 应用内确认框（替代 window.confirm） */
@@ -297,7 +297,7 @@ export interface AppState extends PersistSlice {
   ensureMessageInMemory: (id: string) => Promise<unknown>;
   importBackup: (bundle: unknown) => Promise<{ ok: boolean; reason?: string }>;
   setCrmPanelCollapsed: (v: boolean) => void;
-  setCrmPanelTab: (tab: "customer" | "quick-replies") => void;
+  setCrmPanelTab: (tab: "customer" | "quick-replies" | "images") => void;
   setChatListFilter: (f: ChatListFilter) => void;
   goToChats: (filter?: ChatListFilter) => void;
   pushToast: (

@@ -459,6 +459,22 @@ fn ack_rank(status: &str) -> u8 {
     match status { "sent" => 1, "server" => 2, "delivered" => 3, "read" => 4, "played" => 5, _ => 0 }
 }
 
+fn read_json_text(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<String> {
+    match row.get_ref(index)? {
+        rusqlite::types::ValueRef::Text(bytes) => {
+            // Preserve legacy rows with damaged text; never rewrite their original bytes on read.
+            match std::str::from_utf8(bytes) {
+                Ok(text) => Ok(text.to_owned()),
+                Err(error) => {
+                    tracing::warn!(index, offset = error.valid_up_to(), "invalid UTF-8 in stored JSON; replacing unreadable characters");
+                    Ok(String::from_utf8_lossy(bytes).into_owned())
+                }
+            }
+        }
+        _ => row.get(index),
+    }
+}
+
 const ACK_MESSAGE_ROWS_SQL: &str = "SELECT id, json FROM messages WHERE (id = ?1 OR json_extract(json, '$.waMessageId') = ?1 OR json_extract(json, '$.waKey.id') = ?1) AND COALESCE(json_extract(json, '$.accountId'), json_extract(json, '$.deviceId'), '') = ?2";
 
 pub fn update_message_acks(conn: &Connection, items: &[Value], account_id: &str) -> Result<(), String> {
@@ -470,7 +486,7 @@ pub fn update_message_acks(conn: &Connection, items: &[Value], account_id: &str)
         if key.is_empty() || ack_rank(ack) == 0 { continue; }
         let rows: Vec<(String, String)> = {
             let mut stmt = tx.prepare(ACK_MESSAGE_ROWS_SQL).map_err(|e| e.to_string())?;
-            let rows = stmt.query_map(params![key, account_id], |r| Ok((r.get(0)?, r.get(1)?))).map_err(|e| e.to_string())?;
+            let rows = stmt.query_map(params![key, account_id], |r| Ok((r.get(0)?, read_json_text(r, 1)?))).map_err(|e| e.to_string())?;
             rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
         };
         for (id, json) in rows {
@@ -869,7 +885,7 @@ pub fn load_messages_page(
                 .map_err(|e| e.to_string())?;
             let rows = stmt
                 .query_map(params![chat_id, bs, bid, lim], |row| {
-                    let j: String = row.get(0)?;
+                    let j = read_json_text(row, 0)?;
                     Ok(j)
                 })
                 .map_err(|e| e.to_string())?;
@@ -893,7 +909,7 @@ pub fn load_messages_page(
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![chat_id, lim], |row| {
-            let j: String = row.get(0)?;
+            let j = read_json_text(row, 0)?;
             Ok(j)
         })
         .map_err(|e| e.to_string())?;
@@ -941,7 +957,7 @@ pub fn search_messages(
             "#,
         ) {
             if let Ok(rows) = stmt.query_map(params![match_q, lim], |row| {
-                let j: String = row.get(0)?;
+                let j = read_json_text(row, 0)?;
                 Ok(j)
             }) {
                 let mut out = Vec::new();
@@ -995,7 +1011,7 @@ pub fn search_messages(
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![like, lim], |row| {
-            let j: String = row.get(0)?;
+            let j = read_json_text(row, 0)?;
             Ok(j)
         })
         .map_err(|e| e.to_string())?;
@@ -1015,7 +1031,7 @@ pub fn get_message_by_id(conn: &Connection, id: &str) -> Result<Option<Value>, S
         .query_row(
             "SELECT json FROM messages WHERE id = ?1 LIMIT 1",
             params![id],
-            |r| r.get(0),
+            |r| read_json_text(r, 0),
         )
         .optional()
         .map_err(|e| e.to_string())?;
@@ -1032,7 +1048,7 @@ fn load_table(conn: &Connection, table: &str) -> Result<Vec<Value>, String> {
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
-            let j: String = row.get(0)?;
+            let j = read_json_text(row, 0)?;
             Ok(j)
         })
         .map_err(|e| e.to_string())?;
@@ -1137,7 +1153,7 @@ fn load_messages_boot(conn: &Connection) -> Result<Vec<Value>, String> {
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![BOOT_MESSAGES_CAP], |row| {
-            let j: String = row.get(0)?;
+            let j = read_json_text(row, 0)?;
             Ok(j)
         })
         .map_err(|e| e.to_string())?;
@@ -1160,7 +1176,7 @@ fn load_activities_boot(conn: &Connection) -> Result<Vec<Value>, String> {
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![BOOT_ACTIVITIES_CAP], |row| {
-            let j: String = row.get(0)?;
+            let j = read_json_text(row, 0)?;
             Ok(j)
         })
         .map_err(|e| e.to_string())?;
@@ -1413,6 +1429,39 @@ pub fn clear_all(conn: &Connection) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_invalid_utf8_does_not_block_backup_or_message_reads() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mut bytes = br#"{"id":"legacy","chatId":"chat","direction":"in","body":""#.to_vec();
+        bytes.extend_from_slice("中文 😀 avant ".as_bytes());
+        bytes.push(0xff);
+        bytes.extend_from_slice(" après\",\"sentAt\":\"2026-10-31T00:00:00Z\"}".as_bytes());
+        conn.execute("INSERT INTO messages(id, chat_id, sent_at, json) VALUES ('legacy', 'chat', '2026-10-31T00:00:00Z', CAST(?1 AS TEXT))", params![bytes]).unwrap();
+        let clean = serde_json::json!({"id":"clean","chatId":"chat","body":"normal 😀"});
+        conn.execute("INSERT INTO messages(id, chat_id, json) VALUES ('clean', 'chat', ?1)", params![clean.to_string()]).unwrap();
+        let full = load_full_history(&conn).unwrap();
+        let messages = full["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages.iter().find(|m| m["id"] == "legacy").unwrap()["body"], "中文 😀 avant � après");
+        assert!(messages.contains(&clean));
+        assert_eq!(get_message_by_id(&conn, "legacy").unwrap().unwrap()["body"], "中文 😀 avant � après");
+        assert_eq!(load_messages_page(&conn, "chat", None, None, 50).unwrap().len(), 2);
+        assert_eq!(load_messages_boot(&conn).unwrap().len(), 2);
+        let original: Vec<u8> = conn.query_row("SELECT CAST(json AS BLOB) FROM messages WHERE id = 'legacy'", [], |r| r.get(0)).unwrap();
+        assert_eq!(original, bytes);
+    }
+
+    #[test]
+    fn backup_still_rejects_broken_json_and_wrong_sql_types() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute("INSERT INTO activities(id, json) VALUES ('broken', '{broken')", []).unwrap();
+        assert!(load_full_history(&conn).is_err());
+        conn.execute("UPDATE activities SET json = ?1 WHERE id = 'broken'", params![vec![0xffu8]]).unwrap();
+        assert!(load_full_history(&conn).is_err());
+    }
 
     #[test]
     fn chat_activity_requires_real_messages_from_the_chat_account() {

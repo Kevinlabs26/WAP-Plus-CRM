@@ -40,6 +40,7 @@ import { formatAccountDisplay } from "@/lib/accountLabels";
 import { QuickReplyBrowser } from "@/components/chat/QuickReplyBrowser";
 import { useI18n } from "@/i18n";
 import { emitQuickReplyMedia } from "@/lib/quickReplyMedia";
+import { ImageLibraryPanel } from "@/components/chat/ImageLibraryPanel";
 
 function threadForContact(
   messages: Message[],
@@ -475,7 +476,7 @@ export function CrmAiPanel() {
       </div>
 
       <div
-        className="grid grid-cols-2 gap-1 border-b border-zinc-800/90 p-1.5"
+        className="grid grid-cols-3 gap-1 border-b border-zinc-800/90 p-1.5"
         role="tablist"
         aria-label={t("crmPanel.title")}
       >
@@ -507,9 +508,10 @@ export function CrmAiPanel() {
         >
           {t("crmPanel.quickReplies")}
         </button>
+        <button type="button" role="tab" aria-selected={panelTab === "images"} className={cn("rounded-lg px-2 py-1.5 text-[11px] transition-colors", panelTab === "images" ? "bg-zinc-800 text-brand" : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300")} onClick={() => setPanelTab("images")}>{t("gallery.title")}</button>
       </div>
 
-      {panelTab === "customer" ? (
+      {panelTab === "images" ? <ImageLibraryPanel chatId={selectedChatId} contextKey={[selectedChatId, quickReplyAccountId, settings.sendChannel, quickReplyChat?.phoneId].join(":")} target={quickReplyChat ? `${quickReplyChat.contactName || quickReplyChat.id} · ${quickReplyIdentity}` : undefined} /> : panelTab === "customer" ? (
         <>
       <section className="min-h-0 flex-1 overflow-y-auto p-3">
         {!contact ? (

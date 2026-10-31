@@ -4,6 +4,7 @@ import { useAppStore } from "@/store/appStore";
 import type { Message } from "@/types/crm";
 import { copyImageToClipboard } from "./messageMediaUtils";
 import { useI18n } from "@/i18n";
+import { saveChatImage } from "@/lib/imageLibrary";
 
 type Props = {
   message: Message;
@@ -45,6 +46,11 @@ export function MessageMediaMenuActions({
 
   return (
     <>
+      {canSave && mediaKind === "image" && <button type="button" className={ITEM_CLASS} onClick={() => {
+        void saveChatImage(message.mediaUrl!, message.mediaFileName || `image-${message.id.slice(0, 12)}`)
+          .then(() => pushToast(t("gallery.saved"), "success"))
+          .catch(error => pushToast(String(error), "error")).finally(onClose);
+      }}><Star className="h-3.5 w-3.5 text-zinc-400" />{t("gallery.saveImage")}</button>}
       {mediaKind === "sticker" && canSave && (
         <button
           type="button"

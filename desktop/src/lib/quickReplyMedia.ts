@@ -7,6 +7,7 @@ export type QuickReplyMediaSelection = {
   token: string;
   target?: "main" | "multi";
   chatId?: string;
+  additionalMedia?: Array<Pick<QuickReplyMediaSelection, "dataUrl" | "fileName" | "mimeType" | "kind">>;
 };
 
 const listeners = new Set<(selection: QuickReplyMediaSelection) => boolean | void>();

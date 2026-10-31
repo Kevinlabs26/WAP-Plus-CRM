@@ -421,12 +421,14 @@ function ComposerInner({
       if (selection.target === "multi") return;
       if (selection.chatId && selection.chatId !== resetKey) return;
       if (sending || recording || inputLocked || editingId || pendingMedia.length >= 5 || mediaSendingIndex >= 0) return false;
-      const file = quickReplyMediaToFile(selection);
-      if (!file) return false;
+      const entries = [selection, ...(selection.additionalMedia || []).map(item => ({ ...item, token: selection.token }))];
+      if (entries.length > 5 - pendingMedia.length) return false;
+      const files = entries.map(quickReplyMediaToFile);
+      if (files.some(file => !file)) return false;
       const current = readDraft();
       const caption = selection.caption ? current ? `${current}\n${selection.caption}` : selection.caption : current;
       setDraftLocal(caption); flushDraftNow(caption);
-      stageMediaRef.current([file]);
+      stageMediaRef.current(files as File[]);
       setMediaCaption(caption);
       return true;
     });
@@ -449,18 +451,21 @@ function ComposerInner({
             Array.from(transfer.items || []).some((item) => item.kind === "file"))
       );
     const onDragEnter = (e: DragEvent) => {
+      if (e.target instanceof Element && e.target.closest("[data-image-library-drop]")) { setDragOver(false); return; }
       if (!hasFiles(e.dataTransfer)) return;
       e.preventDefault();
       dragDepthRef.current += 1;
       setDragOver(true);
     };
     const onDragOver = (e: DragEvent) => {
+      if (e.target instanceof Element && e.target.closest("[data-image-library-drop]")) { setDragOver(false); return; }
       if (!hasFiles(e.dataTransfer)) return;
       e.preventDefault();
       if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
       setDragOver(true);
     };
     const onDrop = (e: DragEvent) => {
+      if (e.target instanceof Element && e.target.closest("[data-image-library-drop]")) { setDragOver(false); return; }
       if (!hasFiles(e.dataTransfer)) return;
       e.preventDefault();
       e.stopPropagation();
@@ -487,6 +492,15 @@ function ComposerInner({
           import("@tauri-apps/api/core"),
         ]);
         unlistenTauriDrop = await getCurrentWindow().onDragDropEvent(async (event) => {
+          const payload = event.payload;
+          if ("position" in payload) {
+            const element = document.elementFromPoint(payload.position.x / window.devicePixelRatio, payload.position.y / window.devicePixelRatio);
+            if (element?.closest("[data-image-library-drop]")) {
+              dragDepthRef.current = 0; setDragOver(false);
+              if (payload.type === "drop") window.dispatchEvent(new CustomEvent("wap:image-library-drop", { detail: payload.paths }));
+              return;
+            }
+          }
           if (event.payload.type === "enter" || event.payload.type === "over") {
             dragDepthRef.current = 1;
             setDragOver(true);

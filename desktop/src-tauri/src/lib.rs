@@ -1,6 +1,7 @@
 mod account_id;
 mod atomic_file;
 mod crm_backup;
+mod image_library;
 mod baileys;
 mod bridge;
 #[cfg(windows)]
@@ -178,6 +179,7 @@ pub fn run() {
             crm_backup::crm_backup_status,
             crm_backup::crm_backup_save,
             crm_backup::crm_backup_latest,
+            image_library::image_library,
             commands::db_load_full_history,
             commands::db_load_messages_page,
             commands::db_search_messages,
