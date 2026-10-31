@@ -7,7 +7,7 @@ const source = await readFile(
 );
 
 assert.match(source, /useAppStore\.setState\(\{ aiSuggestions: \[\] \}\)/);
-assert.match(source, /const suggestionKey = useMemo[\s\S]*?getSuggestionContextKey\(contact, thread, settings, aiAccountId\)/);
+assert.match(source, /const suggestionKey = useMemo[\s\S]*?getSuggestionContextKey\(contact, thread, settings, aiAccountId, \{ chatId: selectedChatId \|\| undefined \}\)/);
 assert.match(source, /useLayoutEffect\([\s\S]*?\[selectedChatId, selectedContactId, setCrmPanelCollapsed\]/);
 assert.match(source, /\}, \[selectedChatId, selectedContactId\]\)/);
 assert.match(source, /const request = \+\+generation\.current/);

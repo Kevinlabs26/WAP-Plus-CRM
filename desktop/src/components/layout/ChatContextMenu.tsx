@@ -6,6 +6,7 @@ import {
   BellOff,
   Check,
   CheckCheck,
+  Clock3,
   ChevronRight,
   Copy,
   Eraser,
@@ -25,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 
 export type ChatMenuAction =
+  | "schedule"
   | "markRead"
   | "markUnread"
   | "archive"
@@ -240,6 +242,9 @@ export function ChatContextMenu({
         >
           <CheckCheck className="h-3.5 w-3.5 text-zinc-400" />
           {t("chatContext.markRead")}
+        </button>
+        <button type="button" className={itemCls} onMouseEnter={scheduleCloseSub} onClick={() => fire("schedule")}>
+          <Clock3 className="h-3.5 w-3.5 text-brand" />{t("planQueue.create")}
         </button>
         <button
           type="button"

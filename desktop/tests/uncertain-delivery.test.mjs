@@ -113,6 +113,13 @@ test('a definite failure retains direct retry without confirmation', async () =>
   await retryMessage(run.deps); assert.deepEqual(run.prompts, []); assert.equal(run.updates[0].deliveryStatus, 'queued');
 });
 
+test('scheduled plan messages cannot bypass their queue through chat retry buttons', async () => {
+  const run=setup(message({systemKind:'scheduled_plan',deliveryUncertain:false}),assert.fail);
+  let opened=0;run.deps.openScheduledPlans=()=>opened++;
+  await retryMessage(run.deps);
+  assert.equal(opened,1);assert.deepEqual(run.updates,[]);assert.deepEqual(run.sends,[]);
+});
+
 test('an unknown media retry is confirmed and uses the original account', async () => {
   const run = setup(message({mediaType: 'image', mediaUrl: 'data:image/png;base64,fixture'}), () => true);
   await retryMessage(run.deps); assert.equal(run.prompts.length, 1); assert.equal(run.sends.length, 1);
@@ -126,6 +133,13 @@ test('a media retry that loses its transport result requires checking again', as
   assert.equal(run.updates.at(-1).deliveryStatus, 'failed');
   assert.equal(run.updates.at(-1).deliveryUncertain, true);
   assert.equal(isRetryableOutgoing({...message(), ...run.updates.at(-1)}), false);
+});
+
+for (const mediaType of [undefined, 'image', 'document']) test(`campaign ${mediaType || 'text'} retry must return to its owning queue`,async()=>{
+  const run=setup(message({systemKind:'broadcast_campaign',mediaType,mediaUrl:'data:image/png;base64,fixture'}),()=>true);
+  let opened=0;run.deps.openBroadcast=()=>{opened++;};
+  await retryMessage(run.deps);
+  assert.equal(opened,1);assert.equal(run.prompts.length,0);assert.equal(run.updates.length,0);assert.equal(run.sends.length,0);
 });
 
 test('the text channel preserves structured uncertainty for failed or incomplete responses', async () => {

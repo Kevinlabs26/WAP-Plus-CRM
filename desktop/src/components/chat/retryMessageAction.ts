@@ -22,6 +22,8 @@ type RetryMessageActionDeps = {
   pushToast: AppState["pushToast"];
   requestConfirm: AppState["requestConfirm"];
   readMessage?: (id: string) => Message | undefined;
+  openScheduledPlans?: () => void;
+  openBroadcast?: () => void;
 };
 
 export async function retryMessage({
@@ -35,8 +37,20 @@ export async function retryMessage({
   pushToast,
   requestConfirm,
   readMessage,
+  openScheduledPlans,
+  openBroadcast,
 }: RetryMessageActionDeps) {
   if (!message || message.direction !== "out" || message.deliveryStatus !== "failed") return;
+  if (message.systemKind === "broadcast_campaign") {
+    pushToast(translateCurrent("broadcast.retryFromCampaign"), "info");
+    openBroadcast?.();
+    return;
+  }
+  if (message.systemKind === "scheduled_plan") {
+    pushToast(translateCurrent("planQueue.retryFromPlan"), "info");
+    openScheduledPlans?.();
+    return;
+  }
   if (isDeliveryUncertain(message)) {
     const original = message;
     if (!requestConfirm || !await requestConfirm({

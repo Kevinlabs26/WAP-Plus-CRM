@@ -63,6 +63,8 @@ export type SettingsSafeExport = {
   rateMinIntervalSec: number;
   quickReplies: AppSettings["quickReplies"];
   quickReplyCustomCategories: AppSettings["quickReplyCustomCategories"];
+  quickReplyPinnedIds: string[];
+  quickReplyRecentIds: string[];
   translateTargetLang: string;
   myLang: string;
   voiceInputEngine: AppSettings["voiceInputEngine"];
@@ -71,6 +73,7 @@ export type SettingsSafeExport = {
   chatFolders: AppSettings["chatFolders"];
   chatFolderClones: AppSettings["chatFolderClones"];
   scheduledMessages: AppSettings["scheduledMessages"];
+  scheduledPlans: AppSettings["scheduledPlans"];
   /** 账号槽：去掉大体量 data: 头像，恢复后可重拉 */
   waAccounts: WaAccount[];
   activeAccountId: string;
@@ -140,6 +143,8 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     rateMinIntervalSec: settings.rateMinIntervalSec,
     quickReplies: settings.quickReplies,
     quickReplyCustomCategories: settings.quickReplyCustomCategories || [],
+    quickReplyPinnedIds: settings.quickReplyPinnedIds || [],
+    quickReplyRecentIds: settings.quickReplyRecentIds || [],
     translateTargetLang: settings.translateTargetLang,
     myLang: settings.myLang,
     voiceInputEngine: settings.voiceInputEngine,
@@ -148,6 +153,7 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     chatFolders: settings.chatFolders,
     chatFolderClones: settings.chatFolderClones,
     scheduledMessages: settings.scheduledMessages || [],
+    scheduledPlans: settings.scheduledPlans || [],
     waAccounts: stripAccountAvatars(settings.waAccounts || []),
     activeAccountId: settings.activeAccountId,
     liveBaileysAccountId: settings.liveBaileysAccountId,
@@ -633,9 +639,9 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
   // 只恢复客户数据与界面偏好；端点、密钥、自动发送及保护策略沿用本机。
   if (settingsSafe) {
     const allowed = [
-      "quickReplies", "quickReplyCustomCategories", "translateTargetLang", "myLang",
+      "quickReplies", "quickReplyCustomCategories", "quickReplyPinnedIds", "quickReplyRecentIds", "translateTargetLang", "myLang",
       "voiceInputLang", "leadInbox", "chatFolders", "chatFolderClones",
-      "scheduledMessages", "waAccounts", "accountViewMode", "historySyncNote",
+      "scheduledMessages", "scheduledPlans", "waAccounts", "accountViewMode", "historySyncNote",
       "historySyncNoteByAccountId", "internalNotesByKey", "chatBackground",
       "salesStageLabels", "salesStageOrder", "theme",
     ];
@@ -656,6 +662,10 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
           ? { ...task, status: "failed", messageId: undefined, error: "从备份恢复：请重新确认发送时间" }
           : task
       );
+    }
+    if (Array.isArray(settingsSafe.scheduledPlans)) {
+      settingsSafe.scheduledPlans = settingsSafe.scheduledPlans.map(plan => plan && !["done", "cancelled"].includes(plan.status)
+        ? { ...plan, status: "paused", error: "planQueue.restored" } : plan);
     }
   }
 

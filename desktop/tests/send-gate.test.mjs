@@ -3,14 +3,14 @@ import { buildSync } from "esbuild";
 import { fileURLToPath } from "node:url";
 
 const result = buildSync({
-  entryPoints: [fileURLToPath(new URL("../src/channels/sendGate.ts", import.meta.url))],
+  stdin: { contents: "export * from './src/channels/sendGate.ts'; export {clearRateLimitState} from './src/channels/rateLimit.ts';", resolveDir: fileURLToPath(new URL('../', import.meta.url)) },
   bundle: true,
   format: "esm",
   platform: "neutral",
   write: false,
 });
 
-const moduleUrl = `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`;
+const moduleUrl = `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text+'\n//# sourceURL=send-gate-test.js').toString("base64")}`;
 const mod = await import(moduleUrl);
   const {
     assertSendGate,
@@ -18,6 +18,7 @@ const mod = await import(moduleUrl);
     resolveEffectiveLimits,
     withSendGate,
     setSendGateConfigProvider,
+    clearRateLimitState,
   } = mod;
 
   assert.equal(
@@ -177,6 +178,8 @@ const mod = await import(moduleUrl);
   assert.equal(accountAResult.ok, true);
   assert.equal(accountBResult.ok, true, "Different accounts must not block each other.");
 
+  // This scenario starts with no earlier traffic; policy changes are tested separately.
+  clearRateLimitState();
   let releaseGlobalA;
   let globalAEntered;
   const globalADone = new Promise((resolve) => { releaseGlobalA = resolve; });

@@ -989,7 +989,7 @@ export function MultiWindowWorkspace({
               const targetId = quickRepliesWindowId;
               if (!targetId) return;
               const current = useAppStore.getState().draftReplyByChatId[targetId] || "";
-              setChatDraft(targetId, current ? `${current}\n${text}` : text);
+              if (text) setChatDraft(targetId, current ? `${current}\n${text}` : text);
               setQuickRepliesWindowId(null);
               pushToast(t("multi.quickReplyAdded"), "success");
             }}

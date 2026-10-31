@@ -136,6 +136,7 @@ const ScheduledMessageWatcher = lazy(() =>
     default: m.ScheduledMessageWatcher,
   }))
 );
+const ScheduledPlanWatcher = lazy(() => import("@/components/bridge/ScheduledPlanWatcher").then(m => ({ default: m.ScheduledPlanWatcher })));
 const GroupAutoReadWatcher = lazy(() =>
   import("@/components/bridge/GroupAutoReadWatcher").then((m) => ({
     default: m.GroupAutoReadWatcher,
@@ -437,6 +438,7 @@ function DeferredWatchers({ interactive }: { interactive: boolean }) {
       <SendQueueWatcher />
       <CampaignRunner />
       <ScheduledMessageWatcher />
+      <ScheduledPlanWatcher />
       <FollowUpDueWatcher />
       <GroupAutoReadWatcher />
       <AiAutoReplier />

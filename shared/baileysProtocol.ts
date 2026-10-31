@@ -45,6 +45,7 @@ export interface BaileysBridgeStatus {
   presenceEventCount?: number;
   lastPresenceDebug?: Record<string, unknown> | null;
   eventCursor?: number;
+  capabilities?: { nativeVideo?: boolean };
 }
 
 export type BaileysEventType =

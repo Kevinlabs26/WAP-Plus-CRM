@@ -19,6 +19,13 @@ import {
 import { applyAccountWarmup } from "@/lib/accountWarmup";
 import type { SendRateLimits } from "@/channels/types";
 import { DEFAULT_RATE_LIMITS } from "@/channels/rateLimit";
+import { isDeliveryUncertain } from "@/store/outgoingRetry";
+import type { Message } from "@/types/crm";
+
+export function broadcastItemUncertain(item: BroadcastItem, messages: Message[]) {
+  const message = messages.find(m=>m.id===item.messageId);
+  return message ? isDeliveryUncertain(message) : isDeliveryUncertain({direction:"out",deliveryStatus:"failed",lastError:item.error});
+}
 
 function uid(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -81,6 +88,7 @@ export function normalizeCampaigns(raw: unknown): BroadcastCampaign[] {
     out.push({
       id,
       accountId: String(c.accountId || "").trim() || "wa-default",
+      priority: Number.isFinite(c.priority) ? c.priority : 0,
       title: c.title ? String(c.title).slice(0, 80) : undefined,
       template: String(c.template || "").slice(0, 2000),
       media: normalizeBroadcastMedia(c.media),
@@ -94,11 +102,12 @@ export function normalizeCampaigns(raw: unknown): BroadcastCampaign[] {
       finishedAt: c.finishedAt ? String(c.finishedAt) : undefined,
       extraGapSec: Math.min(
         120,
-        Math.max(5, Number(c.extraGapSec) || BROADCAST_DEFAULT_EXTRA_GAP_SEC)
+        Math.max(20, Number(c.extraGapSec) || BROADCAST_DEFAULT_EXTRA_GAP_SEC)
       ),
       extraGapMaxSec: Math.min(
         120,
         Math.max(
+          20,
           Number(c.extraGapSec) || BROADCAST_DEFAULT_EXTRA_GAP_SEC,
           Number(c.extraGapMaxSec) ||
             Number(c.extraGapSec) ||
@@ -242,11 +251,12 @@ export function buildCampaignOrError(
       createdAt: now,
       extraGapSec: Math.min(
         120,
-        Math.max(5, input.extraGapSec ?? BROADCAST_DEFAULT_EXTRA_GAP_SEC)
+        Math.max(20, input.extraGapSec ?? BROADCAST_DEFAULT_EXTRA_GAP_SEC)
       ),
       extraGapMaxSec: Math.min(
         120,
         Math.max(
+          20,
           input.extraGapSec ?? BROADCAST_DEFAULT_EXTRA_GAP_SEC,
           input.extraGapMaxSec ?? BROADCAST_DEFAULT_EXTRA_GAP_MAX_SEC
         )

@@ -46,8 +46,19 @@ export function useChatHistory(chatId: string | null, accountId: string, liveAcc
           state.messages.filter((message) => message.chatId === chatId), accountId, liveAccountId
         );
         const oldest = bucket.find((message) => message.waKey?.remoteJid && message.waKey?.id);
+        const latest = [...bucket].reverse().find(message => message.waKey?.remoteJid && message.waKey?.id);
+        const recentKey = `${accountId}:${chatId}:recent`;
+        // Refill holes near the latest message too; loading only older pages cannot recover a swallowed photo.
+        if (latest?.waKey && accountId && !requestedHistory.current.has(recentKey)) {
+          requestedHistory.current.add(recentKey);
+          void baileysFetchMessageHistory({ key: latest.waKey, oldestMsgTimestampMs: Date.parse(latest.sentAt), count: 50 }, accountId)
+            .catch(error => {
+              requestedHistory.current.delete(recentKey);
+              syncLog("ui.chat", "recent protocol history request failed", { chatId, error: String(error) });
+            });
+        }
         const key = `${accountId}:${chatId}`;
-        if (bucket.length < 200 && oldest?.waKey && accountId && !requestedHistory.current.has(key)) {
+        if (bucket.length < 200 && oldest?.waKey && oldest.waKey.id !== latest?.waKey?.id && accountId && !requestedHistory.current.has(key)) {
           requestedHistory.current.add(key);
           void baileysFetchMessageHistory({ key: oldest.waKey, oldestMsgTimestampMs: Date.parse(oldest.sentAt), count: 50 }, accountId)
             .catch((error) => {

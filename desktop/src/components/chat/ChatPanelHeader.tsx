@@ -263,6 +263,7 @@ export function ChatPanelHeader({
               contact={activeContact}
               localOnlyChat={localOnlyChat}
               isBaileys={isBaileys}
+              chatConnected={chatConnected}
               chatAccountId={chatAccountId}
               settings={settings}
               open={menuOpen}

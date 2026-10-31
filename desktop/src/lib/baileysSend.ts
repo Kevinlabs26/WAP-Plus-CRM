@@ -3,7 +3,7 @@ import type {
   BaileysSendResponse,
 } from "@shared/baileysProtocol";
 import type { WhatsAppProduct } from "@/types/crm";
-import { request } from "./baileysCore";
+import { baileysStatus, request } from "./baileysCore";
 
 export type QuotePayload = BaileysQuotePayload;
 
@@ -161,6 +161,18 @@ export const baileysSendVoice = (
       quoted: opts?.quoted,
     }),
   }, opts?.accountId);
+
+/** Older bridges can silently treat an unknown video payload as plain text. */
+export const baileysSendVideo = async (phoneE164: string, videoDataUrl: string, caption = "", accountId?: string | null, canSend?: () => boolean) => {
+  let status;
+  try { status = await baileysStatus(accountId); }
+  catch (error) { throw Object.assign(error instanceof Error ? error : new Error(String(error)), { deliveryUncertain: false }); }
+  if (status.connection !== "connected") throw Object.assign(new Error("WhatsApp 尚未连接"), { code: "baileys_not_connected", deliveryUncertain: false });
+  if (status.capabilities?.nativeVideo !== true) throw Object.assign(new Error("当前桥接不支持原生视频，请更新桥接或改用文件发送"), { code: "native_video_unsupported", deliveryUncertain: false });
+  if (canSend && !canSend()) throw Object.assign(new Error("发送任务已暂停、取消或超出发送时间"), { code: "automation_cancelled", deliveryUncertain: false });
+  return request<BaileysSendResponse>("/send", { method: "POST", signal: AbortSignal.timeout(120_000),
+    body: JSON.stringify({phoneE164,videoDataUrl,text:caption,mediaType:"video"}) }, accountId);
+};
 
 /** 发文件/文档 */
 export const baileysSendDocument = (

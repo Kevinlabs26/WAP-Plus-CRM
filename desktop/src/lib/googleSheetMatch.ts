@@ -14,7 +14,8 @@ export function sheetPhone(value: string, region?: CountryCode): string | null {
   const input = value.trim();
   if (!input || /[^\d+().\s-]/.test(input) || (input.match(/\+/g)?.length || 0) > 1 || (input.includes("+") && !input.startsWith("+"))) return null;
   const phone = parsePhoneNumberFromString(input, region);
-  return phone?.isValid() ? phone.number : null;
+  // Match stored identities, including legacy numbering plans; current allocations are not required.
+  return phone?.isPossible() ? phone.number : null;
 }
 
 export function sheetInternationalPhone(value: string): string | null {

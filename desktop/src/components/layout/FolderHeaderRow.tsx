@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Check,
+  Clock3,
   ChevronDown,
   ChevronRight,
   Folder,
@@ -33,6 +34,9 @@ type FolderHeaderRowProps = {
   dragging: boolean;
   autoReplyMode?: AutoReplyMode;
   onAutoReplyModeChange?: (mode: AutoReplyMode | undefined) => void;
+  onAiPrompt?: () => void;
+  onSchedule?: () => void;
+  onBroadcast?: () => void;
   onToggle: () => void;
   onStartDrag: (event: React.PointerEvent) => void;
   onCreateChild: () => void;
@@ -58,6 +62,9 @@ export function FolderHeaderRow({
   dragging,
   autoReplyMode,
   onAutoReplyModeChange,
+  onAiPrompt,
+  onSchedule,
+  onBroadcast,
   onToggle,
   onStartDrag,
   onCreateChild,
@@ -233,7 +240,7 @@ export function FolderHeaderRow({
           role="menu"
           aria-label={t("folder.actionsFor", { name })}
           className="fixed z-[9999] min-w-[15rem] max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/50"
-          style={{ left: menu.x, top: menu.y }}
+          style={{ left: menu.x, top: menu.y, maxHeight: Math.max(0, window.innerHeight - menu.y - 8) }}
           onContextMenu={(event) => event.preventDefault()}
           onMouseEnter={cancelClose}
           onMouseLeave={scheduleClose}
@@ -264,6 +271,15 @@ export function FolderHeaderRow({
             <span className="flex-1">{t("autoReplyScope.folderMode")}</span>
             <span className="text-zinc-500">{t(autoReplyMode === "auto" ? "multi.replyMode.auto" : autoReplyMode === "manual" ? "multi.replyMode.manual" : "autoReplyScope.defaultShort")}</span>
             <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+          </button>}
+          {onAiPrompt && <button type="button" role="menuitem" className={itemClass} onClick={() => run(onAiPrompt)}>
+            <Pencil className="h-3.5 w-3.5 text-brand" />{t("folderAi.action")}
+          </button>}
+          {onBroadcast && <button type="button" role="menuitem" className={itemClass} onClick={() => run(onBroadcast)}>
+            <Users className="h-3.5 w-3.5 text-brand" />{t("planQueue.folderBroadcast")}
+          </button>}
+          {onSchedule && <button type="button" role="menuitem" className={itemClass} onClick={() => run(onSchedule)}>
+            <Clock3 className="h-3.5 w-3.5 text-brand" />{t("planQueue.create")}
           </button>}
           <button
             type="button"

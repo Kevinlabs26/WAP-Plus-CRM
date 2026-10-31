@@ -9,10 +9,10 @@ export type QuickReplyMediaSelection = {
   chatId?: string;
 };
 
-const listeners = new Set<(selection: QuickReplyMediaSelection) => void>();
+const listeners = new Set<(selection: QuickReplyMediaSelection) => boolean | void>();
 
 export function onQuickReplyMedia(
-  listener: (selection: QuickReplyMediaSelection) => void
+  listener: (selection: QuickReplyMediaSelection) => boolean | void
 ) {
   listeners.add(listener);
   return () => {
@@ -21,7 +21,9 @@ export function onQuickReplyMedia(
 }
 
 export function emitQuickReplyMedia(selection: QuickReplyMediaSelection) {
-  for (const listener of listeners) listener(selection);
+  let accepted = false;
+  for (const listener of listeners) if (listener(selection) === true) accepted = true;
+  return accepted;
 }
 
 export function quickReplyMediaToFile(selection: QuickReplyMediaSelection): File | null {

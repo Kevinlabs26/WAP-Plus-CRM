@@ -418,7 +418,7 @@ export function BroadcastView() {
       );
     }
 
-    const created = createBroadcastCampaign({
+    const input = {
       accountId,
       template,
       contactIds: [...selected],
@@ -427,7 +427,13 @@ export function BroadcastView() {
       extraGapMaxSec,
       media,
       mediaMode,
-    });
+    };
+    let created=createBroadcastCampaign(input);
+    if(!created.ok&&created.duplicateIds){
+      const duplicateIds=created.duplicateIds;
+      if(!await requestConfirm({title:t("planQueue.duplicateTitle"),description:t("planQueue.duplicates",{count:duplicateIds.length}),confirmLabel:t("planQueue.confirmDuplicate"),cancelLabel:t("common.cancel"),tone:"danger"}))return;
+      created=createBroadcastCampaign({...input,confirmedDuplicateIds:duplicateIds});
+    }
     if (!created.ok) {
       pushToast(created.reason, "error");
       return;
@@ -591,11 +597,11 @@ export function BroadcastView() {
                     {t("broadcast.minGap")}
                     <Input
                       type="number"
-                      min={5}
+                      min={20}
                       max={120}
                       value={extraGapSec}
                       onChange={(event) => {
-                        const value = Math.min(120, Math.max(5, Number(event.target.value) || 20));
+                        const value = Math.min(120, Math.max(20, Number(event.target.value) || 20));
                         setExtraGapSec(value);
                         setExtraGapMaxSec((current) => Math.max(current, value));
                       }}
@@ -728,17 +734,18 @@ export function BroadcastView() {
               const r = resumeBroadcastCampaign(watching.id);
               if (!r.ok) pushToast(r.reason, "error");
             }}
-            onRetryFailed={async () => {
-              const failed = watching.items.filter((item) => item.status === "failed").length;
+            onRetryFailed={async (ids, unknown) => {
+              const failed = watching.items.filter((item) => item.status === "failed" && ids.includes(item.id)).length;
               if (!failed) return;
               const ok = await requestConfirm({
                   title: t("broadcast.retryFailedTitle", { count: failed }),
-                  description: t("broadcast.retryFailedDescription"),
+                  description: t(unknown ? "broadcast.retryFailedDescription" : "planQueue.retrySelectedHint"),
                   confirmLabel: t("broadcast.retryFailedConfirm"),
                 tone: "danger",
               });
               if (!ok) return;
-              retryFailedBroadcastCampaign(watching.id);
+              const count=retryFailedBroadcastCampaign(watching.id,ids,unknown&&ids.length===1?ids:[]);
+              if (!count) return;
               const result = resumeBroadcastCampaign(watching.id);
               if (!result.ok) pushToast(result.reason, "error");
             }}

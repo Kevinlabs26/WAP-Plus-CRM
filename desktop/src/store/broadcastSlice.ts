@@ -1,10 +1,12 @@
 import {
   buildCampaignOrError,
   trimCampaigns,
+  broadcastItemUncertain,
 } from "@/lib/broadcastCampaign";
 import type { AppState, SliceContext } from "./types";
 import { resolveActiveSalesStage } from "@/lib/contactWorkflow";
 import { accountCreatedAtOf, persist } from "./persist";
+import { planSteps, recipientKey } from "@/lib/scheduledPlans";
 import {
   contactSendablePhone,
   parseBroadcastPhones,
@@ -70,6 +72,13 @@ export function createBroadcastSlice({
         },
       });
       if (!res.ok) return { ok: false, reason: res.reason };
+      if (!res.campaign.media?.length) {
+        const targets=new Map(res.campaign.items.filter(i=>i.status==="pending").map(i=>[recipientKey(input.accountId,i.phoneE164),i.bodyRendered.trim()]));
+        const newer=(state.settings.scheduledPlans||[]).filter(p=>!["done","cancelled","expired"].includes(p.status)&&Math.abs(Date.parse(p.dueAt)-Date.now())<=86400_000&&planSteps(p).length===1&&!p.media&&p.items.some(i=>["pending","sending","unknown"].includes(i.status)&&targets.get(recipientKey(i.accountId,i.recipient))===p.text.trim()));
+        const older=state.broadcastCampaigns.filter(c=>["draft","running","paused"].includes(c.status)&&!c.media?.length&&c.items.some(i=>["pending","sending"].includes(i.status)&&targets.get(recipientKey(c.accountId,i.phoneE164))===i.bodyRendered.trim()));
+        const duplicateIds=[...newer,...older].map(p=>p.id).filter(id=>!input.confirmedDuplicateIds?.includes(id));
+        if(duplicateIds.length)return {ok:false,reason:`发现 ${duplicateIds.length} 个可能重复的未完成任务，请先核对`,duplicateIds};
+      }
       set((s) => ({
         contacts,
         broadcastCampaigns: trimCampaigns([res.campaign, ...s.broadcastCampaigns]),
@@ -135,9 +144,14 @@ export function createBroadcastSlice({
       return { ok: true };
     },
 
-    retryFailedBroadcastCampaign: (id) => {
-      const campaign = get().broadcastCampaigns.find((item) => item.id === id);
-      const count = campaign?.items.filter((item) => item.status === "failed").length || 0;
+    retryFailedBroadcastCampaign: (id, itemIds, confirmedUnknownIds = []) => {
+      const state = get();
+      const campaign = state.broadcastCampaigns.find((item) => item.id === id);
+      if (!campaign || campaign.status === "running" || campaign.items.some(i=>i.status==="sending")) return 0;
+      const retryIds = new Set(campaign.items.filter(item => item.status === "failed" && (!itemIds || itemIds.includes(item.id))
+        && !state.messages.some(m=>m.id===item.messageId && ["sent","server","delivered","read","played"].includes(m.deliveryStatus || ""))
+        && (!broadcastItemUncertain(item,state.messages) || itemIds?.length===1 && confirmedUnknownIds.length===1 && confirmedUnknownIds.includes(item.id))).map(i=>i.id));
+      const count = retryIds.size;
       if (!count) return 0;
       set((state) => ({
         broadcastCampaigns: state.broadcastCampaigns.map((item) =>
@@ -147,7 +161,7 @@ export function createBroadcastSlice({
                 status: "paused",
                 finishedAt: undefined,
                 items: item.items.map((entry) =>
-                  entry.status === "failed"
+                  entry.status === "failed" && retryIds.has(entry.id)
                     ? { ...entry, status: "pending", error: undefined }
                     : entry
                 ),
@@ -187,9 +201,15 @@ export function createBroadcastSlice({
             ? { ...task, status: "cancelled" as const, error: "发送账号已删除" }
             : task
         );
+        const scheduledPlans = (state.settings.scheduledPlans || []).map(plan => {
+          if (["done", "cancelled"].includes(plan.status) || !plan.items.some(item => item.accountId === accountId && item.status !== "sent")) return plan;
+          const items = plan.items.map(item => item.accountId === accountId && item.status !== "sent"
+            ? { ...item, retired: true, status: "cancelled" as const, error: "planQueue.accountChanged" } : item);
+          return { ...plan, items, status: items.some(item => item.status === "pending") ? "paused" as const : "cancelled" as const, error: "planQueue.accountChanged" };
+        });
         return {
           scheduledMessages,
-          settings: { ...state.settings, scheduledMessages },
+          settings: { ...state.settings, scheduledMessages, scheduledPlans },
           messages: state.messages.map((message) =>
             message.direction === "out" &&
             message.accountId === accountId &&

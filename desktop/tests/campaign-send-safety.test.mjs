@@ -2,10 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
+const storageRows=new Map();globalThis.localStorage={getItem:k=>storageRows.get(k)||null,setItem:(k,v)=>storageRows.set(k,v),removeItem:k=>storageRows.delete(k)};
 
 const mocks = {
   react: "export const useRef=current=>({current});export const useEffect=fn=>{globalThis.campaignCleanup=fn();};",
-  "@/store/appStore": "export const useAppStore={getState:()=>globalThis.campaignState};",
+  "@/store/appStore": "export const useAppStore={getState:()=>globalThis.campaignState};export const flushPersist=async()=>globalThis.campaignPersist?.();",
   "@/lib/baileys": `export const baileysStatus=async()=>({connection:'connected'});
     export const baileysSend=(...args)=>globalThis.campaignSend(...args);
     export const baileysSendImage=baileysSend,baileysSendSticker=baileysSend,baileysSendDocument=baileysSend;`,
@@ -15,7 +16,7 @@ const mocks = {
 };
 const result = await build({
   stdin: { contents: `export {CampaignRunner} from './src/components/bridge/CampaignRunner.tsx';
-    export {withSendGate} from './src/channels/sendGate.ts';`, resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
+    export {withSendGate} from './src/channels/sendGate.ts';export {clearRateLimitState} from './src/channels/rateLimit.ts';`, resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
   bundle: true, format: "esm", platform: "browser", write: false,
   alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) },
   plugins: [{ name: "campaign-io", setup(b) {
@@ -23,10 +24,11 @@ const result = await build({
     b.onLoad({ filter: /.*/, namespace: "mock" }, a => ({ contents: mocks[a.path] }));
   } }],
 });
-const { CampaignRunner, withSendGate } = await import("data:text/javascript;base64," + Buffer.from(result.outputFiles[0].text).toString("base64"));
+const { CampaignRunner, withSendGate, clearRateLimitState } = await import("data:text/javascript;base64," + Buffer.from(result.outputFiles[0].text+'\n//# sourceURL=campaign-safety-test.js').toString("base64"));
 const settle = () => new Promise(setImmediate);
 
 function setup(kind = "text") {
+  clearRateLimitState();
   const originals = { window: globalThis.window, FileReader: globalThis.FileReader, fetch: globalThis.fetch, setTimeout: globalThis.setTimeout };
   let tick;
   const sends = [];
@@ -59,11 +61,45 @@ function setup(kind = "text") {
   return { sends, get: () => state, tick: () => tick(), cleanup() {
     globalThis.campaignCleanup?.();
     Object.assign(globalThis, originals);
-    for (const key of ["campaignState", "campaignCleanup", "campaignMedia", "campaignSend"]) delete globalThis[key];
+    for (const key of ["campaignState", "campaignCleanup", "campaignMedia", "campaignSend", "campaignPersist"]) delete globalThis[key];
   } };
 }
 
 for (const kind of ["text", "image", "document"]) {
+  test(`${kind}: a definite send failure pauses before the next recipient`, async () => {
+    const env = setup(kind);
+    try {
+      env.get().broadcastCampaigns[0].items.push({id:'second',status:'pending',contactId:'customer-2',phoneE164:'+12025550101',bodyRendered:'hello'});
+      let attempts = 0;
+      globalThis.campaignSend = async () => { attempts++; throw Error('recipient rejected'); };
+      CampaignRunner(); await settle();
+      assert.equal(attempts, 1); assert.equal(env.get().broadcastCampaigns[0].status, 'paused');
+      await env.tick(); await settle(); assert.equal(attempts, 1);
+      assert.equal(env.get().broadcastCampaigns[0].items[1].status, 'pending');
+    } finally { env.cleanup(); }
+  });
+
+  test(`${kind}: a failed write-ahead save blocks all transmission`, async () => {
+    const env = setup(kind);
+    try {
+      globalThis.campaignPersist = () => { throw Error('disk full'); };
+      CampaignRunner(); await settle();
+      assert.equal(env.sends.length, 0); assert.equal(env.get().broadcastCampaigns[0].status, 'paused');
+      assert.match(env.get().broadcastCampaigns[0].items[0].error, /disk full/);
+    } finally { env.cleanup(); }
+  });
+
+  test(`${kind}: gate cooldown keeps the first recipient pending without sending or skipping`, async () => {
+    const env = setup(kind);
+    try {
+      await withSendGate({accountId:'other'}, {rateLimitEnabled:false,blockSendWhenOverheated:false}, async()=>({ok:true}));
+      CampaignRunner(); await settle();
+      assert.equal(env.sends.length, 0);
+      assert.equal(env.get().broadcastCampaigns[0].items[0].status, 'pending');
+      assert.equal(env.get().broadcastCampaigns[0].status, 'running');
+    } finally { env.cleanup(); }
+  });
+
   test(`${kind}: continuing a campaign skips the delivery-unknown item`, async () => {
     const env = setup(kind);
     try {
@@ -102,5 +138,20 @@ for (const kind of ["text", "image", "document"]) {
       assert.equal(env.get().broadcastCampaigns[0].items[0].status, "sent");
       assert.equal(env.get().messages[0].systemKind, "broadcast_campaign");
     } finally { env.cleanup(); }
+  });
+  if (kind !== "text") test(`${kind}: resuming after a cooldown reuses the original outgoing record`,async()=>{
+    const env=setup(kind);const realNow=Date.now;let now=realNow();Date.now=()=>now;
+    try{
+      await withSendGate({accountId:'manual'}, {rateLimitEnabled:false,blockSendWhenOverheated:false},async()=>({ok:true}));
+      CampaignRunner();await settle();assert.equal(env.sends.length,0);assert.equal(env.get().messages.length,1);
+      now+=60000;await env.tick();await settle();assert.equal(env.sends.length,1);assert.equal(env.get().messages.length,1);assert.equal(env.get().broadcastCampaigns[0].items[0].status,'sent');
+    }finally{Date.now=realNow;env.cleanup();}
+  });
+  if (kind !== "text") test(`${kind}: failing to save the prepared media record prevents transmission`,async()=>{
+    const env=setup(kind);let writes=0;
+    try{
+      globalThis.campaignPersist=()=>{if(++writes===2)throw Error('media record could not be saved');};
+      CampaignRunner();await settle();assert.equal(writes,2);assert.equal(env.sends.length,0);assert.equal(env.get().broadcastCampaigns[0].status,'paused');assert.equal(env.get().messages.length,1);
+    }finally{env.cleanup();}
   });
 }

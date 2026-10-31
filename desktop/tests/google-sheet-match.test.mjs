@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { sheetPhone, sheetInternationalPhone, sheetColumnIndex, matchingSheetRows, selectedSheetValues, sheetRefreshDue } from '../src/lib/googleSheetMatch.ts';
 
-test('phone matching requires a real number and never interprets a WhatsApp LID as a phone', () => {
+test('phone matching requires a plausible number and never interprets a WhatsApp LID as a phone', () => {
   assert.equal(sheetInternationalPhone('  +33 6 12 34 56 78  '), '+33612345678');
   assert.equal(sheetInternationalPhone(' 33612345678 '), '+33612345678');
   assert.equal(sheetInternationalPhone('12025550100@lid'), null);
@@ -13,6 +13,18 @@ test('phone matching requires a real number and never interprets a WhatsApp LID 
   const rows = [['+1 202 555 0100'], ['+33 1 42 68 53 00'], ['+12025550100']];
   assert.deepEqual(matchingSheetRows(rows, 0, '+12025550100'), [0, 2]);
   assert.deepEqual(matchingSheetRows(rows.reverse(), 0, '+12025550100'), [0, 2]);
+});
+
+test('legacy Benin numbers match the same stored number without rewriting or aliasing the new plan',()=>{
+ const old='22957576439',modern='+2290157576439';
+ assert.equal(sheetInternationalPhone(old),'+22957576439');
+ assert.equal(sheetInternationalPhone('+229 57 57 64 39'),'+22957576439');
+ assert.equal(sheetInternationalPhone(modern),modern);
+ const rows=[['Beniegraceshop','+'+old],['Other contact','+22957576438'],['Modern format',modern],['Duplicate old','+229 57 57 64 39']];
+ assert.deepEqual(matchingSheetRows(rows,1,'+22957576439'),[0,3]);
+ assert.deepEqual(matchingSheetRows(rows,1,modern),[2]);
+ assert.deepEqual(selectedSheetValues(['Name','Phone'],rows,{heading:'Phone'},[{heading:'Name'}],'+22957576439'),[['Beniegraceshop'],['Duplicate old']]);
+ for(const value of ['+229575','+99957576439','22957576439@lid','+229575764390000000'])assert.equal(sheetInternationalPhone(value),null,value);
 });
 
 test('headings must remain unique when a column moves or is renamed', () => {

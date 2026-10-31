@@ -21,6 +21,7 @@ const byKey: Map<string, Stamp[]> = new Map();
 const nextAllowedAt: Map<string, Stamp> = new Map();
 /** 本机任意账号下次允许（跨号总闸） */
 let globalNextAllowedAt = 0;
+let globalLastActivityAt = 0;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let hydrated = false;
 
@@ -54,18 +55,23 @@ function hydrateFromStorage() {
     const data = JSON.parse(raw) as {
       v?: number;
       globalNextAllowedAt?: number;
+      globalLastActivityAt?: number;
       keys?: Record<string, { stamps?: number[]; nextAllowedAt?: number }>;
     };
     if (data.v !== 1 || !data.keys) return;
     const now = Date.now();
+    if (Number.isFinite(data.globalLastActivityAt)) globalLastActivityAt = data.globalLastActivityAt!;
     if (typeof data.globalNextAllowedAt === "number" && data.globalNextAllowedAt > now) {
       globalNextAllowedAt = data.globalNextAllowedAt;
     }
     for (const [k, row] of Object.entries(data.keys)) {
       const stamps = (row.stamps || []).filter(
-        (t) => typeof t === "number" && now - t < 3600_000
+        (t) => Number.isFinite(t) && now - t < 3600_000
       );
-      if (stamps.length) byKey.set(k, stamps);
+      if (stamps.length) {
+        byKey.set(k, stamps);
+        globalLastActivityAt = Math.max(globalLastActivityAt, ...stamps);
+      }
       if (typeof row.nextAllowedAt === "number" && row.nextAllowedAt > now) {
         nextAllowedAt.set(k, row.nextAllowedAt);
       }
@@ -75,10 +81,10 @@ function hydrateFromStorage() {
   }
 }
 
-function schedulePersist() {
-  if (!canUseStorage()) return;
+function schedulePersist(immediate = false) {
+  if (!canUseStorage()) return false;
   if (persistTimer) clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => {
+  const save = () => {
     persistTimer = null;
     try {
       const now = Date.now();
@@ -101,22 +107,30 @@ function schedulePersist() {
       }
       const payload = {
         v: 1 as const,
+        globalLastActivityAt,
         globalNextAllowedAt:
           globalNextAllowedAt > now ? globalNextAllowedAt : 0,
         keys,
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      return true;
     } catch {
-      /* quota / private mode */
+      return false;
     }
-  }, 400);
+  };
+  if (immediate) return save();
+  else persistTimer = setTimeout(save, 400);
+  return true;
 }
 
 /** 测试或设置页可手动清空 */
 export function clearRateLimitState() {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = null;
   byKey.clear();
   nextAllowedAt.clear();
   globalNextAllowedAt = 0;
+  globalLastActivityAt = 0;
   if (canUseStorage()) {
     try {
       localStorage.removeItem(STORAGE_KEY);
@@ -132,6 +146,7 @@ export function checkRateLimit(
   limits: SendRateLimits = DEFAULT_RATE_LIMITS,
   opts?: {
     accountId?: string | null;
+    globalMinGapSec?: number;
   }
 ): { ok: true } | { ok: false; reason: string; retryAfterMs?: number } {
   hydrateFromStorage();
@@ -142,8 +157,10 @@ export function checkRateLimit(
   });
   const now = Date.now();
 
-  if (globalNextAllowedAt > now) {
-    const retryAfterMs = globalNextAllowedAt - now;
+  // Apply the current policy even when the preceding send used a shorter gap.
+  const globalNext = Math.max(globalNextAllowedAt, globalLastActivityAt ? globalLastActivityAt + (opts?.globalMinGapSec || 0) * 1000 : 0);
+  if (globalNext > now) {
+    const retryAfterMs = globalNext - now;
     const wait = Math.ceil(retryAfterMs / 1000);
     return {
       ok: false,
@@ -152,7 +169,9 @@ export function checkRateLimit(
     };
   }
 
-  const nextAt = nextAllowedAt.get(key) ?? 0;
+  const stamps = (byKey.get(key) ?? []).filter((t) => now - t < 3600_000);
+  const lastSentAt = Math.max(0, ...stamps);
+  const nextAt = Math.max(nextAllowedAt.get(key) ?? 0, lastSentAt ? lastSentAt + limits.minIntervalSec * 1000 : 0);
   if (nextAt > now) {
     const retryAfterMs = nextAt - now;
     const wait = Math.ceil(retryAfterMs / 1000);
@@ -163,7 +182,6 @@ export function checkRateLimit(
     };
   }
 
-  const stamps = (byKey.get(key) ?? []).filter((t) => now - t < 3600_000);
   const min1 = stamps.filter((t) => now - t < 60_000).length;
   if (min1 >= limits.perPhonePerMinute) {
     const oldestInWindow = stamps
@@ -196,12 +214,14 @@ export function checkRateLimit(
 export function reserveGlobalSendGap(seconds = 0) {
   hydrateFromStorage();
   const gapSec = Math.max(0, seconds);
-  if (!gapSec) return;
+  if (!gapSec) return true;
+  globalLastActivityAt = Date.now();
   globalNextAllowedAt = Math.max(
     globalNextAllowedAt,
     Date.now() + (gapSec + Math.random() * Math.min(1.5, gapSec)) * 1000
   );
-  schedulePersist();
+  // Persist the reservation before transport; a restart must not erase batch cooldowns.
+  return schedulePersist(true);
 }
 
 export function recordSend(
@@ -217,6 +237,7 @@ export function recordSend(
   hydrateFromStorage();
   const key = keyOf({ accountId, phoneE164, deviceId });
   const now = Date.now();
+  globalLastActivityAt = now;
   const minSec = Math.max(
     0,
     opts?.minIntervalSec ?? DEFAULT_RATE_LIMITS.minIntervalSec

@@ -4,13 +4,16 @@ import { campaignProgress } from "@/lib/broadcastCampaign";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/primitives";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { useState } from "react";
+import { broadcastItemUncertain } from "@/lib/broadcastCampaign";
+import { planItemReceipt } from "@/lib/scheduledPlanProgress";
 
 type Props = {
   campaignId: string;
   onBack: () => void;
   onPause: () => void;
   onResume: () => void;
-  onRetryFailed: () => void;
+  onRetryFailed: (ids: string[], unknown?: boolean) => void;
   onCancel: () => void;
 };
 
@@ -40,6 +43,8 @@ export function CampaignRunPanel({
   onCancel,
 }: Props) {
   const { t } = useI18n();
+  const [selected,setSelected] = useState<string[]>([]);
+  const messages = useAppStore(s=>s.messages);
   const c = useAppStore((s) =>
     (s.broadcastCampaigns || []).find((x) => x.id === campaignId)
   );
@@ -55,6 +60,8 @@ export function CampaignRunPanel({
   }
   const p = campaignProgress(c);
   const pct = p.total ? Math.round(((p.sent + p.failed + p.skipped) / p.total) * 100) : 0;
+  const messagesById=new Map(messages.map(m=>[m.id,m]));
+  const retrySelection=selected.filter(id=>c.items.some(i=>i.id===id&&i.status==="failed"&&!broadcastItemUncertain(i,messages)));
 
   return (
     <div className="space-y-4">
@@ -75,9 +82,9 @@ export function CampaignRunPanel({
           </Button>
         )}
         {p.failed > 0 && c.status !== "running" && (
-          <Button variant="secondary" className="!min-h-8 gap-1" onClick={onRetryFailed}>
+          <Button variant="secondary" disabled={!retrySelection.length} className="!min-h-8 gap-1" onClick={()=>onRetryFailed(retrySelection)}>
             <RotateCcw className="h-3.5 w-3.5" />
-            {t("broadcast.run.retryFailed", { count: p.failed })}
+            {t("broadcast.run.retryFailed", { count: retrySelection.length })}
           </Button>
         )}
         {c.status !== "done" && c.status !== "cancelled" && (
@@ -115,6 +122,7 @@ export function CampaignRunPanel({
             className="rounded-lg border border-zinc-800/80 bg-zinc-950/40 px-2.5 py-1.5 text-[11px]"
           >
             <div className="flex justify-between gap-2">
+              {it.status === "failed" && c.status !== "running" && !broadcastItemUncertain(it,messages) && <input type="checkbox" aria-label={t("planQueue.selectRetry",{name:it.contactName})} checked={selected.includes(it.id)} onChange={e=>setSelected(ids=>e.target.checked?[...ids,it.id]:ids.filter(id=>id!==it.id))} />}
               <span className="truncate font-medium text-zinc-200">
                 {it.contactName}
               </span>
@@ -128,12 +136,13 @@ export function CampaignRunPanel({
                   it.status === "skipped" && "text-zinc-600"
                 )}
               >
-                {t(ITEM_STATUS_LABELS[it.status] || "broadcast.run.item.pending")}
+                {it.status==="sent"?t(`planQueue.receipt.${planItemReceipt({status:"sent",messageId:it.messageId},messagesById)}`):t(ITEM_STATUS_LABELS[it.status] || "broadcast.run.item.pending")}
               </span>
             </div>
             {it.error && (
               <p className="mt-0.5 truncate text-2xs text-zinc-600">{it.error}</p>
             )}
+            {it.status === "failed" && c.status !== "running" && broadcastItemUncertain(it,messages) && <Button size="sm" onClick={()=>onRetryFailed([it.id],true)}>{t("planQueue.reviewRetry")}</Button>}
           </li>
         ))}
       </ul>

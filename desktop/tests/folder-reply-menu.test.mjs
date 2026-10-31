@@ -8,7 +8,7 @@ const mocks={
  react:'export const useState=v=>globalThis.folderMenuHooks.state(v);export const useRef=v=>globalThis.folderMenuHooks.ref(v);export const useEffect=(f,d)=>globalThis.folderMenuHooks.effect(f,d);',
  'react-dom':'export const createPortal=children=>children;',
  'react/jsx-runtime':'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
- 'lucide-react':['Check','ChevronDown','ChevronRight','Folder','FolderPlus','Link2','GripVertical','LayoutGrid','MoreHorizontal','Pencil','Trash2','Upload','Users','UserRoundX'].map(n=>`export const ${n}="${n}";`).join(''),
+ 'lucide-react':['Clock3', 'Check','ChevronDown','ChevronRight','Folder','FolderPlus','Link2','GripVertical','LayoutGrid','MoreHorizontal','Pencil','Trash2','Upload','Users','UserRoundX'].map(n=>`export const ${n}="${n}";`).join(''),
  '@/i18n':'export const useI18n=()=>({t:(k,p)=>globalThis.folderMenuTranslate(k,p)});',
 };
 const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/layout/FolderHeaderRow.tsx',import.meta.url))],bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',
@@ -104,5 +104,26 @@ test('outside clicks, another folder menu and viewport changes dismiss the menu 
    else ui.dispatch('pointerdown',{target:{closest:()=>action==='outside'?null:{dataset:{folderActionMenu:'other'}}}});
    assert.equal(ui.root,undefined);assert.equal(ui.submenu,undefined);assert.deepEqual(ui.changes,[]);
   }
+ }finally{ui.close();}
+});
+
+test('folder schedule action opens once and closes the menu while retaining viewport space',()=>{
+ const ui=fixture();let opened=0;ui.props.onSchedule=()=>opened++;
+ try{
+ ui.render();ui.open();
+ const action=ui.tree.find(n=>n.props.role==='menuitem'&&Array.isArray(n.props.children)&&n.props.children.includes('新建定时计划'));
+ assert.ok(action);assert.ok(ui.root.props.style.maxHeight<=window.innerHeight-ui.root.props.style.top);
+ action.props.onClick();ui.render();assert.equal(opened,1);assert.equal(ui.root,undefined);
+ }finally{ui.close();}
+});
+
+test('folder bulk send and scheduled send are separate actions and each closes the context menu',()=>{
+ const ui=fixture();let bulk=0,scheduled=0;ui.props.onBroadcast=()=>bulk++;ui.props.onSchedule=()=>scheduled++;
+ try{
+ ui.render();ui.open();
+ const action=label=>ui.tree.find(n=>n.props.role==='menuitem'&&Array.isArray(n.props.children)&&n.props.children.includes(label));
+ assert.ok(action('群发给此文件夹'));assert.ok(action('新建定时计划'));
+ action('群发给此文件夹').props.onClick();ui.render();assert.equal(bulk,1);assert.equal(scheduled,0);assert.equal(ui.root,undefined);
+ ui.open();action('新建定时计划').props.onClick();ui.render();assert.equal(bulk,1);assert.equal(scheduled,1);assert.equal(ui.root,undefined);
  }finally{ui.close();}
 });

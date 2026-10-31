@@ -1,7 +1,13 @@
 import type { AutoReplyMode } from "@/lib/autoReplyScope";
+import { normalizeScheduledPlans, type ScheduledPlan } from "@/lib/scheduledPlans";
 import {
   normalizeQuickReplyCategory,
   QUICK_REPLY_CATEGORIES,
+  MAX_QUICK_REPLIES,
+  MAX_RECENT_QUICK_REPLIES,
+  normalizeQuickReplyIds,
+  MAX_QUICK_REPLY_CATEGORIES,
+  MAX_QUICK_REPLY_MEDIA_TOTAL_BYTES,
   type QuickReplyCategory,
   type QuickReplyCategoryOption,
 } from "@/lib/quickReplies";
@@ -54,6 +60,8 @@ export interface SettingsChatFolder {
   /** 主归属成员 chatId，在同一 scope 内互斥 */
   chatIds: string[];
   autoReplyMode?: AutoReplyMode;
+  /** Empty or absent inherits the nearest parent / account / global identity. */
+  aiSystemPrompt?: string;
   /**
    * 号内分组 or 全部视图跨号分组。
    * 缺省视为默认账号号内分组（兼容旧数据）。
@@ -179,6 +187,8 @@ export interface SettingsShape {
   rateMinIntervalSec: number;
   quickReplies: SettingsQuickReply[];
   quickReplyCustomCategories: QuickReplyCategoryOption[];
+  quickReplyPinnedIds: string[];
+  quickReplyRecentIds: string[];
   translateTargetLang: string;
   /** 我的语言（母语）：入站消息/语音翻译的译出目标（给自己看）。空 = 自动检测系统语言 */
   myLang: string;
@@ -231,6 +241,7 @@ export interface SettingsShape {
   followUpRuleSettings: FollowUpRuleSetting[];
   /** 一次性定时文字消息；由出站队列实际发送 */
   scheduledMessages: ScheduledMessage[];
+  scheduledPlans: ScheduledPlan[];
   /** 健康度「过热」时是否拦截发送 */
   blockSendWhenOverheated: boolean;
   /** 监测页手动暂停发送的账号 id */
@@ -336,6 +347,8 @@ export const defaultSettings: SettingsShape = {
   rateMinIntervalSec: 4,
   quickReplies: defaultQuickReplies,
   quickReplyCustomCategories: [],
+  quickReplyPinnedIds: [],
+  quickReplyRecentIds: [],
   translateTargetLang: "en",
   myLang: "",
   voiceInputEngine: "auto",
@@ -357,6 +370,7 @@ export const defaultSettings: SettingsShape = {
   autoFollowUpEnabled: true,
   followUpRuleSettings: DEFAULT_FOLLOW_UP_RULE_SETTINGS,
   scheduledMessages: [],
+  scheduledPlans: [],
   blockSendWhenOverheated: true,
   sendPausedAccountIds: [],
   rateJitterSec: 2,
@@ -401,16 +415,16 @@ export function normalizeLoadedSettings(
           !QUICK_REPLY_CATEGORIES.some((category) => category.id === item.id) &&
           items.findIndex((candidate) => candidate.id === item.id) === index
         )
-        .slice(0, 20)
+        .slice(0, MAX_QUICK_REPLY_CATEGORIES)
     : [];
   const ch = String(merged.sendChannel ?? "");
+  merged.scheduledPlans = normalizeScheduledPlans(merged.scheduledPlans);
   merged.sendChannel =
     ch === "android_bridge" ? "android_bridge" : "baileys";
-  if (!Array.isArray(merged.quickReplies) || merged.quickReplies.length === 0) {
+  if (!Array.isArray(merged.quickReplies)) {
     merged.quickReplies = defaultQuickReplies;
   } else {
     let quickReplyMediaBytes = 0;
-    const maxQuickReplyMediaBytes = 64 * 1024 * 1024;
     merged.quickReplies = merged.quickReplies
       .map((r, i) => {
         const title = String(r?.title || "").slice(0, 40);
@@ -438,7 +452,7 @@ export function normalizeLoadedSettings(
         const keepMedia =
           dataUrl.startsWith("data:") &&
           dataUrl.length <= 12 * 1024 * 1024 &&
-          quickReplyMediaBytes + mediaSize <= maxQuickReplyMediaBytes;
+          quickReplyMediaBytes + mediaSize <= MAX_QUICK_REPLY_MEDIA_TOTAL_BYTES;
         if (keepMedia) quickReplyMediaBytes += mediaSize;
         const media = keepMedia
             ? {
@@ -463,8 +477,10 @@ export function normalizeLoadedSettings(
         };
       })
       .filter((r) => r.title || r.body || r.media)
-      .slice(0, 40);
+      .slice(0, MAX_QUICK_REPLIES);
   }
+  merged.quickReplyPinnedIds = normalizeQuickReplyIds(merged.quickReplyPinnedIds, merged.quickReplies, MAX_QUICK_REPLIES);
+  merged.quickReplyRecentIds = normalizeQuickReplyIds(merged.quickReplyRecentIds, merged.quickReplies, MAX_RECENT_QUICK_REPLIES);
   merged.notificationPrivacy = merged.notificationPrivacy === "name" || merged.notificationPrivacy === "hidden"
     ? merged.notificationPrivacy : "full";
   merged.theme = merged.theme === "light" ? "light" : "dark";
@@ -867,6 +883,8 @@ export function normalizeLoadedSettings(
         sort,
         collapsed: !!f?.collapsed,
         ...(f?.autoReplyMode === "auto" || f?.autoReplyMode === "manual" ? { autoReplyMode: f.autoReplyMode } : {}),
+        ...(typeof f?.aiSystemPrompt === "string" && f.aiSystemPrompt.trim()
+          ? { aiSystemPrompt: f.aiSystemPrompt.trim().slice(0, 6000) } : {}),
         chatIds,
         scope,
       };

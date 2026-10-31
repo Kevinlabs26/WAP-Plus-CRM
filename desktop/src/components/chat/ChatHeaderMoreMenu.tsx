@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Download,
   Images,
+  Link2,
   Loader2,
   Mail,
   MoreVertical,
@@ -18,18 +19,22 @@ import {
   UserPlus,
   Users,
 } from "lucide-react";
-import { useState, type MutableRefObject } from "react";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { getAccountBlocklist, isJidBlocked } from "@/lib/accountWaMeta";
 import { Button } from "@/components/ui/primitives";
 import type { AppSettings } from "@/store/appStore";
 import type { ChatPreview, Contact } from "@/types/crm";
 import { useI18n } from "@/i18n";
+import { baileysGroupInviteCode } from "@/lib/baileysGroups";
+import { useAppStore } from "@/store/appStore";
+import { jidFromBridgeEntityId } from "@/lib/utils";
 
 type Props = {
   chat: ChatPreview;
   contact?: Contact;
   localOnlyChat: boolean;
   isBaileys: boolean;
+  chatConnected: boolean;
   chatAccountId?: string;
   settings: Pick<
     AppSettings,
@@ -65,8 +70,55 @@ const itemClass =
 export function ChatHeaderMoreMenu(props: Props) {
   const { t } = useI18n();
   const [muteOpen, setMuteOpen] = useState(false);
+  const [copyBusy, setCopyBusy] = useState(false);
+  const [copyError, setCopyError] = useState("");
+  const [inviteUrl, setInviteUrl] = useState("");
   const { chat, contact } = props;
   const isGroup = Boolean(contact?.isGroup || chat.isGroup);
+  const accountId = props.chatAccountId || chat.accountId || contact?.accountId;
+  const groupJid = [contact?.channelAddress, contact?.id, chat.contactId, chat.id,
+    jidFromBridgeEntityId(contact?.id), jidFromBridgeEntityId(chat.contactId), jidFromBridgeEntityId(chat.id)]
+    .find(value => /^[\w.-]+@g\.us$/.test(value || "")) || "";
+  const contextKey = `${chat.id}:${accountId}:${props.open}`;
+  const requestRef = useRef({ key: contextKey, version: 0, busy: false });
+  if (requestRef.current.key !== contextKey) requestRef.current = { key: contextKey, version: requestRef.current.version + 1, busy: false };
+  useEffect(() => {
+    setCopyBusy(false); setCopyError(""); setInviteUrl("");
+    return () => { requestRef.current.version++; requestRef.current.busy = false; };
+  }, [contextKey]);
+  const copyUnavailable = !props.isBaileys ? t("group.copyNeedsBaileys")
+    : !props.chatConnected || !accountId ? t("chat.connectFirst")
+    : !groupJid || props.localOnlyChat ? t("group.copyMissingAddress") : "";
+  const copyInvite = async () => {
+    if (copyUnavailable || !isGroup || requestRef.current.busy) return;
+    const version = requestRef.current.version;
+    const current = () => requestRef.current.version === version;
+    requestRef.current.busy = true;
+    setCopyBusy(true); setCopyError(""); setInviteUrl("");
+    try {
+      const result = await baileysGroupInviteCode(groupJid, accountId);
+      if (!current()) return;
+      if (!result.ok) throw new Error(result.error || t("groupActions.noInviteLink"));
+      if (!result.inviteUrl) throw new Error(t("groupActions.noInviteLink"));
+      const url = new URL(result.inviteUrl || "");
+      if (url.origin !== "https://chat.whatsapp.com" || url.username || url.password || !/^\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)) throw new Error(t("groupActions.noInviteLink"));
+      try {
+        await navigator.clipboard.writeText(url.href);
+        if (!current()) return;
+        useAppStore.getState().pushToast(t("group.linkCopied"), "success");
+        props.onClose();
+      } catch {
+        if (current()) { setInviteUrl(url.href); setCopyError(t("group.copyManualHint")); }
+      }
+    } catch (error) {
+      if (!current()) return;
+      const message = error instanceof Error ? error.message : String(error);
+      setCopyError((error as { status?: number })?.status === 403 || /forbidden|not.authorized|permission|权限|admin/i.test(message)
+        ? t("group.copyNoPermission") : t("group.copyInviteError", { error: message }));
+    } finally {
+      if (current()) { requestRef.current.busy = false; setCopyBusy(false); }
+    }
+  };
   const directContact = !isGroup ? contact : undefined;
   const muted = typeof chat.mutedUntil === "number" && chat.mutedUntil > Date.now();
   const fire = (action: () => void) => {
@@ -92,9 +144,19 @@ export function ChatHeaderMoreMenu(props: Props) {
           className="absolute right-0 top-full z-[80] mt-1 max-h-[min(70vh,28rem)] min-w-[12rem] overflow-y-auto rounded-xl border border-zinc-700/90 bg-zinc-900 py-1 shadow-xl shadow-black/50"
         >
           {isGroup && (
+            <>
             <button type="button" role="menuitem" className={itemClass} onClick={() => fire(props.onOpenGroupInfo)}>
               <Users className="h-3.5 w-3.5 text-zinc-400" />{t("chat.groupInfo")}
             </button>
+            <button type="button" role="menuitem" className={itemClass} disabled={copyBusy || !!copyUnavailable}
+              title={copyUnavailable || t("group.copyInviteLink")} aria-busy={copyBusy} onClick={() => void copyInvite()}>
+              {copyBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" /> : <Link2 className="h-3.5 w-3.5 text-zinc-400" />}
+              {t(copyBusy ? "group.fetchingLink" : "group.copyInviteLink")}
+            </button>
+            {copyError && <p role="alert" className="px-3 py-1 text-[11px] leading-5 text-amber-500">{copyError}</p>}
+            {inviteUrl && <div className="px-3 py-1"><input readOnly value={inviteUrl} aria-label={t("groupActions.inviteLink")}
+              className="ui-control w-full px-2 py-1 text-[12px]" onFocus={event => event.currentTarget.select()} /></div>}
+            </>
           )}
           {directContact && (
             <>

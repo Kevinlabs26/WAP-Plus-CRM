@@ -67,6 +67,8 @@ async function prepareImageForSend(file: File): Promise<{
 }
 
 type SendImageMessageDeps = {
+  requiredMinGapSec?: number;
+  persistBeforeSend?: () => Promise<void>;
   canSend?: () => boolean;
   sending: boolean;
   stickToBottom: () => void;
@@ -157,6 +159,8 @@ export async function sendImageMessage(
         mediaCaption: caption || undefined,
       });
     }
+    if (!msgId && deps.requiredMinGapSec !== undefined) throw new Error("无法保存出站消息，群发已停止");
+    await deps.persistBeforeSend?.();
     const raw = deps.isBaileys
       ? await gatedMediaSend(
           { phoneE164: recipient, accountId: deps.chatAccountId },
@@ -166,12 +170,14 @@ export async function sendImageMessage(
               : baileysSendImage(recipient, dataUrl, caption, {
                   accountId: deps.chatAccountId,
                 }),
-          deps.canSend
+          deps.canSend,
+          deps.requiredMinGapSec
         )
       : await gatedMediaSend(
           { phoneE164: recipient, accountId: deps.chatAccountId },
           () => deps.openAndroidMediaShare(sendFile, dataUrl, caption, recipient),
-          deps.canSend
+          deps.canSend,
+          deps.requiredMinGapSec
         );
     if (msgId) {
       deps.updateMessageDelivery(msgId, {
@@ -202,6 +208,7 @@ export async function sendImageMessage(
       });
     }
     deps.pushToast(message, "error");
+    if (deps.requiredMinGapSec !== undefined) throw e;
     return false;
   } finally {
     deps.setSending(false);

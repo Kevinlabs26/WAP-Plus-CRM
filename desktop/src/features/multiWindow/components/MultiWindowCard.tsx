@@ -324,6 +324,8 @@ export function MultiWindowCard({
       pushToast,
         requestConfirm: useAppStore.getState().requestConfirm,
         readMessage: (messageId) => useAppStore.getState().messages.find((item) => item.id === messageId),
+        openScheduledPlans: () => useAppStore.getState().setSettingsOpen(true, "scheduled"),
+        openBroadcast: () => useAppStore.getState().setActiveNav("broadcast"),
     });
   };
 

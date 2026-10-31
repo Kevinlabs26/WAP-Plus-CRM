@@ -13,6 +13,7 @@ import { deferDuringRestore, isDataRestoreActive } from "./restoreGuard";
 import { persist } from "./persist";
 import type { ScheduledMessage } from "@/types/crm";
 import { removeSalesStage, resolveSalesStageLabel } from "@/lib/contactWorkflow";
+import { MAX_QUICK_REPLIES, MAX_RECENT_QUICK_REPLIES, normalizeQuickReplyIds } from "@/lib/quickReplies";
 
 let lastSecretSaveErrorAt = 0;
 
@@ -22,6 +23,8 @@ export function createSettingsActionsSlice({
 }: SliceContext): Pick<
   AppState,
   | "updateSettings"
+  | "toggleQuickReplyPin"
+  | "recordQuickReplyUsage"
   | "retrySecretSave"
   | "deleteSalesStage"
   | "importPhonesToFolder"
@@ -59,6 +62,19 @@ export function createSettingsActionsSlice({
     return run;
   };
   return {
+    toggleQuickReplyPin: id => {
+      if (deferDuringRestore(() => get().toggleQuickReplyPin(id))) return;
+      const { settings, updateSettings } = get();
+      if (!settings.quickReplies.some(reply => reply.id === id)) return;
+      const pinned = settings.quickReplyPinnedIds || [];
+      updateSettings({ quickReplyPinnedIds: pinned.includes(id) ? pinned.filter(item => item !== id) : [...pinned, id] });
+    },
+    recordQuickReplyUsage: id => {
+      if (deferDuringRestore(() => get().recordQuickReplyUsage(id))) return;
+      const { settings, updateSettings } = get();
+      if (!settings.quickReplies.some(reply => reply.id === id) || settings.quickReplyRecentIds?.[0] === id) return;
+      updateSettings({ quickReplyRecentIds: [id, ...(settings.quickReplyRecentIds || []).filter(item => item !== id)].slice(0, MAX_RECENT_QUICK_REPLIES) });
+    },
     retrySecretSave: async () => {
       if (isDataRestoreActive() || getStorageEngine() !== "sqlite") return false;
       return saveCurrentSecrets();
@@ -105,6 +121,12 @@ export function createSettingsActionsSlice({
           }
         }
         if (!changed) return state;
+        if (patch.quickReplies !== undefined || patch.quickReplyPinnedIds !== undefined) {
+          next.quickReplyPinnedIds = normalizeQuickReplyIds(next.quickReplyPinnedIds, next.quickReplies, MAX_QUICK_REPLIES);
+        }
+        if (patch.quickReplies !== undefined || patch.quickReplyRecentIds !== undefined) {
+          next.quickReplyRecentIds = normalizeQuickReplyIds(next.quickReplyRecentIds, next.quickReplies, MAX_RECENT_QUICK_REPLIES);
+        }
         return {
           settings: next,
           ...(accountViewChanged

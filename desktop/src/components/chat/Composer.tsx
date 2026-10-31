@@ -419,12 +419,18 @@ function ComposerInner({
   useEffect(() => {
     return onQuickReplyMedia((selection) => {
       if (selection.target === "multi") return;
+      if (selection.chatId && selection.chatId !== resetKey) return;
+      if (sending || recording || inputLocked || editingId || pendingMedia.length >= 5 || mediaSendingIndex >= 0) return false;
       const file = quickReplyMediaToFile(selection);
-      if (!file) return;
+      if (!file) return false;
+      const current = readDraft();
+      const caption = selection.caption ? current ? `${current}\n${selection.caption}` : selection.caption : current;
+      setDraftLocal(caption); flushDraftNow(caption);
       stageMediaRef.current([file]);
-      if (selection.caption) setMediaCaption(selection.caption);
+      setMediaCaption(caption);
+      return true;
     });
-  }, [setMediaCaption]);
+  }, [resetKey, setMediaCaption, sending, recording, inputLocked, editingId, pendingMedia.length, mediaSendingIndex]);
   const dragDepthRef = useRef(0);
   useEffect(() => {
     const filesFromTransfer = (transfer: DataTransfer | null) => {
@@ -532,7 +538,6 @@ function ComposerInner({
     voiceLanguageOpen,
     setVoiceLanguageOpen,
     handleToggleVoiceInput,
-    handleCancelVoiceInput,
     resetVoiceInput,
   } = useComposerVoiceInput({
     editingId,
@@ -1361,9 +1366,10 @@ function ComposerInner({
             <div ref={voiceLanguageRef} className="relative">
               <button
                 type="button"
-                title={voiceInputOpen ? t("voice.statusListening") : t("tooltip.speechToText")}
-                aria-label={t("tooltip.speechToText")}
-                disabled={recording || sending || inputLocked}
+                title={t(voiceInputBusy ? "voice.inputBusy" : voiceInputOpen ? "voice.finishInput" : "tooltip.speechToText")}
+                aria-label={t(voiceInputBusy ? "voice.inputBusy" : voiceInputOpen ? "voice.finishInput" : "tooltip.speechToText")}
+                aria-pressed={voiceInputOpen}
+                disabled={recording || sending || inputLocked || voiceInputBusy}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
@@ -1372,15 +1378,14 @@ function ComposerInner({
                 }}
                 onClick={() => {
                   setVoiceLanguageOpen(false);
-                  if (voiceInputOpen) handleCancelVoiceInput();
-                  else void handleToggleVoiceInput();
+                  void handleToggleVoiceInput();
                 }}
                 className={cn(
                   "relative inline-flex h-9 w-9 items-center justify-center rounded-xl transition-colors",
                   voiceInputOpen
                     ? "bg-brand/15 text-brand ring-1 ring-brand/30"
                     : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100",
-                  (recording || sending || inputLocked) &&
+                  (recording || sending || inputLocked || voiceInputBusy) &&
                     "cursor-not-allowed opacity-40"
                 )}
               >
@@ -1476,7 +1481,7 @@ function ComposerInner({
           <div className="order-first flex items-center gap-2 border-b border-zinc-800/90 bg-zinc-950/40 px-3 py-1.5">
             <Loader2 className="h-3 w-3 shrink-0 animate-spin text-brand" />
             <span className="text-[11px] text-zinc-300">
-              正在听…（{voiceInputEngineLabel}）边说边转，点击麦克风按钮取消
+                {voiceInputBusy ? t("voice.inputBusy") : t("voice.inputListening", { engine: voiceInputEngineLabel })}
             </span>
           </div>
         )}

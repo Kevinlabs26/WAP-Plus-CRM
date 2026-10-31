@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
+import { sheetInternationalPhone } from '../src/lib/googleSheetMatch.ts';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const built = await build({entryPoints:[root+'src/lib/googleSheets.ts'],bundle:true,write:false,format:'esm',platform:'node',plugins:[{name:'mock-boundaries',setup(build){
   build.onLoad({filter:/src[\\/]lib[\\/]bridge\.ts$/},()=>({contents:'export const isTauri=()=>true;',loader:'ts'}));
@@ -10,6 +11,19 @@ const built = await build({entryPoints:[root+'src/lib/googleSheets.ts'],bundle:t
   build.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:'export const invoke=(...args)=>globalThis.sheetInvoke(...args);',loader:'js'}));
 }}]});
 const {initializeSheets, saveSheetConfig, refreshSheets, useGoogleSheets} = await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
+
+test('bare legacy Benin numbers index the same contact and show multiple selected columns',async()=>{
+ const headers=['Numéro','Nom','Profession'];
+ const columns=[['Numéro','22957576439','+229 57 57 64 39','+2290157576439','22957576438','12025550100@lid'],['Nom','Beniegraceshop','Duplicate historical','Modern','Other','LID'],['Profession','商人','Second row','Modern job','Other job','Not a phone']];
+ globalThis.sheetInvoke=async(_command,args)=>({valueRanges:args.ranges.length===1?[{values:headers.map(h=>[h])}]:[...columns.map(values=>({values:[values]})),{values:headers.map(h=>[h])}]});
+ useGoogleSheets.setState({configured:true,email:'test@example.com'});
+ try{
+  await saveSheetConfig({spreadsheet:'legacy-benin',tab:'Contacts',headerRow:1,phone:{heading:'Numéro'},fields:[{id:'name',label:'姓名',column:{heading:'Nom'},schedule:{kind:'manual'}},{id:'job',label:'职业',column:{heading:'Profession'},schedule:{kind:'manual'}}]});
+  const key=sheetInternationalPhone('22957576439'),state=useGoogleSheets.getState();assert.equal(state.error,'');
+  assert.deepEqual(state.data.name.values[key],['Beniegraceshop','Duplicate historical']);assert.deepEqual(state.data.job.values[key],['商人','Second row']);
+  assert.deepEqual(state.data.name.values['+2290157576439'],['Modern']);assert.equal(Object.keys(state.data.name.values).some(key=>key.includes('@lid')),false);
+ }finally{delete globalThis.sheetInvoke;}
+});
 
 test('reads selected fields with current phone rows, keeps duplicates and retains good data on mapping failure', async()=>{
   let calls=[];

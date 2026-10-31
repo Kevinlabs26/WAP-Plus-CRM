@@ -1,3 +1,4 @@
+import { messageTimestampMs } from "./messageTimestamp.mjs";
 import { createDeletionJournal } from "./deletionJournal.mjs";
 import { rm } from "node:fs/promises";
 import makeWASocket, {
@@ -237,10 +238,7 @@ function push(type, payload) {
 }
 
 function timestamp(value) {
-  if (typeof value === "number") return value < 1e12 ? value * 1000 : value;
-  if (typeof value === "bigint") return Number(value) * 1000;
-  if (value?.toNumber) return value.toNumber() * 1000;
-  return Date.now();
+  return messageTimestampMs(value);
 }
 
 const { mediaToDataUrl } = createMediaDownloader({
@@ -1462,6 +1460,7 @@ function statusPayload() {
     protocolVersion: BAILEYS_BRIDGE_PROTOCOL_VERSION,
     baileysVersion: BAILEYS_LIBRARY_VERSION,
     connection,
+    capabilities: { nativeVideo: true },
     qrDataUrl: connection === "qr" ? qrDataUrl : "",
     user,
     lastError,

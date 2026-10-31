@@ -5,7 +5,7 @@
  */
 import { useEffect, useRef } from "react";
 import { dispatchSendText, normalizeChannelId } from "@/channels";
-import { useAppStore } from "@/store/appStore";
+import { flushPersist, useAppStore } from "@/store/appStore";
 import type { AppState } from "@/store/appStore";
 import type { BroadcastCampaign, BroadcastItem } from "@/types/broadcast";
 import { readMediaCache } from "@/lib/mediaCache";
@@ -15,6 +15,8 @@ import { openAndroidMediaShare as openAndroidMediaShareAction } from "../chat/op
 import { isWaAccountConnected } from "@/lib/accountConnection";
 import { dataUrlToBlob } from "@/lib/mediaBlob";
 import { isDeliveryUncertain } from "@/store/outgoingRetry";
+import { MediaGateBlockedError } from "@/channels/mediaGate";
+import { nextBatchTask } from "@/lib/scheduledPlans";
 
 type CampaignSendResult = {
   ok: boolean;
@@ -63,6 +65,8 @@ async function sendBroadcastMedia(opts: {
   }
 
   const deps = {
+    requiredMinGapSec: Math.max(20, campaign.extraGapSec || 20),
+    persistBeforeSend: () => flushPersist(() => useAppStore.getState()),
     canSend: opts.canSend,
     sending: false,
     stickToBottom: () => {},
@@ -87,6 +91,11 @@ async function sendBroadcastMedia(opts: {
     getDraftReply: () => "",
     setDraftReply: () => {},
     enqueueOutgoingMessage: (input: Parameters<AppState["enqueueOutgoingMessage"]>[0]) => {
+      const latest=useAppStore.getState();
+      const previousId=latest.broadcastCampaigns.find(c=>c.id===campaign.id)?.items.find(i=>i.id===item.id)?.messageId;
+      if(previousId&&latest.messages.some(m=>m.id===previousId&&m.systemKind==="broadcast_campaign"&&!isDeliveryUncertain(m)&&!["sent","server","delivered","read","played"].includes(m.deliveryStatus||""))){
+        latest.updateMessageDelivery(previousId,{deliveryStatus:"pending",lastError:undefined,deliveryUncertain:false});return previousId;
+      }
       const id = state.enqueueOutgoingMessage({ ...input, systemKind: "broadcast_campaign" });
       if (id) state.patchBroadcastItem(campaign.id, item.id, { messageId: id });
       return id;
@@ -127,8 +136,10 @@ async function sendBroadcastMedia(opts: {
         : !opts.canSend() ? "automation_cancelled" : "send_failed" };
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : "媒体发送异常",
-      error: error && typeof error === "object" && "deliveryUncertain" in error && error.deliveryUncertain
-        ? "baileys_delivery_unknown" : "send_failed" };
+      error: error instanceof MediaGateBlockedError ? error.gateError
+        : error && typeof error === "object" && "deliveryUncertain" in error && error.deliveryUncertain
+          ? "baileys_delivery_unknown" : "send_failed",
+      retryAfterMs: error instanceof MediaGateBlockedError ? error.retryAfterMs : undefined };
   }
 }
 
@@ -151,6 +162,7 @@ export function CampaignRunner() {
           (c) => c.status === "running"
         );
         if (!campaign) return;
+        if (nextBatchTask(state.settings.scheduledPlans || [],state.broadcastCampaigns) !== campaign.id) return;
 
         const settings = state.settings;
         if ((settings.sendPausedAccountIds || []).includes(campaign.accountId)) {
@@ -195,6 +207,7 @@ export function CampaignRunner() {
             status: "failed",
             error: "无法创建会话",
           });
+          state.pauseBroadcastCampaign(campaign.id);
           return;
         }
 
@@ -235,6 +248,9 @@ export function CampaignRunner() {
           }
         }
 
+        if (!hasMedia && !msgId) throw new Error("无法保存出站消息，群发已停止");
+        // Persist the in-flight marker before transport, so a crash cannot silently resend it.
+        await flushPersist(() => useAppStore.getState());
         let result: CampaignSendResult;
         if (hasMedia) {
           result = await sendBroadcastMedia({
@@ -259,6 +275,7 @@ export function CampaignRunner() {
             {
               channelId,
               canSend,
+              requiredMinGapSec: Math.max(20, campaign.extraGapSec || 20),
               rateLimitEnabled: settings.rateLimitEnabled !== false,
               rateLimits: {
                 perPhonePerMinute: settings.ratePerMinute,
@@ -391,28 +408,35 @@ export function CampaignRunner() {
             status: "failed",
             error: (result.message || err || "发送失败").slice(0, 200),
           });
+          useAppStore.getState().pauseBroadcastCampaign(campaign.id);
+          useAppStore.getState().pushToast(`群发已暂停：${result.message || err || "发送失败"}`, "error");
+          return;
         }
 
         // 每条重新抽取随机间隔，避免固定节奏。
-        const gapMinSec = Math.max(5, campaign.extraGapSec || 20);
+        const gapMinSec = Math.max(20, campaign.extraGapSec || 20);
         const gapMaxSec = Math.max(gapMinSec, campaign.extraGapMaxSec || 30);
         const gapSec = gapMinSec + Math.random() * (gapMaxSec - gapMinSec);
         await new Promise((r) => setTimeout(r, Math.round(gapSec * 1000)));
 
         useAppStore.getState().completeBroadcastCampaignIfIdle(campaign.id);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
+        const uncertain = !!e && typeof e === "object" && "deliveryUncertain" in e && e.deliveryUncertain === true;
+        const detail = e instanceof Error ? e.message : String(e);
+        const msg = uncertain ? `发送结果未知：${detail}` : detail;
         const state = useAppStore.getState();
         const campaign = (state.broadcastCampaigns || []).find((c) =>
           c.items.some((item) => item.status === "sending")
         );
         if (campaign) {
+          state.pauseBroadcastCampaign(campaign.id);
           const item = campaign.items.find((i) => i.status === "sending");
           if (item) {
             if (item.messageId) {
               state.updateMessageDelivery(item.messageId, {
                 deliveryStatus: "failed",
                 lastError: msg.slice(0, 160),
+                deliveryUncertain: uncertain,
               });
             }
             state.patchBroadcastItem(campaign.id, item.id, {

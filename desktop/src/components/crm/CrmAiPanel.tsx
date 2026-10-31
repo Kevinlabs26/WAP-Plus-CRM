@@ -7,7 +7,6 @@ import {
   ExternalLink,
   PanelRightClose,
   RefreshCw,
-  Search,
   ShoppingCart,
   Sparkles,
   Zap,
@@ -22,6 +21,7 @@ import {
 } from "@/lib/baileys";
 import { generateSuggestions, getSuggestionContextKey, hasRealAiKey, type GenerateSuggestionsResult } from "@/lib/aiSuggest";
 import { createSuggestionCache, isManualSuggestionContext } from "@/lib/aiSuggestionCache";
+import { resolveAiReplyProfile } from "@/lib/aiPromptScope";
 import type { Message, WhatsAppLabel } from "@/types/crm";
 import { ContactAvatar } from "./ContactAvatar";
 import { GoogleSheetInfo } from "./GoogleSheetInfo";
@@ -35,14 +35,10 @@ import { WhatsAppLabelMenu } from "@/components/chat/WhatsAppLabelMenu";
 import { workflowForStage } from "@/lib/contactWorkflow";
 import { SalesStageField } from "./SalesStageField";
 import { filterMessagesForAccount } from "@/lib/personThreads";
-import { isWaAccountConnected } from "@/lib/accountConnection";
-import {
-  filterQuickReplies,
-  getQuickReplyCategories,
-  QUICK_REPLY_CATEGORIES,
-  type QuickReplyCategoryFilter,
-} from "@/lib/quickReplies";
-import { useI18n, type TranslationKey } from "@/i18n";
+import { isWaAccountConnected, resolveWaSendAccountId } from "@/lib/accountConnection";
+import { formatAccountDisplay } from "@/lib/accountLabels";
+import { QuickReplyBrowser } from "@/components/chat/QuickReplyBrowser";
+import { useI18n } from "@/i18n";
 import { emitQuickReplyMedia } from "@/lib/quickReplyMedia";
 
 function threadForContact(
@@ -75,6 +71,9 @@ export function CrmAiPanel() {
     (state) => state.selectedThreadAccount
   );
   const chats = useAppStore((state) => state.chats);
+  const phones = useAppStore((state) => state.phones);
+  const toggleQuickReplyPin = useAppStore(state => state.toggleQuickReplyPin);
+  const recordQuickReplyUsage = useAppStore(state => state.recordQuickReplyUsage);
   const openContactWorkspace = useAppStore(
     (state) => state.openContactWorkspace
   );
@@ -111,9 +110,6 @@ export function CrmAiPanel() {
   const [followDate, setFollowDate] = useState("");
   const [followTime, setFollowTime] = useState("10:00");
   const [followNote, setFollowNote] = useState("");
-  const [quickQuery, setQuickQuery] = useState("");
-  const [quickCategory, setQuickCategory] =
-    useState<QuickReplyCategoryFilter>("all");
   const [loading, setLoading] = useState(false);
   const [aiSource, setAiSource] = useState<string>(settings.aiProvider);
   const [aiError, setAiError] = useState("");
@@ -129,6 +125,13 @@ export function CrmAiPanel() {
     threadAccountId ||
     chats.find((chat) => chat.id === selectedChatId)?.accountId ||
     contact?.accountId;
+  const quickReplyChat = chats.find(chat => chat.id === selectedChatId);
+  const quickReplyAccountId = resolveWaSendAccountId(settings.waAccounts, aiAccountId || settings.liveBaileysAccountId || settings.activeAccountId, settings.liveBaileysAccountId, baileysUi.connection)
+    || settings.liveBaileysAccountId || settings.activeAccountId || "wa-default";
+  const quickReplyAccount = settings.waAccounts?.find(account => account.id === quickReplyAccountId);
+  const quickReplyIdentity = settings.sendChannel === "android_bridge"
+    ? t("quickShelf.device", { device: phones?.find(phone => phone.id === quickReplyChat?.phoneId)?.name || quickReplyChat?.phoneId || t("quickShelf.unknownAccount") })
+    : quickReplyAccount ? formatAccountDisplay(quickReplyAccount) : quickReplyAccountId;
   const thread = useMemo(() => {
     // 用 messagesByChatId 索引桶（已按 chatId 分组 + sentAt 排序），避免全量扫 messages
     if (!threadBucket?.length) return [];
@@ -196,30 +199,15 @@ export function CrmAiPanel() {
     ? "manual" : settings.aiAutoReplyModeByChatId?.[selectedChatId || ""] || "inherit";
   const replyScope = resolveAutoReplyScope(settings, selectedChatId || "");
   const groupChat = contact?.isGroup || chats.find(chat => chat.id === selectedChatId)?.isGroup;
-  const filteredQuickReplies = useMemo(
-    () =>
-      filterQuickReplies(
-        settings.quickReplies || [],
-        quickCategory,
-        quickQuery
-      ),
-    [settings.quickReplies, quickCategory, quickQuery]
-  );
-  const availableQuickCategories = useMemo(
-    () =>
-      getQuickReplyCategories(settings.quickReplyCustomCategories).filter((category) =>
-        settings.quickReplies?.some((reply) => reply.category === category.id)
-      ),
-    [settings.quickReplies, settings.quickReplyCustomCategories]
-  );
 
-  const suggestionKey = useMemo(() => getSuggestionContextKey(contact, thread, settings, aiAccountId),
+  const aiProfile = resolveAiReplyProfile(settings, aiAccountId, selectedChatId || undefined);
+  const suggestionKey = useMemo(() => getSuggestionContextKey(contact, thread, settings, aiAccountId, { chatId: selectedChatId || undefined }),
     [selectedChatId, selectedContactId, contact, thread, settings, aiAccountId]);
   const latestSuggestionKey = useRef(suggestionKey);
   latestSuggestionKey.current = suggestionKey;
 
   const requestSuggestions = (key: string, force = false, onProgress?: (result: GenerateSuggestionsResult) => void) => suggestionCache.request(key,
-    publish => generateSuggestions(contact, thread, settings, { accountId: aiAccountId, onProgress: publish }), force, onProgress);
+    publish => generateSuggestions(contact, thread, settings, { accountId: aiAccountId, chatId: selectedChatId || undefined, onProgress: publish }), force, onProgress);
 
   const showProgress = (key: string, request: number) => (result: GenerateSuggestionsResult) => {
     if (request !== generation.current || latestSuggestionKey.current !== key) return;
@@ -227,14 +215,6 @@ export function CrmAiPanel() {
     setAiSource(result.source);
   };
 
-  useEffect(() => {
-    if (
-      quickCategory !== "all" &&
-      !availableQuickCategories.some((category) => category.id === quickCategory)
-    ) {
-      setQuickCategory("all");
-    }
-  }, [availableQuickCategories, quickCategory]);
 
   const setReplyMode = (mode: string) => {
     if (!selectedChatId || !["inherit", "auto", "manual"].includes(mode)) return;
@@ -910,6 +890,9 @@ export function CrmAiPanel() {
               {autoRuntime.retryAt && <span className="ml-1">{t("autoReplyRuntime.retryAt", { time: new Date(autoRuntime.retryAt).toLocaleTimeString() })}</span>}
             </span>}
         </p>}
+        <p className="px-3 pb-2 text-[10px] leading-4 text-zinc-500" title={aiProfile.prompt}>
+          {t("folderAi.effective", { source: t(`folderAi.source.${aiProfile.source}`, { name: aiProfile.folderName || "" }) })}
+        </p>
         {!aiReady ? (
           <div className="flex min-h-36 flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
             <p className="text-[12px] font-medium text-zinc-300">
@@ -983,7 +966,7 @@ export function CrmAiPanel() {
                   {t("crmPanel.commonReplies")}
                 </div>
                 <div className="text-2xs text-zinc-500">
-                  {t("crmPanel.quickCount", { shown: filteredQuickReplies.length, total: settings.quickReplies?.length || 0 })}
+                  {t("quickShelf.headerHint")}
                 </div>
               </div>
             </div>
@@ -997,117 +980,26 @@ export function CrmAiPanel() {
             </Button>
           </div>
 
-          {(settings.quickReplies || []).length > 0 && (
-            <div className="space-y-2 border-b border-zinc-800/90 p-2.5">
-              <label className="relative block">
-                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-600" />
-                <input
-                  value={quickQuery}
-                  onChange={(event) => setQuickQuery(event.target.value)}
-                  placeholder={t("crmPanel.searchReplies")}
-                  aria-label={t("crmPanel.quickReplies")}
-                  className="ui-control h-8 w-full pl-8 pr-2 text-[11px]"
-                />
-              </label>
-              {availableQuickCategories.length > 1 && (
-                <div className="flex gap-1 overflow-x-auto" aria-label={t("crmPanel.replyCategories")}>
-                  <button
-                    type="button"
-                    aria-pressed={quickCategory === "all"}
-                    className={cn(
-                      "shrink-0 rounded-full px-2.5 py-1 text-[10px]",
-                      quickCategory === "all"
-                        ? "bg-brand/15 text-brand"
-                        : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300"
-                    )}
-                    onClick={() => setQuickCategory("all")}
-                  >
-                    {t("starred.all")}
-                  </button>
-                  {availableQuickCategories.map((category) => (
-                    <button
-                      key={category.id}
-                      type="button"
-                      aria-pressed={quickCategory === category.id}
-                      className={cn(
-                        "shrink-0 rounded-full px-2.5 py-1 text-[10px]",
-                        quickCategory === category.id
-                          ? "bg-brand/15 text-brand"
-                          : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300"
-                      )}
-                      onClick={() => setQuickCategory(category.id)}
-                    >
-                      {category.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {(settings.quickReplies || []).length === 0 ? (
-            <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-              <Zap className="h-8 w-8 text-zinc-600" />
-              <div>
-                <p className="text-[12px] text-zinc-400">{t("crmPanel.noReplies")}</p>
-                <p className="mt-1 text-2xs text-zinc-600">
-                  {t("crmPanel.noRepliesHint")}
-                </p>
-              </div>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setSettingsOpen(true, "quick-replies")}
-              >
-                {t("crmPanel.addReply")}
-              </Button>
-            </div>
-          ) : (
-            <ul className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
-              {filteredQuickReplies.map((reply) => (
-                <li key={reply.id}>
-                  <button
-                    type="button"
-                    disabled={!reply.body.trim() && !reply.media}
-                    className="flex w-full flex-col gap-1 rounded-xl px-3 py-3 text-left transition-colors hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-40"
-                    onClick={() => {
-                      applyAiSuggestion(reply.body, "append");
-                      if (reply.media) {
-                        emitQuickReplyMedia({
-                          ...reply.media,
-                          caption: reply.body,
-                          token: `${reply.id}-${Date.now()}`,
-                          target: "main",
-                        });
-                      }
-                      pushToast(t("crmPanel.appended"), "success");
-                    }}
-                  >
-                    <span className="flex w-full items-center justify-between gap-2">
-                      <span className="truncate text-[12px] font-medium text-zinc-100">
-                        {reply.title || t("crmPanel.unnamed")}
-                      </span>
-                      <span className="shrink-0 rounded-full bg-zinc-800 px-2 py-0.5 text-[9px] text-zinc-500">
-                        {QUICK_REPLY_CATEGORIES.some((category) => category.id === reply.category)
-                          ? t(`quickReply.category.${reply.category}` as TranslationKey)
-                          : getQuickReplyCategories(settings.quickReplyCustomCategories).find(
-                              (category) => category.id === reply.category
-                            )?.label || t("crmPanel.unnamed")}
-                      </span>
-                    </span>
-                    <span className="line-clamp-3 text-[11px] leading-relaxed text-zinc-500">
-                      {reply.body || reply.media?.fileName || t("crmPanel.noContent")}
-                    </span>
-                  </button>
-                </li>
-              ))}
-              {filteredQuickReplies.length === 0 && (
-                <li className="px-4 py-10 text-center text-[11px] text-zinc-600">
-                  {t("crmPanel.noMatchingReplies")}
-                </li>
-              )}
-            </ul>
-          )}
+          <QuickReplyBrowser
+            replies={settings.quickReplies || []}
+            categories={settings.quickReplyCustomCategories || []}
+            contextKey={["main", selectedChatId, quickReplyAccountId, settings.sendChannel, quickReplyChat?.phoneId].join(":")}
+            target={quickReplyChat ? { title: quickReplyChat.contactName || contact?.name || quickReplyChat.id, account: quickReplyIdentity } : undefined}
+            pinnedIds={settings.quickReplyPinnedIds}
+            recentIds={settings.quickReplyRecentIds}
+            onTogglePin={toggleQuickReplyPin}
+            onUsed={recordQuickReplyUsage}
+            disabled={!quickReplyChat}
+            onInsert={reply => {
+              if (!selectedChatId || useAppStore.getState().selectedChatId !== selectedChatId) return false;
+              if (reply.media) {
+                const accepted = emitQuickReplyMedia({ ...reply.media, caption: reply.body,
+                  token: reply.id + "-" + Date.now(), target: "main", chatId: selectedChatId });
+                if (!accepted) { pushToast(t("quickShelf.insertUnavailable"), "info"); return false; }
+              } else if (reply.body.trim()) applyAiSuggestion(reply.body, "append");
+              pushToast(t(reply.media ? "quickShelf.mediaInserted" : "crmPanel.appended"), "success");
+            }}
+          />
         </section>
       )}
     </aside>

@@ -41,6 +41,7 @@ function shallowMessageSame(a: Message, b: Message): boolean {
     a.id === b.id &&
     a.accountPhoneE164 === b.accountPhoneE164 &&
     a.body === b.body &&
+    a.sentAt === b.sentAt &&
     a.mediaType === b.mediaType &&
     a.mediaUrl === b.mediaUrl &&
     a.mediaMime === b.mediaMime &&
@@ -267,6 +268,53 @@ export function applyMessagesSync(opts: {
       } = parsed;
       const isGroup = groupHint || contact.isGroup === true;
 
+      const mergeDetails = (prev: Message): Message => ({
+        ...prev,
+        accountPhoneE164: opts.accountPhoneE164 || prev.accountPhoneE164,
+        body: body || prev.body,
+        sentAt: item.sentAt != null && Number.isFinite(sentTs) ? sentAt : prev.sentAt,
+        mediaType: mediaType || prev.mediaType,
+        mediaUrl: mediaUrl || prev.mediaUrl,
+        mediaMime: mediaMime || prev.mediaMime,
+        mediaFileName: mediaFileName || prev.mediaFileName,
+        mediaSeconds: mediaSeconds ?? prev.mediaSeconds,
+        mediaPtt: mediaPtt || prev.mediaPtt,
+        mediaWaveform: mediaWaveform?.length ? mediaWaveform : prev.mediaWaveform,
+        mediaCaption: mediaCaption || prev.mediaCaption,
+        mediaThumbUrl: mediaThumbUrl || prev.mediaThumbUrl,
+        mediaPending: mediaUrl || prev.mediaUrl ? false : mediaPending || prev.mediaPending,
+        mediaError: mediaUrl ? undefined : prev.mediaError,
+        contactCard: contactCard || prev.contactCard,
+        isGroup: isGroup || prev.isGroup,
+        groupJid: groupJid || prev.groupJid,
+        senderJid: senderJid || prev.senderJid,
+        senderPhoneE164: senderPhoneE164 || prev.senderPhoneE164,
+        senderName: senderName || prev.senderName,
+        senderAvatarUrl: senderAvatarUrl || prev.senderAvatarUrl,
+        quoted: quoted || prev.quoted,
+        systemKind:
+          (typeof systemKind === "string" && systemKind) ||
+          prev.systemKind,
+        systemAction:
+          (typeof systemAction === "string" && systemAction) ||
+          prev.systemAction,
+        mentionedJids: Array.isArray(mentionedJids)
+          ? mentionedJids
+          : prev.mentionedJids,
+        mentionedMe: mentionedMe || prev.mentionedMe,
+        waKey: waKey || prev.waKey,
+        // 本地星标不被 bridge 回声覆盖
+        starred: prev.starred,
+        starredAt: prev.starredAt,
+        // enrich 禁止把 delivered/read 打回 sent
+        deliveryStatus:
+          direction === "out"
+            ? deliveryAckRank(prev.deliveryStatus) >= deliveryAckRank("sent")
+              ? prev.deliveryStatus
+              : "sent"
+            : prev.deliveryStatus,
+      });
+
       // 出站回声：优先并回「当前选中会话」的乐观气泡，避免 WA 把回执挂到「自己/E」上拆会话
       if (direction === "out") {
         const echoTs = sentTs;
@@ -286,26 +334,23 @@ export function applyMessagesSync(opts: {
           // 多号：禁止跨账号合并乐观气泡
           const mOwner = m.accountId || m.deviceId || "";
           if (mOwner && mOwner !== deviceId) continue;
-          const mb = (m.body || "").replace(/\s+/g, " ").trim();
-          if (mb !== normBody) continue;
           // 文本发送会写 waMessageId，媒体/旧版本有时只写 waKey.id；
           // 两者都代表同一个 WhatsApp 协议消息，必须优先合并回本地气泡。
           const exactId =
-            !!waId && (m.waMessageId === waId || m.waKey?.id === waId);
+            !!waId && (m.waMessageId === waId || m.waKey?.id === waId || m.id === waId || m.id === localMessageId);
           if (!exactId) {
+            // A known protocol ID belongs to one message, even when captions or timestamps match.
+            if (m.waMessageId || m.waKey?.id || !String(m.id).startsWith("msg-")) continue;
+            if ((m.body || "").replace(/\s+/g, " ").trim() !== normBody) continue;
+            const localType = m.mediaType === "voice" ? "audio" : m.mediaType || "";
+            const remoteType = mediaType === "voice" ? "audio" : mediaType || "";
+            if (localType !== remoteType) continue;
             const sameThread =
               m.chatId === chatId ||
-              m.chatId === selectedChat ||
               m.contactId === contact.id ||
-              (!!selectedContact && m.contactId === selectedContact);
+              (looksLikeSelfContact(contact, selfName) && (m.chatId === selectedChat ||
+                (!!selectedContact && m.contactId === selectedContact)));
             if (!sameThread) continue;
-            const localLike =
-              String(m.id).startsWith("msg-") ||
-              m.deliveryStatus === "pending" ||
-              m.deliveryStatus === "queued" ||
-              m.deliveryStatus === "sent";
-            if (!localLike && !String(m.id).startsWith("bridge-msg-"))
-              continue;
             const mt = Date.parse(m.sentAt);
             if (!Number.isFinite(mt) || !Number.isFinite(echoTs)) {
               if (!String(m.id).startsWith("msg-")) continue;
@@ -341,10 +386,9 @@ export function applyMessagesSync(opts: {
           const keepContactId =
             prev.contactId || selectedContact || contact.id;
           messages[localIdx] = {
-            ...prev,
+            ...mergeDetails(prev),
             waMessageId: waId || prev.waMessageId,
             accountPhoneE164: opts.accountPhoneE164 || prev.accountPhoneE164,
-            sentAt: prev.sentAt || sentAt,
             // 回声只保证至少 sent，不降级已 delivered/read
             deliveryStatus:
               deliveryAckRank(prev.deliveryStatus) >= deliveryAckRank("sent")
@@ -407,6 +451,7 @@ export function applyMessagesSync(opts: {
             dupIn = m;
             break;
           }
+          if (string(item.id, 300) || string(object(item.waKey ?? item.key)?.id, 300)) continue;
           const t = Date.parse(m.sentAt);
           if (
             Number.isFinite(t) &&
@@ -436,61 +481,17 @@ export function applyMessagesSync(opts: {
       let existingIdx = -1;
       for (const key of [localMessageId, waId, string(item.targetMessageId, 300)]) {
         if (!key) continue;
-        const at = idxMap.get(key);
+        const at = idxMap.get(accountMessageIndexKey(deviceId, key)) ?? idxMap.get(key);
         if (at == null) continue;
         const cand = messages[at];
-        if (cand && cand.chatId === chatId) {
+        if (cand && cand.chatId === chatId && (!cand.accountId || cand.accountId === deviceId)) {
           existingIdx = at;
           break;
         }
       }
       if (existingIdx >= 0) {
         const prev = messages[existingIdx];
-        const next = {
-          ...prev,
-          accountPhoneE164: opts.accountPhoneE164 || prev.accountPhoneE164,
-          body: body || prev.body,
-          mediaType: mediaType || prev.mediaType,
-          mediaUrl: mediaUrl || prev.mediaUrl,
-          mediaMime: mediaMime || prev.mediaMime,
-          mediaFileName: mediaFileName || prev.mediaFileName,
-          mediaSeconds: mediaSeconds ?? prev.mediaSeconds,
-          mediaPtt: mediaPtt || prev.mediaPtt,
-          mediaWaveform: mediaWaveform?.length ? mediaWaveform : prev.mediaWaveform,
-          mediaCaption: mediaCaption || prev.mediaCaption,
-          mediaThumbUrl: mediaThumbUrl || prev.mediaThumbUrl,
-          mediaPending: mediaUrl || prev.mediaUrl ? false : mediaPending || prev.mediaPending,
-          mediaError: mediaUrl ? undefined : prev.mediaError,
-          contactCard: contactCard || prev.contactCard,
-          isGroup: isGroup || prev.isGroup,
-          groupJid: groupJid || prev.groupJid,
-          senderJid: senderJid || prev.senderJid,
-          senderPhoneE164: senderPhoneE164 || prev.senderPhoneE164,
-          senderName: senderName || prev.senderName,
-          senderAvatarUrl: senderAvatarUrl || prev.senderAvatarUrl,
-          quoted: quoted || prev.quoted,
-          systemKind:
-            (typeof systemKind === "string" && systemKind) ||
-            prev.systemKind,
-          systemAction:
-            (typeof systemAction === "string" && systemAction) ||
-            prev.systemAction,
-          mentionedJids: Array.isArray(mentionedJids)
-            ? mentionedJids
-            : prev.mentionedJids,
-          mentionedMe: mentionedMe || prev.mentionedMe,
-          waKey: waKey || prev.waKey,
-          // 本地星标不被 bridge 回声覆盖
-          starred: prev.starred,
-          starredAt: prev.starredAt,
-          // enrich 禁止把 delivered/read 打回 sent
-          deliveryStatus:
-            direction === "out"
-              ? deliveryAckRank(prev.deliveryStatus) >= deliveryAckRank("sent")
-                ? prev.deliveryStatus
-                : "sent"
-              : prev.deliveryStatus,
-        };
+        const next = mergeDetails(prev);
         // 内容未变则不替换引用：避免击穿 selectChatMessages 缓存 → 全部气泡重渲染闪烁
         if (!shallowMessageSame(prev, next)) {
           messages[existingIdx] = next;

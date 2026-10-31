@@ -376,6 +376,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
           stickerDataUrl,
           stickerUrl,
           gifDataUrl,
+          videoDataUrl,
           gifUrl,
           audioDataUrl,
           audioUrl,
@@ -420,6 +421,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
           typeof gifDataUrl === "string" &&
           gifDataUrl.startsWith("data:image/gif;base64,");
         const hasGifUrl = /^https?:\/\//i.test(String(gifUrl || ""));
+        const hasVideo = typeof videoDataUrl === "string" && videoDataUrl.startsWith("data:video/mp4;base64,");
         const hasAudio =
           typeof audioDataUrl === "string" &&
           audioDataUrl.startsWith("data:audio");
@@ -483,7 +485,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
 
         if (
           !address ||
-          (!caption && !hasImage && !hasImageUrl && !hasSticker && !hasStickerUrl && !hasGif && !hasGifUrl && !hasAudio && !hasAudioUrl && !hasFile && !hasFileUrl && !contactCard)
+          (!caption && !hasImage && !hasImageUrl && !hasSticker && !hasStickerUrl && !hasGif && !hasGifUrl && !hasVideo && !hasAudio && !hasAudioUrl && !hasFile && !hasFileUrl && !contactCard)
         )
           return json(res, 400, { error: "号码或消息为空" });
 
@@ -578,6 +580,11 @@ if (req.method === "POST" && url.pathname === "/restart") {
           console.log(
             `[ptt] sent id=${result?.key?.id} type=${result?.message?.audioMessage ? "audio" : JSON.stringify(Object.keys(result?.message || {}))} seconds=${result?.message?.audioMessage?.seconds} ptt=${result?.message?.audioMessage?.ptt} mimetype=${result?.message?.audioMessage?.mimetype} len=${result?.message?.audioMessage?.fileLength}`
           );
+        } else if (hasVideo || mediaType === "video") {
+          const parsed = parseDataUrl(videoDataUrl);
+          if (!parsed?.buf?.length || parsed.mime !== "video/mp4" || parsed.buf.length > 8 * 1024 * 1024) return json(res,400,{error:"视频需为不超过8 MB的MP4文件"});
+          result = await d.socket.sendMessage(jid, { video: parsed.buf, mimetype: "video/mp4",
+            jpegThumbnail: await safeVideoThumbnail(parsed.buf), ...(caption ? {caption} : {}) }, quotedOpt ? {quoted:quotedOpt} : undefined);
         } else if (hasGifUrl) {
           const video = (await downloadRemoteMedia(gifUrl, 12_000_000)).buffer;
           result = await d.socket.sendMessage(jid, {

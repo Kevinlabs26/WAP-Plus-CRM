@@ -6,6 +6,13 @@ export const QUICK_REPLY_CATEGORIES = [
   { id: "other", label: "其他" },
 ] as const;
 
+export const MAX_QUICK_REPLIES = 1000;
+export const MAX_RECENT_QUICK_REPLIES = 20;
+export const MAX_QUICK_REPLY_CATEGORIES = 100;
+export const MAX_QUICK_REPLY_MEDIA_BYTES = 8 * 1024 * 1024;
+// shortcut: Media remains inline in settings (64 MB total); use file storage if larger media libraries are needed.
+export const MAX_QUICK_REPLY_MEDIA_TOTAL_BYTES = 64 * 1024 * 1024;
+
 export type QuickReplyCategory =
   | (typeof QUICK_REPLY_CATEGORIES)[number]["id"]
   | (string & {});
@@ -60,13 +67,16 @@ export function filterQuickReplies<
     media?: { fileName?: string };
   },
 >(items: T[], category: QuickReplyCategoryFilter, query: string): T[] {
-  const keyword = query.trim().toLocaleLowerCase();
-  return items.filter(
-    (item) =>
-      (category === "all" || item.category === category) &&
-      (!keyword ||
-        `${item.title}\n${item.body}\n${item.media?.fileName || ""}`
-          .toLocaleLowerCase()
-          .includes(keyword))
-  );
+  const normalize = (text: string) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const keywords = normalize(query).trim().split(/\s+/u).filter(Boolean);
+  return items.filter(item => {
+    if (category !== "all" && item.category !== category) return false;
+    const text = normalize(`${item.title}\n${item.body}\n${item.media?.fileName || ""}`);
+    return keywords.every(keyword => text.includes(keyword));
+  });
+}
+
+export function normalizeQuickReplyIds(value: unknown, replies: { id: string }[], limit: number): string[] {
+  const valid = new Set(replies.map(reply => reply.id));
+  return Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === "string" && valid.has(id)))].slice(0, limit) : [];
 }

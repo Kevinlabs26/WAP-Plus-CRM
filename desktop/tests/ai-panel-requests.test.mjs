@@ -5,7 +5,10 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { getSuggestionContextKey } from "../src/lib/aiSuggest.ts";
+import { resolveAiReplyProfile } from "../src/lib/aiPromptScope.ts";
 import { createSuggestionCache, isManualSuggestionContext, markManualSuggestionContext } from "../src/lib/aiSuggestionCache.ts";
+import { resolveWaSendAccountId } from "../src/lib/accountConnection.ts";
+import { formatAccountDisplay } from "../src/lib/accountLabels.ts";
 
 const entry = fileURLToPath(new URL("../src/components/crm/CrmAiPanel.tsx", import.meta.url));
 const source = await readFile(entry, "utf8");
@@ -58,11 +61,12 @@ function harness() {
   };
   const requests = []; const timers = new Map(); let timerId = 0; let contextReads = 0;
   globalThis.window = { setTimeout(fn) { timers.set(++timerId, fn); return timerId; }, clearTimeout(id) { timers.delete(id); } };
-  const store = selector => selector(state); store.setState = patch => Object.assign(state, patch);
+  const store = selector => selector(state); store.setState = patch => Object.assign(state, patch); store.getState=()=>state;
   globalThis.panelHooks = hooks;
   globalThis.panelBindings = {
     useAppStore: store, hasRealAiKey: () => true,
-    resolveAutoReplyScope, createSuggestionCache, isManualSuggestionContext,
+    resolveWaSendAccountId, formatAccountDisplay, QuickReplyBrowser: "quick-browser",
+    resolveAutoReplyScope, resolveAiReplyProfile, createSuggestionCache, isManualSuggestionContext,
     getSuggestionContextKey: (...args) => { contextReads++; return getSuggestionContextKey(...args); },
     generateSuggestions: (...args) => new Promise(resolve => requests.push({ args, resolve })),
     useI18n: () => ({ t: key => key }), getQuickReplyCategories: () => [], filterQuickReplies: () => [],
@@ -94,6 +98,48 @@ function harness() {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const reply = text => ({ source: "custom", suggestions: [{ id: text, text }] });
+
+test("main quick replies show the selected thread account and reject insertion after changing chats", async () => {
+ const h=harness();h.state.crmPanelTab='quick-replies';h.state.settings.waAccounts=[{id:'a',label:'1',userName:'Alice',status:'connected'},{id:'b',label:'2',userName:'Bob',status:'connected'}];
+ h.state.settings.sendChannel='baileys';h.state.settings.activeAccountId='b';h.state.settings.liveBaileysAccountId='b';h.state.chats[0].contactName='Grace';
+ h.state.settings.quickReplyPinnedIds=['q'];h.state.settings.quickReplyRecentIds=['q'];h.state.toggleQuickReplyPin=()=>{};h.state.recordQuickReplyUsage=()=>{};
+ const inserted=[];h.state.applyAiSuggestion=(...args)=>inserted.push(args);
+ const nodes=tree=>Array.isArray(tree)?tree.flatMap(nodes):tree?.props?[tree,...nodes(tree.props.children)]:[];
+ await h.mount();
+ try{
+ let shelf=nodes(h.render()).find(n=>n.type==='quick-browser').props;
+ assert.deepEqual(shelf.target,{title:'Grace',account:'1: Alice'});assert.strictEqual(shelf.onUsed,h.state.recordQuickReplyUsage);
+ const oldContext=shelf.contextKey;h.state.selectedThreadAccount={chatId:'a',accountId:'b'};
+ shelf=nodes(h.render()).find(n=>n.type==='quick-browser').props;assert.equal(shelf.target.account,'2: Bob');assert.notEqual(shelf.contextKey,oldContext);
+ shelf.onInsert({id:'q',body:'Hello'});assert.deepEqual(inserted,[['Hello','append']]);
+ h.state.selectedChatId='b';assert.equal(shelf.onInsert({id:'q',body:'Old target'}),false);assert.equal(inserted.length,1);
+ }finally{h.unmount();}
+});
+
+test("folder identity edits and moves reject old streaming replies while clone changes reuse the request", async () => {
+  const h = harness();
+  h.state.settings.chatFolders = [
+    { id: 'parent', name: 'Parent', chatIds: [], aiSystemPrompt: 'PARENT', scope: { type: 'account', accountId: 'a' } },
+    { id: 'child', name: 'Child', chatIds: ['a'], parentId: 'parent', scope: { type: 'account', accountId: 'a' } },
+  ];
+  await h.mount(); h.fireTimers();
+  const original = h.requests[0];
+  h.state.settings = { ...h.state.settings, chatFolderClones: [{ sourceChatId: 'a', folderId: 'other' }] };
+  h.render(); h.fireTimers(); assert.equal(h.requests.length, 1);
+  h.state.settings = { ...h.state.settings, chatFolders: h.state.settings.chatFolders.map(f => f.id === 'parent' ? { ...f, aiSystemPrompt: 'NEW ROLE' } : f) };
+  h.render(); h.fireTimers(); assert.equal(h.requests.length, 2);
+  original.args[3].onProgress(reply('OLD ROLE'));
+  original.resolve(reply('OLD FINAL')); await settle();
+  assert.deepEqual(h.state.aiSuggestions, []);
+  h.requests[1].args[3].onProgress(reply('NEW ROLE candidate'));
+  assert.equal(h.state.aiSuggestions[0].text, 'NEW ROLE candidate');
+  h.state.settings = { ...h.state.settings, chatFolders: [] };
+  h.render(); h.fireTimers(); assert.equal(h.requests.length, 3);
+  h.requests[1].resolve(reply('STALE AFTER MOVE')); await settle();
+  assert.deepEqual(h.state.aiSuggestions, []);
+  h.requests[2].resolve(reply('DEFAULT ROLE')); await settle();
+  assert.equal(h.state.aiSuggestions[0].text, 'DEFAULT ROLE'); h.unmount();
+});
 
 test("streamed candidates appear while loading and cannot leak across conversations or unmount", async () => {
   const h = harness(); await h.mount(); h.fireTimers();

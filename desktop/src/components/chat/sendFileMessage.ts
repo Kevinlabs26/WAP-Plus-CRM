@@ -7,6 +7,8 @@ import { translateCurrent } from "@/i18n";
 type SendResult = object;
 
 type SendFileMessageDeps = {
+  requiredMinGapSec?: number;
+  persistBeforeSend?: () => Promise<void>;
   canSend?: () => boolean;
   sending: boolean;
   stickToBottom: () => void;
@@ -86,6 +88,8 @@ export async function sendFileMessage(
         mediaCaption: caption || undefined,
       });
     }
+    if (!msgId && deps.requiredMinGapSec !== undefined) throw new Error("无法保存出站消息，群发已停止");
+    await deps.persistBeforeSend?.();
     const raw = deps.isBaileys
       ? await gatedMediaSend(
           { phoneE164: recipient, accountId: deps.chatAccountId },
@@ -95,12 +99,14 @@ export async function sendFileMessage(
               caption,
               accountId: deps.chatAccountId,
             }),
-          deps.canSend
+          deps.canSend,
+          deps.requiredMinGapSec
         )
       : await gatedMediaSend(
           { phoneE164: recipient, accountId: deps.chatAccountId },
           () => deps.openAndroidMediaShare(file, dataUrl, caption, recipient),
-          deps.canSend
+          deps.canSend,
+          deps.requiredMinGapSec
         );
     if (msgId) {
       if (!deps.isBaileys) {
@@ -141,6 +147,7 @@ export async function sendFileMessage(
       });
     }
     deps.pushToast(message, "error");
+    if (deps.requiredMinGapSec !== undefined) throw e;
     return false;
   } finally {
     deps.setSending(false);

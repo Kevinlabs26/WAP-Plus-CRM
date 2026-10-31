@@ -19,6 +19,17 @@ function setup(tasks = []) {
 }
 const draft = { text: "Hello", dueAt: new Date(Date.now() + 3600000).toISOString(), contactName: "Example", recipient: "+12025550100", chatId: "chat", contactId: "c", channelId: "baileys", accountId: "wa-a" };
 
+test('quick reply usage is shared, bounded and unique; deleting a reply removes its pin and history',()=>{
+ const {get}=setup();get().settings=normalizeLoadedSettings({quickReplies:Array.from({length:25},(_,i)=>({id:'r'+i,title:'Title '+i,body:'Body',category:'other'}))});
+ get().toggleQuickReplyPin('r2');assert.deepEqual(get().settings.quickReplyPinnedIds,['r2']);
+ get().toggleQuickReplyPin('r2');assert.deepEqual(get().settings.quickReplyPinnedIds,[]);get().toggleQuickReplyPin('r2');
+ for(let i=0;i<25;i++)get().recordQuickReplyUsage('r'+i);
+ assert.equal(get().settings.quickReplyRecentIds.length,20);assert.equal(get().settings.quickReplyRecentIds[0],'r24');
+ get().recordQuickReplyUsage('r2');get().recordQuickReplyUsage('r2');assert.equal(get().settings.quickReplyRecentIds[0],'r2');assert.equal(new Set(get().settings.quickReplyRecentIds).size,20);
+ get().toggleQuickReplyPin('gone');get().recordQuickReplyUsage('gone');assert.equal(get().settings.quickReplyRecentIds.includes('gone'),false);
+ get().updateSettings({quickReplies:get().settings.quickReplies.filter(r=>r.id!=='r2')});assert.deepEqual(get().settings.quickReplyPinnedIds,[]);assert.equal(get().settings.quickReplyRecentIds.includes('r2'),false);
+});
+
 test('expired schedules survive restart and require a confirmed future time without adopting another account',()=>{
  const item={...draft,id:'expired',status:'expired',messageId:'old-out',error:'expired'};
  const {get}=setup([item]);assert.equal(normalizeLoadedSettings(get().settings).scheduledMessages[0].status,'expired');

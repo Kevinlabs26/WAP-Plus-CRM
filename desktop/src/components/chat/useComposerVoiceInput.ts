@@ -13,7 +13,7 @@ type UseComposerVoiceInputOptions = {
 };
 
 /**
- * 语音转文字（麦克风按钮）状态机：开/关/取消 + 实时回填草稿，
+ * 语音转文字按钮状态机：开始/停止/取消 + 实时回填草稿，
  * 从 Composer 抽离以缩小组件体积。
  */
 export function useComposerVoiceInput(opts: UseComposerVoiceInputOptions) {
@@ -30,6 +30,7 @@ export function useComposerVoiceInput(opts: UseComposerVoiceInputOptions) {
   const [voiceInputEngineLabel, setVoiceInputEngineLabel] = useState("");
   const [voiceLanguageOpen, setVoiceLanguageOpen] = useState(false);
   const voiceInputSessionRef = useRef<VoiceInputSession | null>(null);
+  const voiceInputBusyRef = useRef(false);
   const voiceRequestRef = useRef(0);
   const voiceErrorShownRef = useRef(false);
   const voiceOriginalDraftRef = useRef("");
@@ -60,6 +61,7 @@ export function useComposerVoiceInput(opts: UseComposerVoiceInputOptions) {
 
   /** 语音输入：第一次点击开始听，第二次点击结束出文字 */
   const handleToggleVoiceInput = async () => {
+    if (voiceInputBusyRef.current) return;
     if (editingId) {
       pushToast("编辑模式下暂不支持语音输入", "info");
       return;
@@ -68,7 +70,7 @@ export function useComposerVoiceInput(opts: UseComposerVoiceInputOptions) {
       await handleFinishVoiceInput();
       return;
     }
-    if (voiceInputBusy) return;
+    voiceInputBusyRef.current = true;
     const request = ++voiceRequestRef.current;
     voiceErrorShownRef.current = false;
     voiceOriginalDraftRef.current = opts.readDraft?.() || "";
@@ -99,8 +101,10 @@ export function useComposerVoiceInput(opts: UseComposerVoiceInputOptions) {
         `${session.engine === "browser" ? "浏览器实时" : "AI 转写"} · ${session.languageLabel}`
       );
       setVoiceInputBusy(false);
+      voiceInputBusyRef.current = false;
     } catch (e) {
       if (request !== voiceRequestRef.current) return;
+      voiceInputBusyRef.current = false;
       setVoiceInputBusy(false);
       setVoiceInputOpen(false);
       showVoiceError(e instanceof Error ? e.message : "语音输入失败");
@@ -109,7 +113,8 @@ export function useComposerVoiceInput(opts: UseComposerVoiceInputOptions) {
 
   const handleFinishVoiceInput = async () => {
     const session = voiceInputSessionRef.current;
-    if (!session) return;
+    if (!session || voiceInputBusyRef.current) return;
+    voiceInputBusyRef.current = true;
     const request = voiceRequestRef.current;
     voiceInputSessionRef.current = null;
     setVoiceInputBusy(true);
@@ -132,6 +137,7 @@ export function useComposerVoiceInput(opts: UseComposerVoiceInputOptions) {
       showVoiceError(e instanceof Error ? e.message : "语音输入失败");
     } finally {
       if (request === voiceRequestRef.current) {
+        voiceInputBusyRef.current = false;
         setVoiceInputBusy(false);
         setVoiceInputOpen(false);
         setVoiceInputEngineLabel("");
@@ -144,6 +150,7 @@ export function useComposerVoiceInput(opts: UseComposerVoiceInputOptions) {
     voiceRequestRef.current++;
     voiceInputSessionRef.current?.cancel();
     voiceInputSessionRef.current = null;
+    voiceInputBusyRef.current = false;
     setVoiceInputBusy(false);
     setVoiceInputOpen(false);
     setVoiceInputEngineLabel("");

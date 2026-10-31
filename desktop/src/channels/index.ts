@@ -31,6 +31,7 @@ export {
 export type { SendGateConfig } from "./sendGate";
 
 export interface ChannelRuntimeConfig {
+  requiredMinGapSec?: number;
   channelId: ChannelId | string;
   /** 等待发送门闸后复核可撤销的自动任务。 */
   canSend?: () => boolean;
@@ -104,7 +105,8 @@ export async function dispatchSendText(
     gateCfg,
     () => config.canSend && !config.canSend()
       ? Promise.resolve({ ok: false, delivered: false, channel: channelId, status: "failed" as const, error: "automation_cancelled", message: "自动回复已停止或上下文已更新，请人工确认" })
-      : channel.sendText(input)
+      : channel.sendText(input),
+    config.requiredMinGapSec
   );
 
   if (!outcome.ok) {

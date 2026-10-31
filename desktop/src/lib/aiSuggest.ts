@@ -3,6 +3,7 @@ import type { AppSettings } from "@/store/appStore";
 import { geminiGenerate } from "./gemini.ts";
 import { getOpenAiCompatibleConfig, hasAiCredentials } from "./aiProviders.ts";
 import { ingestString } from "../store/bridgeIngestHelpers.ts";
+import { resolveAiReplyProfile } from "./aiPromptScope.ts";
 
 export interface SuggestResult {
   id: string;
@@ -46,14 +47,10 @@ export function hasRealAiKey(s: AppSettings): boolean {
 
 export function resolveAiSystemPrompt(
   settings: AppSettings,
-  accountId?: string
+  accountId?: string,
+  chatId?: string
 ): string {
-  const id = accountId?.trim();
-  return (
-    (id ? settings.aiSystemPromptByAccountId?.[id]?.trim() : "") ||
-    settings.aiSystemPrompt?.trim() ||
-    ""
-  );
+  return resolveAiReplyProfile(settings, accountId, chatId).prompt;
 }
 
 /** 只包含实际生成所用的上下文和配置，不包含密钥或投递回执。 */
@@ -62,11 +59,13 @@ export function getSuggestionContextKey(
   recent: Message[],
   settings: AppSettings,
   accountId?: string,
-  opts?: { auto?: boolean; replyTo?: Message }
+  opts?: { auto?: boolean; replyTo?: Message; chatId?: string }
 ): string {
-  const prompt = resolveAiSystemPrompt(settings, accountId || contact?.accountId);
+  const chatId = opts?.chatId || opts?.replyTo?.chatId || recent[0]?.chatId;
+  const profile = resolveAiReplyProfile(settings, accountId || contact?.accountId, chatId);
+  const prompt = profile.prompt;
   return JSON.stringify([
-    contact?.id || "", recent[0]?.chatId || opts?.replyTo?.chatId || "",
+    contact?.id || "", chatId || "", profile.folderId || "", profile.primaryFolderIds,
     accountId || contact?.accountId || "",
     settings.aiProvider, settings.aiModel, settings.customAiModel,
     settings.customAiBaseUrl, settings.ollamaUrl,
@@ -84,7 +83,7 @@ export async function generateSuggestions(
   contact: Contact | undefined,
   recent: Message[],
   settings: AppSettings,
-  opts?: { auto?: boolean; accountId?: string; replyTo?: Message; signal?: AbortSignal; onProgress?: (result: GenerateSuggestionsResult) => void }
+  opts?: { auto?: boolean; accountId?: string; chatId?: string; replyTo?: Message; signal?: AbortSignal; onProgress?: (result: GenerateSuggestionsResult) => void }
 ): Promise<GenerateSuggestionsResult> {
   const name = contact?.name ?? "there";
   const sorted = [...recent].sort((a, b) => a.sentAt.localeCompare(b.sentAt));
@@ -93,7 +92,8 @@ export async function generateSuggestions(
   const provider = settings.aiProvider;
   const prompt = resolveAiSystemPrompt(
     settings,
-    opts?.accountId || contact?.accountId
+    opts?.accountId || contact?.accountId,
+    opts?.chatId || opts?.replyTo?.chatId || recent[0]?.chatId
   );
   const effectiveSettings =
     prompt === settings.aiSystemPrompt ? settings : { ...settings, aiSystemPrompt: prompt };

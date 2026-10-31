@@ -258,7 +258,8 @@ export interface AppState extends PersistSlice {
     extraGapMaxSec?: number;
     media?: import("@/types/broadcast").BroadcastMedia[];
     mediaMode?: import("@/types/broadcast").BroadcastMediaMode;
-  }) => { ok: true; id: string } | { ok: false; reason: string };
+    confirmedDuplicateIds?: string[];
+  }) => { ok: true; id: string } | { ok: false; reason: string; duplicateIds?: string[] };
   startBroadcastCampaign: (
     id: string
   ) => { ok: true } | { ok: false; reason: string };
@@ -266,7 +267,7 @@ export interface AppState extends PersistSlice {
   resumeBroadcastCampaign: (
     id: string
   ) => { ok: true } | { ok: false; reason: string };
-  retryFailedBroadcastCampaign: (id: string) => number;
+  retryFailedBroadcastCampaign: (id: string, itemIds?: string[], confirmedUnknownIds?: string[]) => number;
   cancelBroadcastCampaign: (id: string) => void;
   retireAccountMessaging: (accountId: string) => void;
   completeBroadcastCampaignIfIdle: (id: string) => void;
@@ -381,6 +382,8 @@ export interface AppState extends PersistSlice {
     note?: string
   ) => number;
   updateSettings: (patch: Partial<AppSettings>) => void;
+  toggleQuickReplyPin: (id: string) => void;
+  recordQuickReplyUsage: (id: string) => void;
   secretSaveStatus: "idle" | "saving" | "failed";
   retrySecretSave: () => Promise<boolean>;
   deleteSalesStage: (stageId: SalesStage, targetId: SalesStage) => boolean;

@@ -58,6 +58,18 @@ test("opening a warm chat still checks recent disk messages and repairs a stale 
   } finally { env.cleanup(); }
 });
 
+test("opening a full chat requests its recent protocol window to refill missing media, not just older pages", async () => {
+  const existing=Array.from({length:200},(_,i)=>message('m-'+i,{sentAt:new Date(Date.parse('2026-10-31T12:00:00Z')+i*1000).toISOString(),waKey:{id:'wa-'+i,remoteJid:'12025550123@s.whatsapp.net',fromMe:true}}));
+  const env=setup(existing);
+  try{
+    globalThis.historyLoad=async()=>page(existing);useChatHistory('chat','wa-a','wa-a');await settle();
+    assert.equal(globalThis.historyRemote.length,1);
+    assert.equal(globalThis.historyRemote[0][0].key.id,'wa-199');assert.equal(globalThis.historyRemote[0][0].count,50);
+    assert.equal(globalThis.historyRemote[0][1],'wa-a');
+    env.listeners.get('focus')();await settle();assert.equal(globalThis.historyRemote.length,1,'focus does not repeatedly flood protocol history requests');
+  }finally{env.cleanup();}
+});
+
 test("a disk page already present in memory still repairs its incomplete message index", async () => {
   const existing = message("already-loaded");
   const env = setup([existing]);

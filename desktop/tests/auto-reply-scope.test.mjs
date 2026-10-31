@@ -7,6 +7,50 @@ const result=await build({stdin:{contents:`export {normalizeLoadedSettings} from
 const {normalizeLoadedSettings,buildSettingsSafe,parseBackupJson}=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].text).toString('base64'));
 const folder=(id,mode,chatIds=['a'])=>({id,name:id,chatIds,autoReplyMode:mode,sort:0});
 
+test('pinned and recent reply IDs survive reload and backup, pruning duplicates, invalid and deleted IDs', () => {
+ const quickReplies=Array.from({length:30},(_,i)=>({id:'r'+i,title:'Title '+i,body:'Body',category:'other'}));
+ const settings=normalizeLoadedSettings({quickReplies,quickReplyPinnedIds:['r2','r2','gone',null,{}],quickReplyRecentIds:['r1','r1','gone',...quickReplies.map(r=>r.id)]});
+ assert.deepEqual(settings.quickReplyPinnedIds,['r2']);assert.equal(settings.quickReplyRecentIds.length,20);
+ assert.deepEqual(settings.quickReplyRecentIds.slice(0,3),['r1','r0','r2']);
+ const backup=parseBackupJson({version:2,contacts:[{id:'a',name:'A',phone:'12025550100'}],settingsSafe:buildSettingsSafe(settings)});
+ const restored=normalizeLoadedSettings(backup.settingsSafe);
+ assert.deepEqual(restored.quickReplyPinnedIds,['r2']);assert.deepEqual(restored.quickReplyRecentIds,settings.quickReplyRecentIds);
+ assert.deepEqual(normalizeLoadedSettings({...settings,quickReplies:[]}).quickReplyPinnedIds,[]);
+ assert.deepEqual(normalizeLoadedSettings({quickReplyPinnedIds:{},quickReplyRecentIds:'bad'}).quickReplyRecentIds,[]);
+});
+
+test('large quick reply libraries and custom categories survive reload and backup, and deletion stays empty', () => {
+ const categories=Array.from({length:100},(_,i)=>({id:'custom-'+i,label:'Category '+i}));
+ const replies=Array.from({length:1000},(_,i)=>({id:'reply-'+i,title:'Title '+i,body:'Body '+i,category:categories[i%100].id}));
+ const settings=normalizeLoadedSettings({quickReplies:replies,quickReplyCustomCategories:categories});
+ const restarted=normalizeLoadedSettings(JSON.parse(JSON.stringify(settings)));
+ assert.deepEqual(restarted.quickReplies,replies.map(r=>({...r,media:undefined})));
+ assert.equal(restarted.quickReplyCustomCategories.length,100);
+ const restored=parseBackupJson({version:2,contacts:[{id:'a',name:'A',phone:'12025550100'}],settingsSafe:buildSettingsSafe(settings)});
+ assert.equal(restored.settingsSafe.quickReplies.length,1000);
+ assert.deepEqual(normalizeLoadedSettings({quickReplies:[]}).quickReplies,[]);
+ assert.equal(normalizeLoadedSettings({quickReplies:[...replies,{...replies[0],id:'extra'}]}).quickReplies.length,1000);
+});
+
+test('folder prompts survive normalization and backup restore without enabling automatic sending', () => {
+ const settings=normalizeLoadedSettings({aiReplyMode:'semi', chatFolders:[
+  {...folder('profile',undefined),aiSystemPrompt:'  FOLDER ROLE  '},
+  {...folder('blank',undefined,[]),aiSystemPrompt:'  '},
+  {...folder('bad',undefined,[]),aiSystemPrompt:{text:'invalid'}},
+  {...folder('long',undefined,[]),aiSystemPrompt:'x'.repeat(7000)},
+ ]});
+ assert.equal(settings.chatFolders.find(f=>f.id==='profile').aiSystemPrompt,'FOLDER ROLE');
+ assert.equal(settings.chatFolders.find(f=>f.id==='blank').aiSystemPrompt,undefined);
+ assert.equal(settings.chatFolders.find(f=>f.id==='bad').aiSystemPrompt,undefined);
+ assert.equal(settings.chatFolders.find(f=>f.id==='long').aiSystemPrompt.length,6000);
+ const restarted=normalizeLoadedSettings(JSON.parse(JSON.stringify(settings)));
+ assert.equal(restarted.chatFolders.find(f=>f.id==='profile').aiSystemPrompt,'FOLDER ROLE');
+ assert.equal(resolveAutoReplyScope(restarted,'a').mode,'manual');
+ const safe=buildSettingsSafe(settings);
+ const restored=parseBackupJson({version:2,contacts:[{id:'a',name:'A',phone:'12025550100'}],settingsSafe:safe});
+ assert.equal(restored.settingsSafe.chatFolders.find(f=>f.id==='profile').aiSystemPrompt,'FOLDER ROLE');
+});
+
 test('nested folders inherit the nearest explicit rule while individual settings and conflicting paths keep precedence',()=>{
  const parent=folder('parent','manual',[]),child={...folder('child',undefined,['a']),parentId:'parent'};
  const settings={aiReplyMode:'auto',chatFolders:[parent,child]};

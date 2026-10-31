@@ -21,3 +21,11 @@ test('right click and language badge open a portal selector and selection is sav
 test('language cannot be changed during active speech recognition',()=>{
  const ui=fixture();ui.scope.voiceInputOpen=true;const tree=ui.render();assert.equal(nodes(tree).find(n=>n.props['aria-controls']).props.disabled,true);nodes(tree).find(n=>n.props.onContextMenu).props.onContextMenu({preventDefault(){},stopPropagation(){}});assert.equal(ui.open,false);
 });
+
+test('the speech button stops through the toggle action instead of cancelling recognized text',()=>{
+ const ui=fixture(),calls=[];ui.scope.handleToggleVoiceInput=()=>calls.push('toggle');ui.scope.handleCancelVoiceInput=()=>calls.push('cancel');
+ const button=()=>nodes(ui.render()).find(n=>n.props.onContextMenu);
+ assert.equal(button().props['aria-label'],'tooltip.speechToText');button().props.onClick();
+ ui.scope.voiceInputOpen=true;assert.equal(button().props['aria-label'],'voice.finishInput');assert.equal(button().props['aria-pressed'],true);assert.equal(button().props.disabled,false);button().props.onClick();
+ assert.deepEqual(calls,['toggle','toggle']);ui.scope.voiceInputBusy=true;assert.equal(button().props.disabled,true);assert.equal(button().props['aria-label'],'voice.inputBusy');
+});

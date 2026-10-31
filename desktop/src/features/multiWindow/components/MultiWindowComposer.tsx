@@ -60,11 +60,13 @@ export function MultiWindowComposer({
   useEffect(() => {
     if (!onAttach) return;
     return onQuickReplyMedia((selection) => {
-      if (selection.target !== "multi" || selection.chatId !== chatId || busy || voice) return;
+      if (selection.target !== "multi" || selection.chatId !== chatId || busy || voice || (media?.items.length || 0) >= 5) return;
       const file = quickReplyMediaToFile(selection);
-      if (file) onAttach(file, selection.caption);
+      if (!file) return false;
+      const caption = selection.caption ? value ? `${value}\n${selection.caption}` : selection.caption : value;
+      onAttach(file, caption); return true;
     });
-  }, [chatId, busy, onAttach, voice]);
+  }, [chatId, busy, onAttach, voice, value, media?.items.length]);
 
   useLayoutEffect(() => {
     const input = textareaRef.current;

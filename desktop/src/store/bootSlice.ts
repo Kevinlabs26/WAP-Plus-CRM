@@ -516,6 +516,7 @@ export function createBootSlice({
             ? { ...task, status: "failed", messageId: undefined, error: "从备份恢复：请重新确认发送时间" }
             : task
         );
+        settings.scheduledPlans = (settings.scheduledPlans || []).map(plan => ["done", "cancelled"].includes(plan.status) ? plan : { ...plan, status: "paused", error: "planQueue.restored" });
         const slice: PersistSlice = {
           phones: parsed.phones,
           contacts: parsed.contacts,

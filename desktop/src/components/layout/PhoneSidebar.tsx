@@ -49,6 +49,8 @@ import {
 import { ChatSidebarRow } from "./ChatSidebarRow";
 import { ContactSidebarList } from "./ContactSidebarList";
 import { FolderHeaderRow } from "./FolderHeaderRow";
+import { FolderAiPromptDialog } from "./FolderAiPromptDialog";
+import { ScheduledPlanDialog } from "@/components/chat/ScheduledPlanDialog";
 import { FolderGroupImportDialog } from "./FolderGroupImportDialog";
 import { SidebarSpecialItem } from "./SidebarSpecialItem";
 import {
@@ -346,6 +348,8 @@ export function PhoneSidebar() {
     null
   );
   const [folderNameDraft, setFolderNameDraft] = useState("");
+  const [aiPromptFolderId, setAiPromptFolderId] = useState<string | null>(null);
+  const [scheduleTarget, setScheduleTarget] = useState<{ folderId?: string; chatIds?: string[]; initialStartNow?: boolean } | null>(null);
   const folderNameInputRef = useRef<HTMLInputElement | null>(null);
   const [folderImportText, setFolderImportText] = useState("");
   const [groupFolderDialog, setGroupFolderDialog] = useState<{
@@ -1014,6 +1018,7 @@ export function PhoneSidebar() {
     setChatMenu(null);
 
     try {
+      if (action === "schedule") { setScheduleTarget({ chatIds: targetChatIds }); return; }
       if (action === "moveToFolder") {
         if (!folderId) return;
         targetChatIds.forEach((chatId) => moveChatToFolder(chatId, folderId));
@@ -1502,6 +1507,9 @@ export function PhoneSidebar() {
                       name={it.name}
                       folderId={folder.id}
                       autoReplyMode={folder.autoReplyMode}
+                      onAiPrompt={() => setAiPromptFolderId(folder.id)}
+                      onSchedule={() => setScheduleTarget({ folderId: folder.id })}
+                      onBroadcast={() => setScheduleTarget({ folderId: folder.id, initialStartNow: true })}
                       onAutoReplyModeChange={mode => {
                         const current = useAppStore.getState();
                         current.updateSettings({ chatFolders: current.settings.chatFolders.map(item => item.id === folder.id ? { ...item, autoReplyMode: mode } : item) });
@@ -1595,6 +1603,8 @@ export function PhoneSidebar() {
         </div>
       )}
 
+      {aiPromptFolderId && <FolderAiPromptDialog key={aiPromptFolderId} folderId={aiPromptFolderId} onClose={() => setAiPromptFolderId(null)} />}
+      {scheduleTarget && <ScheduledPlanDialog {...scheduleTarget} onClose={() => setScheduleTarget(null)} />}
       {groupFolderDialog && (() => {
         const folder = chatFolders.find((item) => item.id === groupFolderDialog.folderId);
         if (!folder) return null;

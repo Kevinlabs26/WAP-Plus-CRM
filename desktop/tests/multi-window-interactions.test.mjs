@@ -46,6 +46,25 @@ test('media quick replies reach only their selected chat and carry the caption',
  }finally{fixtures.forEach(ui=>ui.close());}
 });
 
+test('media quick reply insertion preserves the draft, acknowledges staging and never sends',()=>{
+ const ui=fixture(),attached=[];let sends=0;
+ try{
+ ui.render(()=>MultiWindowComposer({chatId:'a',value:'Existing draft',onChange(){},onSend(){sends++;},onAttach:(file,caption)=>attached.push([file.name,caption]),ariaLabel:'a'}));ui.flush();
+ const selection={chatId:'a',target:'multi',dataUrl:'data:text/plain;base64,aGk=',fileName:'hi.txt',mimeType:'text/plain',kind:'file',token:'one',caption:'Reply text'};
+ assert.equal(emitQuickReplyMedia(selection),true);assert.deepEqual(attached,[['hi.txt','Existing draft\nReply text']]);assert.equal(sends,0);
+ assert.equal(emitQuickReplyMedia({...selection,chatId:'other'}),false);assert.equal(attached.length,1);
+ }finally{ui.close();}
+});
+
+test('recording, sending or a full attachment list cannot silently accept media replies',()=>{
+ const selection={chatId:'a',target:'multi',dataUrl:'data:text/plain;base64,aGk=',fileName:'hi.txt',mimeType:'text/plain',kind:'file',token:'one',caption:'Reply text'};
+ for(const extra of [{disabled:true},{voice:{}},{media:{items:Array.from({length:5},()=>({})),sendingIndex:-1}}]){
+  const ui=fixture();let attaches=0;
+  try{ui.render(()=>MultiWindowComposer({chatId:'a',value:'Keep me',onChange(){},onSend(){assert.fail('must not send');},onAttach(){attaches++;},ariaLabel:'a',...extra}));ui.flush();assert.equal(emitQuickReplyMedia(selection),false);assert.equal(attaches,0);}
+  finally{ui.close();}
+ }
+});
+
 test('initial asynchronous history and later layout changes stay at the newest message',()=>{
  const ui=fixture(),resizes=[],frames=[];let disconnected=0,cancelled=0,top=0;
  globalThis.requestAnimationFrame=f=>{frames.push(f);return 1;};

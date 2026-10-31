@@ -58,6 +58,7 @@ export interface BroadcastCampaign {
   /** 战役随机间隔上限（秒） */
   extraGapMaxSec: number;
   items: BroadcastItem[];
+  priority?: number;
 }
 
 /** 单次战役人数硬顶 */

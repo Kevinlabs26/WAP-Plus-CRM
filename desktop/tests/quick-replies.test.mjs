@@ -36,3 +36,18 @@ test("custom quick-reply categories are accepted", () => {
     "custom-sales"
   );
 });
+
+test("search matches all words across fields, ignoring case and French accents", () => {
+  const items = [
+    {title:"Réunion Église",body:"Vendredi à 19h",category:"opening",media:{fileName:"présentation.pdf"}},
+    {title:"Réunion",body:"Lundi",category:"other"},
+    {title:"中文问候",body:"早上好",category:"opening"},
+  ];
+  for (const query of ["  EGLISE\t REUNION  ","vendredi présentation","re\u0301union 19h"]) {
+    assert.deepEqual(filterQuickReplies(items,"all",query),[items[0]]);
+  }
+  assert.deepEqual(filterQuickReplies(items,"all","réunion absent"),[]);
+  assert.deepEqual(filterQuickReplies(items,"other","reunion vendredi"),[]);
+  assert.deepEqual(filterQuickReplies(items,"all","中文 早上"),[items[2]]);
+  assert.deepEqual(filterQuickReplies(items,"all"," \n\t"),items);
+});

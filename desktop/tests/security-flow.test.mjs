@@ -44,6 +44,19 @@ function setup(chatId) {
   };
   return inbound;
 }
+
+test('automatic replies recheck folder identity after generation and immediately before dispatch', async () => {
+ for (const phase of ['generation', 'dispatch']) for (const change of ['edit', 'move', 'delete']) {
+  const inbound=setup(`folder-identity-${phase}-${change}`), state=globalThis.flowState;
+  state.settings.chatFolders=[{id:'f',name:'F',chatIds:[inbound.chatId],scope:{type:'account',accountId:'wa'},aiSystemPrompt:'ORIGINAL ROLE'}];
+  const mutate=()=>{ state.settings={...state.settings,chatFolders:change==='delete'?[]:state.settings.chatFolders.map(f=>({...f,
+   ...(change==='edit'?{aiSystemPrompt:'CHANGED ROLE'}:{id:'moved-folder'})}))}; };
+  globalThis.generateFlow=async()=>{if(phase==='generation')mutate();return reply;};
+  if(phase==='dispatch')globalThis.beforeAutoGate=mutate;
+  await autoReplyInbound(inbound);
+  assert.deepEqual(globalThis.sentFlow,[],`${phase}: ${change} must invalidate the old identity`);
+ }
+});
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
 const reply = { source: "openai", suggestions: [{ text: "Hello there" }] };
 

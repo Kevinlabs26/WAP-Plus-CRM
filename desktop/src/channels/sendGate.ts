@@ -56,6 +56,7 @@ export type SendGateBlock = {
 
 // 同一账号串行，避免检查/发送/记账竞态；不同账号互不阻塞。
 const sendGateTails = new Map<string, Promise<void>>();
+let batchTail = Promise.resolve();
 
 /** @deprecated 滚动计数后无需短缓存；保留 API 兼容 */
 export function invalidateAccountHealthCache(_accountId?: string | null) {
@@ -88,10 +89,13 @@ export function resolveEffectiveLimits(
   warmup: boolean;
   warmupLabel?: string;
 } {
-  const base: SendRateLimits = {
-    ...DEFAULT_RATE_LIMITS,
-    ...config.rateLimits,
-  };
+  const base = { ...DEFAULT_RATE_LIMITS };
+  for (const key of Object.keys(base) as (keyof SendRateLimits)[]) {
+    const value = config.rateLimits?.[key];
+    if (typeof value === "number" && Number.isFinite(value) && value >= (key === "minIntervalSec" ? 0 : 1)) {
+      base[key] = key === "minIntervalSec" ? value : Math.floor(value);
+    }
+  }
   const created = createdAtForAccount(config.waAccounts, accountId);
   const w = applyAccountWarmup(base, created);
   return {
@@ -140,6 +144,7 @@ export function assertSendGate(
   if (config.rateLimitEnabled !== false) {
     const rate = checkRateLimit(input.phoneE164 || "", input.deviceId, limits, {
       accountId: input.accountId,
+      globalMinGapSec: config.globalMinGapSec,
     });
     if (!rate.ok) {
       const suffix = warmup && warmupLabel ? `（${warmupLabel}）` : "";
@@ -187,7 +192,7 @@ export function recordOutboundSend(
  * 媒体 / 转发 / 任意 baileys 旁路应优先走此包装，避免漏 gate。
  */
 export async function waitForPendingSends(): Promise<void> {
-  await Promise.all([...sendGateTails.values()]);
+  await Promise.all([batchTail, ...sendGateTails.values()]);
 }
 
 let currentConfig: (() => SendGateConfig) | undefined;
@@ -200,11 +205,18 @@ export function setSendGateConfigProvider(provider: () => SendGateConfig) {
 export async function withSendGate<T>(
   input: RateLimitKeyInput,
   config: SendGateConfig,
-  sendFn: () => Promise<T>
+  sendFn: () => Promise<T>,
+  requiredMinGapSec?: number
 ): Promise<
   | { ok: true; result: T; gate: SendGateOk }
   | { ok: false; gate: SendGateBlock; result?: undefined }
 > {
+  let releaseBatch: (() => void) | undefined;
+  if (requiredMinGapSec !== undefined) {
+    const previousBatch = batchTail;
+    batchTail = new Promise<void>(resolve => { releaseBatch = resolve; });
+    await previousBatch;
+  }
   const queueKey = input.accountId || input.deviceId || "default";
   const previous = sendGateTails.get(queueKey) || Promise.resolve();
   let release!: () => void;
@@ -213,15 +225,28 @@ export async function withSendGate<T>(
   });
   sendGateTails.set(queueKey, current);
   await previous;
+  let attempted = false;
   try {
     config = currentConfig?.() ?? config;
+    // Scheduled batches always keep protection, even when manual-send rate limiting is disabled.
+    if (requiredMinGapSec !== undefined) {
+      requiredMinGapSec = Number.isFinite(requiredMinGapSec) ? Math.max(20, requiredMinGapSec) : 20;
+      const limits = resolveEffectiveLimits({ rateLimits: config.rateLimits }).limits;
+      config = { ...config, rateLimitEnabled: true, blockSendWhenOverheated: true,
+        rateLimits: { ...limits, minIntervalSec: Math.max(limits.minIntervalSec, requiredMinGapSec) },
+        globalMinGapSec: Math.max(Number.isFinite(config.globalMinGapSec) ? config.globalMinGapSec! : 0, requiredMinGapSec) };
+    }
     const gate = assertSendGate(input, config);
     if (!gate.ok) {
       return { ok: false, gate };
     }
     if (config.rateLimitEnabled !== false) {
-      reserveGlobalSendGap(config.globalMinGapSec);
+      const saved = reserveGlobalSendGap(config.globalMinGapSec);
+      if (!saved && requiredMinGapSec !== undefined) return { ok: false, gate: {
+        ok: false, error: "send_paused", reason: "无法保存发送保护记录，批量发送已暂停；请检查本地存储后手动继续", queueable: false,
+      } };
     }
+    attempted = true;
     const result = await sendFn();
     const succeeded =
       result === undefined ||
@@ -239,7 +264,10 @@ export async function withSendGate<T>(
     }
     return { ok: true, result, gate };
   } finally {
+    const storageFailed = attempted && requiredMinGapSec !== undefined && !reserveGlobalSendGap(requiredMinGapSec);
     release();
+    releaseBatch?.();
     if (sendGateTails.get(queueKey) === current) sendGateTails.delete(queueKey);
+    if (storageFailed) throw Object.assign(new Error("发送后保护记录保存失败，请核对 WhatsApp 后手动继续"), { deliveryUncertain: true });
   }
 }

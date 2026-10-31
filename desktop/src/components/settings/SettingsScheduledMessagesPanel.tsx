@@ -5,6 +5,7 @@ import { useAppStore } from "@/store/appStore";
 import type { ScheduledMessage, ScheduledMessageStatus } from "@/types/crm";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { ChatScheduledMessageDialog } from "@/components/chat/ChatScheduledMessageDialog";
+import { ScheduledPlansPanel } from "./ScheduledPlansPanel";
 
 type Filter = "all" | "active" | "failed" | "history";
 
@@ -45,6 +46,10 @@ function matchesFilter(task: ScheduledMessage, filter: Filter): boolean {
 }
 
 export function SettingsScheduledMessagesPanel() {
+  return <div className="space-y-8"><ScheduledPlansPanel /><LegacyScheduledMessagesPanel /></div>;
+}
+
+function LegacyScheduledMessagesPanel() {
   const { locale, t } = useI18n();
   const tasks = useAppStore((state) => state.settings.scheduledMessages || []);
   const chats = useAppStore((state) => state.chats);
@@ -110,6 +115,7 @@ export function SettingsScheduledMessagesPanel() {
     [tasks]
   );
 
+  if (!tasks.length) return null;
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       {rescheduling && <ChatScheduledMessageDialog contactName={rescheduling.contactName} initialText={rescheduling.text}

@@ -38,7 +38,8 @@ export class MediaGateBlockedError extends Error {
 export async function gatedMediaSend<T>(
   input: { phoneE164: string; accountId?: string | null },
   sendFn: () => Promise<T>,
-  canSend?: () => boolean
+  canSend?: () => boolean,
+  requiredMinGapSec?: number
 ): Promise<T> {
   const state = useAppStore.getState();
   const runtime = sendRuntimeFromSettings(state.settings, state.messages);
@@ -54,9 +55,11 @@ export async function gatedMediaSend<T>(
   let out = await withSendGate(
     { phoneE164: input.phoneE164, accountId },
     runtime,
-    send
+    send,
+    requiredMinGapSec
   );
   for (let attempt = 0; !out.ok && attempt < MAX_AUTO_RETRIES; attempt++) {
+    if (canSend && !canSend()) throw new MediaGateBlockedError("发送任务已暂停或取消", "send_paused");
     const waitMs = out.gate.retryAfterMs;
     if (
       out.gate.error !== "rate_limited" ||
@@ -69,7 +72,8 @@ export async function gatedMediaSend<T>(
     out = await withSendGate(
       { phoneE164: input.phoneE164, accountId },
       runtime,
-      send
+      send,
+      requiredMinGapSec
     );
   }
   if (!out.ok) {

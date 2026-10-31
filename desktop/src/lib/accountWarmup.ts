@@ -30,8 +30,8 @@ export function applyAccountWarmup(
   }
   const hoursLeft = Math.max(1, Math.ceil((ACCOUNT_WARMUP_MS - age) / 3600_000));
   const warmed: SendRateLimits = {
-    perPhonePerMinute: Math.max(2, Math.floor(limits.perPhonePerMinute * 0.4)),
-    perPhonePerHour: Math.max(12, Math.floor(limits.perPhonePerHour * 0.35)),
+    perPhonePerMinute: Math.min(limits.perPhonePerMinute, Math.max(2, Math.floor(limits.perPhonePerMinute * 0.4))),
+    perPhonePerHour: Math.min(limits.perPhonePerHour, Math.max(12, Math.floor(limits.perPhonePerHour * 0.35))),
     minIntervalSec: Math.max(
       limits.minIntervalSec + 3,
       Math.ceil(limits.minIntervalSec * 1.6)

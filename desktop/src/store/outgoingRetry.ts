@@ -25,7 +25,7 @@ export function isRateLimitedMessage(message: Message) {
 export function isRetryableOutgoing(message: Message, now = Date.now()) {
   if (message.direction !== "out") return false;
   if (isDeliveryUncertain(message)) return false;
-  if (message.systemKind === "broadcast_campaign") return false;
+  if (message.systemKind === "broadcast_campaign" || message.systemKind === "scheduled_plan") return false;
   if (message.deliveryStatus !== "queued" && message.deliveryStatus !== "failed") return false;
   if (!message.phoneE164 || !message.body) return false;
   if ((message.retryCount ?? 0) >= 5 && !isRateLimitedMessage(message)) return false;

@@ -11,7 +11,7 @@ const mocks = {
   "@/store/appStore": "export const useAppStore=Object.assign(f=>f(globalThis.dragStore),{getState:()=>globalThis.dragStore});",
   "zustand/react/shallow": "export const useShallow=f=>f;",
   "@/i18n": "export const useI18n=()=>({t:(k,p)=>globalThis.dragTranslate(k,p)});",
-  "lucide-react": ["Check", "BellOff", "Copy", "MoreVertical", "Pin", "ChevronDown", "ChevronRight", "Folder", "FolderPlus", "Link2", "GripVertical", "LayoutGrid", "MoreHorizontal", "Pencil", "Trash2", "Upload", "Users", "UserRoundX", "Archive", "CalendarDays", "Inbox"].map(n=>`export const ${n}=()=>null;`).join(""),
+  "lucide-react": ["Clock3", "Check", "BellOff", "Copy", "MoreVertical", "Pin", "ChevronDown", "ChevronRight", "Folder", "FolderPlus", "Link2", "GripVertical", "LayoutGrid", "MoreHorizontal", "Pencil", "Trash2", "Upload", "Users", "UserRoundX", "Archive", "CalendarDays", "Inbox"].map(n=>`export const ${n}=()=>null;`).join(""),
   "@/components/ui/Avatar": "export const Avatar=()=>null;",
   "@/components/chat/Ticks": "export const Ticks=()=>null;",
   "@/components/ui/primitives": "export const Badge='badge', ListRow='button';",

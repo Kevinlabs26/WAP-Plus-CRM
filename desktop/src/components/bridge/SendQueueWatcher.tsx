@@ -173,6 +173,7 @@ export function SendQueueWatcher() {
           },
           {
             channelId,
+            requiredMinGapSec: msg.systemKind === "scheduled_message" ? 20 : undefined,
             canSend: () => {
               const latest = useAppStore.getState();
               const message = latest.messages.find((item) => item.id === msg.id);

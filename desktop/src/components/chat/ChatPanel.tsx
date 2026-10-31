@@ -1,5 +1,6 @@
 import { Ban, Loader2, Send } from "lucide-react";
 import { useAppStore, type AppState } from "@/store/appStore";
+import { ScheduledPlanDialog } from "./ScheduledPlanDialog";
 import { useShallow } from "zustand/react/shallow";
 import { getAccountBlocklist, isJidBlocked } from "@/lib/accountWaMeta";
 import {
@@ -1121,6 +1122,8 @@ export function ChatPanel() {
       requestConfirm,
       readMessage: (messageId) => useAppStore.getState().messages.find((item) => item.id === messageId)
         || (!liveMessage ? retryMessagesRef.current.find((item) => item.id === messageId) : undefined),
+      openScheduledPlans: () => useAppStore.getState().setSettingsOpen(true, "scheduled"),
+      openBroadcast: () => useAppStore.getState().setActiveNav("broadcast"),
     });
   };
 
@@ -1831,7 +1834,7 @@ export function ChatPanel() {
         />
       )}
       {scheduledMessageDialogOpen && activeContact && activeChat && (
-        <ChatScheduledMessageDialog
+        isBaileys ? <ScheduledPlanDialog chatIds={[activeChat.id]} initialText={useAppStore.getState().draftReply} onClose={() => setScheduledMessageDialogOpen(false)} /> : <ChatScheduledMessageDialog
           contactName={activeContact.name || activeChat.contactName}
           initialText={useAppStore.getState().draftReply}
           onClose={() => setScheduledMessageDialogOpen(false)}

@@ -191,6 +191,33 @@ function browserFixture(onStart) {
     interim(text) { recognition.onresult({ resultIndex: 0, results: [{ isFinal: false, 0: { transcript: text } }] }); } };
 }
 
+for(const original of ['', '原有报价草稿']) test(`second speech click stops and saves recognized text without cancelling (original=${JSON.stringify(original)})`,async()=>{
+ const b=browserFixture();b.f.draft=original;let stops=0;
+ try{
+ const button=b.f.render().handleToggleVoiceInput;
+ const starting=button();await button();await starting;
+ assert.equal(b.recognition.starts,1,'rapid startup clicks must not start another recognition');
+ b.interim('Bonjour, ma sœur');assert.equal(b.f.draft,'Bonjour, ma sœur');
+ b.recognition.stop=()=>{stops++;b.interim('Bonjour, ma sœur. À bientôt !');};
+ const stopping=button();await button();await stopping;
+ assert.equal(stops,1);assert.equal(b.recognition.aborts,0);assert.equal(b.f.draft,'Bonjour, ma sœur. À bientôt !');
+ assert.deepEqual(b.f.writes.at(-1),['flush','Bonjour, ma sœur. À bientôt !']);assert.equal(b.f.render().voiceInputOpen,false);assert.equal(b.f.render().voiceInputBusy,false);assert.deepEqual(b.f.toasts,[]);
+ }finally{b.cleanup();}
+});
+
+test('second click finishes AI input and repeated clicks cannot restart it while transcription is pending',async()=>{
+ const f=fixture();let release,stops=0,cancels=0;
+ globalThis.voiceRecording={stop:async()=>{stops++;return {dataUrl:'fixture',mimeType:'audio/webm'};},cancel:()=>cancels++};
+ globalThis.voiceResult=()=>new Promise(resolve=>{release=resolve;});
+ try{
+ await f.render().handleToggleVoiceInput();const button=f.render().handleToggleVoiceInput;const finishing=button();
+ while(!release)await new Promise(resolve=>setImmediate(resolve));
+ await button();await f.render().handleToggleVoiceInput();assert.equal(f.render().voiceInputBusy,true);assert.equal(f.draft,'原有报价草稿');
+ release({text:'Bonjour, ma sœur',fallback:false});await finishing;
+ assert.equal(stops,1);assert.equal(cancels,0);assert.equal(f.draft,'Bonjour, ma sœur');assert.equal(f.render().voiceInputOpen,false);assert.deepEqual(f.toasts,[]);
+ }finally{f.unmount();}
+});
+
 test('browser recognition failure restores the original draft and reports once despite duplicate error events and stop', async () => {
   const b = browserFixture();
   try {
