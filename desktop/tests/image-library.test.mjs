@@ -15,6 +15,20 @@ const data = 'data:image/png;base64,' + Buffer.from('\x89PNG\r\n\x1a\nfixture','
 const item = {title:'Invitation',category:'Events',data,pinned:true,usedAt:10};
 const backup = items => ({app:'WAP Plus CRM Image Library',version:1,items});
 
+test('empty custom categories round trip in backups and invalid categories never start restoration', async () => {
+  const calls=[];globalThis.libraryInvoke=async(cmd,{request})=>{calls.push(request);};
+  try {
+    await api.exportImageLibrary([],['我的分类']);
+    assert.deepEqual(globalThis.libraryDownload.categories,['我的分类']);
+    const file=value=>new File([JSON.stringify(value)],'library.json');
+    assert.equal(await api.restoreImageLibrary(file(globalThis.libraryDownload),()=>{}),0);
+    assert.deepEqual(calls,[{action:'createCategory',name:'我的分类'}]);
+    calls.length=0;
+    await assert.rejects(api.restoreImageLibrary(file({...backup([]),categories:['Valid','*']}),()=>{}));
+    assert.equal(calls.length,0);
+  } finally {delete globalThis.libraryInvoke;}
+});
+
 test('backup validation rejects remote URLs, SVG, malformed or excessive entries before import', () => {
   assert.deepEqual(api.parseImageLibraryBackup(backup([item])),[item]);
   for(const bad of [null,{},backup([{...item,data:'https://example.invalid/a.png'}]),backup([{...item,data:'data:image/svg+xml;base64,PHN2Zz4='}]),backup([{...item,category:'x'.repeat(61)}]),backup(new Array(3001).fill(item))]) assert.throws(()=>api.parseImageLibraryBackup(bad));
@@ -83,14 +97,14 @@ test('gallery stages multiple images atomically in selection order and rejects f
 const mocks={
   react:'export const useState=i=>globalThis.libraryHooks.state(i);export const useRef=i=>globalThis.libraryHooks.ref(i);export const useMemo=f=>f();export const useEffect=(f,d)=>globalThis.libraryHooks.effect(f,d);',
   'react/jsx-runtime':'export const Fragment="fragment";export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
-  'lucide-react':'export const ImagePlus="image-plus",Star="star";',
+  'lucide-react':'export const ImagePlus="image-plus",Star="star",CheckSquare="check-square",ListChecks="list-checks",X="x";',
   '@/components/ui/primitives':'export const Button="button";',
   '@/i18n':'export const useI18n=()=>({t:(key)=>key});',
   '@/store/appStore':'export const useAppStore=f=>f(globalThis.libraryState);useAppStore.getState=()=>globalThis.libraryState;',
   '@/lib/bridge':'export const isTauri=()=>true;',
   '@tauri-apps/api/core':'export const invoke=async()=>{};',
   '@/lib/quickReplyMedia':'export const emitQuickReplyMedia=value=>{globalThis.libraryEmitted.push(value);return true;};',
-  '@/lib/imageLibrary':'export const listLibraryImages=async()=>globalThis.libraryRows;export const filterLibraryImages=(...a)=>globalThis.libraryFilter(...a);export const readLibraryImage=id=>globalThis.libraryRead(id);export const editLibraryImage=async()=>{};export const addLibraryImage=async()=>({added:true});export const deleteLibraryImages=async()=>{};export const exportImageLibrary=async()=>{};export const restoreImageLibrary=async()=>0;',
+  '@/lib/imageLibrary':'export const listLibraryImages=async()=>globalThis.libraryRows;export const listLibraryCategories=async()=>globalThis.libraryCategories||[];export const createLibraryCategory=async name=>{globalThis.libraryCategories=[...(globalThis.libraryCategories||[]),name];};export const filterLibraryImages=(...a)=>globalThis.libraryFilter(...a);export const readLibraryImage=id=>globalThis.libraryRead(id);export const editLibraryImage=async()=>{};export const addLibraryImage=async(file,category)=>{globalThis.libraryImportCategory=category;return {added:true};};export const deleteLibraryImages=async()=>{};export const exportImageLibrary=async()=>{};export const restoreImageLibrary=async()=>0;',
 };
 const uiBuild=await build({entryPoints:[root+'src/components/chat/ImageLibraryPanel.tsx'],bundle:true,write:false,format:'esm',platform:'node',jsx:'automatic',plugins:[{name:'gallery-ui',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
 const {ImageLibraryPanel}=await import('data:text/javascript;base64,'+Buffer.from(uiBuild.outputFiles[0].text).toString('base64'));
@@ -126,5 +140,12 @@ test('gallery renders only one page, preserves selection order and blocks insert
     props={...props,contextKey:'chat:account-b'};render();release(data);await settle();await settle();render();
     assert.equal(globalThis.libraryEmitted.length,1);
     assert.ok(allNodes(tree).some(n=>n.props.children==='Error: gallery.chatChanged'));
+    allNodes(tree).find(n=>n.type==='input'&&n.props['aria-label']==='gallery.categoryName').props.onChange({target:{value:'我的自定义分类'}});
+    render();allNodes(tree).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});
+    await settle();await settle();render();
+    assert.ok(allNodes(tree).some(n=>n.type==='option'&&n.props.value==='我的自定义分类'));
+    assert.equal(allNodes(tree).filter(n=>n.type==='article').length,0);
+    allNodes(tree).find(n=>n.type==='input'&&n.props.type==='file'&&n.props.multiple).props.onChange({currentTarget:{files:[new File(['image'],'photo.png',{type:'image/png'})],value:'file'}});
+    await settle();await settle();render();assert.equal(globalThis.libraryImportCategory,'我的自定义分类');
   } finally {slots.forEach(slot=>slot?.cleanup?.());globalThis.window=original;}
 });

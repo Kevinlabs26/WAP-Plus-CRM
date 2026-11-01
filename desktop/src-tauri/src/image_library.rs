@@ -13,6 +13,8 @@ const MAX_TOTAL: i64 = 1024 * 1024 * 1024;
 #[serde(tag = "action", rename_all = "camelCase")]
 pub enum Request {
     List,
+    ListCategories,
+    CreateCategory { name: String },
     Read { id: String },
     Import { title: String, category: String, data: String, thumbnail: String },
     Edit { id: String, title: String, category: String, pinned: bool, used_at: i64 },
@@ -51,9 +53,38 @@ fn labels(title: &str, category: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn register_category(conn: &Connection, name: &str) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() { return Ok(()); }
+    if name == "*" || name.chars().count() > 60 { return Err("Invalid category name".into()); }
+    let count: i64 = conn.query_row("SELECT count(*) FROM image_library_categories WHERE name=?1", [name], |r| r.get(0)).map_err(|e| e.to_string())?;
+    if count == 0 {
+        let total: i64 = conn.query_row("SELECT count(*) FROM image_library_categories", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+        if total >= 3000 { return Err("Category limit reached (3000)".into()); }
+        conn.execute("INSERT INTO image_library_categories(name) VALUES (?1)", [name]).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 fn execute(conn: &Connection, dir: &Path, request: Request) -> Result<Value, String> {
     conn.execute_batch("CREATE TABLE IF NOT EXISTS image_library (id TEXT PRIMARY KEY, title TEXT NOT NULL, category TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, thumbnail TEXT NOT NULL, pinned INTEGER NOT NULL DEFAULT 0, used_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)").map_err(|e| e.to_string())?;
+    let has_categories: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='image_library_categories')", [], |row| row.get(0)).map_err(|e| e.to_string())?;
+    if !has_categories {
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        tx.execute_batch("CREATE TABLE image_library_categories (name TEXT PRIMARY KEY NOT NULL); INSERT INTO image_library_categories(name) SELECT DISTINCT category FROM image_library WHERE category <> '';").map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+    }
     match request {
+        Request::ListCategories => {
+            let mut stmt = conn.prepare("SELECT name FROM image_library_categories ORDER BY name").map_err(|e| e.to_string())?;
+            let names = stmt.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+            Ok(json!(names))
+        }
+        Request::CreateCategory { name } => {
+            if name.trim().is_empty() { return Err("Category name is required".into()); }
+            register_category(conn, &name)?;
+            Ok(Value::Null)
+        }
         Request::List => {
             let mut stmt = conn.prepare("SELECT id,title,category,mime,size,thumbnail,pinned,used_at,created_at FROM image_library ORDER BY created_at DESC,id").map_err(|e| e.to_string())?;
             let rows = stmt.query_map([], |r| Ok(json!({"id":r.get::<_,String>(0)?,"title":r.get::<_,String>(1)?,"category":r.get::<_,String>(2)?,"mime":r.get::<_,String>(3)?,"size":r.get::<_,i64>(4)?,"thumbnail":r.get::<_,String>(5)?,"pinned":r.get::<_,bool>(6)?,"usedAt":r.get::<_,i64>(7)?,"createdAt":r.get::<_,i64>(8)?}))).map_err(|e| e.to_string())?;
@@ -75,6 +106,7 @@ fn execute(conn: &Connection, dir: &Path, request: Request) -> Result<Value, Str
             let (bytes, kind) = decode(&data, MAX_IMAGE)?;
             let (_, thumb_kind) = decode(&thumbnail, 48 * 1024)?;
             if thumb_kind != "image/jpeg" { return Err("Thumbnail must be JPEG".into()); }
+            register_category(conn, &category)?;
             let id = format!("{:x}", Sha256::digest(&bytes));
             let exists = conn.query_row("SELECT 1 FROM image_library WHERE id=?1", [&id], |_| Ok(())).optional().map_err(|e| e.to_string())?.is_some();
             if exists {
@@ -96,6 +128,7 @@ fn execute(conn: &Connection, dir: &Path, request: Request) -> Result<Value, Str
         }
         Request::Edit { id, title, category, pinned, used_at } => {
             valid_id(&id)?; labels(&title, &category)?;
+            register_category(conn, &category)?;
             let changed = conn.execute("UPDATE image_library SET title=?2,category=?3,pinned=?4,used_at=?5 WHERE id=?1", params![id,title.trim(),category.trim(),pinned,used_at.max(0)]).map_err(|e| e.to_string())?;
             if changed == 0 { return Err("Image no longer exists".into()); }
             Ok(Value::Null)
@@ -130,6 +163,24 @@ pub async fn image_library(app: tauri::AppHandle, request: Request) -> Result<Va
 mod tests {
     use super::*;
     #[test]
+    fn custom_categories_exist_without_images_and_survive_reopening() {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("library.db");
+        let conn = Connection::open(&db).unwrap();
+        assert_eq!(execute(&conn, &dir, Request::ListCategories).unwrap(), json!([]));
+        for _ in 0..2 { execute(&conn, &dir, Request::CreateCategory { name: "  我的活动  ".into() }).unwrap(); }
+        assert!(execute(&conn, &dir, Request::CreateCategory { name: " ".into() }).is_err());
+        assert!(execute(&conn, &dir, Request::CreateCategory { name: "*".into() }).is_err());
+        assert!(execute(&conn, &dir, Request::CreateCategory { name: "x".repeat(61) }).is_err());
+        assert_eq!(execute(&conn, &dir, Request::List).unwrap(), json!([]));
+        drop(conn);
+        let conn = Connection::open(&db).unwrap();
+        assert_eq!(execute(&conn, &dir, Request::ListCategories).unwrap(), json!(["我的活动"]));
+        drop(conn);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
     fn stores_deduplicated_files_without_inline_originals_and_validates_reads() {
         let conn = Connection::open_in_memory().unwrap();
         let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
@@ -140,6 +191,8 @@ mod tests {
         assert_eq!(execute(&conn,&dir,import()).unwrap()["added"],false);
         assert_eq!(execute(&conn,&dir,Request::Read{id:id.into()}).unwrap(),data);
         assert_eq!(execute(&conn,&dir,Request::List).unwrap().as_array().unwrap().len(),1);
+        conn.execute("DROP TABLE image_library_categories", []).unwrap();
+        assert_eq!(execute(&conn,&dir,Request::ListCategories).unwrap(), json!(["Test"]));
         assert!(execute(&conn,&dir,Request::Read{id:"../outside".into()}).is_err());
         assert!(decode("data:image/svg+xml;base64,PHN2Zz4=",MAX_IMAGE).is_err());
         std::fs::write(dir.join(id),b"broken").unwrap();
@@ -148,6 +201,7 @@ mod tests {
         assert_eq!(execute(&conn,&dir,Request::Read{id:id.into()}).unwrap(),data);
         execute(&conn,&dir,Request::Delete{ids:vec![id.into()]}).unwrap();
         assert!(execute(&conn,&dir,Request::List).unwrap().as_array().unwrap().is_empty());
+        assert_eq!(execute(&conn,&dir,Request::ListCategories).unwrap(), json!(["Test"]));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

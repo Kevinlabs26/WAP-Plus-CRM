@@ -181,6 +181,11 @@ export interface AppState extends PersistSlice {
     systemKind?: string;
     aiReplyContextHash?: string;
     deliveryStatus?: Message["deliveryStatus"];
+    mediaType?: Message["mediaType"];
+    mediaUrl?: Message["mediaUrl"];
+    mediaMime?: Message["mediaMime"];
+    mediaFileName?: Message["mediaFileName"];
+    mediaCaption?: Message["mediaCaption"];
     lastError?: string;
     nextAttemptAt?: string;
   }) => string | null;

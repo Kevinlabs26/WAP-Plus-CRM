@@ -15,6 +15,8 @@ async function command<T>(request: Record<string, unknown>): Promise<T> {
 }
 function changed() { window.dispatchEvent(new Event("wap:image-library")); }
 export const listLibraryImages = () => command<LibraryImage[]>({ action: "list" });
+export const listLibraryCategories = () => command<string[]>({ action: "listCategories" });
+export const createLibraryCategory = (name: string) => command<void>({ action: "createCategory", name: name.trim() });
 export const readLibraryImage = (id: string) => command<string>({ action: "read", id });
 export async function editLibraryImage(image: Pick<LibraryImage, "id" | "title" | "category" | "pinned" | "usedAt">) {
   await command({ action: "edit", id: image.id, title: image.title, category: image.category, pinned: image.pinned, used_at: image.usedAt });
@@ -67,12 +69,12 @@ export function filterLibraryImages(images: LibraryImage[], query: string, categ
     .sort((a, b) => view === "recent" ? b.usedAt - a.usedAt : Number(b.pinned) - Number(a.pinned) || b.createdAt - a.createdAt);
 }
 
-export async function exportImageLibrary(images: LibraryImage[]) {
+export async function exportImageLibrary(images: LibraryImage[], categories = [...new Set(images.map(image => image.category).filter(Boolean))]) {
   // Bound JSON memory; large libraries can be exported as several selections.
   if (images.reduce((sum, image) => sum + image.size * 4 / 3 + 1024, 0) > BACKUP_LIMIT) throw new Error("Backup exceeds 128 MB; select fewer images and export in batches");
   const items = [];
   for (const image of images) items.push({ title: image.title, category: image.category, pinned: image.pinned, usedAt: image.usedAt, data: await readLibraryImage(image.id) });
-  downloadJson(`wap-image-library-${new Date().toISOString().slice(0, 10)}.json`, { app: "WAP Plus CRM Image Library", version: 1, items });
+  downloadJson(`wap-image-library-${new Date().toISOString().slice(0, 10)}.json`, { app: "WAP Plus CRM Image Library", version: 1, categories, items });
 }
 
 export function parseImageLibraryBackup(input: unknown): { title: string; category: string; data: string; pinned: boolean; usedAt: number }[] {
@@ -88,7 +90,11 @@ export function parseImageLibraryBackup(input: unknown): { title: string; catego
 
 export async function restoreImageLibrary(file: File, onProgress: (done: number, total: number) => void) {
   if (file.size > BACKUP_LIMIT) throw new Error("Backup exceeds 128 MB");
-  const items = parseImageLibraryBackup(JSON.parse(await file.text()));
+  const backup = JSON.parse(await file.text());
+  const items = parseImageLibraryBackup(backup);
+  const categories: unknown = backup.categories ?? [];
+  if (!Array.isArray(categories) || categories.length > 3000 || categories.some(name => typeof name !== "string" || !name.trim() || name.trim() === "*" || name.length > 60)) throw new Error("Invalid image library categories");
+  for (const name of categories) await createLibraryCategory(name);
   let added = 0;
   for (let index = 0; index < items.length; index++) {
     const item = items[index]!;

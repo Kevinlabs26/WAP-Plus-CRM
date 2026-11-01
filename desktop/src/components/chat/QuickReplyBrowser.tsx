@@ -58,22 +58,24 @@ export function QuickReplyBrowser({ replies, categories = [], contextKey, onInse
   };
 
   return <div className="flex min-h-0 flex-1 flex-col">
-    <div className="shrink-0 space-y-2 border-b border-zinc-800 p-2.5">
-      {target && <div className="space-y-0.5 text-2xs text-zinc-500"><p className="truncate" title={target.title}>{t("quickShelf.target", { title: target.title })}</p><p className="truncate" title={target.account}>{t("quickShelf.account", { account: target.account })}</p></div>}
-      <label className="relative block"><Search aria-hidden="true" className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
-        <input value={query} onChange={e => { setQuery(e.target.value); resetPage(); }} placeholder={t("quickShelf.search")} aria-label={t("multi.searchQuickReplies")} className="ui-control h-8 w-full pl-7 pr-2 text-xs" />
-      </label>
-      <div className="flex items-center gap-2">
-        <select value={selectedCategory} aria-label={t("multi.quickReplyCategories")} className="ui-control h-8 min-w-0 flex-1 px-2 text-xs" onChange={e => { setCategory(e.target.value); resetPage(); }}>
+    <div className="shrink-0 space-y-1 border-b border-zinc-800 p-2">
+      {target && <p className="truncate text-2xs text-zinc-500" title={`${target.title} · ${target.account}`}><span>{t("quickShelf.target", { title: target.title })}</span><span className="px-1">·</span><span>{t("quickShelf.account", { account: target.account })}</span></p>}
+      <div className="flex items-center gap-1.5">
+        <label className="relative min-w-0 flex-1"><Search aria-hidden="true" className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+          <input value={query} onChange={e => { setQuery(e.target.value); resetPage(); }} placeholder={t("quickShelf.search")} aria-label={t("multi.searchQuickReplies")} className="ui-control h-8 w-full pl-7 pr-2 text-xs" />
+        </label>
+        <select value={selectedCategory} aria-label={t("multi.quickReplyCategories")} className="ui-control h-8 w-[38%] min-w-0 px-2 text-xs" onChange={e => { setCategory(e.target.value); resetPage(); }}>
           <option value="all">{t("multi.all")}</option>
           {categoryOptions.filter(c => replies.some(reply => reply.category === c.id)).map(c => <option key={c.id} value={c.id}>{categoryLabel(c.id)}</option>)}
         </select>
-        <span className="shrink-0 text-2xs text-zinc-500" role="status">{filtered.length}/{replies.length}</span>
       </div>
+      <div className="flex items-center justify-between gap-1">
       <div className="flex gap-1" role="group" aria-label={t("quickShelf.views")}>
         {(["all", "pinned", "recent"] as const).map(item => <Button key={item} size="xs" variant={view === item ? "secondary" : "ghost"} aria-pressed={view === item} onClick={() => { setView(item); resetPage(); }}>{t(`quickShelf.view.${item}`)}</Button>)}
       </div>
-      <p className="text-2xs leading-relaxed text-zinc-500">{t("quickShelf.hint")}</p>
+      <span className="shrink-0 text-2xs text-zinc-500" role="status">{filtered.length}/{replies.length}</span>
+      </div>
+      <p className="truncate text-2xs text-zinc-500" title={t("quickShelf.hint")}>{t("quickShelf.hint")}</p>
       {disabled && <p className="text-2xs text-amber-500">{t("quickShelf.chooseChat")}</p>}
     </div>
     <ul ref={listRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">

@@ -1,4 +1,4 @@
-import { Ban, Loader2, Send } from "lucide-react";
+import { Ban, ImagePlus, Loader2, Send, X } from "lucide-react";
 import { useAppStore, type AppState } from "@/store/appStore";
 import { ScheduledPlanDialog } from "./ScheduledPlanDialog";
 import { useShallow } from "zustand/react/shallow";
@@ -117,6 +117,8 @@ import { useI18n } from "@/i18n";
 import { resolveActiveSalesStage } from "@/lib/contactWorkflow";
 
 const EMPTY_MESSAGES: Message[] = [];
+const SELF_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
+const SELF_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 /** 非群聊时的发送者映射（稳定引用） */
 const EMPTY_SENDER_MAP = {} as Record<string, undefined>;
 /** 非群聊时传给 Composer 的空成员列表（稳定引用，避免击穿 memo） */
@@ -492,6 +494,20 @@ export function ChatPanel() {
   });
 
   const localOnlyChat = Boolean(activeChat?.localOnly);
+  const [savedDraftImage, setSavedDraftImage] = useState<{ file: File; previewUrl: string } | null>(null);
+  const [savingSelfImage, setSavingSelfImage] = useState(false);
+  const savedDraftImageRef = useRef(savedDraftImage);
+  savedDraftImageRef.current = savedDraftImage;
+  const savedImagePickerRef = useRef<HTMLInputElement>(null);
+  const savedImageSendLockRef = useRef(false);
+  const stageSavedDraftImage = (file: File) => {
+    if (!SELF_IMAGE_TYPES.has(file.type)) { pushToast(t("runtime.selectImage"), "error"); return; }
+    if (file.size > SELF_IMAGE_MAX_BYTES) { pushToast(t("runtime.imageTooLarge"), "error"); return; }
+    setSavedDraftImage({ file, previewUrl: URL.createObjectURL(file) });
+  };
+  useEffect(() => () => {
+    if (savedDraftImage?.previewUrl) URL.revokeObjectURL(savedDraftImage.previewUrl);
+  }, [savedDraftImage?.previewUrl]);
   const {
     savedDraft,
     setSavedDraft,
@@ -510,6 +526,8 @@ export function ChatPanel() {
     clearSavedSelection,
     resetSaved,
   } = useSavedMessages({ chatMessages, localOnlyChat });
+  const savedDraftValueRef = useRef(savedDraft);
+  savedDraftValueRef.current = savedDraft;
   const activePhone = phones.find((p) => p.id === selectedPhoneId);
   const chatAccount = settings.waAccounts?.find(
     (account) => account.id === chatAccountId
@@ -1673,25 +1691,65 @@ export function ChatPanel() {
         />}
 
         {localOnlyChat ? (
-          <form
-            className="flex items-center gap-2 border-t border-zinc-800/90 px-4 py-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const body = savedDraft.trim();
-              if (!body) return;
-              enqueueOutgoingMessage({
-                body,
-                chatId: SAVED_MESSAGES_CHAT_ID,
-                contactId: "",
-                channelId: "local",
-                deliveryStatus: "sent",
-              });
-              setSavedDraft("");
-            }}
-          >
+          <form className="border-t border-zinc-800/90 px-4 py-2" onSubmit={(event) => {
+            event.preventDefault();
+            const draftValue = savedDraft;
+            const body = draftValue.trim();
+            const image = savedDraftImage;
+            if ((!body && !image) || savedImageSendLockRef.current) return;
+            savedImageSendLockRef.current = true;
+            setSavingSelfImage(Boolean(image));
+            void (async () => {
+              try {
+                const mediaUrl = image ? await new Promise<string>((resolve, reject) => {
+                  const reader = new FileReader();
+                  reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error(t("runtime.imageReadFailed")));
+                  reader.onerror = () => reject(new Error(t("runtime.imageReadFailed")));
+                  reader.readAsDataURL(image.file);
+                }) : undefined;
+                const id = enqueueOutgoingMessage({
+                  body: body || t("media.image"),
+                  chatId: SAVED_MESSAGES_CHAT_ID,
+                  contactId: "",
+                  channelId: "local",
+                  deliveryStatus: "sent",
+                  ...(image ? { mediaType: "image", mediaUrl, mediaMime: image.file.type, mediaFileName: image.file.name || t("media.image"), mediaCaption: body || undefined } : {}),
+                });
+                if (!id) return;
+                if (savedDraftValueRef.current === draftValue) setSavedDraft("");
+                if (image && savedDraftImageRef.current === image) setSavedDraftImage(null);
+              } catch (error) {
+                pushToast(error instanceof Error ? error.message : t("runtime.imageReadFailed"), "error");
+              } finally {
+                savedImageSendLockRef.current = false;
+                setSavingSelfImage(false);
+              }
+            })();
+          }}>
+            {savedDraftImage && <div className="mb-2 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 p-1.5">
+              <img src={savedDraftImage.previewUrl} alt={savedDraftImage.file.name || t("media.image")} className="h-12 w-12 rounded object-cover" />
+              <span className="min-w-0 flex-1 truncate text-xs text-zinc-400">{savedDraftImage.file.name || t("media.image")}</span>
+              <button type="button" disabled={savingSelfImage} aria-label={t("common.close")} className="rounded p-1 text-zinc-400 hover:bg-zinc-800" onClick={() => setSavedDraftImage(null)}><X className="h-4 w-4" /></button>
+            </div>}
+            <input ref={savedImagePickerRef} type="file" hidden accept="image/png,image/jpeg,image/gif,image/webp" onChange={event => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = "";
+              if (!file) return;
+              stageSavedDraftImage(file);
+            }} />
+            <div className="flex items-center gap-2">
+            <button type="button" aria-label={t("composer.image")} title={t("composer.image")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-800 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" onClick={() => savedImagePickerRef.current?.click()}><ImagePlus className="h-4 w-4" /></button>
             <input
               value={savedDraft}
               onChange={(event) => setSavedDraft(event.target.value)}
+              onPaste={event => {
+                const items = Array.from(event.clipboardData.items || []);
+                const file = items.find(item => item.kind === "file" && item.type.startsWith("image/"))?.getAsFile()
+                  || Array.from(event.clipboardData.files || []).find(candidate => candidate.type.startsWith("image/"));
+                if (!file) return;
+                event.preventDefault();
+                stageSavedDraftImage(file);
+              }}
               placeholder={t("chat.selfDraft")}
               className="h-9 min-w-0 flex-1 rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-[14px] text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-brand/60"
               aria-label={t("tooltip.selfMessage")}
@@ -1700,11 +1758,12 @@ export function ChatPanel() {
               type="submit"
               variant="primary"
               className="!h-9 !min-h-9 !w-9 rounded-lg !px-0"
-              disabled={!savedDraft.trim()}
+              disabled={savingSelfImage || !savedDraft.trim() && !savedDraftImage}
               aria-label={t("tooltip.selfMessage")}
             >
               <Send className="h-3.5 w-3.5" />
             </Button>
+            </div>
           </form>
         ) : <Composer
           resetKey={selectedChatId}

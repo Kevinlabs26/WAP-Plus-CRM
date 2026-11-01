@@ -881,19 +881,15 @@ export function CrmAiPanel() {
             </Button>
           )}
         </div>
-        {selectedChatId && <p className="my-2 text-[11px] leading-4 text-zinc-500">
-          {groupChat ? t("autoReplyScope.privateOnly") : t("autoReplyScope.effective", {
-            mode: t(replyScope.mode === "auto" ? "autoReplyScope.auto" : "autoReplyScope.manual"),
-            source: replyScope.source === "folder" ? t("autoReplyScope.folderSource", { name: replyScope.folderName || "" }) : t(`autoReplyScope.source.${replyScope.source}`),
-          })}
-          {!groupChat && replyScope.mode === "auto" && autoRuntime && autoRuntime.inboundId === lastIn?.id && (!autoRuntime.accountId || autoRuntime.accountId === aiAccountId) &&
-            <span role="status" title={autoRuntime.reason} className="ml-2 text-brand">
-              · {t(`multi.replyStatus.${autoRuntime.phase}`)}
+        {selectedChatId && !groupChat && replyScope.mode === "auto" && autoRuntime && autoRuntime.inboundId === lastIn?.id && (!autoRuntime.accountId || autoRuntime.accountId === aiAccountId) &&
+          <p className="my-1 text-[11px] leading-4 text-zinc-500">
+            <span role="status" title={autoRuntime.reason} className="text-brand">
+              {t(`multi.replyStatus.${autoRuntime.phase}`)}
               {autoRuntime.retryAt && <span className="ml-1">{t("autoReplyRuntime.retryAt", { time: new Date(autoRuntime.retryAt).toLocaleTimeString() })}</span>}
-            </span>}
-        </p>}
-        <p className="px-3 pb-2 text-[10px] leading-4 text-zinc-500" title={aiProfile.prompt}>
-          {t("folderAi.effective", { source: t(`folderAi.source.${aiProfile.source}`, { name: aiProfile.folderName || "" }) })}
+            </span>
+          </p>}
+        <p className="px-3 pb-1 text-[9px] leading-3 text-zinc-500" title={aiProfile.prompt}>
+          {t(`folderAi.source.${aiProfile.source}`, { name: aiProfile.folderName || "" })}
         </p>
         {!aiReady ? (
           <div className="flex min-h-36 flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
@@ -910,9 +906,6 @@ export function CrmAiPanel() {
           </div>
         ) : (
           <>
-            {aiSuggestions.length > 0 && (
-              <p className="mb-1.5 break-words text-[10px] leading-3 text-zinc-600">{t("crmPanel.suggestionHint")}</p>
-            )}
             <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
               {!loading && aiError && (
                 <p role="alert" className="rounded-lg border border-amber-800/50 bg-amber-950/20 p-2 text-[11px] leading-4 text-amber-300">
@@ -958,10 +951,10 @@ export function CrmAiPanel() {
         </>
       ) : (
         <section className="flex min-h-0 flex-1 flex-col">
-          <div className="flex items-center justify-between border-b border-zinc-800/90 px-3 py-3">
+          <div className="flex items-center justify-between border-b border-zinc-800/90 px-2.5 py-2">
             <div className="flex min-w-0 items-center gap-2">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand/10 text-brand">
-                <Zap className="h-4 w-4" />
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-brand/10 text-brand">
+                <Zap className="h-3.5 w-3.5" />
               </span>
               <div className="min-w-0">
                 <div className="text-[12px] font-medium text-zinc-100">
