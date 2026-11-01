@@ -92,14 +92,8 @@ export function SettingsQuickRepliesPanel() {
             <h3 className="text-lg font-semibold text-zinc-100">{t("settingsQuickReplies.title")}</h3>
             <SaveBadge state={saveHint} />
           </div>
-          <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
-            {t("settingsQuickReplies.description")}
-          </p>
-          <p className="mt-1 text-2xs text-zinc-600">
-            {t("settingsQuickReplies.mediaOnlyLocal")}
-          </p>
         </div>
-        <div className="flex shrink-0 flex-col items-start gap-1.5 sm:items-end">
+        <div className="relative flex shrink-0 flex-col items-start gap-1.5 sm:items-end">
           <div className="flex flex-wrap gap-2">
             <Button
               variant="primary"
@@ -109,6 +103,9 @@ export function SettingsQuickRepliesPanel() {
             >
               {t("settingsQuickReplies.add")}
             </Button>
+            <details className="text-xs text-zinc-500" onClick={event => { if ((event.target as HTMLElement).closest("button")) event.currentTarget.open = false; }}>
+              <summary className="ui-control cursor-pointer list-none px-3 py-2" aria-label={t("nav.more")}>•••</summary>
+              <div className="absolute right-0 top-full z-20 mt-1 flex w-72 max-w-[80vw] flex-col gap-2 rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl">
             <Button size="sm" onClick={() => setImportOpen(open => !open)}>{t("quickLibrary.import")}</Button>
             <Button
               variant="secondary"
@@ -132,12 +129,20 @@ export function SettingsQuickRepliesPanel() {
             >
               {busy ? t("settingsQuickReplies.syncing") : t("settingsQuickReplies.sync")}
             </Button>
-          </div>
           {!connected && (
-            <p className="max-w-[220px] text-right text-2xs leading-snug text-zinc-600">
+            <p className="max-w-[220px] text-2xs leading-snug text-zinc-600">
               {t("settingsQuickReplies.connectFirst")}
             </p>
           )}
+          <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+            {t("settingsQuickReplies.description")}
+          </p>
+          <p className="mt-1 text-2xs text-zinc-600">
+            {t("settingsQuickReplies.mediaOnlyLocal")}
+          </p>
+              </div>
+            </details>
+          </div>
         </div>
       </header>
 

@@ -43,57 +43,40 @@ export function SavedMessageToolbar({
     video: t("saved.video"), audio: t("saved.audio"), file: t("saved.file"), tag: t("saved.tag"),
   } as const;
   return (
-    <div className="flex items-center gap-1 overflow-x-auto border-b border-zinc-800/70 px-4 py-1.5">
-      {([
-        ["all", "全部"],
-        ["text", "文字"],
-        ["image", "图片"],
-        ["video", "视频"],
-        ["audio", "语音"],
-        ["file", "文件"],
-        ["tag", "标签"],
-      ] as const).map(([id]) => (
+    <div className="shrink-0 border-b border-zinc-800/70">
+      <div className="flex flex-wrap items-center gap-2 px-4 py-1.5">
+        <select value={filter} onChange={event => onFilterChange(event.target.value as SavedMessageFilter)} aria-label={t("saved.filterType")} className="ui-control min-w-0 max-w-40 px-2 text-2xs">
+          {(Object.keys(filterLabels) as SavedMessageFilter[]).map(id => <option key={id} value={id}>{filterLabels[id]}</option>)}
+        </select>
+        {filter === "tag" && (
+          <select
+            value={tagFilter}
+            aria-label={t("saved.tag")}
+            onChange={(event) => onTagFilterChange(event.target.value)}
+            className="ui-control min-w-0 max-w-40 px-2 text-2xs"
+          >
+            <option value="all">{t("saved.allTags")}</option>
+            {tags.map((tag) => (
+              <option key={tag} value={tag}>{tag}</option>
+            ))}
+          </select>
+        )}
+        <span className="flex-1" />
         <button
-          key={id}
           type="button"
-          onClick={() => onFilterChange(id)}
+          onClick={onToggleSelectMode}
           className={cn(
             "shrink-0 rounded-md px-2 py-1 text-2xs transition-colors",
-            filter === id
+            selectMode
               ? "bg-brand/15 text-brand"
               : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
           )}
         >
-          {filterLabels[id]}
+          {selectMode ? t("saved.done") : t("saved.multiSelect")}
         </button>
-      ))}
-      {filter === "tag" && (
-        <select
-          value={tagFilter}
-          onChange={(event) => onTagFilterChange(event.target.value)}
-          className="h-6 rounded-md border border-zinc-800 bg-zinc-900 px-1.5 text-2xs text-zinc-400 outline-none focus:border-brand/50"
-        >
-          <option value="all">{t("saved.allTags")}</option>
-          {tags.map((tag) => (
-            <option key={tag} value={tag}>{tag}</option>
-          ))}
-        </select>
-      )}
-      <span className="flex-1" />
-      <button
-        type="button"
-        onClick={onToggleSelectMode}
-        className={cn(
-          "shrink-0 rounded-md px-2 py-1 text-2xs transition-colors",
-          selectMode
-            ? "bg-brand/15 text-brand"
-            : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
-        )}
-      >
-        {selectMode ? t("saved.done") : t("saved.multiSelect")}
-      </button>
+      </div>
       {selectMode && (
-        <div className="flex items-center gap-2 border-b border-zinc-800/70 px-4 py-1.5 text-2xs">
+        <div className="flex flex-wrap items-center gap-3 border-t border-zinc-800/70 px-4 py-1.5 text-2xs">
           <span className="text-zinc-500">{t("saved.selected", { count: selectedCount })}</span>
           <button
             type="button"

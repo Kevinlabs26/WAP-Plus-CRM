@@ -121,23 +121,32 @@ function elements(node) {
   return [node, ...elements(node.props.children)];
 }
 
-test("translation bar distinguishes all sources and shows a disabled restore-auto action only for a preference", () => {
-  let restores = 0;
-  const props = { visible: true, hasDraft: true, translateOriginal: null, translating: false,
-    translateLang: "fr", onTranslateLangChange() {}, onRestoreAuto: () => restores++,
-    onTranslate() {}, onRestore() {}, recording: false, recordSec: 0 };
-  for (const source of ["preferred", "country", "message", "default"]) {
-    const tree = elements(TranslateBar({ ...props, source }));
-    const label = `translation.source${source[0].toUpperCase()}${source.slice(1)}`;
-    assert.ok(tree.some(node => node.type === "span" && node.props.children === label));
-    const select = tree.find(node => node.type === "select");
-    assert.equal(select.props.title, `tooltip.outputLanguage · ${label}`);
-    const restore = tree.find(node => node.type === "button" && node.props.children === "translation.restoreAuto");
-    assert.equal(Boolean(restore), source === "preferred");
-    if (restore) restore.props.onClick();
+test("translation bar keeps source in tooltip and moves automatic selection into the language dropdown", () => {
+  const calls=[];
+  const props={visible:true,hasDraft:true,translateOriginal:null,translating:false,translateLang:'fr',onTranslateLangChange:v=>calls.push(v),onRestoreAuto:()=>calls.push('auto'),onTranslate(){},onRestore(){},recording:false,recordSec:0};
+  for(const source of ['preferred','country','message','default']){
+    const tree=elements(TranslateBar({...props,source})),label='translation.source'+source[0].toUpperCase()+source.slice(1);
+    assert.ok(!tree.some(n=>n.type==='span'&&n.props.children===label));
+    const select=tree.find(n=>n.type==='select');assert.equal(select.props.title,'tooltip.outputLanguage · '+label);
+    assert.equal(select.props.value,source==='preferred'?'fr':'auto');
+    assert.ok(tree.some(n=>n.type==='option'&&n.props.value==='auto'));
+    assert.ok(!tree.some(n=>n.type==='button'&&n.props.children==='translation.restoreAuto'));
+    select.props.onChange({target:{value:'auto'}});select.props.onChange({target:{value:'de'}});
   }
-  assert.equal(restores, 1);
-  const busy = elements(TranslateBar({ ...props, translating: true, source: "preferred" }));
-  assert.equal(busy.find(node => node.type === "button" && node.props.children === "translation.restoreAuto").props.disabled, true);
-  assert.equal(busy.find(node => node.type === "select").props.disabled, true);
+  assert.deepEqual(calls,['auto','de','auto','de','auto','de','auto','de']);
+  const busy=elements(TranslateBar({...props,source:'preferred',translating:true}));
+  const select=busy.find(n=>n.type==='select');assert.equal(select.props.disabled,true);select.props.onChange({target:{value:'auto'}});assert.equal(calls.length,8);
+});
+
+test('compact translation tools preserve translate, undo and recording behavior without permanent shortcut text',()=>{
+ let translated=0,restored=0;
+ const props={visible:true,hasDraft:true,translateOriginal:null,translating:false,translateLang:'fr',source:'country',onTranslateLangChange(){},onRestoreAuto(){},onTranslate:()=>translated++,onRestore:()=>restored++,recording:false,recordSec:0};
+ let tree=elements(TranslateBar(props));
+ const action=tree.find(n=>n.type==='button');assert.match(action.props.title,/Ctrl\+Shift\+T/);action.props.onClick();assert.equal(translated,1);
+ assert.equal(tree.filter(n=>n.type==='button').length,1);
+ tree=elements(TranslateBar({...props,translateOriginal:'Original',recording:true,recordSec:12}));
+ tree.find(n=>n.type==='button'&&n.props.title==='tooltip.restoreOriginal').props.onClick();assert.equal(restored,1);
+ assert.ok(tree.some(n=>n.type==='span'&&Array.isArray(n.props.children)&&n.props.children[0]===12));
+ assert.ok(!tree.some(n=>n.props.children==='translation.shortcuts'));
+ assert.equal(TranslateBar({...props,visible:false}),null);
 });

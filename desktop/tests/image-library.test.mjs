@@ -130,6 +130,9 @@ test('gallery renders only one page, preserves selection order and blocks insert
   const select=id=>{const nodes=allNodes(tree);nodes.filter(n=>n.type==='input'&&n.props.type==='checkbox')[id].props.onChange({target:{checked:true}});render();};
   try {
     render();await settle();let nodes=render();assert.equal(nodes.filter(n=>n.type==='article').length,40);
+    assert.equal(nodes.filter(n=>n.type==='input'&&n.props.type==='checkbox').length,0);
+    assert.equal(nodes.some(n=>n.type==='form'),false);
+    nodes.find(n=>n.props.children==='gallery.multiSelect').props.onClick();render();
     select(5);select(2);
     const reads=[];globalThis.libraryRead=async id=>{reads.push(id);return data;};
     allNodes(tree).find(n=>n.props.children==='gallery.insertSelected').props.onClick();await settle();await settle();render();
@@ -143,7 +146,7 @@ test('gallery renders only one page, preserves selection order and blocks insert
     allNodes(tree).find(n=>n.type==='input'&&n.props['aria-label']==='gallery.categoryName').props.onChange({target:{value:'我的自定义分类'}});
     render();allNodes(tree).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});
     await settle();await settle();render();
-    assert.ok(allNodes(tree).some(n=>n.type==='option'&&n.props.value==='我的自定义分类'));
+    assert.ok(allNodes(tree).some(n=>n.type==='button'&&n.props.title==='我的自定义分类'&&n.props['aria-pressed']));
     assert.equal(allNodes(tree).filter(n=>n.type==='article').length,0);
     allNodes(tree).find(n=>n.type==='input'&&n.props.type==='file'&&n.props.multiple).props.onChange({currentTarget:{files:[new File(['image'],'photo.png',{type:'image/png'})],value:'file'}});
     await settle();await settle();render();assert.equal(globalThis.libraryImportCategory,'我的自定义分类');

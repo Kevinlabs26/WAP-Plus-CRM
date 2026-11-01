@@ -73,15 +73,18 @@ export function SettingsSpeechPanel() {
             </select>
           </label>
           {settings.transcriptionProvider !== "none" && <>
-            {settings.transcriptionProvider !== "gemini" && <label className="block text-2xs text-zinc-500 sm:col-span-2">
-              {t("settingsAi.speechBaseUrl")}
-              <Input value={settings.transcriptionBaseUrl} onChange={(event) => updateSettings({ transcriptionBaseUrl: event.target.value })} className="mt-1" placeholder="https://your-speech-service.example/v1" />
-            </label>}
             <label className="block text-2xs text-zinc-500">{t("settingsAi.speechKey")}<Input type="password" autoComplete="off" className="mt-1" value={settings.transcriptionApiKey} onChange={e => updateSettings({ transcriptionApiKey: e.target.value })} /></label>
             <label className="block text-2xs text-zinc-500">
               {t("settingsAi.speechModel")}
               <Input value={settings.transcriptionModel} onChange={(event) => updateSettings({ transcriptionModel: event.target.value })} className="mt-1" placeholder={TRANSCRIPTION_DEFAULTS[settings.transcriptionProvider].model || "whisper-large-v3"} />
             </label>
+            {settings.transcriptionProvider !== "gemini" && <details key={settings.transcriptionProvider} open={settings.transcriptionProvider === "custom"} className="text-2xs text-zinc-500 sm:col-span-2">
+              <summary className="cursor-pointer py-1">{t("settingsAi.speechConnection")}</summary>
+              <label className="mt-2 block">
+                {t("settingsAi.speechBaseUrl")}
+                <Input value={settings.transcriptionBaseUrl} onChange={(event) => updateSettings({ transcriptionBaseUrl: event.target.value })} className="mt-1" placeholder="https://your-speech-service.example/v1" />
+              </label>
+            </details>}
           </>}
         </div>
         <p className="mt-3 text-xs leading-relaxed text-zinc-500">{t("settingsAi.speechLocalHint")}</p>

@@ -88,7 +88,7 @@ function harness() {
       const find = node => {
         if (!node || typeof node !== "object") return;
         const children = [node.props?.children].flat(Infinity);
-        if (node.props?.onClick && children.some(child => typeof child === "string" && /crmPanel\.(generateReply|regenerate|generating)/.test(child))) return node;
+        if (node.props?.onClick && /crmPanel\.(generateReply|regenerate|generating)/.test(node.props?.["aria-label"] || "")) return node;
         for (const child of children) { const found = find(child); if (found) return found; }
       };
       const button = find(tree); assert.ok(button, "refresh button exists"); button.props.onClick();

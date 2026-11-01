@@ -91,8 +91,11 @@ export function SettingsLocalSpeechPanel({ embedded = false }: { embedded?: bool
         </p>
       </div>}
 
-      <section>
-        <SectionLabel>{t("settingsSpeech.presets")}</SectionLabel>
+      <details>
+        <summary className="cursor-pointer py-2 text-[13px] font-medium text-zinc-400">
+          {t("settingsSpeech.presets")}
+          {models.some(m => m.ready) && <span className="ml-2 text-2xs text-brand">{t("settingsSpeech.ready")} · {models.filter(m => m.ready).length}</span>}
+        </summary>
         <div className="space-y-2">
           {SPEECH_MODEL_PRESETS.map((preset) => {
             const installed = models.some((m) => m.name === preset.id && m.ready);
@@ -148,10 +151,42 @@ export function SettingsLocalSpeechPanel({ embedded = false }: { embedded?: bool
             );
           })}
         </div>
-      </section>
 
-      <section>
-        <SectionLabel>{t("settingsSpeech.ttsVoices")}</SectionLabel>
+        {models.length > 0 && (
+          <section>
+            <SectionLabel>{t("settingsSpeech.localDirectory")}</SectionLabel>
+            <div className="space-y-2">
+              {models.map((model) => (
+                <div
+                  key={model.name}
+                  className="flex items-center gap-3 rounded-lg border border-zinc-800/70 px-3 py-2"
+                >
+                  <span
+                    className={cn(
+                      "h-1.5 w-1.5 shrink-0 rounded-full",
+                      model.ready ? "bg-emerald-400" : "bg-zinc-600"
+                    )}
+                  />
+                  <span className="min-w-0 flex-1 truncate font-mono text-2xs text-zinc-400">
+                    {model.dir}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    disabled={!!busyId}
+                    className="!min-h-6 w-7 !px-0 text-zinc-500 hover:!text-red-400"
+                    title={t("settingsSpeech.deleteModel")}
+                    onClick={() => void handleRemove(model)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+      </details>
+      <details>
+        <summary className="cursor-pointer py-2 text-[13px] font-medium text-zinc-400">{t("settingsSpeech.ttsVoices")}</summary>
         {systemVoices.length === 0 ? (
           <p className="text-2xs text-zinc-600">
             {t("settingsSpeech.noVoices")}
@@ -173,40 +208,7 @@ export function SettingsLocalSpeechPanel({ embedded = false }: { embedded?: bool
         <p className="mt-1.5 text-2xs leading-snug text-zinc-600">
           {t("settingsSpeech.voiceHint")}
         </p>
-      </section>
-
-      {models.length > 0 && (
-        <section>
-          <SectionLabel>{t("settingsSpeech.localDirectory")}</SectionLabel>
-          <div className="space-y-2">
-            {models.map((model) => (
-              <div
-                key={model.name}
-                className="flex items-center gap-3 rounded-lg border border-zinc-800/70 px-3 py-2"
-              >
-                <span
-                  className={cn(
-                    "h-1.5 w-1.5 shrink-0 rounded-full",
-                    model.ready ? "bg-emerald-400" : "bg-zinc-600"
-                  )}
-                />
-                <span className="min-w-0 flex-1 truncate font-mono text-2xs text-zinc-400">
-                  {model.dir}
-                </span>
-                <Button
-                  variant="ghost"
-                  disabled={!!busyId}
-                  className="!min-h-6 w-7 !px-0 text-zinc-500 hover:!text-red-400"
-                  title={t("settingsSpeech.deleteModel")}
-                  onClick={() => void handleRemove(model)}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      </details>
     </div>
   );
 }

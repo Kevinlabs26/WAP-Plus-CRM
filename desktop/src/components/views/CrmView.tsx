@@ -12,8 +12,7 @@ import {
   CheckSquare,
   Plus,
   Search,
-  LayoutGrid,
-  List,
+  MoreHorizontal,
   Clock3,
   CalendarDays,
   Megaphone,
@@ -548,8 +547,8 @@ export function CrmView() {
 
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-zinc-950">
-      <div className="flex min-h-16 shrink-0 flex-wrap items-center gap-3 px-4 py-3">
-        <div className="min-w-0">
+      <div className="flex shrink-0 flex-wrap items-center gap-3 px-4 py-3">
+        <div className="min-w-0 flex-1">
           <h1 className="text-lg font-semibold">{t("crm.title")}</h1>
           <div className="text-2xs text-zinc-500">
             {q || quickFilter !== "all"
@@ -557,156 +556,59 @@ export function CrmView() {
               : t("crm.contactCountAll", { total: peopleContacts.length })}
           </div>
         </div>
-
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          <Button
-            variant="secondary"
-            className="!min-h-8 gap-1 !px-2.5 text-[13px]"
-            title={t("crm.importTitle")}
-            onClick={() => setImportOpen(true)}
-          >
-            <FilePlus2 className="h-3.5 w-3.5" />
-            {t("crm.import")}
-          </Button>
-          {selectMode ? (
-            <Button
-              variant="secondary"
-              className="!min-h-8 gap-1 !px-2.5 text-[13px]"
-              onClick={exitSelectMode}
-            >
-              <X className="h-3.5 w-3.5" />
-              {t("crm.exitSelect", { count: selectedIds.size })}
+        {selectMode && <Button variant="secondary" className="!min-h-8 gap-1 !px-2.5 text-2xs" onClick={exitSelectMode}>
+          <X className="h-3.5 w-3.5" />{t("crm.exitSelect", { count: selectedIds.size })}
+        </Button>}
+        <Button variant="primary" className="!min-h-8 gap-1 !px-2.5 text-[13px]" onClick={() => setShowAdd(v => !v)}>
+          <Plus className="h-3.5 w-3.5" />{t("crm.newContact")}
+        </Button>
+        <details className="relative" onClick={event => {
+          if ((event.target as HTMLElement).closest("button")) {
+            event.currentTarget.open = false;
+            event.currentTarget.querySelector("summary")?.focus();
+          }
+        }} onKeyDown={event => {
+          if (event.key === "Escape") {
+            event.stopPropagation();
+            event.currentTarget.open = false;
+            event.currentTarget.querySelector("summary")?.focus();
+          }
+        }}>
+          <summary aria-label={t("chat.more")} title={t("chat.more")} className="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-800 [&::-webkit-details-marker]:hidden">
+            <MoreHorizontal className="h-4 w-4" />
+          </summary>
+          <div className="absolute right-0 top-full z-30 mt-1 flex min-w-44 flex-col gap-1 rounded-xl border border-zinc-800 bg-zinc-950 p-2 shadow-xl">
+            <Button variant="ghost" className="!min-h-8 justify-start gap-2 !px-2 text-2xs" title={t("crm.importTitle")} onClick={() => setImportOpen(true)}>
+              <FilePlus2 className="h-3.5 w-3.5" />{t("crm.import")}
             </Button>
-          ) : (
-            <Button
-              variant="secondary"
-              className="!min-h-8 gap-1 !px-2.5 text-[13px]"
-              onClick={() => setSelectMode(true)}
-            >
-              <CheckSquare className="h-3.5 w-3.5" />
-              {t("crm.select")}
+            {!selectMode && <Button variant="ghost" className="!min-h-8 justify-start gap-2 !px-2 text-2xs" onClick={() => setSelectMode(true)}>
+              <CheckSquare className="h-3.5 w-3.5" />{t("crm.select")}
+            </Button>}
+            <Button variant="ghost" className="!min-h-8 justify-start gap-2 !px-2 text-2xs" onClick={() => setStageManager({})}>
+              <Settings2 className="h-3.5 w-3.5" />{t("crm.manageStages")}
             </Button>
-          )}
-          <Button
-            variant="primary"
-            className="!min-h-8 gap-1 !px-2.5 text-[13px]"
-            onClick={() => setShowAdd((v) => !v)}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            {t("crm.newContact")}
-          </Button>
-        </div>
-      </div>
-
-      <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-zinc-800/90 px-4 pb-3">
-        <div className="relative min-w-[16rem] max-w-md flex-1">
-          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder={t("crm.search")}
-            aria-label={t("crm.search")}
-            className="pl-7"
-          />
-        </div>
-
-        <div className="flex min-w-0 flex-1 basis-80 flex-wrap items-center gap-1" role="group" aria-label={t("crm.filters")}>
-          {(
-            [
-              { id: "all", label: t("crm.all") },
-              {
-                id: "active",
-                label: t("crm.active"),
-                count: filterCounts.active,
-              },
-              {
-                id: "needs_name",
-                label: t("crm.needsName"),
-                count: filterCounts.needsName,
-              },
-              {
-                id: "due_followup",
-                label: t("crm.dueFollowUp"),
-                count: filterCounts.dueFollowup,
-              },
-              {
-                id: "has_note",
-                label: t("crm.hasNote"),
-                count: filterCounts.hasNote,
-              },
-            ] as const
-          ).map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => changeQuickFilter(item.id)}
-              aria-pressed={quickFilter === item.id}
-              className={cn(
-                "inline-flex min-h-8 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 text-2xs transition-colors",
-                quickFilter === item.id
-                  ? "bg-zinc-800 text-zinc-100 ring-1 ring-zinc-700"
-                  : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300"
-              )}
-              title={
-                item.id === "active"
-                  ? t("crm.activeHint")
-                  : item.id === "needs_name"
-                  ? t("crm.needsNameHint")
-                  : item.id === "due_followup"
-                    ? t("crm.followUpHint")
-                    : item.id === "has_note"
-                      ? t("crm.noteHint")
-                      : t("crm.allHint")
-              }
-            >
-              {item.label}
-              {"count" in item && item.count != null ? (
-                <span className="tabular-nums text-zinc-400">{item.count}</span>
-              ) : null}
-            </button>
-          ))}
-        </div>
-
-        <div className="ml-auto flex shrink-0 items-center gap-2" role="group" aria-label={t("today.displayMode")}>
-          <div className="flex rounded-md border border-zinc-800 bg-zinc-900/50 p-0.5">
-            <button
-              type="button"
-              aria-pressed={mode === "board"}
-              onClick={() => changeMode("board")}
-              className={cn(
-                "inline-flex h-7 items-center gap-1 rounded px-2 text-2xs",
-                mode === "board"
-                  ? "bg-zinc-800 text-zinc-100"
-                  : "text-zinc-500 hover:text-zinc-300"
-              )}
-            >
-              <LayoutGrid className="h-3.5 w-3.5" />
-              {t("crm.board")}
-            </button>
-            <button
-              type="button"
-              aria-pressed={mode === "list"}
-              onClick={() => changeMode("list")}
-              className={cn(
-                "inline-flex h-7 items-center gap-1 rounded px-2 text-2xs",
-                mode === "list"
-                  ? "bg-zinc-800 text-zinc-100"
-                  : "text-zinc-500 hover:text-zinc-300"
-              )}
-            >
-              <List className="h-3.5 w-3.5" />
-              {t("crm.list")}
-            </button>
+            <label className="border-t border-zinc-800 px-2 pt-2 text-2xs text-zinc-500">
+              {t("today.displayMode")}
+              <select value={mode} onChange={event => changeMode(event.target.value as CrmMode)} className="ui-control mt-1 w-full px-2 text-2xs">
+                <option value="board">{t("crm.board")}</option>
+                <option value="list">{t("crm.list")}</option>
+              </select>
+            </label>
           </div>
-          <Button
-            variant="secondary"
-            className="!min-h-8 gap-1 !px-2.5 text-2xs"
-            onClick={() => setStageManager({})}
-          >
-            <Settings2 className="h-3.5 w-3.5" />
-            {t("crm.manageStages")}
-          </Button>
+        </details>
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-800/90 px-4 pb-3">
+        <div className="relative min-w-40 flex-1">
+          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+          <Input value={q} onChange={event => setQ(event.target.value)} placeholder={t("crm.search")} aria-label={t("crm.search")} className="pl-7" />
         </div>
+        <select value={quickFilter} onChange={event => changeQuickFilter(event.target.value as CrmQuickFilter)} aria-label={t("crm.filters")} className="ui-control min-w-0 max-w-full px-2 text-2xs">
+          <option value="all">{t("crm.all")}</option>
+          <option value="active" title={t("crm.activeHint")}>{t("crm.active")} · {filterCounts.active}</option>
+          <option value="due_followup" title={t("crm.followUpHint")}>{t("crm.dueFollowUp")} · {filterCounts.dueFollowup}</option>
+          <option value="needs_name" title={t("crm.needsNameHint")}>{t("crm.needsName")} · {filterCounts.needsName}</option>
+          <option value="has_note" title={t("crm.noteHint")}>{t("crm.hasNote")} · {filterCounts.hasNote}</option>
+        </select>
       </div>
 
       {showAdd && (

@@ -35,20 +35,20 @@ test('1000 replies render one page and search covers attachment filenames',()=>{
 });
 test('category filtering works with custom categories and falls back when a category is removed',()=>{
  const h=harness(QuickReplyBrowser,{replies:[reply('a'),reply('b',{category:'custom'})],categories:[{id:'custom',label:'Invitation'}]});
- h.find('multi.quickReplyCategories').props.onChange({target:{value:'custom'}});h.render();assert.ok(h.find('Reply b'));assert.equal(h.find('Reply a'),undefined);
+ h.click('Invitation');assert.ok(h.find('Reply b'));assert.equal(h.find('Reply a'),undefined);
  h.props.categories=[];h.render();assert.equal(h.nodes().filter(n=>n.type==='article').length,2);
 });
 test('preview does not insert, and insertion uses the latest text and media rather than an old snapshot',()=>{
- const h=harness();h.click('quickShelf.preview');assert.equal(h.inserted.length,0);assert.equal(h.preview().props.reply.media.fileName,'invitation.png');
+ const h=harness();h.click('quickShelf.previewNamed'+JSON.stringify({title:'Reply one'}));assert.equal(h.inserted.length,0);assert.equal(h.preview().props.reply.media.fileName,'invitation.png');
  h.props.replies=[reply('one',{body:'Updated text',media:{...media,fileName:'updated.png'}})];h.render();assert.equal(h.preview().props.reply.body,'Updated text');
  h.preview().props.onInsert();h.render();assert.equal(h.inserted.length,1);assert.equal(h.inserted[0].media.fileName,'updated.png');assert.equal(h.preview(),undefined);
 });
 test('changing the target chat or deleting a reply closes the old preview',()=>{
- const h=harness();h.click('quickShelf.preview');h.props.contextKey='main:b';h.render();assert.equal(h.preview(),undefined);
- h.click('quickShelf.preview');h.props.replies=[];h.render();assert.equal(h.preview(),undefined);assert.equal(h.inserted.length,0);
+ const h=harness();h.click('quickShelf.previewNamed'+JSON.stringify({title:'Reply one'}));h.props.contextKey='main:b';h.render();assert.equal(h.preview(),undefined);
+ h.click('quickShelf.previewNamed'+JSON.stringify({title:'Reply one'}));h.props.replies=[];h.render();assert.equal(h.preview(),undefined);assert.equal(h.inserted.length,0);
 });
 test('blocked media insertion keeps the preview open and disabled chat cannot insert',()=>{
- const h=harness(QuickReplyBrowser,{onInsert:()=>false});h.click('quickShelf.preview');h.preview().props.onInsert();h.render();assert.ok(h.preview());
+ const h=harness(QuickReplyBrowser,{onInsert:()=>false});h.click('quickShelf.previewNamed'+JSON.stringify({title:'Reply one'}));h.preview().props.onInsert();h.render();assert.ok(h.preview());
  h.props.disabled=true;h.render();h.find('quickShelf.insert').props.onClick();assert.equal(h.inserted.length,0);assert.ok(h.find('quickShelf.chooseChat'));
 });
 test('a media-only reply remains insertable and carries its attachment',()=>{
@@ -58,31 +58,31 @@ test('a media-only reply remains insertable and carries its attachment',()=>{
 test('pinned replies lead the complete list; pinned and recent views still respect search and category',()=>{
  const replies=[reply('a'),reply('b',{category:'opening'}),reply('c')];const pinned=[];
  const h=harness(QuickReplyBrowser,{replies,pinnedIds:['c'],recentIds:['b','c','missing'],onTogglePin:id=>pinned.push(id)});
- const titles=()=>h.nodes().filter(n=>n.type==='h4').map(n=>n.props.children);
+ const titles=()=>h.nodes().filter(n=>n.props.role==='heading').map(n=>n.props.children);
  assert.deepEqual(titles(),['Reply c','Reply a','Reply b']);assert.deepEqual(replies.map(r=>r.id),['a','b','c']);
  h.click('quickShelf.unpin'+JSON.stringify({title:'Reply c'}));assert.deepEqual(pinned,['c']);
  h.click('quickShelf.view.pinned');assert.deepEqual(titles(),['Reply c']);
  h.click('quickShelf.view.recent');assert.deepEqual(titles(),['Reply b','Reply c']);
- h.find('multi.quickReplyCategories').props.onChange({target:{value:'opening'}});h.render();assert.deepEqual(titles(),['Reply b']);
+ h.click('quickReply.category.opening');assert.deepEqual(titles(),['Reply b']);
  h.find('multi.searchQuickReplies').props.onChange({target:{value:'missing'}});h.render();assert.deepEqual(titles(),[]);
 });
 
 test('previewing and refused insertion do not update recents; successful insertion records one use',()=>{
  const used=[];let accepted=false;const h=harness(QuickReplyBrowser,{onInsert:()=>accepted,onUsed:id=>used.push(id)});
  h.click('quickShelf.view.recent');assert.ok(h.find('quickShelf.empty.recent'));h.click('quickShelf.view.all');
- h.click('quickShelf.preview');assert.deepEqual(used,[]);h.preview().props.onInsert();h.render();assert.deepEqual(used,[]);
+ h.click('quickShelf.previewNamed'+JSON.stringify({title:'Reply one'}));assert.deepEqual(used,[]);h.preview().props.onInsert();h.render();assert.deepEqual(used,[]);
  accepted=true;h.preview().props.onInsert();h.render();assert.deepEqual(used,['one']);assert.equal(h.preview(),undefined);
  h.props.disabled=true;h.render();h.click('quickShelf.insert');assert.deepEqual(used,['one']);
 });
 
 test('preview carries the current target chat and sending identity; account changes hide the old preview',()=>{
  const target={title:'Grace',account:'2: Alexandre'};const h=harness(QuickReplyBrowser,{target});
- h.click('quickShelf.preview');assert.deepEqual(h.preview().props.target,target);
+ h.click('quickShelf.previewNamed'+JSON.stringify({title:'Reply one'}));assert.deepEqual(h.preview().props.target,target);
  h.props.contextKey='main:a:account-b';h.render();assert.equal(h.preview(),undefined);
  const original=globalThis.document;globalThis.document={body:{}};
  try{
  const p=harness(QuickReplyPreview,{reply:reply('one'),category:'Other',target,disabled:false,onInsert(){},onClose(){}});
- assert.ok(p.find('quickShelf.target'+JSON.stringify({title:'Grace'})));assert.ok(p.find('quickShelf.account'+JSON.stringify({account:'2: Alexandre'})));
+ assert.ok(p.nodes().some(n=>n.type==='p'&&Array.isArray(n.props.children)&&n.props.children.join('')==='Grace · 2: Alexandre'));
  }finally{globalThis.document=original;}
 });
 

@@ -8,7 +8,6 @@ import { Avatar } from "@/components/ui/Avatar";
 import {
   Button,
   Input,
-  SectionLabel,
   Textarea,
 } from "@/components/ui/primitives";
 import { useI18n } from "@/i18n";
@@ -54,13 +53,24 @@ export function BroadcastPickStep({
   onClear,
 }: Props) {
   const { t } = useI18n();
+  const [source, setSource] = useState<"contacts" | "numbers">(() => phoneText.trim() ? "numbers" : "contacts");
   const [showSelectedOnly, setShowSelectedOnly] = useState(false);
   const selectedOnlyActive = showSelectedOnly && selected.size > 0;
   const visiblePool = selectedOnlyActive ? selectedContacts : pool;
 
   return (
     <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant={source === "contacts" ? "secondary" : "ghost"} aria-pressed={source === "contacts"} onClick={() => setSource("contacts")}>
+          {t("broadcast.chooseContacts")} · {selected.size}
+        </Button>
+        <Button variant={source === "numbers" ? "secondary" : "ghost"} aria-pressed={source === "numbers"} onClick={() => setSource("numbers")}>
+          {t("broadcast.directPhones")} · {directPhoneCount}
+        </Button>
+        <span className="ml-auto text-2xs text-zinc-500" role="status">{t("broadcast.recipientTotal", { count: recipientCount, cap: BROADCAST_HARD_CAP })}</span>
+      </div>
       <section
+        hidden={source !== "numbers"}
         className={cn(
           "rounded-xl border p-3",
           directPhoneCount
@@ -68,20 +78,15 @@ export function BroadcastPickStep({
             : "border-zinc-800 bg-zinc-900/30"
         )}
       >
-        <div className="flex items-center gap-2">
-          <SectionLabel>{t("broadcast.directPhones")}</SectionLabel>
-          <span className="rounded bg-brand/15 px-1.5 py-0.5 text-2xs text-brand">
-            {t("broadcast.recommended")}
-          </span>
-        </div>
         <p className="mt-1 text-2xs text-zinc-500">
           {t("broadcast.directPhonesHint")}
         </p>
         <Textarea
+          aria-label={t("broadcast.directPhones")}
           value={phoneText}
           onChange={(event) => onPhoneTextChange(event.target.value)}
-          rows={8}
-          className="mt-2 min-h-[200px] max-h-64 overflow-y-auto font-mono"
+          rows={5}
+          className="mt-2 max-h-64 overflow-y-auto font-mono"
           onInput={(event) => {
             event.currentTarget.style.height = "auto";
             event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 256)}px`;
@@ -93,8 +98,7 @@ export function BroadcastPickStep({
         </p>
       </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
-        <SectionLabel>{t("broadcast.chooseContacts")}</SectionLabel>
+      <section hidden={source !== "contacts"} className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
         <div className="flex flex-wrap items-end gap-2">
           <label className="text-2xs text-zinc-500">
             {t("broadcast.stage")}
@@ -160,9 +164,6 @@ export function BroadcastPickStep({
         </div>
         <p className="mt-2 text-2xs text-zinc-600">
           {t("broadcast.selectionSummary", {
-            selected: selected.size,
-            count: recipientCount,
-            cap: BROADCAST_HARD_CAP,
             visible: visiblePool.length,
           })}
         </p>

@@ -117,6 +117,17 @@ test('folder schedule action opens once and closes the menu while retaining view
  }finally{ui.close();}
 });
 
+test('import actions expand on demand and close the folder menu after running once',()=>{
+ const ui=fixture();let imported=0;ui.props.onImport=()=>imported++;
+ const action=label=>ui.tree.find(n=>n.props.role==='menuitem'&&nodes(n).some(child=>child.props.children===label||Array.isArray(child.props.children)&&child.props.children.includes(label)));
+ try{
+  ui.render();ui.open();assert.equal(action('导入号码'),undefined);
+  action('导入与添加').props.onClick();ui.render();assert.ok(action('导入号码'));
+  action('导入号码').props.onClick();ui.render();assert.equal(imported,1);assert.equal(ui.root,undefined);
+  ui.open();assert.equal(action('导入号码'),undefined);
+ }finally{ui.close();}
+});
+
 test('folder bulk send and scheduled send are separate actions and each closes the context menu',()=>{
  const ui=fixture();let bulk=0,scheduled=0;ui.props.onBroadcast=()=>bulk++;ui.props.onSchedule=()=>scheduled++;
  try{

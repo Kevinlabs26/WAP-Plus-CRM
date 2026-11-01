@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckSquare, ImagePlus, ListChecks, Star, X } from "lucide-react";
+import { ImagePlus, Star } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/primitives";
 import { useI18n } from "@/i18n";
@@ -13,10 +13,11 @@ export function ImageLibraryPanel({ chatId, contextKey, target }: { chatId?: str
   const { t } = useI18n();
   const [images, setImages] = useState<LibraryImage[]>([]);
   const [customCategories, setCustomCategories] = useState<string[]>([]);
-  const [newCategory, setNewCategory] = useState("");
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("*");
   const [destination, setDestination] = useState("");
+  const [creatingCategory, setCreatingCategory] = useState(false);
+  const [selecting, setSelecting] = useState(false);
   const [view, setView] = useState<"all" | "pinned" | "recent">("all");
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<string[]>([]);
@@ -71,7 +72,7 @@ export function ImageLibraryPanel({ chatId, contextKey, target }: { chatId?: str
           const dropped = await invoke<{ name: string; mime: string; bytes: number[] }>("read_dropped_file", { path: source });
           file = new File([new Uint8Array(dropped.bytes)], dropped.name, { type: dropped.mime });
         } else file = source;
-        const result = await addLibraryImage(file, destination); if (result.added) added++; else duplicates++;
+        const result = await addLibraryImage(file, category === "*" ? "" : category); if (result.added) added++; else duplicates++;
       }
       catch (e) { failures++; detail = `${typeof source === "string" ? source.split(/[\\/]/).pop() : source.name}: ${String(e)}`; }
       setProgress(`${index + 1}/${files.length}`);
@@ -101,67 +102,76 @@ export function ImageLibraryPanel({ chatId, contextKey, target }: { chatId?: str
   };
   if (!isTauri()) return <p className="p-4 text-xs text-zinc-500">{t("gallery.desktopOnly")}</p>;
   return <section data-image-library-drop className="flex min-h-0 flex-1 flex-col" aria-label={t("gallery.title")} onDragOver={e => { e.preventDefault(); e.stopPropagation(); }} onDrop={e => { e.preventDefault(); e.stopPropagation(); if (!lock.current) void importFiles(Array.from(e.dataTransfer.files)); }}>
-    <header className="shrink-0 space-y-1.5 border-b border-zinc-800 p-2">
-      <div className="flex items-center justify-between"><h3 className="text-xs font-semibold">{t("gallery.title")}</h3><span className="text-2xs text-zinc-500">{images.length}/3000 · {(images.reduce((sum, image) => sum + image.size, 0) / 1024 / 1024).toFixed(1)} MB / 1 GB</span></div>
-      {target && <p className="truncate text-2xs text-zinc-500" title={target}>{t("quickShelf.target", { title: target })}</p>}
-      <div className="flex flex-wrap gap-1">
-        <Button size="xs" disabled={busy || loading} onClick={() => upload.current?.click()}><ImagePlus className="mr-1 h-3 w-3" />{t("gallery.add")}</Button>
-        <Button size="xs" disabled={busy || loading || !images.length && !categories.length} onClick={() => void run(async () => { await exportImageLibrary(chosen.length ? chosen : images, chosen.length ? [...new Set(chosen.map(image => image.category).filter(Boolean))] : categories); setProgress(t("gallery.exported")); })}>{t("gallery.backup")}</Button>
-        <Button size="xs" disabled={busy || loading} onClick={() => restore.current?.click()}>{t("gallery.restore")}</Button>
+    <header className="shrink-0 space-y-2 border-b border-zinc-800 p-2">
+      <div className="flex items-center gap-2">
+        <h3 className="min-w-0 flex-1 text-xs font-semibold">{t("gallery.title")} <span className="ml-1 font-normal text-zinc-500">{images.length}</span></h3>
+        <button type="button" className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-brand" aria-label={t("gallery.add")} title={t("gallery.add")} disabled={busy || loading} onClick={() => upload.current?.click()}><ImagePlus aria-hidden="true" className="h-4 w-4" /></button>
+        <details className="relative text-xs text-zinc-500" onClick={event => { if ((event.target as HTMLElement).closest("button")) event.currentTarget.open = false; }}>
+          <summary aria-label={t("gallery.more")} title={t("gallery.more")} className="cursor-pointer list-none rounded p-1.5 hover:bg-zinc-800">•••</summary>
+          <div className="absolute right-0 top-full z-10 mt-1 flex min-w-max flex-col gap-1 rounded-lg border border-zinc-700 bg-zinc-900 p-1 shadow-xl">
+            <div className="flex gap-1">{(["all", "pinned", "recent"] as const).map(value => <Button key={value} size="xs" variant={view === value ? "secondary" : "ghost"} aria-pressed={view === value} onClick={() => setView(value)}>{t(`quickShelf.view.${value}`)}</Button>)}</div>
+            <Button size="xs" disabled={busy} onClick={() => { setSelecting(value => !value); setSelected([]); }}>{t(selecting ? "common.close" : "gallery.multiSelect")}</Button>
+            <p className="max-w-64 truncate px-2 text-2xs" title={target}>{target}</p>
+            <p className="px-2 text-2xs">{t("gallery.storageHint")}</p>
+            <Button size="xs" disabled={busy || loading || !images.length && !categories.length} onClick={() => void run(async () => { await exportImageLibrary(chosen.length ? chosen : images, chosen.length ? [...new Set(chosen.map(image => image.category).filter(Boolean))] : categories); setProgress(t("gallery.exported")); })}>{t("gallery.backup")}</Button>
+            <Button size="xs" disabled={busy || loading} onClick={() => restore.current?.click()}>{t("gallery.restore")}</Button>
+            {!!chosen.length && <Button size="xs" className="text-rose-400" disabled={busy} onClick={() => void run(async () => { if (await requestConfirm({ title: t("gallery.deleteConfirm", { count: chosen.length }), tone: "danger" })) { await deleteLibraryImages(chosen.map(image => image.id)); setSelected([]); } })}>{t("common.delete")}</Button>}
+          </div>
+        </details>
       </div>
       <input ref={upload} type="file" hidden multiple accept="image/png,image/jpeg,image/gif,image/webp" onChange={e => { const files = Array.from(e.currentTarget.files || []); e.currentTarget.value = ""; void importFiles(files); }} />
       <input ref={restore} type="file" hidden accept="application/json,.json" onChange={e => { const file = e.currentTarget.files?.[0]; e.currentTarget.value = ""; if (file) void run(async () => { const added = await restoreImageLibrary(file, (done, total) => setProgress(`${done}/${total}`)); setProgress(t("gallery.restored", { count: added })); }); }} />
-      <div className="flex gap-1.5">
-      <input className="ui-control h-8 min-w-0 flex-1 px-2 text-xs" aria-label={t("gallery.search")} placeholder={t("gallery.search")} value={query} onChange={e => setQuery(e.target.value)} />
-      <select className="ui-control h-8 w-[38%] min-w-0 px-2 text-xs" aria-label={t("gallery.category")} value={category} onChange={e => { setCategory(e.target.value); setDestination(e.target.value === "*" ? "" : e.target.value); }}>
-        <option value="*">{t("multi.all")}</option><option value="">{t("gallery.uncategorized")}</option>{categories.map(value => <option key={value} value={value}>{value} ({images.filter(image => image.category === value).length})</option>)}
-      </select>
-      </div>
-      <div className="flex gap-1">{(["all", "pinned", "recent"] as const).map(value => <Button key={value} size="xs" variant={view === value ? "secondary" : "ghost"} aria-pressed={view === value} onClick={() => setView(value)}>{t(`quickShelf.view.${value}`)}</Button>)}</div>
-      <details className="text-2xs text-zinc-500">
-        <summary className="cursor-pointer select-none py-0.5">{t("gallery.categoryOptions")}{destination && <span className="ml-1 text-brand">· {destination}</span>}</summary>
-        <form className="mt-1 flex gap-1" onSubmit={event => {
+
+      <input className="ui-control h-8 w-full px-2 text-xs" aria-label={t("gallery.search")} placeholder={t("gallery.search")} value={query} onChange={e => setQuery(e.target.value)} />
+      <nav className="flex items-center gap-1" aria-label={t("gallery.category")}>
+        <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
+          {[["*", t("multi.all")], ...(images.some(image => !image.category) ? [["", t("gallery.uncategorized")]] : []), ...categories.map(name => [name, name])].map(([value, label]) => <button type="button" key={value} aria-pressed={category === value} onClick={() => setCategory(value!)} className={`shrink-0 max-w-40 truncate rounded-full px-2.5 py-1 text-2xs ${category === value ? "bg-brand/10 text-brand" : "text-zinc-500 hover:bg-zinc-800"}`} title={label}>{label}</button>)}
+        </div>
+        <button type="button" aria-label={t("gallery.createCategory")} title={t("gallery.createCategory")} aria-expanded={creatingCategory} className="shrink-0 rounded px-2 py-1 text-sm text-zinc-500 hover:bg-zinc-800" onClick={() => { setCreatingCategory(value => !value); setDestination(""); }}>＋</button>
+      </nav>
+      {(creatingCategory || !!chosen.length) && <>
+      <form className="flex gap-1" onSubmit={event => {
           event.preventDefault();
-          const name = newCategory.trim();
+          const name = destination.trim();
           if (!name) return;
           void run(async () => {
-            await createLibraryCategory(name);
-            setCustomCategories(values => [...new Set([...values, name])]);
-            setCategory(name); setDestination(name); setNewCategory(""); setQuery(""); setView("all");
+            if (!categories.includes(name)) {
+              await createLibraryCategory(name);
+              setCustomCategories(values => [...new Set([...values, name])]);
+            }
+            if (chosen.length) {
+              for (const image of chosen) await editLibraryImage({ ...image, category: name });
+              setSelected([]);
+            }
+            setCreatingCategory(false); setCategory(name); setDestination(""); setQuery(""); setView("all");
           });
         }}>
-          <input aria-label={t("gallery.categoryName")} placeholder={t("gallery.categoryName")} value={newCategory} maxLength={60} onChange={event => setNewCategory(event.target.value)} className="ui-control h-8 min-w-0 flex-1 px-2 text-xs" />
-          <Button type="submit" size="xs" disabled={busy || loading || !newCategory.trim()}>{t("gallery.createCategory")}</Button>
+          <input autoFocus aria-label={t("gallery.categoryName")} placeholder={t("gallery.categoryName")} list="image-library-categories" value={destination} maxLength={60} onChange={event => setDestination(event.target.value)} className="ui-control h-8 min-w-0 flex-1 px-2 text-xs" />
+          <Button type="submit" size="xs" disabled={busy || loading || !destination.trim() || !chosen.length && categories.includes(destination.trim())}>{t(chosen.length ? "gallery.move" : "gallery.createCategory")}</Button>
         </form>
-        <label className="mt-1 block">{t("gallery.destination")}<input list="image-library-categories" maxLength={60} className="ui-control mt-1 h-8 w-full px-2 text-xs" value={destination} onChange={e => setDestination(e.target.value)} placeholder={t("gallery.uncategorized")} /></label>
-      </details>
-      <datalist id="image-library-categories">{categories.map(value => <option key={value} value={value} />)}</datalist>
-      <p className="truncate text-2xs text-zinc-500" title={t("gallery.storageHint")}>{t("gallery.storageHint")}</p>
+      <datalist id="image-library-categories">{categories.map(value => <option key={value} value={value} />)}</datalist></>}
+      {view !== "all" && <button type="button" className="text-2xs text-brand" onClick={() => setView("all")}>{t(`quickShelf.view.${view}`)} ×</button>}
     </header>
     {(error || progress || loading) && <div aria-live="polite" className="shrink-0 break-words p-2 text-2xs">{loading && <p>{t("gallery.loading")}</p>}{progress && <p className="text-zinc-400">{progress}</p>}{error && <p role="alert" className="text-rose-400">{error}</p>}</div>}
     <div className="min-h-0 flex-1 overflow-y-auto p-2" aria-busy={busy}>
-      <div className="grid grid-cols-2 gap-2">{visible.map(image => <article key={image.id} className={`min-w-0 rounded-lg border p-1.5 ${selected.includes(image.id) ? "border-brand bg-brand/10" : "border-zinc-800"}`}>
-        <div className="mb-1 flex justify-between gap-1"><input type="checkbox" disabled={busy} aria-label={t("gallery.selectNamed", { title: image.title })} checked={selected.includes(image.id)} onChange={e => setSelected(ids => e.target.checked ? [...ids, image.id] : ids.filter(id => id !== image.id))} /><button type="button" disabled={busy} aria-label={t(image.pinned ? "quickShelf.unpin" : "quickShelf.pin", { title: image.title })} aria-pressed={image.pinned} onClick={() => void run(async () => editLibraryImage({ ...image, pinned: !image.pinned }))}><Star className={`h-3.5 w-3.5 ${image.pinned ? "fill-amber-400 text-amber-400" : "text-zinc-500"}`} /></button></div>
-        <button type="button" disabled={busy} className="block w-full rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand" onClick={() => setPreview(image)} aria-label={t("quickShelf.previewNamed", { title: image.title })}><img src={image.thumbnail} alt={image.title} loading="lazy" decoding="async" className="aspect-square w-full rounded bg-zinc-800 object-contain" /><span className="mt-1 block truncate text-xs" title={image.title}>{image.title}</span></button>
-        <p className="truncate text-2xs text-zinc-500">{image.category || t("gallery.uncategorized")}</p>
-        <Button size="xs" className="mt-1 w-full" disabled={busy || !chatId} onClick={() => void insert([image])}>{t("quickShelf.insert")}</Button>
+      <div className="grid grid-cols-2 gap-2">{visible.map(image => <article key={image.id} className={`relative min-w-0 rounded-lg p-1.5 ${selected.includes(image.id) ? "ring-1 ring-brand bg-brand/10" : ""}`}>
+        <div className="absolute inset-x-3 top-3 z-[1] flex justify-between gap-1">{selecting && <input type="checkbox" disabled={busy} aria-label={t("gallery.selectNamed", { title: image.title })} checked={selected.includes(image.id)} onChange={e => setSelected(ids => e.target.checked ? [...ids, image.id] : ids.filter(id => id !== image.id))} />}<button type="button" className="ml-auto rounded-full bg-zinc-900 p-1 shadow-sm" disabled={busy} aria-label={t(image.pinned ? "quickShelf.unpin" : "quickShelf.pin", { title: image.title })} aria-pressed={image.pinned} onClick={() => void run(async () => editLibraryImage({ ...image, pinned: !image.pinned }))}><Star className={`h-3.5 w-3.5 ${image.pinned ? "fill-amber-400 text-amber-400" : "text-zinc-500"}`} /></button></div>
+        <button type="button" disabled={busy} className="block w-full rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand" onClick={() => setPreview(image)} aria-label={t("quickShelf.previewNamed", { title: image.title })}><img src={image.thumbnail} alt={image.title} loading="lazy" decoding="async" className="aspect-square w-full rounded-lg bg-zinc-800 object-contain" /><span className="mt-1 block truncate text-left text-2xs" title={image.title}>{image.title}</span></button>
+        {!selecting && <button type="button" className="absolute bottom-8 right-3 flex h-7 w-7 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-lg text-brand shadow-sm" aria-label={t("quickShelf.insert")} title={t("quickShelf.insert")} disabled={busy || !chatId} onClick={() => void insert([image])}>＋</button>}
       </article>)}</div>
-      {!loading && !visible.length && <p className="p-5 text-center text-xs text-zinc-500">{t(images.length ? "gallery.noMatches" : "gallery.empty")}</p>}
+      {!loading && !visible.length && <p className="p-5 text-center text-xs text-zinc-500">{t(!query.trim() && category !== "*" && view === "all" ? "gallery.emptyCategory" : images.length ? "gallery.noMatches" : "gallery.empty")}</p>}
     </div>
-    <footer className="shrink-0 space-y-2 border-t border-zinc-800 p-2">
-      <div className="flex items-center gap-1 text-2xs">
-        <Button size="xs" className="h-7 w-8 justify-center px-1" aria-label={t("gallery.selectPage")} title={t("gallery.selectPage")} disabled={busy || !visible.length} onClick={() => setSelected(ids => [...new Set([...ids, ...visible.map(image => image.id)])])}><CheckSquare aria-hidden="true" className="h-3.5 w-3.5" /></Button>
-        <Button size="xs" className="h-7 w-8 justify-center px-1" aria-label={t("gallery.selectAll")} title={t("gallery.selectAll")} disabled={busy || !filtered.length} onClick={() => setSelected(ids => [...new Set([...ids, ...filtered.map(image => image.id)])])}><ListChecks aria-hidden="true" className="h-3.5 w-3.5" /></Button>
-        <span className="min-w-0 flex-1 truncate text-center">{t("gallery.selected", { count: chosen.length })}</span>
-        <Button size="xs" className="h-7 w-8 justify-center px-1" aria-label={t("gallery.clear")} title={t("gallery.clear")} disabled={busy || !chosen.length} onClick={() => setSelected([])}><X aria-hidden="true" className="h-3.5 w-3.5" /></Button>
-      </div>
+    {(selecting || filtered.length > PAGE_SIZE) && <footer className="shrink-0 space-y-2 border-t border-zinc-800 p-2">
+      {selecting && <div className="flex items-center gap-2 text-2xs">
+        <button type="button" className="text-zinc-500 hover:text-zinc-300" disabled={busy || !visible.length} onClick={() => setSelected(ids => [...new Set([...ids, ...visible.map(image => image.id)])])}>{t("gallery.selectPage")}</button>
+        <span className="min-w-0 flex-1 text-right text-zinc-500">{chosen.length ? t("gallery.selected", { count: chosen.length }) : ""}</span>
+        <button type="button" className="text-zinc-500 hover:text-zinc-300" disabled={busy} onClick={() => { setSelected([]); setSelecting(false); }}>{t("common.close")}</button>
+      </div>}
       {!!chosen.length && <div className="flex flex-wrap gap-1">
         <Button size="xs" disabled={busy || !chatId || chosen.length > 5} onClick={() => void insert(chosen)}>{t("gallery.insertSelected")}</Button>
-        <Button size="xs" disabled={busy} onClick={() => void run(async () => { for (const image of chosen) await editLibraryImage({ ...image, category: destination }); })}>{t("gallery.move")}</Button>
-        <Button size="xs" className="text-rose-400" disabled={busy} onClick={() => void run(async () => { if (await requestConfirm({ title: t("gallery.deleteConfirm", { count: chosen.length }), tone: "danger" })) { await deleteLibraryImages(chosen.map(image => image.id)); setSelected([]); } })}>{t("common.delete")}</Button>
       </div>}
-      <div className="flex items-center justify-between text-2xs text-zinc-500"><Button size="xs" aria-label={t("quickShelf.previousPage")} disabled={!currentPage} onClick={() => setPage(currentPage - 1)}>‹</Button><span>{currentPage + 1}/{Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))} · {filtered.length}</span><Button size="xs" aria-label={t("quickShelf.nextPage")} disabled={(currentPage + 1) * PAGE_SIZE >= filtered.length} onClick={() => setPage(currentPage + 1)}>›</Button></div>
-    </footer>
+      {filtered.length > PAGE_SIZE && <div className="flex items-center justify-between text-2xs text-zinc-500"><Button size="xs" aria-label={t("quickShelf.previousPage")} disabled={!currentPage} onClick={() => setPage(currentPage - 1)}>‹</Button><span>{currentPage + 1}/{Math.ceil(filtered.length / PAGE_SIZE)}</span><Button size="xs" aria-label={t("quickShelf.nextPage")} disabled={(currentPage + 1) * PAGE_SIZE >= filtered.length} onClick={() => setPage(currentPage + 1)}>›</Button></div>}
+    </footer>}
     {preview && <ImageLibraryPreview key={`${contextKey}:${preview.id}`} image={preview} busy={busy} canInsert={!!chatId} categories={categories} onClose={() => setPreview(null)} onInsert={caption => void insert([preview], caption)} onSave={image => void run(async () => { await editLibraryImage(image); setPreview(null); })} />}
   </section>;
 }

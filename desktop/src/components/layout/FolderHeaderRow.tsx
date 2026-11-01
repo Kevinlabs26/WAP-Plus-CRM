@@ -79,6 +79,7 @@ export function FolderHeaderRow({
   const { t } = useI18n();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [replyMenu, setReplyMenu] = useState<{ left: number; top: number; focus: boolean } | null>(null);
+  const [expandedGroup, setExpandedGroup] = useState<"import" | "organize" | null>(null);
   const replyTrigger = useRef<HTMLButtonElement>(null);
   const replyPopup = useRef<HTMLDivElement>(null);
   const actionsTrigger = useRef<HTMLButtonElement>(null);
@@ -87,9 +88,10 @@ export function FolderHeaderRow({
     if (closeTimer.current) clearTimeout(closeTimer.current);
     closeTimer.current = null;
   };
-  const close = () => { cancelClose(); setReplyMenu(null); setMenu(null); };
+  const close = () => { cancelClose(); setReplyMenu(null); setExpandedGroup(null); setMenu(null); };
   const openReplyMenu = (anchor: HTMLButtonElement, focus = false) => {
     cancelClose();
+    setExpandedGroup(null);
     const rect = anchor.getBoundingClientRect();
     setReplyMenu({
       left: Math.max(8, Math.min(rect.right + 2 + 224 <= window.innerWidth - 8 ? rect.right + 2 : rect.left - 226, window.innerWidth - 232)),
@@ -140,6 +142,7 @@ export function FolderHeaderRow({
   const openMenu = (x: number, y: number) => {
     cancelClose();
     setReplyMenu(null);
+    setExpandedGroup(null);
     setMenu({
       x: Math.max(8, Math.min(x, window.innerWidth - 248)),
       y: Math.max(8, Math.min(y, window.innerHeight - 312)),
@@ -285,20 +288,13 @@ export function FolderHeaderRow({
             type="button"
             role="menuitem"
             className={itemClass}
-            onClick={() => run(onCreateChild)}
-          >
-            <FolderPlus className="h-3.5 w-3.5 text-zinc-500" />
-            {t("folder.createChild")}
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className={itemClass}
             onClick={() => run(onOpenMultiWindow)}
           >
             <LayoutGrid className="h-3.5 w-3.5 text-zinc-500" />
             {t("folder.openMultiWindow")}
           </button>
+          <button type="button" role="menuitem" className={itemClass} aria-expanded={expandedGroup === "import"} aria-controls={expandedGroup === "import" ? `folder-import-${folderId}` : undefined} onClick={() => { setReplyMenu(null); setExpandedGroup(expandedGroup === "import" ? null : "import"); }}><span className="flex-1">{t("folder.importMenu")}</span><ChevronRight className={cn("h-3.5 w-3.5", expandedGroup === "import" && "rotate-90")} /></button>
+          {expandedGroup === "import" && <div id={`folder-import-${folderId}`} role="group" aria-label={t("folder.importMenu")} className="ml-3 border-l border-zinc-700">
           <button
             type="button"
             role="menuitem"
@@ -326,6 +322,18 @@ export function FolderHeaderRow({
             <Users className="h-3.5 w-3.5 text-zinc-500" />
             {t("folderGroups.selectAction")}
           </button>
+          </div>}
+          <button type="button" role="menuitem" className={itemClass} aria-expanded={expandedGroup === "organize"} aria-controls={expandedGroup === "organize" ? `folder-organize-${folderId}` : undefined} onClick={() => { setReplyMenu(null); setExpandedGroup(expandedGroup === "organize" ? null : "organize"); }}><span className="flex-1">{t("folder.organizeMenu")}</span><ChevronRight className={cn("h-3.5 w-3.5", expandedGroup === "organize" && "rotate-90")} /></button>
+          {expandedGroup === "organize" && <div id={`folder-organize-${folderId}`} role="group" aria-label={t("folder.organizeMenu")} className="ml-3 border-l border-zinc-700">
+          <button
+            type="button"
+            role="menuitem"
+            className={itemClass}
+            onClick={() => run(onCreateChild)}
+          >
+            <FolderPlus className="h-3.5 w-3.5 text-zinc-500" />
+            {t("folder.createChild")}
+          </button>
           <button
             type="button"
             role="menuitem"
@@ -344,6 +352,8 @@ export function FolderHeaderRow({
             <UserRoundX className="h-3.5 w-3.5 text-zinc-500" />
             {t("folder.clearMembers")}
           </button>
+          </div>}
+          <div className="mt-1 border-t border-zinc-800 pt-1">
           <button
             type="button"
             role="menuitem"
@@ -353,6 +363,7 @@ export function FolderHeaderRow({
             <Trash2 className="h-3.5 w-3.5" />
             {t("folder.delete")}
           </button>
+          </div>
         </div>, document.body
       )}
       {menu && replyMenu && onAutoReplyModeChange && createPortal(

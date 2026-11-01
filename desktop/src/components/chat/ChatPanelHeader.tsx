@@ -220,27 +220,22 @@ export function ChatPanelHeader({
         </div>
         {activeContact && (
           <div className="hidden min-w-0 flex-1 items-center gap-1.5 self-center overflow-hidden lg:flex">
-            <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-50 dark:border-amber-400/35 dark:bg-amber-950/60 px-2.5 py-0.5 text-[11px] font-bold text-amber-800 dark:text-amber-300 shadow-2xs">
-              {t("chat.stage")} · {resolveSalesStageLabel(activeContact.stage, settings.salesStageLabels)}
+            <span className="shrink-0 rounded-md bg-zinc-800/60 px-2 py-0.5 text-[11px] font-medium text-zinc-400" title={t("chat.stage")}>
+              {resolveSalesStageLabel(activeContact.stage, settings.salesStageLabels)}
             </span>
             {activeFollowUp && (
               <span
-                className="max-w-56 truncate rounded-full border border-sky-500/30 bg-sky-50 dark:border-sky-400/35 dark:bg-sky-950/60 px-2.5 py-0.5 text-[11px] font-bold text-sky-800 dark:text-sky-300 shadow-2xs"
-                title={
+                className="max-w-40 truncate px-1 py-0.5 text-[11px] text-zinc-500"
+                title={(followUpTitle || t("chat.followUp")) + " · " + (
                   activeFollowUp.note
                     ? `${activeFollowUp.note}\n${formatFollowDueLabel(activeFollowUp.dueAt)}`
-                    : formatFollowDueLabel(activeFollowUp.dueAt)
+                    : formatFollowDueLabel(activeFollowUp.dueAt))
                 }
               >
-                {followUpTitle || t("chat.followUp")} ·{" "}
                 {formatFollowDueLabel(activeFollowUp.dueAt)}
               </span>
             )}
-            {activeContact.tags[0] && (
-              <span className="max-w-32 truncate rounded-full border border-emerald-500/30 bg-emerald-50 dark:border-emerald-400/35 dark:bg-emerald-950/60 px-2.5 py-0.5 text-[11px] font-bold text-emerald-800 dark:text-emerald-300 shadow-2xs">
-                {activeContact.tags[0]}
-              </span>
-            )}
+
           </div>
         )}
         {localOnlyChat && <div className="min-w-0 flex-1" />}

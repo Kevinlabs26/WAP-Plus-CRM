@@ -18,7 +18,6 @@ import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { isSyncDebugEnabled, syncLog } from "@/lib/syncDebug";
 import { cn } from "@/lib/utils";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { SectionLabel } from "@/components/ui/primitives";
 import type { ChatListFilter } from "@/store/appStore";
 import {
   CHAT_SORT_OPTIONS,
@@ -166,12 +165,13 @@ export function SidebarListHeader({
 
   return (
     <div className="shrink-0">
-      <div className="mb-3 grid grid-cols-2 rounded-lg bg-zinc-900 p-1 text-[13px]">
+      <div className="mb-2 flex items-center gap-1">
+      <div className="grid min-w-0 flex-1 grid-cols-2 rounded-lg bg-zinc-900 p-0.5 text-xs">
         <button
           type="button"
           onClick={() => onTabChange("chats")}
           className={cn(
-            "flex items-center justify-center gap-1 rounded-md px-2 py-1.5",
+            "flex items-center justify-center gap-1 rounded-md px-1 py-1.5",
             listTab === "chats"
               ? "bg-zinc-700 text-zinc-100"
               : "text-zinc-500"
@@ -184,7 +184,7 @@ export function SidebarListHeader({
           type="button"
           onClick={() => onTabChange("contacts")}
           className={cn(
-            "flex items-center justify-center gap-1 rounded-md px-2 py-1.5",
+            "flex items-center justify-center gap-1 rounded-md px-1 py-1.5",
             listTab === "contacts"
               ? "bg-zinc-700 text-zinc-100"
               : "text-zinc-500"
@@ -193,6 +193,9 @@ export function SidebarListHeader({
           <Users className="h-3 w-3" />
           {t("sidebar.contacts")} · {contactsCount}
         </button>
+      </div>
+        <button type="button" onClick={onOpenSaved} title={t("sidebar.saved")} aria-label={t("sidebar.saved")} aria-pressed={savedActive} className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-md", savedActive ? "bg-brand/10 text-brand" : "text-zinc-500 hover:bg-zinc-900")}><Bookmark className="h-4 w-4" /></button>
+        {listTab === "chats" && <button type="button" onClick={onOpenLeads} aria-label={t("leadInbox.title")} aria-pressed={leadActive} title={!leadEnabled ? t("leadInbox.settings") : t("leadInbox.title")} className={cn("relative flex h-8 w-8 shrink-0 items-center justify-center rounded-md", leadActive ? "bg-brand/10 text-brand" : "text-zinc-500 hover:bg-zinc-900")}><UserRoundPlus className="h-4 w-4" />{leadCount > 0 && <span className="absolute -right-1 -top-1 rounded-full bg-brand px-1 text-[9px] font-semibold text-brand-foreground" aria-label={t("leadInbox.filterActive", { count: leadCount })}>{leadCount > 99 ? "99+" : leadCount}</span>}</button>}
       </div>
       <div className="mb-2 flex items-center gap-1.5">
         <div className="relative min-w-0 flex-1">
@@ -228,7 +231,7 @@ export function SidebarListHeader({
         <div className="relative shrink-0" ref={actionsRef}>
           <button type="button" aria-label={t("sidebar.actions")} title={t("sidebar.actions")}
             aria-expanded={actionsOpen} aria-controls="sidebar-actions"
-            onClick={() => { setGroupFilterOpen(false); setActionsOpen(open => !open); }}
+            onClick={() => { setGroupFilterOpen(false); if (sortOpen) onToggleSort(); setActionsOpen(open => !open); }}
             className="ui-btn-secondary h-9 w-9 !px-0">
             <MoreHorizontal className="h-4 w-4" />
           </button>
@@ -245,62 +248,9 @@ export function SidebarListHeader({
           </div>}
         </div>
       </div>
-      <div className="mb-3 grid grid-cols-2 gap-1.5">
-        <button type="button" onClick={onOpenSaved} title={`${t("sidebar.saved")} · ${t("sidebar.savedLocal")}`} aria-pressed={savedActive}
-          className={cn("flex min-h-8 min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] leading-5",
-            savedActive ? "bg-brand/10 font-medium text-brand" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100")}>
-          <Bookmark className="h-4 w-4 shrink-0" />
-          <span className="min-w-0 break-words">{t("sidebar.saved")}</span>
-        </button>
-        {listTab === "chats" && (
-          <button type="button" onClick={onOpenLeads} aria-pressed={leadActive}
-            title={!leadEnabled ? t("leadInbox.settings") : t("leadInbox.title")}
-            className={cn("flex min-h-8 min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] leading-5",
-              leadActive ? "bg-brand/10 font-medium text-brand" : "text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100")}>
-            <UserRoundPlus className="h-4 w-4 shrink-0" />
-            <span className="min-w-0 flex-1 break-words">{t("leadInbox.title")}</span>
-            {leadCount > 0 && <span className="text-2xs font-semibold tabular-nums text-brand">{leadCount}</span>}
-          </button>
-        )}
-      </div>
-      {listTab === "chats" && listFilter !== "all" && (
-        <div className="mb-2 flex items-center justify-between gap-2 rounded-lg border border-brand/25 bg-brand/10 px-2 py-1.5">
-          <span className="min-w-0 truncate text-[11px] font-medium text-brand">
-            {listFilter === "unread"
-              ? t("sidebar.filterUnread", { count: filteredCount })
-              : listFilter === "today"
-                ? t("sidebar.filterToday", { count: filteredCount })
-                : t("leadInbox.filterActive", { count: filteredCount })}
-          </span>
-          <button
-            type="button"
-            onClick={onClearFilter}
-            className="shrink-0 rounded-md bg-zinc-900/80 px-2 py-0.5 text-2xs font-medium text-zinc-100 hover:bg-zinc-800"
-            title={t("sidebar.showAllChats")}
-          >
-            {t("sidebar.showAllChats")}
-          </button>
-        </div>
-      )}
       <div className="mb-2 space-y-2">
-        {!(listTab === "chats" && !filter && groupFilter === "hidden") && (
-          <SectionLabel className="!mb-0 block">
-            {listTab === "chats"
-              ? listFilter === "unread"
-                ? t("sidebar.unreadChats")
-                : listFilter === "awaiting"
-                  ? t("today.awaitingReply")
-                : listFilter === "today"
-                  ? t("sidebar.todayChats")
-                  : listFilter === "leads"
-                    ? t("leadInbox.title")
-                    : filter
-                      ? t("sidebar.searchResults")
-                      : t(GROUP_FILTER_LABELS[groupFilter])
-              : t("sidebar.contacts")}
-          </SectionLabel>
-        )}
-        <div className="flex items-center justify-between gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {listTab === "chats" && listFilter !== "all" && <button type="button" onClick={onClearFilter} title={t("sidebar.showAllChats")} aria-label={t("sidebar.showAllChats")} className="flex max-w-full items-center gap-1 rounded-full bg-brand/10 px-2 py-1 text-2xs text-brand"><span className="truncate">{listFilter === "unread" ? t("sidebar.filterUnread", { count: filteredCount }) : listFilter === "today" ? t("sidebar.filterToday", { count: filteredCount }) : listFilter === "awaiting" ? t("today.awaitingReply") + " · " + filteredCount : t("leadInbox.filterActive", { count: filteredCount })}</span><span aria-hidden="true">×</span></button>}
           {listTab === "chats" && (
             <div className="relative min-w-0 flex-1" ref={groupFilterRef}>
               <button
@@ -313,10 +263,11 @@ export function SidebarListHeader({
                 onClick={() => {
                   if (!groupFilterOpen) setGroupFilterCounts(getGroupFilterCounts());
                   setActionsOpen(false);
+                  if (sortOpen) onToggleSort();
                   setGroupFilterOpen(open => !open);
                 }}
-                className={cn("inline-flex min-h-8 max-w-full items-center gap-1.5 rounded-md border px-2 text-[12px]",
-                  groupFilter !== "all" ? "border-brand/40 bg-brand/10 text-brand" : "border-zinc-800 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100")}
+                className={cn("inline-flex min-h-7 max-w-full items-center gap-1 rounded-md px-1.5 text-2xs",
+                  groupFilter !== "all" ? "bg-brand/10 text-brand" : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100")}
               >
                 <UsersRound className="h-3.5 w-3.5 shrink-0" />
                 <span className="truncate">{t(GROUP_FILTER_LABELS[groupFilter])}</span>
@@ -394,12 +345,12 @@ export function SidebarListHeader({
                 title={t("sidebar.sortPinnedHint", { label: localizedSortLabel })}
                 aria-label={t("sidebar.sortTitle")}
                 aria-expanded={sortOpen}
-                onClick={onToggleSort}
+                onClick={() => { setGroupFilterOpen(false); setActionsOpen(false); onToggleSort(); }}
                 className={cn(
-                  "inline-flex min-h-8 max-w-full items-center gap-1 rounded-md border px-2 text-[12px] transition-colors",
+                  "inline-flex min-h-7 max-w-full items-center gap-1 rounded-md px-1.5 text-2xs transition-colors",
                   sortOpen
-                    ? "border-brand/40 bg-zinc-900 text-zinc-100"
-                    : "border-zinc-800/80 bg-zinc-900/70 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+                    ? "bg-zinc-900 text-zinc-100"
+                    : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200"
                 )}
               >
                 <ArrowUpDown className="h-3 w-3 shrink-0 text-zinc-500" />

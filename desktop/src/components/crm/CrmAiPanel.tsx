@@ -9,7 +9,6 @@ import {
   RefreshCw,
   ShoppingCart,
   Sparkles,
-  Zap,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "@/store/appStore";
@@ -732,6 +731,9 @@ export function CrmAiPanel() {
               )}
             </div>
 
+            <details key={contact.id} className="rounded-lg border border-zinc-800 p-2.5">
+              <summary className="cursor-pointer text-xs text-zinc-500">{t("crmPanel.moreDetails")}</summary>
+              <div className="mt-3 space-y-3">
             <PersonMultiAccountPanel
               variant="card"
               seed={contact}
@@ -795,6 +797,9 @@ export function CrmAiPanel() {
               />
             )}
 
+              </div>
+            </details>
+
             <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-2.5">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <SectionLabel className="!mb-0">{t("crmPanel.tags")}</SectionLabel>
@@ -853,31 +858,30 @@ export function CrmAiPanel() {
       </section>
 
       <section className={cn("flex flex-col border-t border-zinc-800/90 p-3", (loading || aiSuggestions.length) && "max-h-[38%] min-h-48")}>
-          <div className={cn("flex flex-wrap items-center gap-1.5", (loading || aiSuggestions.length) && "mb-2")}>
-          <div className="shrink-0 whitespace-nowrap flex items-center gap-1.5 text-[13px] font-semibold">
+          <div className={cn("flex items-center gap-2", (loading || aiSuggestions.length) && "mb-2")}>
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 whitespace-nowrap text-xs font-semibold" title={t(`folderAi.source.${aiProfile.source}`, { name: aiProfile.folderName || "" })}>
             <Sparkles className="h-3.5 w-3.5 text-brand" />
             {t("crmPanel.replySuggestions")}
           </div>
           {selectedChatId && (
-            <label className="shrink-0 flex items-center gap-1 text-[10px] text-zinc-500">
-              {t("crmPanel.autoMode")}
+            <label className="shrink-0 text-2xs text-zinc-500">
               <select
                 value={replyOverride}
                 disabled={!!groupChat}
                 onChange={(event) => setReplyMode(event.target.value)}
-                className="ui-control h-7 px-1.5 text-[10px]"
+                className="h-7 max-w-32 cursor-pointer rounded-md bg-zinc-800 px-2 text-2xs text-zinc-400"
+                aria-label={t("crmPanel.autoMode")}
                 title={t("autoReplyScope.chatHint")}
               >
-                <option value="inherit">{t("autoReplyScope.inherit")}</option>
-                <option value="auto">{t("autoReplyScope.auto")}</option>
-                <option value="manual">{t("crmPanel.manualOnly")}</option>
+                <option value="inherit">{t("crmPanel.inheritShort")} · {t(replyScope.mode === "auto" ? "multi.replyMode.auto" : "multi.replyMode.manual")}</option>
+                <option value="auto">{t("multi.replyMode.auto")}</option>
+                <option value="manual">{t("multi.replyMode.manual")}</option>
               </select>
             </label>
           )}
           {aiReady && (
-            <Button variant="ghost" className="shrink-0 !min-h-7 gap-1 !px-2 text-2xs" disabled={loading} onClick={() => void refreshAi()}>
+            <Button variant="ghost" className="h-7 w-7 shrink-0 justify-center !p-0" aria-label={loading ? t("crmPanel.generating") : aiSuggestions.length ? t("crmPanel.regenerate") : t("crmPanel.generateReply")} title={loading ? t("crmPanel.generating") : aiSuggestions.length ? t("crmPanel.regenerate") : t("crmPanel.generateReply")} disabled={loading} onClick={() => void refreshAi()}>
               <RefreshCw className={cn("h-3 w-3", loading && "animate-spin")} />
-              {loading ? t("crmPanel.generating") : aiSuggestions.length ? t("crmPanel.regenerate") : t("crmPanel.generateReply")}
             </Button>
           )}
         </div>
@@ -888,9 +892,6 @@ export function CrmAiPanel() {
               {autoRuntime.retryAt && <span className="ml-1">{t("autoReplyRuntime.retryAt", { time: new Date(autoRuntime.retryAt).toLocaleTimeString() })}</span>}
             </span>
           </p>}
-        <p className="px-3 pb-1 text-[9px] leading-3 text-zinc-500" title={aiProfile.prompt}>
-          {t(`folderAi.source.${aiProfile.source}`, { name: aiProfile.folderName || "" })}
-        </p>
         {!aiReady ? (
           <div className="flex min-h-36 flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
             <p className="text-[12px] font-medium text-zinc-300">
@@ -951,31 +952,8 @@ export function CrmAiPanel() {
         </>
       ) : (
         <section className="flex min-h-0 flex-1 flex-col">
-          <div className="flex items-center justify-between border-b border-zinc-800/90 px-2.5 py-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-brand/10 text-brand">
-                <Zap className="h-3.5 w-3.5" />
-              </span>
-              <div className="min-w-0">
-                <div className="text-[12px] font-medium text-zinc-100">
-                  {t("crmPanel.commonReplies")}
-                </div>
-                <div className="text-2xs text-zinc-500">
-                  {t("quickShelf.headerHint")}
-                </div>
-              </div>
-            </div>
-            <Button
-              variant="ghost"
-              size="xs"
-              className="shrink-0 text-zinc-400"
-              onClick={() => setSettingsOpen(true, "quick-replies")}
-            >
-              {t("crmPanel.manage")}
-            </Button>
-          </div>
-
           <QuickReplyBrowser
+            onManage={() => setSettingsOpen(true, "quick-replies")}
             replies={settings.quickReplies || []}
             categories={settings.quickReplyCustomCategories || []}
             contextKey={["main", selectedChatId, quickReplyAccountId, settings.sendChannel, quickReplyChat?.phoneId].join(":")}

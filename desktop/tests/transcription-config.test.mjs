@@ -112,6 +112,18 @@ test('the settings page separates speech fields; changing text presets leaves sp
   }finally{ui.close();}
 });
 
+test('speech connection settings collapse for built-in services and remain visible for custom endpoints',()=>{
+  for(const provider of ['groq','openai','custom','gemini','none']) {
+    const ui=fixture({transcriptionProvider:provider,transcriptionBaseUrl:'https://speech.invalid/v1'});
+    try {
+      const tree=mod.SettingsSpeechPanel(),details=nodes(tree).filter(n=>n.type==='details');
+      assert.equal(details.length,['gemini','none'].includes(provider)?0:1);
+      if(details.length){assert.equal(details[0].props.open,provider==='custom');assert.equal(field(tree,'语音服务 Base URL').props.value,'https://speech.invalid/v1');}
+      assert.equal(speechSaves.length,0);
+    }finally{ui.close();}
+  }
+});
+
 test('boot securely copies the old speech key before persisting migrated config, and the config survives a restart',async()=>{
   const ui=fixture();try {
     speechSnapshot={phones:[],contacts:[],chats:[],messages:[],followUps:[],settings:{aiProvider:'custom',customAiBaseUrl:'https://old.invalid/v1',customAiModel:'text',customWhisperModel:'speech'}};

@@ -25,7 +25,7 @@ type Props = {
 };
 
 /**
- * 输入区底部横条：翻译语言选择 / 翻译按钮 / 还原原文 / 快捷键提示。
+ * 输入区翻译栏：目标语言、翻译与还原。
  */
 export function TranslateBar({
   compact = false,
@@ -56,30 +56,24 @@ export function TranslateBar({
     <div className="order-first flex flex-wrap items-center gap-2 border-b border-zinc-800/90 bg-zinc-950/40 px-2.5 py-1.5">
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
         <select
-          value={translateLang}
+          value={source === "preferred" ? translateLang : "auto"}
           disabled={translating}
-          onChange={(e) => onTranslateLangChange(e.target.value)}
-          className="h-7 rounded-lg border border-zinc-800 bg-zinc-900 px-1.5 text-[11px] text-zinc-300 outline-none"
+          onChange={(e) => {
+            if (translating) return;
+            if (e.target.value === "auto") onRestoreAuto();
+            else onTranslateLangChange(e.target.value);
+          }}
+          className={cn("h-7 min-w-0 rounded-lg border border-zinc-800 bg-zinc-900 px-1.5 text-[11px] text-zinc-300 outline-none", compact ? "max-w-32" : "max-w-48")}
           title={`${t("tooltip.outputLanguage")} · ${sourceLabel}`}
           aria-label={t("tooltip.outputLanguage")}
         >
+          <option value="auto">{t("translation.auto")}{source !== "preferred" && ` · ${langShortLabel(translateLang)}`}</option>
           {TRANSLATE_LANGS.map((l) => (
             <option key={l.code} value={l.code}>
               {compact ? l.native : `${l.native} · ${l.label}`}
             </option>
           ))}
         </select>
-        {!compact && <span className="text-2xs text-zinc-300">{sourceLabel}</span>}
-        {source === "preferred" && (
-          <button
-            type="button"
-            disabled={translating}
-            onClick={onRestoreAuto}
-            className="inline-flex h-7 items-center rounded-lg px-2 text-[11px] text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {t("translation.restoreAuto")}
-          </button>
-        )}
         <button
           type="button"
           disabled={!hasDraft || translating}
@@ -90,7 +84,7 @@ export function TranslateBar({
               ? "text-zinc-500"
               : "bg-brand/10 text-brand hover:bg-brand/15"
           )}
-          title="Ctrl+Shift+T"
+          title={`${t("translation.to", { language: langShortLabel(translateLang) })} · Ctrl+Shift+T`}
         >
           {translating ? (
             <Loader2 className="h-3 w-3 animate-spin" />
@@ -99,7 +93,7 @@ export function TranslateBar({
           )}
           {translating
             ? t("translation.busy")
-            : t("translation.to", { language: langShortLabel(translateLang) })}
+            : t("tooltip.translate")}
         </button>
         {translateOriginal != null && (
           <button
@@ -117,10 +111,6 @@ export function TranslateBar({
       {recording ? (
         <span className="text-2xs tabular-nums text-rose-300/90">
           {recordSec}s
-        </span>
-      ) : !compact ? (
-        <span className="shrink-0 text-2xs text-zinc-600">
-          {t("translation.shortcuts")}
         </span>
       ) : null}
     </div>

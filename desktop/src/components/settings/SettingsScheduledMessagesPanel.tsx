@@ -1,4 +1,4 @@
-import { Clock3, ExternalLink, Trash2, XCircle } from "lucide-react";
+import { Clock3, Trash2, XCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Button, EmptyState, SectionLabel } from "@/components/ui/primitives";
 import { useAppStore } from "@/store/appStore";
@@ -183,9 +183,9 @@ function LegacyScheduledMessagesPanel() {
                   <Clock3 className="mt-0.5 h-4 w-4 shrink-0 text-zinc-500" />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="truncate text-[12px] font-medium text-zinc-200">
+                      <button type="button" className="truncate text-left text-[12px] font-medium text-zinc-200 hover:text-brand" aria-label={t("settingsScheduled.openChat")} title={t("settingsScheduled.openChat")} onClick={() => openChat(task)}>
                         {task.contactName || task.recipient}
-                      </span>
+                      </button>
                       <span className={`rounded border px-1.5 py-0.5 text-[10px] ${statusClass(task.status)}`}>
                         {t(STATUS_LABEL[task.status])}
                       </span>
@@ -193,29 +193,21 @@ function LegacyScheduledMessagesPanel() {
                     <div className="mt-1 text-2xs text-zinc-500">
                       {task.status === "pending" ? t("settingsScheduled.scheduled") : t("settingsScheduled.originallyScheduled")}: {formatDueAt(task.dueAt, locale, t("settingsScheduled.invalidTime"))}
                     </div>
-                    <p className="mt-2 line-clamp-2 whitespace-pre-wrap text-[12px] leading-5 text-zinc-300">
+                    <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-[12px] leading-5 text-zinc-300">
                       {task.text}
                     </p>
                     {task.error && (
-                      <p className="mt-1 line-clamp-2 text-2xs text-rose-300">{task.error}</p>
+                      <p className="mt-1 line-clamp-2 text-2xs text-rose-300" title={task.error}>{task.error}</p>
                     )}
                   </div>
-                </div>
-                <div className="mt-3 flex flex-wrap justify-end gap-2">
-                  <Button type="button" size="xs" variant="ghost" onClick={() => openChat(task)}>
-                    <ExternalLink className="mr-1 h-3 w-3" />{t("settingsScheduled.openChat")}
-                  </Button>
-                  {(task.status === "pending" || task.status === "queued") && (
-                    <Button type="button" size="xs" variant="ghost" onClick={() => void cancelTask(task)}>
-                      <XCircle className="mr-1 h-3 w-3" />{t("common.cancel")}
-                    </Button>
-                  )}
-                  {task.status === "expired" && <Button size="xs" onClick={() => setRescheduling(task)}>{t("scheduled.replan")}</Button>}
-                  {task.status !== "pending" && task.status !== "queued" && (
-                    <Button type="button" size="xs" variant="ghost" className="text-rose-300 hover:text-rose-200" onClick={() => void deleteTask(task)}>
-                      <Trash2 className="mr-1 h-3 w-3" />{t("settingsScheduled.deleteRecord")}
-                    </Button>
-                  )}
+                  <div className="flex shrink-0 items-center gap-1">
+                    {(task.status === "pending" || task.status === "queued") && <Button type="button" size="xs" variant="ghost" onClick={() => void cancelTask(task)}><XCircle className="mr-1 h-3 w-3" />{t("common.cancel")}</Button>}
+                    {task.status === "expired" && <Button size="xs" onClick={() => setRescheduling(task)}>{t("scheduled.replan")}</Button>}
+                    {task.status !== "pending" && task.status !== "queued" && <details className="relative text-xs text-zinc-500" onClick={event => { if ((event.target as HTMLElement).closest("button")) event.currentTarget.open = false; }}>
+                      <summary className="cursor-pointer list-none rounded p-1.5 hover:bg-zinc-800" aria-label={t("nav.more")}>•••</summary>
+                      <div className="absolute right-0 top-full z-10 mt-1 min-w-max rounded-lg border border-zinc-700 bg-zinc-900 p-1 shadow-xl"><Button type="button" size="xs" variant="ghost" className="text-rose-300 hover:text-rose-200" onClick={() => void deleteTask(task)}><Trash2 className="mr-1 h-3 w-3" />{t("settingsScheduled.deleteRecord")}</Button></div>
+                    </details>}
+                  </div>
                 </div>
               </article>
             ))}

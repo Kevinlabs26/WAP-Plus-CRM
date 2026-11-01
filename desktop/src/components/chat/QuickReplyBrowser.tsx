@@ -11,7 +11,7 @@ const EMPTY_IDS: string[] = [];
 type ReplyTarget = { title: string; account: string };
 const mediaSize = (size: number) => size < 1024 * 1024 ? `${Math.max(1, Math.ceil(size / 1024))} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`;
 
-export function QuickReplyBrowser({ replies, categories = [], contextKey, onInsert, pinnedIds = EMPTY_IDS, recentIds = EMPTY_IDS, onTogglePin, onUsed, target, disabled = false, compact = false }: {
+export function QuickReplyBrowser({ replies, categories = [], contextKey, onInsert, pinnedIds = EMPTY_IDS, recentIds = EMPTY_IDS, onTogglePin, onUsed, target, disabled = false, compact = false, onManage }: {
   replies: SettingsQuickReply[];
   categories?: QuickReplyCategoryOption[];
   contextKey: string;
@@ -23,6 +23,7 @@ export function QuickReplyBrowser({ replies, categories = [], contextKey, onInse
   target?: ReplyTarget;
   disabled?: boolean;
   compact?: boolean;
+  onManage?: () => void;
 }) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
@@ -58,45 +59,44 @@ export function QuickReplyBrowser({ replies, categories = [], contextKey, onInse
   };
 
   return <div className="flex min-h-0 flex-1 flex-col">
-    <div className="shrink-0 space-y-1 border-b border-zinc-800 p-2">
-      {target && <p className="truncate text-2xs text-zinc-500" title={`${target.title} · ${target.account}`}><span>{t("quickShelf.target", { title: target.title })}</span><span className="px-1">·</span><span>{t("quickShelf.account", { account: target.account })}</span></p>}
-      <div className="flex items-center gap-1.5">
+    <div className="shrink-0 space-y-2 border-b border-zinc-800 p-2">
+      <div className="flex items-center gap-2">
         <label className="relative min-w-0 flex-1"><Search aria-hidden="true" className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
           <input value={query} onChange={e => { setQuery(e.target.value); resetPage(); }} placeholder={t("quickShelf.search")} aria-label={t("multi.searchQuickReplies")} className="ui-control h-8 w-full pl-7 pr-2 text-xs" />
         </label>
-        <select value={selectedCategory} aria-label={t("multi.quickReplyCategories")} className="ui-control h-8 w-[38%] min-w-0 px-2 text-xs" onChange={e => { setCategory(e.target.value); resetPage(); }}>
-          <option value="all">{t("multi.all")}</option>
-          {categoryOptions.filter(c => replies.some(reply => reply.category === c.id)).map(c => <option key={c.id} value={c.id}>{categoryLabel(c.id)}</option>)}
-        </select>
+        <details className="relative shrink-0 text-xs text-zinc-500" onClick={event => { if ((event.target as HTMLElement).closest("button")) event.currentTarget.open = false; }}>
+          <summary aria-label={t("nav.more")} title={t("nav.more")} className="cursor-pointer list-none rounded px-2 py-1.5 hover:bg-zinc-800">•••</summary>
+          <div className="absolute right-0 top-full z-10 mt-1 min-w-max space-y-2 rounded-lg border border-zinc-700 bg-zinc-900 p-2 shadow-xl">
+            <div className="flex gap-1" role="group" aria-label={t("quickShelf.views")}>{(["all", "pinned", "recent"] as const).map(item => <Button key={item} size="xs" variant={view === item ? "secondary" : "ghost"} aria-pressed={view === item} onClick={() => { setView(item); resetPage(); }}>{t(`quickShelf.view.${item}`)}</Button>)}</div>
+            {onManage && <Button size="xs" className="w-full" onClick={onManage}>{t("crmPanel.manage")}</Button>}
+            {target && <p className="max-w-64 truncate px-1 text-2xs" title={`${target.title} · ${target.account}`}>{target.title} · {target.account}</p>}
+            <p className="px-1 text-2xs" role="status">{filtered.length}/{replies.length}</p>
+          </div>
+        </details>
       </div>
-      <div className="flex items-center justify-between gap-1">
-      <div className="flex gap-1" role="group" aria-label={t("quickShelf.views")}>
-        {(["all", "pinned", "recent"] as const).map(item => <Button key={item} size="xs" variant={view === item ? "secondary" : "ghost"} aria-pressed={view === item} onClick={() => { setView(item); resetPage(); }}>{t(`quickShelf.view.${item}`)}</Button>)}
-      </div>
-      <span className="shrink-0 text-2xs text-zinc-500" role="status">{filtered.length}/{replies.length}</span>
-      </div>
-      <p className="truncate text-2xs text-zinc-500" title={t("quickShelf.hint")}>{t("quickShelf.hint")}</p>
+      <nav className="flex items-center gap-1 overflow-x-auto" aria-label={t("multi.quickReplyCategories")}>
+        <button type="button" aria-pressed={selectedCategory === "all"} onClick={() => { setCategory("all"); resetPage(); }} className={`shrink-0 rounded-full px-2.5 py-1 text-2xs ${selectedCategory === "all" ? "bg-brand/10 text-brand" : "text-zinc-500 hover:bg-zinc-800"}`}>{t("multi.all")}</button>
+        {categoryOptions.filter(c => replies.some(reply => reply.category === c.id)).map(c => <button type="button" key={c.id} aria-pressed={selectedCategory === c.id} title={categoryLabel(c.id)} onClick={() => { setCategory(c.id); resetPage(); }} className={`max-w-40 shrink-0 truncate rounded-full px-2.5 py-1 text-2xs ${selectedCategory === c.id ? "bg-brand/10 text-brand" : "text-zinc-500 hover:bg-zinc-800"}`}>{categoryLabel(c.id)}</button>)}
+        {view !== "all" && <button type="button" className="shrink-0 rounded-full bg-brand/10 px-2.5 py-1 text-2xs text-brand" onClick={() => { setView("all"); resetPage(); }}>{t(`quickShelf.view.${view}`)} ×</button>}
+      </nav>
       {disabled && <p className="text-2xs text-amber-500">{t("quickShelf.chooseChat")}</p>}
     </div>
     <ul ref={listRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
       {pageReplies.map(reply => <li key={reply.id}>
-        <article className="space-y-2 rounded-xl border border-zinc-800 bg-zinc-900/30 p-2.5">
-          <div className="flex items-start gap-2.5">
-            {reply.media && <button type="button" className="shrink-0 rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand" aria-label={t("quickShelf.previewNamed", { title: reply.title || t("crmPanel.unnamed") })} onClick={() => setPreview({ id: reply.id, contextKey })}>
-              <QuickReplyMediaTile media={reply.media} compact={compact} />
-            </button>}
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1"><h4 className="min-w-0 flex-1 truncate text-xs font-semibold text-zinc-100" title={reply.title}>{reply.title || t("crmPanel.unnamed")}</h4>
-                {onTogglePin && <button type="button" aria-pressed={pinned.has(reply.id)} aria-label={t(pinned.has(reply.id) ? "quickShelf.unpin" : "quickShelf.pin", { title: reply.title || t("crmPanel.unnamed") })} onClick={() => { onTogglePin(reply.id); resetPage(); }} className={`shrink-0 rounded p-1 hover:bg-zinc-800 ${pinned.has(reply.id) ? "text-brand" : "text-zinc-500"}`}><Pin aria-hidden="true" className="h-3.5 w-3.5" /></button>}
-              </div>
-              <p className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-zinc-400">{reply.body || t("quickShelf.mediaOnly")}</p>
-              {reply.media && <p className="mt-1 truncate text-2xs text-zinc-500" title={reply.media.fileName}>{reply.media.fileName} · {mediaSize(reply.media.size)}</p>}
-            </div>
+        <article className="space-y-2 rounded-xl border border-zinc-800 p-2.5">
+          <div className="flex items-start gap-2">
+            <button type="button" className="flex min-w-0 flex-1 items-start gap-2.5 rounded text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand" aria-label={t("quickShelf.previewNamed", { title: reply.title || t("crmPanel.unnamed") })} onClick={() => setPreview({ id: reply.id, contextKey })}>
+              {reply.media && <span className="shrink-0" title={`${reply.media.fileName} · ${mediaSize(reply.media.size)}`}><QuickReplyMediaTile media={reply.media} compact={compact} /></span>}
+              <span className="min-w-0 flex-1">
+                <span role="heading" aria-level={4} className="block truncate text-xs font-semibold text-zinc-100" title={reply.title}>{reply.title || t("crmPanel.unnamed")}</span>
+                <span className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-zinc-400">{reply.body || t("quickShelf.mediaOnly")}</span>
+              </span>
+            </button>
+            {onTogglePin && <button type="button" aria-pressed={pinned.has(reply.id)} aria-label={t(pinned.has(reply.id) ? "quickShelf.unpin" : "quickShelf.pin", { title: reply.title || t("crmPanel.unnamed") })} onClick={() => { onTogglePin(reply.id); resetPage(); }} className={`shrink-0 rounded p-1 hover:bg-zinc-800 ${pinned.has(reply.id) ? "text-brand" : "text-zinc-500"}`}><Pin aria-hidden="true" className="h-3.5 w-3.5" /></button>}
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="max-w-[42%] truncate rounded bg-brand/10 px-1.5 py-0.5 text-2xs text-brand">{categoryLabel(reply.category)}</span>
-            <div className="flex gap-1"><Button size="xs" variant="ghost" onClick={() => setPreview({ id: reply.id, contextKey })}>{t("quickShelf.preview")}</Button>
-              <Button size="xs" disabled={disabled || !reply.body.trim() && !reply.media} onClick={() => insert(reply)}>{t("quickShelf.insert")}</Button></div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="min-w-0 truncate text-2xs text-zinc-500">{categoryLabel(reply.category)}</span>
+            <Button size="xs" aria-label={t("quickShelf.insert")} disabled={disabled || !reply.body.trim() && !reply.media} onClick={() => insert(reply)}>{t("quickShelf.insertShort")}</Button>
           </div>
         </article>
       </li>)}
@@ -150,7 +150,7 @@ export function QuickReplyPreview({ reply, category, target, disabled, onInsert,
     <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className="flex max-h-[88vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl">
       <header className="flex shrink-0 items-start justify-between gap-3 border-b border-zinc-800 p-4"><div className="min-w-0"><h3 id={titleId} className="break-words text-sm font-semibold text-zinc-100">{reply.title || t("crmPanel.unnamed")}</h3><p className="mt-1 text-xs text-zinc-500">{category}</p></div><button ref={closeRef} type="button" onClick={onClose} aria-label={t("common.close")} className="rounded p-1 text-zinc-400 hover:bg-zinc-800"><X aria-hidden="true" className="h-4 w-4" /></button></header>
       <div className="min-h-0 space-y-4 overflow-y-auto p-4">
-        {target && <div className="space-y-1 rounded-lg bg-brand/10 p-3 text-xs text-brand"><p className="break-words">{t("quickShelf.target", { title: target.title })}</p><p className="break-words">{t("quickShelf.account", { account: target.account })}</p></div>}
+        {target && <p className="break-words rounded-lg bg-brand/10 p-2 text-xs text-brand">{target.title} · {target.account}</p>}
         {reply.body && <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-zinc-200">{reply.body}</p>}
         {reply.media && <div className="space-y-2 rounded-lg border border-zinc-700 p-3">
           {mediaFailed ? <p role="status" className="text-xs text-amber-500">{t("quickShelf.previewUnavailable")}</p> : reply.media.kind === "image" ? <img src={reply.media.dataUrl} alt={reply.media.fileName} className="max-h-72 w-full object-contain" onError={()=>setMediaFailed(true)} /> : reply.media.kind === "audio" ? <audio src={reply.media.dataUrl} controls preload="metadata" className="w-full" aria-label={reply.media.fileName} onError={()=>setMediaFailed(true)} /> : reply.media.kind === "video" ? <video src={reply.media.dataUrl} controls preload="metadata" className="max-h-72 w-full" aria-label={reply.media.fileName} onError={()=>setMediaFailed(true)} /> : <FileText aria-hidden="true" className="h-10 w-10 text-zinc-500" />}

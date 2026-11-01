@@ -215,6 +215,8 @@ test("nested folder headers offer child creation and keep indentation within the
     assert.equal(tree.props.style.marginLeft,72);
     nodes(tree).find(n=>n.props["aria-label"]==="分组操作").props.onClick({clientX:50,clientY:100,currentTarget:{getBoundingClientRect:()=>({left:50,bottom:100})}});
     ui.render();tree=FolderHeaderRow(props);
+    nodes(tree).find(n=>n.props.role==="menuitem"&&nodes(n).some(child=>child.props.children==="整理文件夹")).props.onClick();
+    ui.render();tree=FolderHeaderRow(props);
     const create=nodes(tree).find(n=>n.props.role==="menuitem"&&n.props.children?.includes?.("新建子分组"));
     assert.ok(create);create.props.onClick();assert.equal(created,1);
   }finally{ui.close();}
