@@ -15,6 +15,6 @@ assert.match(source, /suggestionCache/);
 assert.match(source, /window\.setTimeout\(\(\) =>/);
 assert.match(source, /latestSuggestionKey\.current !== key/);
 assert.match(source, /requestSuggestions\(key, false, showProgress\(key, request\)\)/);
-assert.match(source, /\[\s*collapsed,\s*panelTab,\s*suggestionKey,\s*aiReady,\s*awaitingReply,\s*\]/);
+assert.match(source, /\[\s*collapsed,\s*panelTab,\s*suggestionKey,\s*aiReady,\s*\]/);
 
 console.log("ai-panel-refresh.test.mjs ok");

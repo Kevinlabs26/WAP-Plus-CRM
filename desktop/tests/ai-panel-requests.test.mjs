@@ -21,7 +21,7 @@ const built = await build({
   plugins: [{ name: "panel-boundaries", setup(b) {
     b.onResolve({ filter: /.*/ }, args => args.kind === "entry-point" ? undefined : ({ path: args.path, namespace: "stub" }));
     b.onLoad({ filter: /.*/, namespace: "stub" }, args => ({ contents: args.path === "react/jsx-runtime"
-      ? "export const jsx = (type, props) => ({type, props}); export const jsxs = jsx; export const Fragment = 'fragment';"
+      ? "export const jsx = (type, props, key) => ({type, props, key}); export const jsxs = jsx; export const Fragment = 'fragment';"
       : args.path === "react"
         ? "export const {useEffect,useLayoutEffect,useMemo,useRef,useState} = globalThis.panelHooks;"
         : (exportsByModule.get(args.path) || []).map(name => `export const ${name} = globalThis.panelBindings[${JSON.stringify(name)}] || (() => null);`).join("\n") }));
@@ -99,6 +99,18 @@ function harness() {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const reply = text => ({ source: "custom", suggestions: [{ id: text, text }] });
+
+test('streaming additional suggestions keeps the first card mounted even when the provider regenerates candidate IDs',async()=>{
+  const h=harness();await h.mount();h.fireTimers();
+  const nodes=tree=>Array.isArray(tree)?tree.flatMap(nodes):tree?.props?[tree,...nodes(tree.props.children)]:[];
+  const progress=h.requests[0].args[3].onProgress;
+  progress({source:'custom',suggestions:[{id:'chunk-1',text:'Bonjour !'}]});
+  const first=nodes(h.render()).find(n=>n.type==='suggestion-card');assert.ok(first.key);
+  const next={source:'custom',suggestions:[{id:'chunk-2',text:'Bonjour !'},{id:'chunk-3',text:'Bonsoir !'}]};
+  progress(next);const cards=nodes(h.render()).filter(n=>n.type==='suggestion-card');
+  assert.equal(cards[0].key,first.key,'translation state survives a new streaming candidate');assert.notEqual(cards[0].key,cards[1].key);
+  h.requests[0].resolve(next);await settle();h.unmount();
+});
 
 test('expired visible suggestions cannot be inserted, expire without automatic API loops and allow explicit regeneration',async t=>{
   let now=Date.now();t.mock.method(Date,'now',()=>now);
@@ -214,23 +226,27 @@ test("manual and automatic requests cannot put an old contact's suggestion into 
   }
 });
 
-test("sending stops automatic suggestions; manual refresh still works with the current model and context", async () => {
+test("sent replies automatically generate a continuation while receipts reuse it and refresh shares pending work", async () => {
   const h = harness(); await h.mount(); h.fireTimers();
   h.requests[0].resolve(reply("first")); await settle(); h.render();
   h.state.messagesByChatId = { ...h.state.messagesByChatId, a: h.state.messagesByChatId.a.map(m => ({ ...m, deliveryStatus: "read" })) };
   h.render(); h.fireTimers(); assert.equal(h.requests.length, 1);
   h.state.messagesByChatId = { ...h.state.messagesByChatId, a: [...h.state.messagesByChatId.a, { id: "a-out", chatId: "a", direction: "out", body: "Already answered.", deliveryStatus: "sent", sentAt: "2026-01-01T00:01:00Z" }] };
-  h.render(); h.fireTimers(); assert.equal(h.requests.length, 1);
-  assert.deepEqual(h.state.aiSuggestions, [], "do not offer a reply to an already answered message");
-  h.state.settings = { ...h.state.settings, customAiModel: "two" }; h.render(); h.fireTimers();
-  assert.equal(h.requests.length, 1);
-  h.refresh(); assert.equal(h.requests.length, 2);
-  assert.equal(h.requests[1].args[2].customAiModel, "two");
+  h.render(); h.fireTimers(); assert.equal(h.requests.length, 2);
   assert.equal(h.requests[1].args[1].at(-1).body, "Already answered.");
-  h.requests[1].resolve(reply("new model")); await settle(); h.render();
+  h.requests[1].resolve(reply("continuation")); await settle(); h.render();
+  assert.equal(h.state.aiSuggestions[0].text, "continuation");
+  h.state.messagesByChatId = { ...h.state.messagesByChatId, a: h.state.messagesByChatId.a.map(m => ({ ...m, deliveryStatus: "read" })) };
+  h.render(); h.fireTimers(); assert.equal(h.requests.length, 2);
+  h.state.settings = { ...h.state.settings, customAiModel: "two" }; h.render(); h.fireTimers();
+  assert.equal(h.requests.length, 3);
+  h.refresh(); assert.equal(h.requests.length, 3);
+  assert.equal(h.requests[2].args[2].customAiModel, "two");
+  assert.equal(h.requests[2].args[1].at(-1).body, "Already answered.");
+  h.requests[2].resolve(reply("new model")); await settle(); h.render();
   assert.equal(h.state.aiSuggestions[0].text, "new model");
-  h.refresh(); assert.equal(h.requests.length, 3); h.unmount();
-  h.requests[2].resolve(reply("AFTER UNMOUNT")); await settle();
+  h.refresh(); assert.equal(h.requests.length, 4); h.unmount();
+  h.requests[3].resolve(reply("AFTER UNMOUNT")); await settle();
   assert.equal(h.state.aiSuggestions[0].text, "new model");
 });
 
@@ -295,19 +311,39 @@ test("failed requests are retryable and changed incoming text, identity, model a
   h.unmount();
 });
 
-test("queued replies suspend generation and late old-context results cannot reappear after sending", async () => {
+test("unsent replies reuse suggestions; confirmed sending updates context and rejects older results", async () => {
   const h = harness(); await h.mount(); h.fireTimers();
   h.state.messagesByChatId = { ...h.state.messagesByChatId, a: [...h.state.messagesByChatId.a, {
     id: "queued", chatId: "a", direction: "out", body: "My answer", deliveryStatus: "queued", sentAt: "2026-01-01T00:01:00Z",
   }] }; h.render(); h.fireTimers();
   h.requests[0].resolve(reply("old unanswered context")); await settle();
   assert.equal(h.requests.length, 1);
-  assert.deepEqual(h.state.aiSuggestions, []);
+  assert.equal(h.state.aiSuggestions[0].text, "old unanswered context");
   h.state.messagesByChatId = { ...h.state.messagesByChatId, a: h.state.messagesByChatId.a.map(m => m.id === "queued" ? { ...m, deliveryStatus: "failed" } : m) };
   h.render(); h.fireTimers();
   assert.equal(h.requests.length, 1, "failed reply restores the cached unanswered context");
   assert.equal(h.state.aiSuggestions[0].text, "old unanswered context");
+  h.state.messagesByChatId = { ...h.state.messagesByChatId, a: h.state.messagesByChatId.a.map(m => m.id === "queued" ? { ...m, deliveryStatus: "sent" } : m) };
+  h.render(); h.fireTimers();
+  assert.equal(h.requests.length, 2);
+  assert.deepEqual(h.state.aiSuggestions, []);
+  h.requests[0].args[3].onProgress(reply("STALE PROGRESS"));
+  assert.deepEqual(h.state.aiSuggestions, []);
+  h.requests[1].resolve(reply("next message")); await settle();
+  assert.equal(h.state.aiSuggestions[0].text, "next message");
   h.unmount();
+});
+
+test("empty conversations and conversations with only my sent messages can offer suggestions", async () => {
+  for (const messages of [[], [{ id: "own", chatId: "a", direction: "out", body: "Bonjour", deliveryStatus: "sent", sentAt: "2026-01-01T00:00:00Z" }]]) {
+    const h = harness(); h.state.messagesByChatId.a = messages;
+    await h.mount(); h.fireTimers();
+    assert.equal(h.requests.length, 1);
+    assert.deepEqual(h.requests[0].args[1], messages);
+    h.requests[0].resolve(reply("start or continue")); await settle();
+    assert.equal(h.state.aiSuggestions[0].text, "start or continue");
+    h.unmount();
+  }
 });
 
 test("another conversation receiving messages does not rebuild the selected conversation's AI context", async () => {

@@ -12,7 +12,11 @@ import {
 } from "@/components/ui/primitives";
 import { useI18n } from "@/i18n";
 
+export type BroadcastRecipientSource = "contacts" | "numbers";
+
 type Props = {
+  source: BroadcastRecipientSource;
+  onSourceChange: (source: BroadcastRecipientSource) => void;
   phoneText: string;
   onPhoneTextChange: (value: string) => void;
   directPhoneCount: number;
@@ -32,8 +36,10 @@ type Props = {
   onClear: () => void;
 };
 
-/** 群发第 1 步：选发送账号 + 筛选并勾选客户。 */
+/** 群发名单：粘贴号码或按需打开联系人列表。 */
 export function BroadcastPickStep({
+  source,
+  onSourceChange,
   phoneText,
   onPhoneTextChange,
   directPhoneCount,
@@ -53,26 +59,24 @@ export function BroadcastPickStep({
   onClear,
 }: Props) {
   const { t } = useI18n();
-  const [source, setSource] = useState<"contacts" | "numbers">(() => phoneText.trim() ? "numbers" : "contacts");
   const [showSelectedOnly, setShowSelectedOnly] = useState(false);
   const selectedOnlyActive = showSelectedOnly && selected.size > 0;
   const visiblePool = selectedOnlyActive ? selectedContacts : pool;
 
   return (
-    <div className="space-y-4">
+    <div className="flex h-full min-w-0 flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant={source === "contacts" ? "secondary" : "ghost"} aria-pressed={source === "contacts"} onClick={() => setSource("contacts")}>
-          {t("broadcast.chooseContacts")} · {selected.size}
-        </Button>
-        <Button variant={source === "numbers" ? "secondary" : "ghost"} aria-pressed={source === "numbers"} onClick={() => setSource("numbers")}>
+        <Button variant={source === "numbers" ? "secondary" : "ghost"} aria-pressed={source === "numbers"} onClick={() => onSourceChange("numbers")}>
           {t("broadcast.directPhones")} · {directPhoneCount}
+        </Button>
+        <Button variant={source === "contacts" ? "secondary" : "ghost"} aria-pressed={source === "contacts"} onClick={() => onSourceChange("contacts")}>
+          {t("broadcast.chooseContacts")} · {selected.size}
         </Button>
         <span className="ml-auto text-2xs text-zinc-500" role="status">{t("broadcast.recipientTotal", { count: recipientCount, cap: BROADCAST_HARD_CAP })}</span>
       </div>
-      <section
-        hidden={source !== "numbers"}
+      {source === "numbers" && <section
         className={cn(
-          "rounded-xl border p-3",
+          "flex flex-1 flex-col rounded-xl border p-3",
           directPhoneCount
             ? "border-brand/30 bg-brand/5"
             : "border-zinc-800 bg-zinc-900/30"
@@ -85,20 +89,17 @@ export function BroadcastPickStep({
           aria-label={t("broadcast.directPhones")}
           value={phoneText}
           onChange={(event) => onPhoneTextChange(event.target.value)}
-          rows={5}
-          className="mt-2 max-h-64 overflow-y-auto font-mono"
-          onInput={(event) => {
-            event.currentTarget.style.height = "auto";
-            event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 256)}px`;
-          }}
+          rows={12}
+          spellCheck={false}
+          className="mt-3 min-h-80 flex-1 overflow-y-auto font-mono"
           placeholder={"+12025550123\n+12025550124"}
         />
         <p className="mt-2 text-2xs text-zinc-500">
           {t("broadcast.validNumbers", { count: directPhoneCount })}
         </p>
-      </section>
+      </section>}
 
-      <section hidden={source !== "contacts"} className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
+      {source === "contacts" && <section className="flex flex-1 flex-col rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
         <div className="flex flex-wrap items-end gap-2">
           <label className="text-2xs text-zinc-500">
             {t("broadcast.stage")}
@@ -170,7 +171,7 @@ export function BroadcastPickStep({
         {visiblePool.length ? (
           <Virtuoso
             className="mt-2"
-            style={{ height: 288 }}
+            style={{ height: "clamp(360px, 56vh, 640px)" }}
             data={visiblePool}
             computeItemKey={(_index, contact) => contact.id}
             defaultItemHeight={45}
@@ -230,7 +231,7 @@ export function BroadcastPickStep({
             {selectedOnlyActive ? t("broadcast.noSelectedContacts") : t("crm.noMatch")}
           </div>
         )}
-      </section>
+      </section>}
 
     </div>
   );

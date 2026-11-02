@@ -31,7 +31,7 @@ import { buildContactLookup } from "@/lib/groupMemberDisplay";
 import { salesStagesWithLabels } from "@/lib/contactWorkflow";
 import { Button, Input, SectionLabel, Textarea } from "@/components/ui/primitives";
 import { CampaignRunPanel } from "./CampaignRunPanel";
-import { BroadcastPickStep } from "./BroadcastPickStep";
+import { BroadcastPickStep, type BroadcastRecipientSource } from "./BroadcastPickStep";
 import { BroadcastMediaPicker } from "./BroadcastMediaPicker";
 import type {
   BroadcastMedia,
@@ -126,6 +126,7 @@ export function BroadcastView() {
     }
   });
   const [phoneText, setPhoneText] = useState("");
+  const [recipientSource, setRecipientSource] = useState<BroadcastRecipientSource>(() => selected.size ? "contacts" : "numbers");
   const [media, setMedia] = useState<BroadcastMedia[]>([]);
   const [mediaMode, setMediaMode] = useState<BroadcastMediaMode>("single");
   const [mediaDataUrls, setMediaDataUrls] = useState<Record<string, string>>(
@@ -180,6 +181,7 @@ export function BroadcastView() {
   );
 
   const pool = useMemo(() => {
+    if (recipientSource !== "contacts") return [];
     const tag = tagFilter.trim().toLowerCase();
     const s = deferredQ.trim().toLowerCase();
     const filtered = contacts.filter((c) => {
@@ -206,10 +208,10 @@ export function BroadcastView() {
       unique.push(lookup.get(phone.toLowerCase()) || contact);
     }
     return unique;
-  }, [contacts, accountId, stageFilter, tagFilter, deferredQ]);
+  }, [contacts, accountId, stageFilter, tagFilter, deferredQ, recipientSource]);
 
   const selectedList = useMemo(
-    () => contacts.filter((c) => selected.has(c.id)),
+    () => selected.size ? contacts.filter((c) => selected.has(c.id)) : [],
     [contacts, selected]
   );
 
@@ -500,8 +502,10 @@ export function BroadcastView() {
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {step === "setup" && (
-          <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(360px,0.7fr)]">
+          <div className="mx-auto grid max-w-[1440px] items-stretch gap-4 lg:grid-cols-[minmax(320px,0.85fr)_minmax(0,1.15fr)]">
             <BroadcastPickStep
+              source={recipientSource}
+              onSourceChange={setRecipientSource}
               phoneText={phoneText}
               onPhoneTextChange={setPhoneText}
               directPhoneCount={directPhones.length}
@@ -521,37 +525,33 @@ export function BroadcastView() {
               onClear={() => setSelected(new Set())}
             />
 
-            <div className="space-y-4 xl:sticky xl:top-0">
+            <div className="min-w-0 space-y-3">
               <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
-                <SectionLabel>{t("broadcast.account")}</SectionLabel>
-                <select
-                  value={accountId}
-                  onChange={(event) => {
-                    setAccountId(event.target.value);
-                    setSelected(new Set());
-                  }}
-                  className="ui-control mt-2 h-9 w-full px-2 text-[13px]"
-                >
-                  {!accounts.length && <option value="">{t("broadcast.noAccount")}</option>}
-                  {accounts.map((item, index) => (
-                    <option key={item.id} value={item.id}>
-                      {formatAccountDisplay({
-                        label: item.label,
-                        userName: item.userName,
-                        index1: index + 1,
-                      })}
-                    </option>
-                  ))}
-                </select>
-                {warmup.active && (
-                  <p className="mt-2 text-[11px] text-sky-300/90">
-                    {t("broadcast.warmupLabel", { hours: warmup.hoursLeft })} — {t("broadcast.warmup")}
-                  </p>
-                )}
-              </section>
-
-              <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
-                <SectionLabel>{t("broadcast.copy")}</SectionLabel>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <SectionLabel className="!mb-0">{t("broadcast.copy")}</SectionLabel>
+                  <label className="flex min-w-0 items-center gap-2 text-2xs text-zinc-500">
+                    <span className="shrink-0">{t("broadcast.account")}</span>
+                    <select
+                      value={accountId}
+                      onChange={(event) => {
+                        setAccountId(event.target.value);
+                        setSelected(new Set());
+                      }}
+                      className="ui-control h-8 min-w-0 max-w-56 px-2 text-[12px]"
+                    >
+                      {!accounts.length && <option value="">{t("broadcast.noAccount")}</option>}
+                      {accounts.map((item, index) => (
+                        <option key={item.id} value={item.id}>
+                          {formatAccountDisplay({
+                            label: item.label,
+                            userName: item.userName,
+                            index1: index + 1,
+                          })}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
                 <p className="mt-1 text-2xs text-zinc-600">
                   {t("broadcast.copyHint")}
                 </p>
@@ -575,8 +575,8 @@ export function BroadcastView() {
                   ref={templateRef}
                   value={template}
                   onChange={(event) => setTemplate(event.target.value)}
-                  rows={8}
-                  className="mt-2"
+                  rows={5}
+                  className="mt-2 min-h-36 max-h-72 resize-y"
                 />
                 <div className="mt-2 border-t border-zinc-800/80 pt-2">
                   <div className="mb-1 text-2xs text-zinc-500">
@@ -591,39 +591,6 @@ export function BroadcastView() {
                       setMediaDataUrls(dataUrls);
                     }}
                   />
-                </div>
-                <div className="mt-3 flex items-end gap-2 text-2xs text-zinc-500">
-                  <label>
-                    {t("broadcast.minGap")}
-                    <Input
-                      type="number"
-                      min={20}
-                      max={120}
-                      value={extraGapSec}
-                      onChange={(event) => {
-                        const value = Math.min(120, Math.max(20, Number(event.target.value) || 20));
-                        setExtraGapSec(value);
-                        setExtraGapMaxSec((current) => Math.max(current, value));
-                      }}
-                      className="mt-1 h-8 w-28"
-                    />
-                  </label>
-                  <span className="pb-2 text-zinc-600">{t("broadcast.to")}</span>
-                  <label>
-                    {t("broadcast.maxGap")}
-                    <Input
-                      type="number"
-                      min={extraGapSec}
-                      max={120}
-                      value={extraGapMaxSec}
-                      onChange={(event) =>
-                        setExtraGapMaxSec(
-                          Math.min(120, Math.max(extraGapSec, Number(event.target.value) || 30))
-                        )
-                      }
-                      className="mt-1 h-8 w-28"
-                    />
-                  </label>
                 </div>
               </section>
 
@@ -673,8 +640,10 @@ export function BroadcastView() {
                 )}
               </section>
 
-              <section className="sticky bottom-0 rounded-xl border border-brand/30 bg-zinc-900/95 p-3 shadow-xl shadow-black/30 backdrop-blur">
-                <div className="grid grid-cols-2 gap-2 text-2xs text-zinc-500">
+            </div>
+
+              <section className="flex flex-wrap items-center gap-3 rounded-xl border border-brand/30 bg-zinc-900/95 p-3 lg:col-span-2">
+                <div className="grid shrink-0 grid-cols-2 gap-x-6 gap-y-2 text-2xs text-zinc-500">
                   <div>
                     <div>{t("broadcast.recipients")}</div>
                     <div className="mt-1 tabular-nums text-brand">
@@ -693,32 +662,44 @@ export function BroadcastView() {
                     </div>
                   </div>
                 </div>
+                <div role="group" aria-label={t("broadcast.gap")} className="flex items-center gap-2 text-2xs text-zinc-500">
+                  <span className="shrink-0">{t("broadcast.gap")}</span>
+                  <Input type="number" aria-label={t("broadcast.minGap")} min={20} max={120} value={extraGapSec}
+                    onChange={event => {
+                      const value = Math.min(120, Math.max(20, Number(event.target.value) || 20));
+                      setExtraGapSec(value);
+                      setExtraGapMaxSec(current => Math.max(current, value));
+                    }} className="h-8 !w-16" />
+                  <span>{t("broadcast.to")}</span>
+                  <Input type="number" aria-label={t("broadcast.maxGap")} min={extraGapSec} max={120} value={extraGapMaxSec}
+                    onChange={event => setExtraGapMaxSec(Math.min(120, Math.max(extraGapSec, Number(event.target.value) || 30)))}
+                    className="h-8 !w-16" />
+                </div>
                 {warmup.active && (
-                  <p className="mt-3 text-2xs text-sky-300">
+                  <p className="order-last w-full text-2xs text-sky-300">
                     {t("broadcast.warmupBlocked", {
                       label: t("broadcast.warmupLabel", { hours: warmup.hoursLeft }),
                     })}
                   </p>
                 )}
                 {recipientCount > BROADCAST_HARD_CAP && (
-                  <p className="mt-3 text-2xs text-rose-300">
+                  <p className="order-last w-full text-2xs text-rose-300">
                     {t("broadcast.overLimit", { count: recipientCount - BROADCAST_HARD_CAP })}
                   </p>
                 )}
-                <p className="mt-3 flex items-center gap-1.5 text-2xs text-amber-300/80">
+                <p className="flex min-w-48 flex-1 items-center gap-1.5 text-2xs text-amber-300/80">
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                   {t("broadcast.riskWarning")}
                 </p>
                 <Button
                   variant="primary"
-                  className="mt-3 w-full !min-h-10"
+                  className="w-full !min-h-10 sm:w-auto sm:min-w-48"
                   disabled={Boolean(launchBlockedReason)}
                   onClick={() => void launch()}
                 >
                   {launchBlockedReason || t("broadcast.start")}
                 </Button>
               </section>
-            </div>
           </div>
         )}
 

@@ -156,10 +156,6 @@ export function CrmAiPanel() {
     () => [...thread].reverse().find((message) => message.direction === "in"),
     [thread]
   );
-  // 排队/发送中的回复也暂停建议；发送失败后仍可继续为未回复的消息生成。
-  const awaitingReply = useMemo(() => [...thread].reverse().find((message) =>
-    message.direction === "in" || !["failed", "local"].includes(message.deliveryStatus || "")
-  )?.direction === "in", [thread]);
   const activeOrder = useMemo(
     () =>
       [...thread]
@@ -339,7 +335,7 @@ export function CrmAiPanel() {
     const key = suggestionKey;
     useAppStore.setState({ aiSuggestions: [] });
     setAiError("");
-    if (collapsed || panelTab !== "customer" || !contact || !thread.length || !aiReady) {
+    if (collapsed || panelTab !== "customer" || !contact || !aiReady) {
       setLoading(false);
       return () => { generation.current++; };
     }
@@ -352,7 +348,7 @@ export function CrmAiPanel() {
       setLoading(false);
       return () => { generation.current++; };
     }
-    if (!awaitingReply || isManualSuggestionContext(key)) {
+    if (isManualSuggestionContext(key)) {
       setLoading(false);
       return () => { generation.current++; };
     }
@@ -382,14 +378,13 @@ export function CrmAiPanel() {
       generation.current++;
       window.clearTimeout(timer);
     };
-    // 仅为未回复的消息自动生成，完整上下文仍用于手动刷新和缓存隔离。
+    // 已发出的消息也更新下一句建议；未发出的内容不改变上下文或重复请求。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     collapsed,
     panelTab,
     suggestionKey,
     aiReady,
-    awaitingReply,
   ]);
 
   const refreshLabels = async () => {
@@ -947,7 +942,7 @@ export function CrmAiPanel() {
               )}
               {aiSuggestions.map((suggestion) => (
                 <AiSuggestionCard
-                  key={`${selectedChatId}:${aiAccountId}:${suggestion.id}`}
+                  key={JSON.stringify([selectedChatId, aiAccountId, suggestion.text])}
                   text={suggestion.text}
                   contextKey={suggestionKey}
                   settings={settings}

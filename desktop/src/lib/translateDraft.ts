@@ -338,7 +338,11 @@ const cache = new Map<
 const CACHE_MS = 10 * 60_000;
 const inFlight = new Map<string, Promise<TranslateResult>>();
 
-function cacheKey(text: string, to: string, settings: AppSettings) {
+type TranslationOptions = { googleFirst?: boolean };
+
+export function getTranslationContextKey(text: string, to: string, settings: AppSettings, opts?: TranslationOptions) {
+  text = text.trim();
+  to = LANG_NAME[to] ? to : "en";
   const service = settings.translateService || "auto";
   const ready = hasKey(settings);
   const google = service === "google" || (service === "auto" && !ready);
@@ -346,7 +350,7 @@ function cacheKey(text: string, to: string, settings: AppSettings) {
   return JSON.stringify([to, text, service, google ? "google" : settings.aiProvider,
     google ? "" : config?.model || settings.aiModel || "",
     google ? "" : config?.baseUrl || (settings.aiProvider === "ollama" ? settings.ollamaUrl : ""),
-    google || ready]);
+    google || ready, opts?.googleFirst && service === "auto" ? "google-first" : ""]);
 }
 
 function rememberTranslation(key: string, text: string, source: TranslateResult["source"]) {
@@ -475,7 +479,8 @@ async function chatComplete(opts: {
  */
 async function googleTranslate(
   text: string,
-  to: string
+  to: string,
+  timeoutMs = 30_000
 ): Promise<string> {
   const url = new URL("https://translate.googleapis.com/translate_a/single");
   url.searchParams.set("client", "gtx");
@@ -484,7 +489,7 @@ async function googleTranslate(
   url.searchParams.set("dt", "t");
   url.searchParams.set("q", text);
   const res = await fetch(url.toString(), {
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`Google 翻译 ${res.status}`);
   const data = (await res.json()) as unknown[];
@@ -506,7 +511,8 @@ async function googleTranslate(
 export async function translateDraftText(
   text: string,
   targetLang: Exclude<TranslateLangCode, "auto"> | string,
-  settings: AppSettings
+  settings: AppSettings,
+  opts?: TranslationOptions
 ): Promise<TranslateResult> {
   const src = text.trim();
   const to = (
@@ -522,7 +528,7 @@ export async function translateDraftText(
     };
   }
 
-  const ck = cacheKey(src, to, settings);
+  const ck = getTranslationContextKey(src, to, settings, opts);
   const hit = cache.get(ck);
   if (
     hit &&
@@ -541,22 +547,22 @@ export async function translateDraftText(
   if (hit) cache.delete(ck);
   const pending = inFlight.get(ck);
   if (pending) return pending;
-  const request = translateDraftTextUncached(src, to, settings, ck);
+  const request = translateDraftTextUncached(src, to, settings, ck, opts);
   inFlight.set(ck, request);
   try { return await request; }
   finally { if (inFlight.get(ck) === request) inFlight.delete(ck); }
 }
 
-async function translateDraftTextUncached(src: string, to: string, settings: AppSettings, ck: string): Promise<TranslateResult> {
+async function translateDraftTextUncached(src: string, to: string, settings: AppSettings, ck: string, opts?: TranslationOptions): Promise<TranslateResult> {
   const provider = settings.aiProvider;
   const service = settings.translateService || "auto";
   const hasAiKey = hasKey(settings);
 
-  // Google 免费：显式选择，或 auto 且无 AI Key 时自动走
-  const useGoogle = service === "google" || (service === "auto" && !hasAiKey);
+  const googleFirst = opts?.googleFirst && service === "auto";
+  const useGoogle = service === "google" || (service === "auto" && (!hasAiKey || googleFirst));
   if (useGoogle) {
     try {
-      const textOut = await googleTranslate(src, to);
+      const textOut = await googleTranslate(src, to, googleFirst ? 3_000 : 30_000);
       if (!translationMatchesTarget(src, textOut, to)) {
         throw new Error(`Google 翻译未返回${LANG_NAME[to]}译文`);
       }
@@ -568,14 +574,17 @@ async function translateDraftTextUncached(src: string, to: string, settings: App
         targetLang: to,
       };
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return {
-        text: "",
-        source: "google",
-        fallback: true,
-        error: msg,
-        targetLang: to,
-      };
+      // Reading translations fail over promptly; explicit provider choices never change service.
+      if (!googleFirst || !hasAiKey) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return {
+          text: "",
+          source: "google",
+          fallback: true,
+          error: msg,
+          targetLang: to,
+        };
+      }
     }
   }
 
@@ -625,7 +634,7 @@ async function translateDraftTextUncached(src: string, to: string, settings: App
     }
 
     // “自动”模式允许在 AI 连续返回错语言时改走已有的 Google 翻译后备。
-    if (!translationMatchesTarget(src, textOut, to) && service === "auto") {
+    if (!translationMatchesTarget(src, textOut, to) && service === "auto" && !googleFirst) {
       const googleText = await googleTranslate(src, to);
       if (!translationMatchesTarget(src, googleText, to)) {
         throw new Error(`翻译服务未返回${langName}译文`);

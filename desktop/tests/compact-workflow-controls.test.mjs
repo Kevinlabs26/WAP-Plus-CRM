@@ -21,16 +21,17 @@ const mocks={
  '@/lib/localSpeech':'export const SPEECH_MODEL_PRESETS=[];export const listLocalSpeechModels=async()=>[];export const downloadSpeechModel=async()=>{};export const removeLocalSpeechModel=async()=>{};',
 };
 const built=await build({stdin:{contents:`export {CrmView} from './src/components/views/CrmView.tsx';export {SavedMessageToolbar} from './src/components/chat/SavedMessageToolbar.tsx';export {BroadcastPickStep} from './src/components/views/BroadcastPickStep.tsx';export {MultiWindowLayoutControls} from './src/features/multiWindow/components/MultiWindowLayoutControls.tsx';export {SettingsLocalSpeechPanel} from './src/components/settings/SettingsLocalSpeechPanel.tsx';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',jsx:'automatic',alias:{'@':root+'src'},plugins:[{name:'boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
-const ui=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
+const ui=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text+'\n//# sourceURL=compact-workflow-controls.js').toString('base64'));
 const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
 const text=t=>Array.isArray(t)?t.map(text).join(''):t?.props?text(t.props.children):typeof t==='string'||typeof t==='number'?String(t):'';
 function harness(component,props,initial=[]){let slots=initial,cursor=0,tree;const h={props,render(){cursor=0;globalThis.compactHooks=i=>{const at=cursor++;if(!(at in slots))slots[at]=typeof i==='function'?i():i;return [slots[at],v=>slots[at]=typeof v==='function'?v(slots[at]):v];};tree=component(h.props);return tree;},nodes:()=>nodes(tree),text:()=>text(tree),button:k=>h.nodes().find(n=>n.type==='button'&&text(n).startsWith(k))};h.render();return h;}
-function picker(extra={}){return harness(ui.BroadcastPickStep,{phoneText:'',directPhoneCount:0,recipientCount:1,stages:[],stageFilter:'all',tagFilter:'',q:'',pool:[],selectedContacts:[{id:'a'}],selected:new Set(['a']),onToggle(){},onSelectVisible(){},onClear(){},...extra});}
+function picker(extra={}){const h=harness(ui.BroadcastPickStep,{source:'numbers',onSourceChange:source=>{h.props.source=source;},phoneText:'',directPhoneCount:0,recipientCount:1,stages:[],stageFilter:'all',tagFilter:'',q:'',pool:[{id:'a'}],selectedContacts:[{id:'a'}],selected:new Set(['a']),onToggle(){},onSelectVisible(){},onClear(){},...extra});return h;}
 
 test('switching recipient source retains both selections and always exposes their counts and union total',()=>{
- const changes=[];const h=picker({onPhoneTextChange:v=>{changes.push(v);h.props.phoneText=v;h.props.directPhoneCount=2;h.props.recipientCount=2;},onClear:()=>assert.fail('switch must not clear contacts')});
- assert.deepEqual(h.nodes().filter(n=>n.type==='section').map(n=>n.props.hidden),[true,false]);
+ const changes=[];const h=picker({source:'contacts',onPhoneTextChange:v=>{changes.push(v);h.props.phoneText=v;h.props.directPhoneCount=2;h.props.recipientCount=2;},onClear:()=>assert.fail('switch must not clear contacts')});
+ assert.equal(h.nodes().filter(n=>n.type==='section').length,1);assert.ok(h.nodes().some(n=>n.type==='list'));assert.ok(!h.nodes().some(n=>n.type==='textarea'));
  h.button('broadcast.directPhones').props.onClick();h.render();
+ assert.ok(!h.nodes().some(n=>n.type==='list'),'inactive list is unmounted');
  h.nodes().find(n=>n.type==='textarea').props.onChange({target:{value:'+12025550101\n+12025550102'}});h.render();
  h.button('broadcast.chooseContacts').props.onClick();h.render();
  assert.equal(h.props.selected.has('a'),true);assert.equal(h.props.phoneText,changes[0]);assert.match(text(h.button('broadcast.directPhones')),/2$/);
@@ -40,7 +41,7 @@ test('switching recipient source retains both selections and always exposes thei
 
 test('existing pasted numbers open their source; clear selection only clears contacts',()=>{
  let clears=0;const h=picker({phoneText:'+12025550101',directPhoneCount:1,onClear:()=>{clears++;h.props.selected=new Set();}});
- assert.deepEqual(h.nodes().filter(n=>n.type==='section').map(n=>n.props.hidden),[false,true]);
+ assert.equal(h.nodes().filter(n=>n.type==='section').length,1);assert.ok(h.nodes().some(n=>n.type==='textarea'));assert.ok(!h.nodes().some(n=>n.type==='list'));
  h.button('broadcast.chooseContacts').props.onClick();h.render();h.button('broadcast.clearSelection').props.onClick();h.render();
  assert.equal(clears,1);assert.equal(h.props.phoneText,'+12025550101');
 });

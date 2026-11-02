@@ -72,3 +72,19 @@ test("suggestions discard invalid items and repeated text instead of fabricating
   assert.equal(result.fallback, false);
   assert.deepEqual(result.suggestions.map(item => item.text), ["Bien reçu.", "Merci !"]);
 });
+
+test("manual suggestions continue after my message and keep changing clock after reusable context", async t => {
+  const inputs = [];
+  t.mock.method(globalThis, "fetch", async (_url, opts) => {
+    inputs.push(JSON.parse(opts.body).messages[1].content);
+    return Response.json({ choices: [{ message: { content: '[{"text":"Suite."}]' } }] });
+  });
+  const history = [message("0"), message("1", { direction: "out", body: "MY SENT ANSWER", deliveryStatus: "sent" })];
+  await generateSuggestions(contact, history, settings);
+  assert.ok(inputs[0].indexOf("MY SENT ANSWER") < inputs[0].indexOf("Runtime clock"));
+  assert.match(inputs[0], /if it is from Me, suggest a useful continuation/);
+  assert.match(inputs[0], /without repeating my answer or inventing a customer reply/);
+  await generateSuggestions(contact, history, settings, { auto: true });
+  assert.match(inputs[1], /Write one reply to the customer's latest message/);
+  assert.ok(!inputs[1].includes("suggest a useful continuation"));
+});
