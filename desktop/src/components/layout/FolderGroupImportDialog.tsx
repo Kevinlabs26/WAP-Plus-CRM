@@ -31,7 +31,7 @@ type Props = {
   fixedAccountId?: string;
   onClose: () => void;
   onMoveGroups: (chatIds: string[]) => void;
-  onJoined: (groupJid: string, info: GroupDetails, accountId: string) => void;
+  onJoined: (groupJid: string, info: GroupDetails, accountId: string) => void | Promise<void>;
   onAlreadyJoined: (chatId: string) => void;
 };
 
@@ -151,7 +151,7 @@ export function FolderGroupImportDialog({
         if (!result.ok || !result.groupJid) {
           throw new Error(result.error || t("folderGroups.joinFailed"));
         }
-        onJoined(result.groupJid, result.group || row.info!, accountId);
+        await onJoined(result.groupJid, result.group || row.info!, accountId);
         successful += 1;
         setRows((current) =>
           current.map((item) =>

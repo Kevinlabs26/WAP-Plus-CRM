@@ -40,6 +40,9 @@ import { QuickReplyBrowser } from "@/components/chat/QuickReplyBrowser";
 import { useI18n } from "@/i18n";
 import { emitQuickReplyMedia } from "@/lib/quickReplyMedia";
 import { ImageLibraryPanel } from "@/components/chat/ImageLibraryPanel";
+import { AiSuggestionCard } from "./AiSuggestionCard";
+import { AiSuggestionReadingControl } from "./AiSuggestionReadingControl";
+import { resolveMyLang } from "@/lib/translateDraft";
 
 function threadForContact(
   messages: Message[],
@@ -113,6 +116,8 @@ export function CrmAiPanel() {
   const [loading, setLoading] = useState(false);
   const [aiSource, setAiSource] = useState<string>(settings.aiProvider);
   const [aiError, setAiError] = useState("");
+  const [readingLanguage, setReadingLanguage] = useState("");
+  const [readingTarget, setReadingTarget] = useState<string | null>(null);
   const generation = useRef(0);
   const [suggestionCache] = useState(createSuggestionCache);
 
@@ -206,11 +211,25 @@ export function CrmAiPanel() {
   const latestSuggestionKey = useRef(suggestionKey);
   latestSuggestionKey.current = suggestionKey;
 
+  useEffect(() => {
+    if (!aiSuggestions.length || collapsed || panelTab !== "customer") return;
+    const entry = suggestionCache.get(suggestionKey);
+    const expire = () => {
+      if (latestSuggestionKey.current !== suggestionKey || suggestionCache.get(suggestionKey)) return;
+      generation.current++;
+      useAppStore.setState({ aiSuggestions: [] });
+      setLoading(false);
+      setAiError(t("crmPanel.suggestionsExpired"));
+    };
+    const timer = window.setTimeout(expire, Math.max(0, (entry?.expiresAt || Date.now()) - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [aiSuggestions, suggestionKey, collapsed, panelTab, suggestionCache, settings.uiLanguage]);
+
   const requestSuggestions = (key: string, force = false, onProgress?: (result: GenerateSuggestionsResult) => void) => suggestionCache.request(key,
     publish => generateSuggestions(contact, thread, settings, { accountId: aiAccountId, chatId: selectedChatId || undefined, onProgress: publish }), force, onProgress);
 
   const showProgress = (key: string, request: number) => (result: GenerateSuggestionsResult) => {
-    if (request !== generation.current || latestSuggestionKey.current !== key) return;
+    if (request !== generation.current || latestSuggestionKey.current !== key || !suggestionCache.get(key)) return;
     useAppStore.setState({ aiSuggestions: result.suggestions });
     setAiSource(result.source);
   };
@@ -351,8 +370,11 @@ export function CrmAiPanel() {
           setAiError(result.error || "");
           setLoading(false);
         })
-        .catch(() => {
-          if (!cancelled && request === generation.current && latestSuggestionKey.current === key) setLoading(false);
+        .catch((error) => {
+          if (!cancelled && request === generation.current && latestSuggestionKey.current === key) {
+            setAiError(error instanceof Error ? error.message : t("crmPanel.suggestionError", { error: String(error) }));
+            setLoading(false);
+          }
         });
     }, suggestionCache.get(key) ? 0 : 200);
     return () => {
@@ -510,7 +532,7 @@ export function CrmAiPanel() {
         <button type="button" role="tab" aria-selected={panelTab === "images"} className={cn("rounded-lg px-2 py-1.5 text-[11px] transition-colors", panelTab === "images" ? "bg-zinc-800 text-brand" : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300")} onClick={() => setPanelTab("images")}>{t("gallery.title")}</button>
       </div>
 
-      {panelTab === "images" ? <ImageLibraryPanel chatId={selectedChatId} contextKey={[selectedChatId, quickReplyAccountId, settings.sendChannel, quickReplyChat?.phoneId].join(":")} target={quickReplyChat ? `${quickReplyChat.contactName || quickReplyChat.id} · ${quickReplyIdentity}` : undefined} /> : panelTab === "customer" ? (
+      {panelTab === "images" ? <ImageLibraryPanel chatId={selectedChatId} contextKey={[selectedChatId, quickReplyAccountId, settings.sendChannel, quickReplyChat?.phoneId].join(":")} /> : panelTab === "customer" ? (
         <>
       <section className="min-h-0 flex-1 overflow-y-auto p-3">
         {!contact ? (
@@ -907,6 +929,16 @@ export function CrmAiPanel() {
           </div>
         ) : (
           <>
+            {aiSuggestions.length > 0 && <div className="mb-2 flex shrink-0">
+              <AiSuggestionReadingControl
+                language={readingLanguage}
+                targetLanguage={readingTarget || resolveMyLang(settings)}
+                onChange={language => {
+                  if (language) setReadingTarget(language);
+                  setReadingLanguage(language);
+                }}
+              />
+            </div>}
             <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
               {!loading && aiError && (
                 <p role="alert" className="rounded-lg border border-amber-800/50 bg-amber-950/20 p-2 text-[11px] leading-4 text-amber-300">
@@ -914,34 +946,34 @@ export function CrmAiPanel() {
                 </p>
               )}
               {aiSuggestions.map((suggestion) => (
-                <div
-                  key={suggestion.id}
-                  className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-2.5 transition-colors hover:border-brand/30 hover:bg-zinc-900"
-                >
-                  <p className="line-clamp-3 text-[11px] leading-4 text-zinc-300">{suggestion.text}</p>
-                  <div className="mt-2 flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      className="rounded-md bg-brand/15 px-2 py-1 text-[10px] font-medium text-brand hover:bg-brand/25"
-                      onClick={() => {
-                        applyAiSuggestion(suggestion.text, "replace");
-                        pushToast(t("crmPanel.fillInput"), "success");
-                      }}
-                    >
-                      {t("crmPanel.fillInput")}
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-md px-2 py-1 text-[10px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-                      onClick={() => {
-                        applyAiSuggestion(suggestion.text, "append");
-                        pushToast(t("crmPanel.append"), "info");
-                      }}
-                    >
-                      {t("crmPanel.append")}
-                    </button>
-                  </div>
-                </div>
+                <AiSuggestionCard
+                  key={`${selectedChatId}:${aiAccountId}:${suggestion.id}`}
+                  text={suggestion.text}
+                  contextKey={suggestionKey}
+                  settings={settings}
+                  language={readingLanguage}
+                  onInsert={mode => {
+                    const current = useAppStore.getState();
+                    const currentContact = current.contacts.find(item => item.id === current.selectedContactId);
+                    const accountId = (current.selectedThreadAccount?.chatId === current.selectedChatId ? current.selectedThreadAccount.accountId : null)
+                      || current.chats.find(chat => chat.id === current.selectedChatId)?.accountId
+                      || currentContact?.accountId;
+                    if (current.selectedChatId !== selectedChatId || current.selectedContactId !== selectedContactId
+                      || accountId !== aiAccountId || latestSuggestionKey.current !== suggestionKey
+                      || !current.aiSuggestions.some(item => item.id === suggestion.id && item.text === suggestion.text)) return;
+                    const currentThread = filterMessagesForAccount(threadForContact(current.messagesByChatId[selectedChatId || ""] || [], selectedContactId, selectedChatId),
+                      current.selectedThreadAccount?.chatId === selectedChatId ? current.selectedThreadAccount.accountId : null,
+                      current.settings.liveBaileysAccountId);
+                    if (getSuggestionContextKey(currentContact, currentThread, current.settings, accountId, { chatId: selectedChatId || undefined }) !== suggestionKey) return;
+                    if (!suggestionCache.get(suggestionKey)) {
+                      useAppStore.setState({ aiSuggestions: [] });
+                      setAiError(t("crmPanel.suggestionsExpired"));
+                      return;
+                    }
+                    applyAiSuggestion(suggestion.text, mode);
+                    pushToast(t(mode === "append" ? "crmPanel.append" : "crmPanel.fillInput"), mode === "append" ? "info" : "success");
+                  }}
+                />
               ))}
               {loading && <div className="py-6 text-center text-2xs text-zinc-500">{t("crmPanel.generating")}…</div>}
             </div>

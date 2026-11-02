@@ -1,13 +1,16 @@
 import type { GenerateSuggestionsResult } from "./aiSuggest";
 
+export const SUGGESTION_MAX_AGE_MS = 5 * 60_000;
+
 /** 当前界面的短期缓存；只保存真实成功结果，不落盘。 */
 export function createSuggestionCache() {
   type Progress = (result: GenerateSuggestionsResult) => void;
-  type Entry = { result?: GenerateSuggestionsResult; promise: Promise<GenerateSuggestionsResult>;
+  type Entry = { createdAt: number; expiresAt: number; result?: GenerateSuggestionsResult; promise: Promise<GenerateSuggestionsResult>;
     updates: { latest?: GenerateSuggestionsResult; listeners: Set<Progress> } };
   const entries = new Map<string, Entry>();
   const get = (key: string) => {
     const entry = entries.get(key);
+    if (entry && (Date.now() >= entry.expiresAt || Date.now() < entry.createdAt)) { entries.delete(key); return; }
     if (entry) { entries.delete(key); entries.set(key, entry); }
     return entry;
   };
@@ -23,13 +26,19 @@ export function createSuggestionCache() {
         return existing.promise;
       }
       const updates: Entry["updates"] = { listeners: new Set(onProgress ? [onProgress] : []) };
+      const createdAt = Date.now();
       const entry: Entry = {
+        createdAt, expiresAt: createdAt + SUGGESTION_MAX_AGE_MS,
         updates,
         promise: generate(result => {
           updates.latest = result;
           for (const listener of updates.listeners) listener(result);
         }).then((result) => {
           updates.listeners.clear();
+          if (Date.now() >= entry.expiresAt || Date.now() < entry.createdAt) {
+            if (entries.get(key) === entry) entries.delete(key);
+            throw new Error("Reply suggestions expired; please generate again.");
+          }
           if (entries.get(key) === entry) {
             if (result.fallback || result.source === "mock") entries.delete(key);
             else entry.result = result;

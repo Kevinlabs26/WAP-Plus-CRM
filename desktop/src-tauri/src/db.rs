@@ -930,6 +930,34 @@ pub fn count_messages_for_chat(conn: &Connection, chat_id: &str) -> Result<i64, 
     .map_err(|e| e.to_string())
 }
 
+/// Only return IDs, without loading message bodies or media across IPC.
+pub fn chats_with_inbound(conn: &Connection, chat_ids: &[String]) -> Result<Vec<String>, String> {
+    if chat_ids.len() > 50_000 || chat_ids.iter().any(|id| id.is_empty() || id.len() > 1000)
+        || chat_ids.iter().map(String::len).sum::<usize>() > 8 * 1024 * 1024 {
+        return Err("Invalid history query size".into());
+    }
+    let mut stmt = conn.prepare(r#"
+        SELECT EXISTS (
+            SELECT 1 FROM messages m
+            WHERE m.chat_id = c.id AND json_extract(m.json, '$.direction') = 'in'
+              AND COALESCE(json_extract(m.json, '$.mediaType'), '') != 'system'
+              AND COALESCE(json_extract(m.json, '$.systemKind'), '') = ''
+              AND (COALESCE(NULLIF(json_extract(m.json, '$.accountId'), ''), NULLIF(json_extract(m.json, '$.deviceId'), ''), '') = ''
+                   OR COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''), NULLIF(json_extract(c.json, '$.phoneId'), ''), '') = ''
+                   OR COALESCE(NULLIF(json_extract(m.json, '$.accountId'), ''), NULLIF(json_extract(m.json, '$.deviceId'), ''), '') =
+                      COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''), NULLIF(json_extract(c.json, '$.phoneId'), ''), ''))
+        ) FROM chats c WHERE c.id = ?1
+    "#).map_err(|e| e.to_string())?;
+    let mut replied = Vec::new();
+    let mut seen = HashSet::new();
+    for id in chat_ids {
+        if seen.insert(id) && stmt.query_row(params![id], |row| row.get::<_, bool>(0)).map_err(|e| e.to_string())? {
+            replied.push(id.clone());
+        }
+    }
+    Ok(replied)
+}
+
 /// 全局消息搜索（磁盘冷历史 + 已落盘近期）。pattern 为小写子串。
 pub fn search_messages(
     conn: &Connection,
@@ -1429,6 +1457,42 @@ pub fn clear_all(conn: &Connection) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inbound_lookup_excludes_outgoing_system_events_and_foreign_accounts() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let ids = ["empty", "outgoing", "text", "voice", "image", "system", "system_kind", "wrong_account", "legacy", "quote'); DROP TABLE messages;--"];
+        let messages = vec![
+            serde_json::json!({"id":"out", "chatId":"outgoing", "accountId":"a", "direction":"out", "deliveryStatus":"read", "quoted":{"fromMe":false}}),
+            serde_json::json!({"id":"text", "chatId":"text", "accountId":"a", "direction":"in", "body":"reply"}),
+            serde_json::json!({"id":"voice", "chatId":"voice", "deviceId":"a", "direction":"in", "mediaType":"audio"}),
+            serde_json::json!({"id":"image", "chatId":"image", "accountId":"a", "direction":"in", "mediaType":"image"}),
+            serde_json::json!({"id":"system", "chatId":"system", "accountId":"a", "direction":"in", "mediaType":"system"}),
+            serde_json::json!({"id":"system-kind", "chatId":"system_kind", "accountId":"a", "direction":"in", "systemKind":"call"}),
+            serde_json::json!({"id":"wrong", "chatId":"wrong_account", "accountId":"", "deviceId":"b", "direction":"in"}),
+            serde_json::json!({"id":"legacy", "chatId":"legacy", "direction":"in"}),
+            serde_json::json!({"id":"quote", "chatId":ids[9], "direction":"in"}),
+        ];
+        save_snapshot(&conn, &AppSnapshot { chats: ids.iter().map(|id| serde_json::json!({"id":id, "phoneId":"a"})).collect(), messages, ..Default::default() }).unwrap();
+        let requested: Vec<String> = ids.iter().map(|id| id.to_string()).chain(std::iter::once("text".into())).collect();
+        assert_eq!(chats_with_inbound(&conn, &requested).unwrap(), ["text", "voice", "image", "legacy", ids[9]]);
+        assert!(chats_with_inbound(&conn, &["missing".into()]).is_err());
+        assert!(chats_with_inbound(&conn, &["x".repeat(1001)]).is_err());
+        assert!(chats_with_inbound(&conn, &vec!["empty".into(); 50_001]).is_err());
+        assert_eq!(count_messages_for_chat(&conn, "text").unwrap(), 1);
+    }
+
+    #[test]
+    fn inbound_lookup_checks_replies_older_than_the_boot_message_window() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mut messages = vec![serde_json::json!({"id":"old-reply", "chatId":"cold", "direction":"in", "accountId":"a", "sentAt":"2000-01-01T00:00:00Z"})];
+        messages.extend((0..2002).map(|i| serde_json::json!({"id":format!("out-{i}"), "chatId":"cold", "direction":"out", "accountId":"a", "deliveryStatus":"sent", "sentAt":"2026-11-02T00:00:00Z"})));
+        save_snapshot(&conn, &AppSnapshot { chats: vec![serde_json::json!({"id":"cold", "accountId":"a"})], messages, ..Default::default() }).unwrap();
+        assert!(load_messages_boot(&conn).unwrap().iter().all(|message| message["id"] != "old-reply"));
+        assert_eq!(chats_with_inbound(&conn, &["cold".into()]).unwrap(), ["cold"]);
+    }
 
     #[test]
     fn legacy_invalid_utf8_does_not_block_backup_or_message_reads() {

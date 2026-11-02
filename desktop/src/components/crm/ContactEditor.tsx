@@ -8,6 +8,7 @@ import { Button, Input, Textarea } from "@/components/ui/primitives";
 import { ActivityTimeline } from "@/components/crm/ActivityTimeline";
 import { ContactTagsNotesEditor } from "@/components/crm/ContactTagsNotesEditor";
 import { SPEECH_LANG_OPTIONS } from "@/components/chat/speakMessage";
+import { TimeZoneSelect } from "@/components/ui/TimeZoneSelect";
 import { ChatFollowUpDialog } from "@/components/chat/ChatFollowUpDialog";
 import { getNextOpenFollowUp } from "@/lib/todayBoard";
 import { useAppStore } from "@/store/appStore";
@@ -180,6 +181,9 @@ export function ContactEditor({
         value={contact.country ?? ""}
         onChange={(value) => updateContact(contact.id, { country: value })}
       />
+      {!contact.isGroup && <TimeZoneSelect value={contact.timeZone}
+        onChange={timeZone => updateContact(contact.id, { timeZone: timeZone || undefined })}
+        label={t("contact.timeZone")} automatic={t("contactTime.automatic")} />}
       <label className="block text-2xs text-zinc-500">
         {t("contact.speechLanguage")}
         <select

@@ -4,7 +4,7 @@ import type { ChatPreview, Contact, Message } from "@/types/crm";
 import { useAppStore } from "@/store/appStore";
 import { resolveSendTarget } from "@/lib/utils";
 import { generateSuggestions, getSuggestionContextKey, hasRealAiKey } from "@/lib/aiSuggest";
-import { isManualSuggestionContext } from "@/lib/aiSuggestionCache";
+import { isManualSuggestionContext, SUGGESTION_MAX_AGE_MS } from "@/lib/aiSuggestionCache";
 import { currentAutoReplyContext, hashAiReplyContext } from "@/lib/aiReplyContext";
 import { sendTextMessage } from "@/components/chat/sendTextMessage";
 import {
@@ -327,12 +327,17 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
   const contextKey = getSuggestionContextKey(contact, conversation, settings, accountId, { auto: true });
   if (isManualSuggestionContext(getSuggestionContextKey(contact, conversation, settings, accountId))) return;
   runtime("generating");
+  const generationStartedAt = Date.now();
   const result = await generateSuggestions(contact, conversation, settings, {
     auto: true,
     accountId,
     signal,
   });
   if (signal.aborted) return;
+  if (Date.now() < generationStartedAt || Date.now() - generationStartedAt >= SUGGESTION_MAX_AGE_MS) {
+    runtime("human", "生成的回复已过期，请重新生成");
+    return;
+  }
   // API 失败回退的本地模板绝不能自动发给真实客户
   if (result.fallback || result.source === "mock") {
     logAutoDecision(contact.id, "自动回复：未发送", result.error || "AI 不可用");
@@ -387,6 +392,7 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
     phoneId: freshChat.phoneId,
     inboundId: m.id,
     contextKey,
+    validUntil: generationStartedAt + SUGGESTION_MAX_AGE_MS,
   });
   if (!queued) runtime("human", "收件人、会话或发送状态需要检查");
   logAutoDecision(
@@ -399,6 +405,7 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
 /** 自动回复发送：入队 + 走标准发送管线（保留限速/过热拦截），无成功打扰 */
 export async function sendAutoReplyText(opts: {
   text: string;
+  validUntil?: number;
   inboundId?: string;
   contextKey?: string;
   contact: Contact;
@@ -422,6 +429,7 @@ export async function sendAutoReplyText(opts: {
   const contextKey = currentAutoReplyContext(state, pendingContext);
   if (!contextKey || (opts.contextKey && opts.contextKey !== contextKey)) return false;
   const aiReplyContextHash = await hashAiReplyContext(contextKey);
+  if (opts.validUntil && Date.now() >= opts.validUntil) return false;
   state = useAppStore.getState();
   if (resolveAutoReplyScope(state.settings, opts.chat.id).mode !== "auto" || currentAutoReplyContext(state, pendingContext) !== contextKey) return false;
 
@@ -448,6 +456,7 @@ export async function sendAutoReplyText(opts: {
   await sendTextMessage({
     msgId,
     canSend: () => {
+      if (opts.validUntil && Date.now() >= opts.validUntil) return false;
       const latest = useAppStore.getState();
       const message = latest.messages.find((item) => item.id === msgId);
       if (!message || message.deliveryStatus !== "pending") return false;

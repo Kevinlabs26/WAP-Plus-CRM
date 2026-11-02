@@ -831,6 +831,13 @@ pub fn db_load_full_history(
     db::load_full_history(&conn)
 }
 
+/// 只检查指定会话的完整来信历史，不传输消息正文。
+#[tauri::command(async)]
+pub fn db_chats_with_inbound(state: State<'_, DbState>, chat_ids: Vec<String>) -> Result<Vec<String>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::chats_with_inbound(&conn, &chat_ids)
+}
+
 /// 冷历史分页：按 chat 倒序取消息（不含内存已有的更新部分时由前端 before* 游标控制）
 #[tauri::command(async)]
 pub fn db_load_messages_page(

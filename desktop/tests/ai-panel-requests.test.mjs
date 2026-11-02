@@ -9,6 +9,7 @@ import { resolveAiReplyProfile } from "../src/lib/aiPromptScope.ts";
 import { createSuggestionCache, isManualSuggestionContext, markManualSuggestionContext } from "../src/lib/aiSuggestionCache.ts";
 import { resolveWaSendAccountId } from "../src/lib/accountConnection.ts";
 import { formatAccountDisplay } from "../src/lib/accountLabels.ts";
+import { resolveMyLang } from "../src/lib/translateDraft.ts";
 
 const entry = fileURLToPath(new URL("../src/components/crm/CrmAiPanel.tsx", import.meta.url));
 const source = await readFile(entry, "utf8");
@@ -65,7 +66,7 @@ function harness() {
   globalThis.panelHooks = hooks;
   globalThis.panelBindings = {
     useAppStore: store, hasRealAiKey: () => true,
-    resolveWaSendAccountId, formatAccountDisplay, QuickReplyBrowser: "quick-browser",
+    resolveWaSendAccountId, formatAccountDisplay, resolveMyLang, QuickReplyBrowser: "quick-browser", AiSuggestionCard: "suggestion-card", AiSuggestionReadingControl: "reading-control",
     resolveAutoReplyScope, resolveAiReplyProfile, createSuggestionCache, isManualSuggestionContext,
     getSuggestionContextKey: (...args) => { contextReads++; return getSuggestionContextKey(...args); },
     generateSuggestions: (...args) => new Promise(resolve => requests.push({ args, resolve })),
@@ -98,6 +99,47 @@ function harness() {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const reply = text => ({ source: "custom", suggestions: [{ id: text, text }] });
+
+test('expired visible suggestions cannot be inserted, expire without automatic API loops and allow explicit regeneration',async t=>{
+  let now=Date.now();t.mock.method(Date,'now',()=>now);
+  const h=harness(),inserted=[];h.state.applyAiSuggestion=(...args)=>inserted.push(args);await h.mount();h.fireTimers();
+  h.requests[0].resolve(reply('Good evening.'));await settle();
+  const nodes=tree=>Array.isArray(tree)?tree.flatMap(nodes):tree?.props?[tree,...nodes(tree.props.children)]:[];
+  const card=nodes(h.render()).find(n=>n.type==='suggestion-card');assert.ok(card);
+  now+=5*60_000;card.props.onInsert('replace');assert.deepEqual(inserted,[]);assert.deepEqual(h.state.aiSuggestions,[]);
+  h.render();h.fireTimers();assert.equal(h.requests.length,1,'expiration does not trigger paid background regeneration');
+  h.refresh();assert.equal(h.requests.length,2);h.requests[1].resolve(reply('Fresh reply.'));await settle();h.render();
+  now+=5*60_000;h.fireTimers();assert.deepEqual(h.state.aiSuggestions,[],'visible results expire without a click');
+  h.unmount();
+});
+
+test("a single reading control updates all suggestions, remembers the target and also controls newly generated cards", async () => {
+  const h=harness();h.state.settings.myLang='zh';await h.mount();h.fireTimers();
+  h.requests[0].resolve({source:'custom',suggestions:[{id:'1',text:'Bonjour !'},{id:'2',text:'Bonsoir !'},{id:'3',text:'Salut !'}]});await settle();
+  const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
+  const control=()=>nodes(h.render()).filter(n=>n.type==='reading-control');
+  const cards=()=>nodes(h.render()).filter(n=>n.type==='suggestion-card');
+  assert.equal(control().length,1);assert.equal(control()[0].props.targetLanguage,'zh');assert.deepEqual(cards().map(n=>n.props.language),['','','']);
+  control()[0].props.onChange('zh');assert.deepEqual(cards().map(n=>n.props.language),['zh','zh','zh']);
+  control()[0].props.onChange('');assert.equal(control()[0].props.targetLanguage,'zh');assert.deepEqual(cards().map(n=>n.props.language),['','','']);
+  control()[0].props.onChange('de');assert.equal(control()[0].props.targetLanguage,'de');assert.deepEqual(cards().map(n=>n.props.language),['de','de','de']);
+  h.state.aiSuggestions=[{id:'new',text:'Nouvelle réponse.'}];assert.equal(cards()[0].props.language,'de');
+  assert.deepEqual(h.state.settings.myLang,'zh','reading controls do not change translation or sending settings');h.unmount();
+});
+
+test("suggestion reading inserts only the generated original and rejects stale chat, account or refreshed cards", async () => {
+  const h=harness(),inserted=[];h.state.applyAiSuggestion=(...args)=>inserted.push(args);
+  await h.mount();h.fireTimers();h.requests[0].resolve(reply('Bonjour !'));await settle();
+  const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
+  const card=nodes(h.render()).find(n=>n.type==='suggestion-card').props;
+  assert.equal(card.text,'Bonjour !');assert.strictEqual(card.settings,h.state.settings);
+  card.onInsert('replace');card.onInsert('append');assert.deepEqual(inserted,[['Bonjour !','replace'],['Bonjour !','append']]);
+  h.state.selectedChatId='b';card.onInsert('replace');assert.equal(inserted.length,2);
+  h.state.selectedChatId='a';h.state.selectedThreadAccount={chatId:'a',accountId:'b'};card.onInsert('append');assert.equal(inserted.length,2);
+  h.state.selectedThreadAccount=null;h.state.settings={...h.state.settings,aiTimeZone:'Asia/Tokyo'};card.onInsert('replace');assert.equal(inserted.length,2,'timezone changes reject old callbacks before React rerenders');
+  h.state.selectedThreadAccount=null;h.state.aiSuggestions=[];card.onInsert('replace');assert.equal(inserted.length,2);
+  h.unmount();
+});
 
 test("main quick replies show the selected thread account and reject insertion after changing chats", async () => {
  const h=harness();h.state.crmPanelTab='quick-replies';h.state.settings.waAccounts=[{id:'a',label:'1',userName:'Alice',status:'connected'},{id:'b',label:'2',userName:'Bob',status:'connected'}];

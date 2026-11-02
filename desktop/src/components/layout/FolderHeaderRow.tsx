@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Check,
+  Copy,
   Clock3,
   ChevronDown,
   ChevronRight,
@@ -46,8 +47,10 @@ type FolderHeaderRowProps = {
   onSelectGroups: () => void;
   onRename: () => void;
   onClear: () => void;
+  onCopyUnreplied?: () => void;
   onDelete: () => void;
 };
+type SubmenuKind = "reply" | "import" | "organize";
 
 export function FolderHeaderRow({
   folderId,
@@ -74,41 +77,44 @@ export function FolderHeaderRow({
   onSelectGroups,
   onRename,
   onClear,
+  onCopyUnreplied,
   onDelete,
 }: FolderHeaderRowProps) {
   const { t } = useI18n();
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const [replyMenu, setReplyMenu] = useState<{ left: number; top: number; focus: boolean } | null>(null);
-  const [expandedGroup, setExpandedGroup] = useState<"import" | "organize" | null>(null);
+  const [submenu, setSubmenu] = useState<{ kind: SubmenuKind; left: number; top: number; focus: boolean } | null>(null);
   const replyTrigger = useRef<HTMLButtonElement>(null);
-  const replyPopup = useRef<HTMLDivElement>(null);
+  const importTrigger = useRef<HTMLButtonElement>(null);
+  const organizeTrigger = useRef<HTMLButtonElement>(null);
+  const submenuTriggers = { reply: replyTrigger, import: importTrigger, organize: organizeTrigger };
+  const submenuPopup = useRef<HTMLDivElement>(null);
   const actionsTrigger = useRef<HTMLButtonElement>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelClose = () => {
     if (closeTimer.current) clearTimeout(closeTimer.current);
     closeTimer.current = null;
   };
-  const close = () => { cancelClose(); setReplyMenu(null); setExpandedGroup(null); setMenu(null); };
-  const openReplyMenu = (anchor: HTMLButtonElement, focus = false) => {
+  const close = () => { cancelClose(); setSubmenu(null); setMenu(null); };
+  const openSubmenu = (kind: SubmenuKind, anchor: HTMLButtonElement, focus = false) => {
     cancelClose();
-    setExpandedGroup(null);
     const rect = anchor.getBoundingClientRect();
-    setReplyMenu({
+    setSubmenu({
+      kind,
       left: Math.max(8, Math.min(rect.right + 2 + 224 <= window.innerWidth - 8 ? rect.right + 2 : rect.left - 226, window.innerWidth - 232)),
-      top: Math.max(8, Math.min(rect.top, window.innerHeight - 184)),
+      top: Math.max(8, Math.min(rect.top, window.innerHeight - (kind === "reply" ? 184 : kind === "organize" && onCopyUnreplied ? 144 : 112))),
       focus,
     });
   };
   const scheduleClose = () => {
     cancelClose();
-    closeTimer.current = setTimeout(() => setReplyMenu(null), 180);
+    closeTimer.current = setTimeout(() => setSubmenu(null), 180);
   };
 
   useEffect(() => () => cancelClose(), []);
   useEffect(() => { if (menu) replyTrigger.current?.focus(); }, [menu]);
   useEffect(() => {
-    if (replyMenu?.focus) replyPopup.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
-  }, [replyMenu]);
+    if (submenu?.focus) submenuPopup.current?.querySelector<HTMLButtonElement>(submenu.kind === "reply" ? '[aria-checked="true"]' : '[role="menuitem"]')?.focus();
+  }, [submenu]);
 
   useEffect(() => {
     if (!menu) return;
@@ -120,7 +126,7 @@ export function FolderHeaderRow({
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        if (replyMenu) { setReplyMenu(null); replyTrigger.current?.focus(); }
+        if (submenu) { setSubmenu(null); submenuTriggers[submenu.kind].current?.focus(); }
         else { close(); actionsTrigger.current?.focus(); }
       }
     };
@@ -131,18 +137,19 @@ export function FolderHeaderRow({
     window.addEventListener("keydown", onKey);
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
     return () => {
       window.removeEventListener("pointerdown", onPointer, true);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
     };
-  }, [menu, replyMenu]);
+  }, [menu, submenu]);
 
   const openMenu = (x: number, y: number) => {
     cancelClose();
-    setReplyMenu(null);
-    setExpandedGroup(null);
+    setSubmenu(null);
     setMenu({
       x: Math.max(8, Math.min(x, window.innerWidth - 248)),
       y: Math.max(8, Math.min(y, window.innerHeight - 312)),
@@ -249,26 +256,27 @@ export function FolderHeaderRow({
           onMouseLeave={scheduleClose}
           onMouseOver={event => {
             const item = (event.target as HTMLElement).closest('[role="menuitem"]');
-            if (item && item !== replyTrigger.current) setReplyMenu(null);
+            if (item && !item.hasAttribute("aria-haspopup")) setSubmenu(null);
           }}
-          onScroll={() => setReplyMenu(null)}
+          onScroll={() => setSubmenu(null)}
           onKeyDown={event => {
             if (event.key === "Tab") { close(); actionsTrigger.current?.focus(); return; }
             if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
             event.preventDefault();
+            setSubmenu(null);
             const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
             const index = items.indexOf(document.activeElement as HTMLButtonElement);
             items[event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
           }}
         >
           {onAutoReplyModeChange && <button ref={replyTrigger} type="button" role="menuitem"
-            aria-haspopup="menu" aria-expanded={!!replyMenu} aria-controls={replyMenu ? `folder-reply-${folderId}` : undefined}
+            aria-haspopup="menu" aria-expanded={submenu?.kind === "reply"} aria-controls={submenu?.kind === "reply" ? `folder-reply-${folderId}` : undefined}
             className={`${itemClass} border-b border-zinc-800`}
-            onMouseEnter={event => openReplyMenu(event.currentTarget)}
-            onClick={event => openReplyMenu(event.currentTarget, true)}
+            onMouseEnter={event => openSubmenu("reply", event.currentTarget)}
+            onClick={event => openSubmenu("reply", event.currentTarget, true)}
             onKeyDown={event => {
               if (["ArrowRight", "Enter", " "].includes(event.key)) {
-                event.preventDefault(); event.stopPropagation(); openReplyMenu(event.currentTarget, true);
+                event.preventDefault(); event.stopPropagation(); openSubmenu("reply", event.currentTarget, true);
               }
             }}>
             <span className="flex-1">{t("autoReplyScope.folderMode")}</span>
@@ -293,8 +301,55 @@ export function FolderHeaderRow({
             <LayoutGrid className="h-3.5 w-3.5 text-zinc-500" />
             {t("folder.openMultiWindow")}
           </button>
-          <button type="button" role="menuitem" className={itemClass} aria-expanded={expandedGroup === "import"} aria-controls={expandedGroup === "import" ? `folder-import-${folderId}` : undefined} onClick={() => { setReplyMenu(null); setExpandedGroup(expandedGroup === "import" ? null : "import"); }}><span className="flex-1">{t("folder.importMenu")}</span><ChevronRight className={cn("h-3.5 w-3.5", expandedGroup === "import" && "rotate-90")} /></button>
-          {expandedGroup === "import" && <div id={`folder-import-${folderId}`} role="group" aria-label={t("folder.importMenu")} className="ml-3 border-l border-zinc-700">
+          {(["import", "organize"] as const).map(kind => <button key={kind} ref={submenuTriggers[kind]} type="button" role="menuitem" className={itemClass}
+            aria-haspopup="menu" aria-expanded={submenu?.kind === kind} aria-controls={submenu?.kind === kind ? `folder-${kind}-${folderId}` : undefined}
+            onMouseEnter={event => openSubmenu(kind, event.currentTarget)}
+            onClick={event => openSubmenu(kind, event.currentTarget, true)}
+            onKeyDown={event => {
+              if (["ArrowRight", "Enter", " "].includes(event.key)) {
+                event.preventDefault(); event.stopPropagation(); openSubmenu(kind, event.currentTarget, true);
+              }
+            }}>
+            <span className="flex-1">{t(kind === "import" ? "folder.importMenu" : "folder.organizeMenu")}</span><ChevronRight className="h-3.5 w-3.5" />
+          </button>)}
+
+          <div className="mt-1 border-t border-zinc-800 pt-1">
+          <button
+            type="button"
+            role="menuitem"
+            className={`${itemClass} text-rose-300 hover:bg-rose-500/10`}
+            onClick={() => run(onDelete)}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {t("folder.delete")}
+          </button>
+          </div>
+        </div>, document.body
+      )}
+      {menu && submenu && createPortal(
+        <div ref={submenuPopup} id={`folder-${submenu.kind}-${folderId}`} data-folder-action-menu={folderId} role="menu"
+          aria-label={submenu.kind === "reply" ? t("autoReplyScope.folderRuleFor", { name }) : t(submenu.kind === "import" ? "folder.importMenu" : "folder.organizeMenu")}
+          className="fixed z-[10000] w-56 max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/50"
+          style={{ left: submenu.left, top: submenu.top }} onMouseEnter={cancelClose} onMouseLeave={scheduleClose}
+          onContextMenu={event => event.preventDefault()}
+          onKeyDown={event => {
+            if (event.key === "Tab") { close(); actionsTrigger.current?.focus(); return; }
+            if (["ArrowLeft", "Escape"].includes(event.key)) {
+              event.preventDefault(); event.stopPropagation(); setSubmenu(null); submenuTriggers[submenu.kind].current?.focus(); return;
+            }
+            if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+            event.preventDefault();
+            const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>(submenu.kind === "reply" ? '[role="menuitemradio"]' : '[role="menuitem"]')];
+            const index = items.indexOf(document.activeElement as HTMLButtonElement);
+            items[event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
+          }}>
+          {submenu.kind === "reply" && (["inherit", "auto", "manual"] as const).map(mode => <button key={mode} type="button" role="menuitemradio"
+            aria-checked={(autoReplyMode || "inherit") === mode} className={itemClass} onClick={() => changeReplyMode(mode)}>
+            <Check className={cn("h-3.5 w-3.5 shrink-0 text-brand", (autoReplyMode || "inherit") !== mode && "invisible")} />
+            {t(mode === "inherit" ? "autoReplyScope.inheritDefault" : mode === "auto" ? "autoReplyScope.auto" : "autoReplyScope.manual")}
+          </button>)}
+          {submenu.kind === "reply" && <p className="border-t border-zinc-800 px-3 py-2 text-[11px] leading-4 text-zinc-500">{t("autoReplyScope.folderHint")}</p>}
+          {submenu.kind === "import" && <div>
           <button
             type="button"
             role="menuitem"
@@ -323,8 +378,10 @@ export function FolderHeaderRow({
             {t("folderGroups.selectAction")}
           </button>
           </div>}
-          <button type="button" role="menuitem" className={itemClass} aria-expanded={expandedGroup === "organize"} aria-controls={expandedGroup === "organize" ? `folder-organize-${folderId}` : undefined} onClick={() => { setReplyMenu(null); setExpandedGroup(expandedGroup === "organize" ? null : "organize"); }}><span className="flex-1">{t("folder.organizeMenu")}</span><ChevronRight className={cn("h-3.5 w-3.5", expandedGroup === "organize" && "rotate-90")} /></button>
-          {expandedGroup === "organize" && <div id={`folder-organize-${folderId}`} role="group" aria-label={t("folder.organizeMenu")} className="ml-3 border-l border-zinc-700">
+          {submenu.kind === "organize" && <div>
+          {onCopyUnreplied && <button type="button" role="menuitem" className={itemClass} onClick={() => run(onCopyUnreplied)}>
+            <Copy className="h-3.5 w-3.5 text-zinc-500" />{t("folder.copyUnreplied")}
+          </button>}
           <button
             type="button"
             role="menuitem"
@@ -353,42 +410,6 @@ export function FolderHeaderRow({
             {t("folder.clearMembers")}
           </button>
           </div>}
-          <div className="mt-1 border-t border-zinc-800 pt-1">
-          <button
-            type="button"
-            role="menuitem"
-            className={`${itemClass} text-rose-300 hover:bg-rose-500/10`}
-            onClick={() => run(onDelete)}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            {t("folder.delete")}
-          </button>
-          </div>
-        </div>, document.body
-      )}
-      {menu && replyMenu && onAutoReplyModeChange && createPortal(
-        <div ref={replyPopup} id={`folder-reply-${folderId}`} data-folder-action-menu={folderId} role="menu"
-          aria-label={t("autoReplyScope.folderRuleFor", { name })}
-          className="fixed z-[10000] w-56 max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/50"
-          style={{ left: replyMenu.left, top: replyMenu.top }} onMouseEnter={cancelClose} onMouseLeave={scheduleClose}
-          onContextMenu={event => event.preventDefault()}
-          onKeyDown={event => {
-            if (event.key === "Tab") { close(); actionsTrigger.current?.focus(); return; }
-            if (["ArrowLeft", "Escape"].includes(event.key)) {
-              event.preventDefault(); event.stopPropagation(); setReplyMenu(null); replyTrigger.current?.focus(); return;
-            }
-            if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-            event.preventDefault();
-            const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
-            const index = items.indexOf(document.activeElement as HTMLButtonElement);
-            items[event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
-          }}>
-          {(["inherit", "auto", "manual"] as const).map(mode => <button key={mode} type="button" role="menuitemradio"
-            aria-checked={(autoReplyMode || "inherit") === mode} className={itemClass} onClick={() => changeReplyMode(mode)}>
-            <Check className={cn("h-3.5 w-3.5 shrink-0 text-brand", (autoReplyMode || "inherit") !== mode && "invisible")} />
-            {t(mode === "inherit" ? "autoReplyScope.inheritDefault" : mode === "auto" ? "autoReplyScope.auto" : "autoReplyScope.manual")}
-          </button>)}
-          <p className="border-t border-zinc-800 px-3 py-2 text-[11px] leading-4 text-zinc-500">{t("autoReplyScope.folderHint")}</p>
         </div>, document.body
       )}
     </div>

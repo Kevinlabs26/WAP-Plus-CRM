@@ -18,6 +18,7 @@ const mocks = {
 const built = await build({
   stdin: { contents: `export { createIngestSlice } from './src/store/ingestSlice.ts';
     export { createMessageActionsSlice } from './src/store/messageActionsSlice.ts';
+    export { mergeImportedContactChatDuplicates, protectedGroupChatIds } from './src/store/chatDuplicateMerge.ts';
     export { useSidebarData } from './src/components/layout/useSidebarData.ts';
     export { defaultSettings } from './src/store/settingsDefaults.ts';
     export { buildSidebarItems } from './src/components/layout/buildSidebarItems.ts';`,
@@ -29,9 +30,85 @@ const built = await build({
     b.onLoad({ filter: /.*/, namespace: "mock" }, args => ({ contents: mocks[args.path] }));
   } }],
 });
-const { createIngestSlice, createMessageActionsSlice, useSidebarData, defaultSettings, buildSidebarItems } = await import(
+const { createIngestSlice, createMessageActionsSlice, mergeImportedContactChatDuplicates, protectedGroupChatIds, useSidebarData, defaultSettings, buildSidebarItems } = await import(
   "data:text/javascript;base64," + Buffer.from(built.outputFiles[0].text).toString("base64")
 );
+
+function groupStore(contacts=[],chats=[],messages=[]) {
+  let state={hydrated:true,contacts,chats,messages,phones:[],followUps:[],activities:[],peerPresenceByKey:{},baileysUi:{},
+    selectedChatId:null,selectedContactId:null,draftReplyByChatId:{},settings:{...defaultSettings,waAccounts:[{id:'a'},{id:'b'}]},
+    recomputeStats(){},pushToast(){}};
+  const ctx={get:()=>state,set:patch=>{state={...state,...(typeof patch==='function'?patch(state):patch)};}};
+  Object.assign(state,createIngestSlice(ctx),createMessageActionsSlice(ctx));return {get state(){return state;}};
+}
+const groupContact=(id,owner,jid='12345@g.us')=>({id,name:'Same group name',accountId:owner,boundPhoneId:owner,channelAddress:jid,isGroup:true,phone:'',tags:[],stage:'new'});
+const groupChat=(contact,extra={})=>({id:`bridge-chat-${contact.id}`,contactId:contact.id,contactName:contact.name,accountId:contact.accountId,phoneId:contact.accountId,isGroup:true,unread:0,lastMessage:'',...extra});
+
+test('invited group uses the incoming-sync chat ID so the filed thread receives messages',async()=>{
+  const originalWindow=globalThis.window;globalThis.window={setTimeout};
+  try{
+    const h=groupStore();await h.state.ingestBridgeEvents([{type:'contacts.sync',accountId:'a',payload:{items:[{jid:'12345@g.us',isGroup:true,displayName:'Invited group'}]}}]);
+    const contact=h.state.contacts[0],chatId=h.state.ensureChatForContact(contact.id,'a');
+    assert.equal(chatId,`bridge-chat-${contact.id}`);assert.equal(h.state.chats[0].isGroup,true);
+    h.state.settings={...h.state.settings,chatFolders:[{id:'folder',name:'Group folder',chatIds:[chatId]}]};
+    await h.state.ingestBridgeEvents([{type:'messages.sync',accountId:'a',payload:{source:'snapshot',live:false,items:[{jid:'12345@g.us',isGroup:true,id:'incoming',body:'hello',direction:'in',sentAt:'2026-11-02T09:00:00Z'}]}}]);
+    assert.equal(h.state.chats.length,1);assert.equal(h.state.messages[0].chatId,chatId);assert.equal(h.state.chats[0].lastMessage,'hello');assert.deepEqual(h.state.settings.chatFolders[0].chatIds,[chatId]);
+  }finally{globalThis.window=originalWindow;}
+});
+
+test('group account switching uses the matching group contact and never creates a foreign-account shell',()=>{
+  const a=groupContact('group-a','a'),b=groupContact('group-b','b');
+  const real=groupChat(b),ghost=groupChat(b,{id:`bridge-chat-${b.id}-b`});
+  const h=groupStore([a,b],[ghost,real]);
+  assert.equal(h.state.ensureChatForContact(a.id,'b'),real.id);assert.equal(h.state.chats.length,2);
+  assert.equal(h.state.ensureChatForContact(a.id,'not-joined'),null);assert.equal(h.state.chats.length,2);
+  const legacy=groupStore([a],[groupChat(a,{accountId:undefined})]);
+  assert.equal(legacy.state.ensureChatForContact(a.id,'a'),legacy.state.chats[0].id);
+});
+
+test('snapshot repairs empty invite shells by JID and sending account, including folder and clone references',async()=>{
+  const originalWindow=globalThis.window;globalThis.window={setTimeout};
+  try{
+    const a=groupContact('group-a','a'),b=groupContact('group-b','b'),other=groupContact('other-group','a','67890@g.us');
+    const realA=groupChat(a,{lastMessage:'History A',hasMessageHistory:true,updatedAt:'2026-11-01'}),realB=groupChat(b,{lastMessage:'History B',hasMessageHistory:true,updatedAt:'2026-11-01'});
+    const ghostB=groupChat(b,{id:'bridge-chat-group-b-b',hasMessageHistory:false,updatedAt:'2026-11-02'});
+    const wrongAccount=groupChat(b,{id:'bridge-chat-group-b-a',accountId:'a',phoneId:'a',hasMessageHistory:false});
+    const messages=[{id:'a-msg',chatId:realA.id,accountId:'a',body:'History A',direction:'in',sentAt:'2026-11-01'},{id:'b-msg',chatId:realB.id,accountId:'b',body:'History B',direction:'in',sentAt:'2026-11-01'}];
+    const h=groupStore([a,b,other],[ghostB,wrongAccount,realA,realB,groupChat(other)],messages);
+    h.state.selectedChatId=ghostB.id;h.state.selectedContactId=b.id;h.state.selectedThreadAccount={chatId:ghostB.id,accountId:'b'};
+    h.state.settings={...h.state.settings,chatFolders:[{id:'f',chatIds:[ghostB.id,wrongAccount.id]}],chatFolderClones:[{id:'clone',folderId:'f',sourceChatId:ghostB.id}]};
+    await h.state.ingestBridgeEvents([{type:'messages.sync',accountId:'a',payload:{source:'snapshot',live:false,items:[]}}]);
+    assert.equal(h.state.chats.length,3);assert.equal(h.state.selectedChatId,realB.id);assert.deepEqual(h.state.selectedThreadAccount,{chatId:realB.id,accountId:'b'});
+    assert.deepEqual(h.state.settings.chatFolders[0].chatIds,[realB.id,realA.id]);assert.equal(h.state.settings.chatFolderClones[0].sourceChatId,realB.id);
+    assert.deepEqual(h.state.messages,messages);assert.equal(h.state.chats.find(c=>c.id===realB.id).updatedAt,realB.updatedAt);
+    assert.ok(h.state.chats.some(c=>c.contactId===other.id),'same names with different group IDs stay separate');
+    h.state.chats=[wrongAccount,...h.state.chats];h.state.selectedChatId=wrongAccount.id;h.state.selectedContactId=b.id;
+    h.state.selectedThreadAccount={chatId:wrongAccount.id,accountId:'a'};
+    await h.state.ingestBridgeEvents([{type:'messages.sync',accountId:'a',payload:{source:'snapshot',live:false,items:[]}}]);
+    assert.equal(h.state.selectedChatId,realA.id);assert.equal(h.state.selectedContactId,a.id);
+    assert.deepEqual(h.state.selectedThreadAccount,{chatId:realA.id,accountId:'a'});assert.deepEqual(h.state.messages,messages);
+  }finally{globalThis.window=originalWindow;}
+});
+
+test('automatic invite repair preserves drafts, automation references and any populated or unverified duplicate',()=>{
+  const contact=groupContact('group','a'),real=groupChat(contact),ghost=groupChat(contact,{id:'bridge-chat-group-a',hasMessageHistory:false});
+  const cases=[
+    {drafts:{[ghost.id]:'unsent draft'}},
+    {settings:{aiAutoReplyModeByChatId:{[ghost.id]:'manual'}}},
+    {settings:{aiAutoReplyManualChatIds:[ghost.id]}},
+    {settings:{leadInbox:{dismissedChatIds:[ghost.id]}}},
+    {settings:{scheduledMessages:[{chatId:ghost.id}]}},
+    {settings:{scheduledPlans:[{items:[{chatId:ghost.id}]}]}},
+    {chat:{hasMessageHistory:true}},
+    {messages:[{id:'local',chatId:ghost.id,body:'keep',accountId:'a'}]},
+  ];
+  for(const scenario of cases){
+    const merged=mergeImportedContactChatDuplicates([real,{...ghost,...scenario.chat}],scenario.messages||[],ghost.id,{contacts:[contact],protectedIds:protectedGroupChatIds({...defaultSettings,...scenario.settings},scenario.drafts)});
+    assert.equal(merged.changed,false);assert.equal(merged.chats.length,2);
+  }
+  const otherOwner=groupChat(contact,{accountId:'b',phoneId:'b'});
+  assert.equal(mergeImportedContactChatDuplicates([otherOwner,ghost],[],null,{contacts:[contact],protectedIds:new Set()}).changed,false);
+});
 
 for (const source of ["contacts", "contacts without LID chat", "live messages", "history with imported chat"]) {
   test(`${source}: resolving 16 LID identities keeps all 36 folder members and clone references`, async () => {

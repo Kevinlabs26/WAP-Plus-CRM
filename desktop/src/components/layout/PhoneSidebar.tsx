@@ -9,7 +9,10 @@ import {
   Virtuoso,
   type ScrollSeekPlaceholderProps,
 } from "react-virtuoso";
-import { useAppStore } from "@/store/appStore";
+import { useAppStore, flushPersist } from "@/store/appStore";
+import { copyNeverRepliedFolderNumbers } from "@/lib/folderUnreplied";
+import { findChatsWithInbound } from "@/lib/storage";
+import { isDataRestoreActive } from "@/store/restoreGuard";
 import { useShallow } from "zustand/react/shallow";
 import { CreateGroupModal } from "@/components/chat/CreateGroupModal";
 import { BatchSaveContactsModal } from "@/components/settings/BatchSaveContactsModal";
@@ -109,6 +112,29 @@ const EMPTY_CLONES: NonNullable<
 
 export function PhoneSidebar() {
   const { t } = useI18n();
+  const copyingFolderNumbers = useRef(false);
+  const copyFolderUnreplied = async (folderId: string) => {
+    if (copyingFolderNumbers.current) return;
+    copyingFolderNumbers.current = true;
+    const state = useAppStore.getState();
+    state.pushToast(t("folder.copyUnrepliedWorking"), "info");
+    try {
+      const count = await copyNeverRepliedFolderNumbers(folderId, {
+        getState: () => {
+          if (isDataRestoreActive()) throw new Error("Restoring");
+          return useAppStore.getState();
+        },
+        flush: () => flushPersist(() => useAppStore.getState()),
+        findInbound: findChatsWithInbound,
+        writeText: text => navigator.clipboard.writeText(text),
+      });
+      state.pushToast(t(count ? "folder.copyUnrepliedDone" : "folder.copyUnrepliedEmpty", { count }), count ? "success" : "info");
+    } catch {
+      state.pushToast(t("folder.copyUnrepliedFailed"), "error");
+    } finally {
+      copyingFolderNumbers.current = false;
+    }
+  };
   const phones = useAppStore((s) => s.phones);
   const contacts = useAppStore((s) => s.contacts);
   const chats = useAppStore((s) => s.chats);
@@ -850,9 +876,9 @@ export function PhoneSidebar() {
   );
 
   const addJoinedGroupToFolder = useCallback(
-    (folderId: string, groupJid: string, group: GroupDetails, accountId: string) => {
+    async (folderId: string, groupJid: string, group: GroupDetails, accountId: string) => {
       const store = useAppStore.getState();
-      store.ingestBridgeEvents([
+      await store.ingestBridgeEvents([
         {
           type: "contacts.sync",
           deviceId: accountId,
@@ -1535,6 +1561,7 @@ export function PhoneSidebar() {
                         });
                       }}
                       onOpenMultiWindow={() => openFolderMultiWindow(folder.id)}
+                      onCopyUnreplied={() => void copyFolderUnreplied(folder.id)}
                       onImport={() => {
                         setFolderImportText("");
                         setFolderDialog({
@@ -1632,7 +1659,10 @@ export function PhoneSidebar() {
           const jid = contact?.channelAddress;
           if (!jid) continue;
           const accountId = chat.accountId || chat.phoneId;
-          existingGroupChatIds[`${accountId}|${jid}`] = chat.id;
+          const key = `${accountId}|${jid}`;
+          if (!existingGroupChatIds[key] || chat.id === `bridge-chat-${chat.contactId}` || chat.id === `chat-${chat.contactId}`) {
+            existingGroupChatIds[key] = chat.id;
+          }
         }
         const initialAccountId =
           scopedAccountId ||

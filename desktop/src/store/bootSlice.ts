@@ -30,7 +30,7 @@ import type {
 } from "./types";
 import { restoreLocalContactChats } from "./localContactChats";
 import { pruneChatFolderRefs } from "./chatFolderCleanup";
-import { mergeImportedContactChatDuplicates } from "./chatDuplicateMerge";
+import { mergeImportedContactChatDuplicates, protectedGroupChatIds } from "./chatDuplicateMerge";
 import { backfillChatPreviewFromMessages } from "./chatReconcile";
 import { clearTrendBuckets } from "./trendBuckets";
 import { buildPersistSlice, flushPersist, primePersistBaseline } from "./persist";
@@ -300,7 +300,9 @@ export function createBootSlice({
       const restoredLocalChats = chats !== chatsBeforeLocalRestore;
       const mergedLocalChats = mergeImportedContactChatDuplicates(
         chats,
-        messages
+        messages,
+        undefined,
+        { contacts, protectedIds: protectedGroupChatIds(settingsNorm, saved?.draftReplyByChatId) }
       );
       chats = mergedLocalChats.chats;
       messages = mergedLocalChats.messages;

@@ -678,6 +678,17 @@ export async function getDbInfo(): Promise<Record<string, unknown> | null> {
   return tryInvoke<Record<string, unknown>>("db_info");
 }
 
+/** Query the complete SQLite history; query failures must not become an empty reply list. */
+export async function findChatsWithInbound(chatIds: string[]): Promise<string[]> {
+  if (!chatIds.length || await resolveStorageEngine() !== "sqlite") return [];
+  await saveQueue;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const ids = await invoke<unknown>("db_chats_with_inbound", { chatIds });
+  const requested = new Set(chatIds);
+  if (!Array.isArray(ids) || !ids.every(id => typeof id === "string" && requested.has(id))) throw new Error("Invalid inbound history result");
+  return ids;
+}
+
 export type FullHistoryResult = {
   messages: unknown[];
   activities: unknown[];

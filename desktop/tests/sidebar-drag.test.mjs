@@ -29,7 +29,7 @@ const built = await build({
     b.onLoad({filter:/.*/,namespace:"mock"}, args=>({contents:mocks[args.path]}));
   }}],
 });
-const {useChatFolderDrag,ChatSidebarRow,FolderHeaderRow,SidebarSpecialItem,buildSidebarItems} = await import("data:text/javascript;base64,"+Buffer.from(built.outputFiles[0].text).toString("base64"));
+const {useChatFolderDrag,ChatSidebarRow,FolderHeaderRow,SidebarSpecialItem,buildSidebarItems} = await import("data:text/javascript;base64,"+Buffer.from(built.outputFiles[0].text+'\n//# sourceURL=sidebar-drag-tests.js').toString("base64"));
 const nodes = tree => Array.isArray(tree) ? tree.flatMap(nodes) : tree?.props ? [tree,...nodes(tree.props.children)] : [];
 
 function fixture() {
@@ -215,7 +215,7 @@ test("nested folder headers offer child creation and keep indentation within the
     assert.equal(tree.props.style.marginLeft,72);
     nodes(tree).find(n=>n.props["aria-label"]==="分组操作").props.onClick({clientX:50,clientY:100,currentTarget:{getBoundingClientRect:()=>({left:50,bottom:100})}});
     ui.render();tree=FolderHeaderRow(props);
-    nodes(tree).find(n=>n.props.role==="menuitem"&&nodes(n).some(child=>child.props.children==="整理文件夹")).props.onClick();
+    nodes(tree).find(n=>n.props.role==="menuitem"&&nodes(n).some(child=>child.props.children==="整理文件夹")).props.onMouseEnter({currentTarget:{getBoundingClientRect:()=>({left:50,right:290,top:100})}});
     ui.render();tree=FolderHeaderRow(props);
     const create=nodes(tree).find(n=>n.props.role==="menuitem"&&n.props.children?.includes?.("新建子分组"));
     assert.ok(create);create.props.onClick();assert.equal(created,1);

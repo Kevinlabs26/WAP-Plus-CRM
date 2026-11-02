@@ -1,4 +1,5 @@
 import type { AutoReplyMode } from "@/lib/autoReplyScope";
+import { validTimeZone } from "@/lib/timeZone";
 import { normalizeScheduledPlans, type ScheduledPlan } from "@/lib/scheduledPlans";
 import {
   normalizeQuickReplyCategory,
@@ -173,6 +174,8 @@ export interface SettingsShape {
   aiSystemPrompt: string;
   /** WhatsApp 账号级身份覆盖；空值或无条目时继承 aiSystemPrompt */
   aiSystemPromptByAccountId: Record<string, string>;
+  /** AI 回复的本人时区；空值跟随电脑时区。 */
+  aiTimeZone: string;
   /**
    * 翻译服务：auto=有 AI Key 用 AI 否则 Google 免费；google=始终 Google 免费；ai=仅 AI（无 Key 演示占位）
    */
@@ -339,6 +342,7 @@ export const defaultSettings: SettingsShape = {
   aiAutoReplyPolicyByAccountId: {},
   aiSystemPrompt: "",
   aiSystemPromptByAccountId: {},
+  aiTimeZone: "",
   translateService: "auto",
   automaticBackupEnabled: true,
   autoConnectBridge: true,
@@ -504,6 +508,7 @@ export function normalizeLoadedSettings(
       : "zh-CN";
   const tl = String(merged.translateTargetLang || "en").toLowerCase();  merged.translateTargetLang = tl || "en";
   const ml = String(merged.myLang || "").trim().toLowerCase();  merged.myLang = ml;
+  merged.aiTimeZone = validTimeZone(merged.aiTimeZone) || "";
   merged.voiceInputEngine =
     merged.voiceInputEngine === "browser" || merged.voiceInputEngine === "ai"
       ? merged.voiceInputEngine

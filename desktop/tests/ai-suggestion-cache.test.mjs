@@ -1,8 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createSuggestionCache, markManualSuggestionContext, isManualSuggestionContext } from '../src/lib/aiSuggestionCache.ts';
+import { createSuggestionCache, markManualSuggestionContext, isManualSuggestionContext, SUGGESTION_MAX_AGE_MS } from '../src/lib/aiSuggestionCache.ts';
 
 const result = { suggestions: [{ text: 'A full reply' }], source: 'custom', fallback: false };
+
+test('clock-aware cache expires five minutes after generation starts and rejects results completed after sleep',async t=>{
+  let now=100000;t.mock.method(Date,'now',()=>now);const cache=createSuggestionCache();let calls=0;
+  const generate=async()=>{calls++;return result;};await cache.request('same',generate);
+  now+=SUGGESTION_MAX_AGE_MS-1;assert.ok(cache.get('same'));await cache.request('same',generate);assert.equal(calls,1);
+  now++;assert.equal(cache.get('same'),undefined);await cache.request('same',generate);assert.equal(calls,2);
+  now-=1;assert.equal(cache.get('same'),undefined,'clock moving backwards also invalidates a snapshot');
+  let finish;const pending=cache.request('sleep',()=>new Promise(resolve=>{finish=resolve;}));now+=SUGGESTION_MAX_AGE_MS;
+  finish(result);await assert.rejects(pending,/expired/);assert.equal(cache.get('sleep'),undefined);
+});
 
 test('suggestions share pending work, reuse completed replies and honor explicit regeneration', async () => {
   const cache = createSuggestionCache(); let resolve, calls = 0;

@@ -14,19 +14,19 @@ const mocks = {
   "@/lib/accountConnection": "export const isWaAccountConnected = () => globalThis.connectedFlow !== false;",
   "@/lib/transcribeVoice": "export const transcribeVoice = (...args) => globalThis.transcribeFlow(...args);",
   "@/components/chat/reloadMediaAction": "export const reloadMedia = (...args) => globalThis.reloadFlow(...args);",
-  "@/lib/aiSuggestionCache": "export const isManualSuggestionContext = (...args) => globalThis.isFlowManualContext(...args);",
+  "@/lib/aiSuggestionCache": "export const SUGGESTION_MAX_AGE_MS=5*60_000;export const isManualSuggestionContext = (...args) => globalThis.isFlowManualContext(...args);",
   "@/components/chat/sendTextMessage": "export const sendTextMessage = async (opts) => { await globalThis.beforeAutoGate?.(); if (opts.canSend && !opts.canSend()) { opts.updateMessageDelivery(opts.msgId, { deliveryStatus: 'failed' }); return; } globalThis.sentFlow.push(opts.text); opts.updateMessageDelivery(opts.msgId, { deliveryStatus: 'sent' }); };",
   "@/lib/desktopNotify": "export const showDesktopNotify = async (opts) => { globalThis.notificationFlow.push(opts); return true; };",
 };
 const built = await build({
-  stdin: { contents: 'export * from "./src/lib/aiAutoReply.ts"; export * from "./src/lib/autoReplyRuntime.ts"; export * from "./src/lib/inboundMessageNotify.ts";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
+  stdin: { contents: 'export * from "./src/lib/aiAutoReply.ts"; export * from "./src/lib/autoReplyRuntime.ts"; export * from "./src/lib/inboundMessageNotify.ts";export {currentAutoReplyContext} from "./src/lib/aiReplyContext.ts";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
   bundle: true, format: "esm", platform: "browser", write: false,
   plugins: [{ name: "flow-mocks", setup(b) {
     b.onResolve({ filter: /.*/ }, args => mocks[args.path] ? { path: args.path, namespace: "mock" } : undefined);
     b.onLoad({ filter: /.*/, namespace: "mock" }, args => ({ contents: mocks[args.path], loader: "js" }));
   } }], alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) },
 });
-const { autoReplyInbound, scheduleAutoReplyInbound, stopAutoReplies, useAutoReplyRuntime, notifyInboundMessages } = await import("data:text/javascript;base64," + Buffer.from(built.outputFiles[0].text).toString("base64"));
+const { autoReplyInbound, scheduleAutoReplyInbound, stopAutoReplies, useAutoReplyRuntime, notifyInboundMessages, currentAutoReplyContext } = await import("data:text/javascript;base64," + Buffer.from(built.outputFiles[0].text+'\n//# sourceURL=security-flow.js').toString("base64"));
 function setup(chatId) {
   globalThis.sentFlow = [];
   globalThis.beforeAutoGate = undefined;
@@ -59,6 +59,33 @@ test('automatic replies recheck folder identity after generation and immediately
 });
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
 const reply = { source: "openai", suggestions: [{ text: "Hello there" }] };
+
+test('automatic replies reject stale clock snapshots after sleep and timezone edits at both generation and dispatch',async t=>{
+  let now=Date.now();t.mock.method(Date,'now',()=>now);
+  const sleeping=setup('clock-sleep');globalThis.generateFlow=async()=>{now+=5*60_000;return reply;};await autoReplyInbound(sleeping);assert.deepEqual(globalThis.sentFlow,[]);
+  for(const phase of ['generation','dispatch'])for(const party of ['sender','recipient']){
+    now=new Date().getTime()+1000;
+    const inbound=setup(`clock-${phase}-${party}`),state=globalThis.flowState;
+    state.settings.aiTimeZone='Europe/Paris';state.contacts[0].timeZone='Asia/Tokyo';
+    const mutate=()=>{if(party==='sender')state.settings.aiTimeZone='America/New_York';else state.contacts[0].timeZone='Europe/London';};
+    globalThis.generateFlow=async()=>{if(phase==='generation')mutate();return reply;};if(phase==='dispatch')globalThis.beforeAutoGate=mutate;
+    await autoReplyInbound(inbound);assert.deepEqual(globalThis.sentFlow,[],`${phase}: ${party} timezone edit invalidates the old clock`);
+  }
+  now=new Date().getTime()+1000;const fresh=setup('clock-fresh');globalThis.generateFlow=async()=>reply;
+  await autoReplyInbound(fresh);assert.equal(globalThis.sentFlow.length,1,'a valid fresh clock still permits the ordinary send path');
+  now=new Date().getTime()+1000;const dispatchSleep=setup('clock-dispatch-sleep');globalThis.generateFlow=async()=>reply;
+  globalThis.beforeAutoGate=()=>{now+=5*60_000;};await autoReplyInbound(dispatchSleep);assert.deepEqual(globalThis.sentFlow,[]);
+});
+
+test('queued auto replies keep a stable context while time ticks but expire at five minutes or after a backwards clock change',t=>{
+  const inbound=setup('clock-queued');let now=Date.now();t.mock.method(Date,'now',()=>now);
+  const queued={id:'queued',chatId:inbound.chatId,contactId:'c',accountId:'wa',channelId:'baileys',sentAt:new Date(now).toISOString()};
+  const key=currentAutoReplyContext(globalThis.flowState,queued);assert.ok(key);
+  now+=4*60_000;assert.equal(currentAutoReplyContext(globalThis.flowState,queued),key);
+  now+=60_000;assert.equal(currentAutoReplyContext(globalThis.flowState,queued),null);
+  now=Date.parse(queued.sentAt)-1;assert.equal(currentAutoReplyContext(globalThis.flowState,queued),null);
+  assert.equal(currentAutoReplyContext(globalThis.flowState,{...queued,sentAt:'invalid'}),null);
+});
 
 function fakeTimers() {
  const original={setTimeout,clearTimeout};let id=0;const timers=new Map();

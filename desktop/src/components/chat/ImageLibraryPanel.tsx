@@ -10,7 +10,7 @@ import { addLibraryImage, createLibraryCategory, deleteLibraryCategory, deleteLi
 import { emitQuickReplyMedia } from "@/lib/quickReplyMedia";
 
 const PAGE_SIZE = 40;
-export function ImageLibraryPanel({ chatId, contextKey, target }: { chatId?: string | null; contextKey: string; target?: string }) {
+export function ImageLibraryPanel({ chatId, contextKey }: { chatId?: string | null; contextKey: string }) {
   const { t } = useI18n();
   const [images, setImages] = useState<LibraryImage[]>([]);
   const [customCategories, setCustomCategories] = useState<string[]>([]);
@@ -124,8 +124,6 @@ export function ImageLibraryPanel({ chatId, contextKey, target }: { chatId?: str
             <div className="flex gap-1">{(["all", "pinned", "recent"] as const).map(value => <Button key={value} size="xs" variant={view === value ? "secondary" : "ghost"} aria-pressed={view === value} onClick={() => setView(value)}>{t(`quickShelf.view.${value}`)}</Button>)}</div>
             <Button size="xs" disabled={busy} onClick={() => { setSelecting(value => !value); setSelected([]); }}>{t(selecting ? "common.close" : "gallery.multiSelect")}</Button>
             {category !== "*" && !!category && <Button size="xs" className="text-rose-400" disabled={busy || loading} onClick={() => void removeCategory(category)}>{t("gallery.deleteCategory")}</Button>}
-            <p className="max-w-64 truncate px-2 text-2xs" title={target}>{target}</p>
-            <p className="px-2 text-2xs">{t("gallery.storageHint")}</p>
             <Button size="xs" disabled={busy || loading || !images.length && !categories.length} onClick={() => void run(async () => { await exportImageLibrary(chosen.length ? chosen : images, chosen.length ? [...new Set(chosen.map(image => image.category).filter(Boolean))] : categories); setProgress(t("gallery.exported")); })}>{t("gallery.backup")}</Button>
             <Button size="xs" disabled={busy || loading} onClick={() => restore.current?.click()}>{t("gallery.restore")}</Button>
             {!!chosen.length && <Button size="xs" className="text-rose-400" disabled={busy} onClick={() => void run(async () => { if (await requestConfirm({ title: t("gallery.deleteConfirm", { count: chosen.length }), tone: "danger" })) { await deleteLibraryImages(chosen.map(image => image.id)); setSelected([]); } })}>{t("common.delete")}</Button>}

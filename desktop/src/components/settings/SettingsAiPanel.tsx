@@ -9,6 +9,8 @@ import {
 import type { AppSettings } from "@/store/appStore";
 import { getOpenAiCompatibleConfig, hasAiCredentials } from "@/lib/aiProviders.ts";
 import { useI18n } from "@/i18n";
+import { TimeZoneSelect } from "@/components/ui/TimeZoneSelect";
+import { systemTimeZone } from "@/lib/timeZone";
 
 export function SettingsAiPanel() {
   const { t } = useI18n();
@@ -128,6 +130,10 @@ export function SettingsAiPanel() {
 
         </div>
         <p className="mt-3 text-2xs text-zinc-600">{t("settingsAi.keyHint")}</p>
+        <div className="mt-3">
+          <TimeZoneSelect value={settings.aiTimeZone} onChange={aiTimeZone => updateSettings({ aiTimeZone })}
+            label={t("settingsAi.myTimeZone")} automatic={t("settingsAi.computerTimeZone", { zone: systemTimeZone() || "UTC" })} />
+        </div>
       </section>
 
 

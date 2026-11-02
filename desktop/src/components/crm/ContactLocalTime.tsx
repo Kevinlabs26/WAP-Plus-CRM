@@ -4,15 +4,17 @@ import type { Contact } from "@/types/crm";
 import { useI18n } from "@/i18n";
 import { useAppStore } from "@/store/appStore";
 import { countryDisplayName, countryLocalTimes, resolvePhoneCountry } from "@/lib/contactTime";
+import { validTimeZone } from "@/lib/timeZone";
 
 export function ContactLocalTime({ contact }: { contact: Contact }) {
   const { locale, t } = useI18n();
   const groupId = useId();
   const updateContact = useAppStore(state => state.updateContact);
   const country = useMemo(() => resolvePhoneCountry(contact), [contact.phone, contact.channelAddress, contact.isGroup]);
+  const confirmedZone = contact.isGroup || contact.channelAddress?.endsWith("@g.us") || contact.phone?.endsWith("@g.us") ? undefined : validTimeZone(contact.timeZone);
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    if (!country?.timezones.length) return;
+    if (!country?.timezones.length && !confirmedZone) return;
     let timer: number;
     const refresh = () => {
       window.clearTimeout(timer);
@@ -27,8 +29,15 @@ export function ContactLocalTime({ contact }: { contact: Contact }) {
       window.removeEventListener("focus", refresh);
       document.removeEventListener("visibilitychange", refresh);
     };
-  }, [country]);
+  }, [country, confirmedZone]);
   const times = useMemo(() => country ? countryLocalTimes(country.timezones, locale, now) : [], [country, locale, now]);
+  const confirmedTimes = useMemo(() => confirmedZone ? countryLocalTimes([confirmedZone], locale, now) : [], [confirmedZone, locale, now]);
+  if (confirmedZone && !country?.timezones.some(zone => zone === confirmedZone) && confirmedTimes[0]) return (
+    <div className="mt-1 flex flex-wrap items-center gap-1.5 text-2xs text-zinc-500" title={confirmedTimes[0].label}>
+      <Clock aria-hidden="true" className="h-3 w-3 shrink-0" />
+      <span>{confirmedZone.replaceAll("_", " ")}</span><span className="tabular-nums">{confirmedTimes[0].shortLabel}</span>
+    </div>
+  );
   if (!country) return null;
   const name = countryDisplayName(country.id, country.name, locale);
   const countryLabel = <><MapPin aria-hidden="true" className="h-3 w-3 shrink-0" /><span>{name}</span></>;

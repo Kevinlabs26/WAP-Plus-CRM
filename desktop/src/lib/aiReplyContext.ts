@@ -2,7 +2,7 @@ import { resolveAutoReplyScope } from "./autoReplyScope";
 import type { AppState } from "@/store/appStore";
 import type { Message } from "@/types/crm";
 import { getSuggestionContextKey, hasRealAiKey } from "@/lib/aiSuggest";
-import { isManualSuggestionContext } from "@/lib/aiSuggestionCache";
+import { isManualSuggestionContext, SUGGESTION_MAX_AGE_MS } from "@/lib/aiSuggestionCache";
 
 export async function hashAiReplyContext(key: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
@@ -12,8 +12,12 @@ export async function hashAiReplyContext(key: string): Promise<string> {
 /** 队列和首次发送使用同一份上下文；仅把摘要落库，不复制聊天内容或密钥。 */
 export function currentAutoReplyContext(
   state: Pick<AppState, "settings" | "contacts" | "chats" | "messages" | "messagesByChatId">,
-  reply: Pick<Message, "id" | "chatId" | "contactId" | "accountId" | "channelId">
+  reply: Pick<Message, "id" | "chatId" | "contactId" | "accountId" | "channelId"> & Partial<Pick<Message, "sentAt">>
 ): string | null {
+  if (reply.id) {
+    const queuedAt = Date.parse(reply.sentAt || "");
+    if (!Number.isFinite(queuedAt) || Date.now() < queuedAt || Date.now() - queuedAt >= SUGGESTION_MAX_AGE_MS) return null;
+  }
   if (resolveAutoReplyScope(state.settings, reply.chatId).mode !== "auto") return null;
   const contact = state.contacts.find(item => item.id === reply.contactId);
   const chat = state.chats.find(item => item.id === reply.chatId);

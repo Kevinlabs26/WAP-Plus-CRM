@@ -184,6 +184,7 @@ pub fn run() {
             image_library::image_library,
             commands::db_load_full_history,
             commands::db_load_messages_page,
+            commands::db_chats_with_inbound,
             commands::db_search_messages,
             commands::db_get_message,
             commands::secure_load_secrets,

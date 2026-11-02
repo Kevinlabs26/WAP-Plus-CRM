@@ -8,19 +8,20 @@ const mocks={
  react:'export const useState=v=>globalThis.folderMenuHooks.state(v);export const useRef=v=>globalThis.folderMenuHooks.ref(v);export const useEffect=(f,d)=>globalThis.folderMenuHooks.effect(f,d);',
  'react-dom':'export const createPortal=children=>children;',
  'react/jsx-runtime':'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
- 'lucide-react':['Clock3', 'Check','ChevronDown','ChevronRight','Folder','FolderPlus','Link2','GripVertical','LayoutGrid','MoreHorizontal','Pencil','Trash2','Upload','Users','UserRoundX'].map(n=>`export const ${n}="${n}";`).join(''),
+ 'lucide-react':['Clock3', 'Check','Copy','ChevronDown','ChevronRight','Folder','FolderPlus','Link2','GripVertical','LayoutGrid','MoreHorizontal','Pencil','Trash2','Upload','Users','UserRoundX'].map(n=>`export const ${n}="${n}";`).join(''),
  '@/i18n':'export const useI18n=()=>({t:(k,p)=>globalThis.folderMenuTranslate(k,p)});',
 };
 const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/layout/FolderHeaderRow.tsx',import.meta.url))],bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',
  alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},plugins:[{name:'folder-menu-boundaries',setup(b){
  b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);
  b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
-const {FolderHeaderRow}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
+const {FolderHeaderRow}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text+'\n//# sourceURL=folder-menu-tests.js').toString('base64'));
 const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
 
 function fixture(mode,rect={left:700,right:940,top:650,bottom:682}) {
- const original={window:globalThis.window,document:globalThis.document};
- const cells=[],effects=[],listeners=new Map(),elements=new Map(),changes=[];let index=0,tree;
+ const original={window:globalThis.window,document:globalThis.document,setTimeout:globalThis.setTimeout,clearTimeout:globalThis.clearTimeout};
+ const cells=[],effects=[],listeners=new Map(),elements=new Map(),changes=[],timers=new Map();let index=0,tree,timerId=0;
+ globalThis.setTimeout=fn=>{timers.set(++timerId,fn);return timerId;};globalThis.clearTimeout=id=>timers.delete(id);
  globalThis.document={body:{},activeElement:null};
  globalThis.window={innerWidth:1000,innerHeight:720,
   addEventListener(name,fn){const items=listeners.get(name)||new Set();items.add(fn);listeners.set(name,items);},
@@ -38,8 +39,8 @@ function fixture(mode,rect={left:700,right:940,top:650,bottom:682}) {
    for(const node of list){if(!node.props.ref)continue;let el=elements.get(node.props.ref);
     if(!el){el={focus(){document.activeElement=this;},getBoundingClientRect:()=>rect};elements.set(node.props.ref,el);}
     el.node=node;node.props.ref.current=el;
-    el.querySelectorAll=selector=>list.filter(n=>n.props.role===(selector.includes('menuitemradio')?'menuitemradio':'menuitem')).map(n=>ui.element(n));
-    el.querySelector=()=>{const selected=list.find(n=>n.props.role==='menuitemradio'&&n.props['aria-checked']);return selected?ui.element(selected):null;};
+    el.querySelectorAll=selector=>nodes(el.node).filter(n=>n!==el.node&&n.props.role===(selector.includes('menuitemradio')?'menuitemradio':'menuitem')).map(n=>ui.element(n));
+    el.querySelector=selector=>{const selected=nodes(el.node).find(n=>selector.includes('aria-checked')?n.props.role==='menuitemradio'&&n.props['aria-checked']:n.props.role==='menuitem');return selected?ui.element(selected):null;};
    }
    while(effects.length)effects.shift()();return list;
   },
@@ -53,6 +54,7 @@ function fixture(mode,rect={left:700,right:940,top:650,bottom:682}) {
   expand(){this.trigger.props.onClick(this.event(this.trigger));this.render();},
   key(node,key){node.props.onKeyDown(this.event(node,{key}));this.render();},
   dispatch(name,event={}){for(const fn of [...listeners.get(name)||[]])fn(event);this.render();},
+  finishClose(){for(const [id,fn]of [...timers]){timers.delete(id);fn();}this.render();},
   close(){cells.forEach(c=>c?.cleanup?.());Object.assign(globalThis,original);delete globalThis.folderMenuHooks;delete globalThis.folderMenuTranslate;},
  };
  ui.render();return ui;
@@ -96,11 +98,11 @@ test('hover then click keeps the submenu open; keyboard navigation returns focus
  }finally{ui.close();}
 });
 
-test('outside clicks, another folder menu and viewport changes dismiss the menu without changing rules',()=>{
+test('outside clicks, another folder menu, window blur and viewport changes dismiss the menu without changing rules',()=>{
  const ui=fixture();try {
-  for(const action of ['outside','other-folder','scroll','resize']) {
+  for(const action of ['outside','other-folder','scroll','resize','blur']) {
    ui.open();ui.expand();
-   if(action==='scroll'||action==='resize')ui.dispatch(action,{target:{closest:()=>null}});
+   if(['scroll','resize','blur'].includes(action))ui.dispatch(action,{target:{closest:()=>null}});
    else ui.dispatch('pointerdown',{target:{closest:()=>action==='outside'?null:{dataset:{folderActionMenu:'other'}}}});
    assert.equal(ui.root,undefined);assert.equal(ui.submenu,undefined);assert.deepEqual(ui.changes,[]);
   }
@@ -122,7 +124,7 @@ test('import actions expand on demand and close the folder menu after running on
  const action=label=>ui.tree.find(n=>n.props.role==='menuitem'&&nodes(n).some(child=>child.props.children===label||Array.isArray(child.props.children)&&child.props.children.includes(label)));
  try{
   ui.render();ui.open();assert.equal(action('导入号码'),undefined);
-  action('导入与添加').props.onClick();ui.render();assert.ok(action('导入号码'));
+  const trigger=action('导入与添加');trigger.props.onClick(ui.event(trigger));ui.render();assert.ok(action('导入号码'));
   action('导入号码').props.onClick();ui.render();assert.equal(imported,1);assert.equal(ui.root,undefined);
   ui.open();assert.equal(action('导入号码'),undefined);
  }finally{ui.close();}
@@ -136,5 +138,50 @@ test('folder bulk send and scheduled send are separate actions and each closes t
  assert.ok(action('群发给此文件夹'));assert.ok(action('新建定时计划'));
  action('群发给此文件夹').props.onClick();ui.render();assert.equal(bulk,1);assert.equal(scheduled,0);assert.equal(ui.root,undefined);
  ui.open();action('新建定时计划').props.onClick();ui.render();assert.equal(bulk,1);assert.equal(scheduled,1);assert.equal(ui.root,undefined);
+ }finally{ui.close();}
+});
+
+const item=(ui,label)=>ui.tree.find(n=>n.props.role==='menuitem'&&nodes(n).some(child=>child.props.children===label||Array.isArray(child.props.children)&&child.props.children.includes(label)));
+for(const [kind,label,first,last] of [['import','导入与添加','导入号码','选择已加入的群组'],['organize','整理文件夹','新建子分组','清空分组成员']]){
+ test(`${kind} opens a side submenu on hover and stays open while crossing the pointer gap`,()=>{
+  const ui=fixture();try{
+   ui.open();const trigger=item(ui,label);trigger.props.onMouseEnter(ui.event(trigger));ui.render();
+   const popup=()=>ui.tree.find(n=>n.props.id===`folder-${kind}-f`);
+   assert.ok(popup());assert.equal(item(ui,label).props['aria-expanded'],true);
+   assert.equal(popup().props.style.left,474);assert.ok(popup().props.style.top+112<=window.innerHeight);
+   assert.ok(item(ui,first));assert.equal(nodes(ui.root).some(n=>n===item(ui,first)),false,'actions are outside the parent menu, not an inline accordion');
+   ui.root.props.onMouseLeave();popup().props.onMouseEnter();ui.finishClose();assert.ok(popup());
+   popup().props.onMouseLeave();ui.finishClose();assert.equal(popup(),undefined);assert.ok(ui.root);
+  }finally{ui.close();}
+ });
+ test(`${kind} keyboard navigation enters the submenu and returns focus to its own trigger`,()=>{
+  const ui=fixture(undefined,{left:20,right:260,top:40,bottom:72});try{
+   ui.open();ui.key(item(ui,label),'ArrowRight');const popup=()=>ui.tree.find(n=>n.props.id===`folder-${kind}-f`);
+   assert.equal(popup().props.style.left,262);assert.ok(document.activeElement.node.props.children.includes(first));
+   ui.key(popup(),'End');assert.ok(document.activeElement.node.props.children.includes(last));
+   ui.key(popup(),'Home');assert.ok(document.activeElement.node.props.children.includes(first));
+   ui.key(popup(),'ArrowLeft');assert.equal(popup(),undefined);assert.equal(document.activeElement,item(ui,label).props.ref.current);
+   ui.key(item(ui,label),'Enter');assert.ok(popup());ui.key(popup(),'Escape');assert.equal(popup(),undefined);assert.ok(ui.root);
+  }finally{ui.close();}
+ });
+}
+
+test('hovering another submenu switches it; hovering a regular action closes it; actions fire once',()=>{
+ const ui=fixture();let renamed=0;ui.props.onRename=()=>renamed++;
+ try{
+  ui.open();const hover=label=>{const trigger=item(ui,label);trigger.props.onMouseEnter(ui.event(trigger));ui.render();};
+  hover('导入与添加');hover('整理文件夹');assert.equal(item(ui,'导入号码'),undefined);assert.ok(item(ui,'重命名'));
+  item(ui,'重命名').props.onClick();ui.render();assert.equal(renamed,1);assert.equal(ui.root,undefined);
+  ui.open();hover('导入与添加');ui.trigger.props.onMouseEnter(ui.event(ui.trigger));ui.render();assert.ok(ui.submenu);assert.equal(item(ui,'导入号码'),undefined);
+  ui.root.props.onMouseOver({target:{closest:()=>({hasAttribute:()=>false})}});ui.render();assert.equal(ui.submenu,undefined);assert.ok(ui.root);
+ }finally{ui.close();}
+});
+
+test('copying never-replied numbers is an organize action and closes the menu after one click',()=>{
+ const ui=fixture();let copied=0;ui.props.onCopyUnreplied=()=>copied++;
+ try{
+  ui.render();ui.open();const trigger=item(ui,'整理文件夹');trigger.props.onMouseEnter(ui.event(trigger));ui.render();
+  const popup=ui.tree.find(n=>n.props.id==='folder-organize-f');assert.ok(popup.props.style.top+144<=window.innerHeight);
+  item(ui,'复制从未回复的号码').props.onClick();ui.render();assert.equal(copied,1);assert.equal(ui.root,undefined);
  }finally{ui.close();}
 });

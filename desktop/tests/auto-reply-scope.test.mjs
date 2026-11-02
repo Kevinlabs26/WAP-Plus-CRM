@@ -4,8 +4,19 @@ import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import { resolveAutoReplyScope } from '../src/lib/autoReplyScope.ts';
 const result=await build({stdin:{contents:`export {normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {buildSettingsSafe,parseBackupJson} from './src/lib/exportData.ts';`,resolveDir:fileURLToPath(new URL('../',import.meta.url))},bundle:true,write:false,format:'esm',platform:'node',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))}});
-const {normalizeLoadedSettings,buildSettingsSafe,parseBackupJson}=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].text).toString('base64'));
+const {normalizeLoadedSettings,buildSettingsSafe,parseBackupJson}=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].text+'\n//# sourceURL=auto-reply-scope.js').toString('base64'));
 const folder=(id,mode,chatIds=['a'])=>({id,name:id,chatIds,autoReplyMode:mode,sort:0});
+
+test('AI sender timezone survives reload and backup while malformed zones revert to computer time',()=>{
+  const settings=normalizeLoadedSettings({aiTimeZone:' Europe/Paris '});assert.equal(settings.aiTimeZone,'Europe/Paris');
+  const backup=parseBackupJson({version:2,contacts:[{id:'a',name:'A',phone:'12025550100',timeZone:'Asia/Tokyo'}],settingsSafe:buildSettingsSafe(settings)});
+  assert.equal(normalizeLoadedSettings(backup.settingsSafe).aiTimeZone,'Europe/Paris');assert.equal(backup.contacts[0].timeZone,'Asia/Tokyo');
+  for(const bad of ['Invented/City',{},null,'x'.repeat(90)]){
+    assert.equal(normalizeLoadedSettings({aiTimeZone:bad}).aiTimeZone,'');
+    assert.equal(parseBackupJson({version:2,contacts:[{id:'a',name:'A',phone:'12025550100'}],settingsSafe:{aiTimeZone:bad}}).settingsSafe.aiTimeZone,'');
+  }
+  assert.equal(normalizeLoadedSettings({}).aiTimeZone,'');
+});
 
 test('pinned and recent reply IDs survive reload and backup, pruning duplicates, invalid and deleted IDs', () => {
  const quickReplies=Array.from({length:30},(_,i)=>({id:'r'+i,title:'Title '+i,body:'Body',category:'other'}));

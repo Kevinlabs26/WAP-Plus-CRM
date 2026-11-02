@@ -293,13 +293,23 @@ export function createMessageActionsSlice({
     ensureChatForContact: (contactId, accountId) => {
       if (!contactId) return null;
       const state = get();
-      const contact = state.contacts.find((c) => c.id === contactId);
+      let contact = state.contacts.find((c) => c.id === contactId);
       if (!contact) return null;
-      const existing = state.chats.find(
-        (c) => c.contactId === contactId && (!accountId || c.accountId === accountId)
-      );
+      const isGroup = contact.isGroup || contact.channelAddress?.endsWith("@g.us");
+      if (isGroup && accountId && (contact.accountId || contact.boundPhoneId) !== accountId) {
+        const groupJid = contact.channelAddress;
+        contact = groupJid?.endsWith("@g.us") ? state.contacts.find(c => c.channelAddress === groupJid &&
+          (c.accountId || c.boundPhoneId) === accountId) : undefined;
+        if (!contact) return null;
+        contactId = contact.id;
+      }
+      const matchesAccount = (c: ChatPreview) => c.contactId === contactId &&
+        (!accountId || (c.accountId || c.phoneId) === accountId);
+      const existing = (isGroup ? state.chats.find(c => c.id === `bridge-chat-${contactId}` && matchesAccount(c)) : undefined)
+        || state.chats.find(matchesAccount);
       if (existing) return existing.id;
-      const chatId = `bridge-chat-${contactId}${accountId ? `-${accountId}` : ""}`;
+      // Group contacts already belong to an account; sync uses this same ID.
+      const chatId = `bridge-chat-${contactId}${!isGroup && accountId ? `-${accountId}` : ""}`;
       const chat: ChatPreview = {
         id: chatId,
         contactId,
@@ -310,6 +320,7 @@ export function createMessageActionsSlice({
         phoneId:
           accountId || contact.boundPhoneId || get().selectedPhoneId || "baileys",
         accountId,
+        isGroup: isGroup || undefined,
       };
       set((s) => ({ chats: [chat, ...s.chats] }));
       get().recomputeStats();

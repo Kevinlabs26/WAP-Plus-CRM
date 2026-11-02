@@ -162,7 +162,10 @@ test("profile clock ticks at minute boundaries, refreshes on focus and clears ti
   assert.equal(a.timeZone, undefined);
   assert.ok(text(nodes(render(a)).find(n => n.type === 'summary')).includes(' / '));
   a.timeZone = 'Europe/Paris';
-  assert.ok(text(nodes(render(a)).find(n => n.type === 'summary')).includes(' / '), 'ignore saved zones from a different country');
+  assert.ok(text(render(a)).includes('Europe/Paris'), 'confirmed timezone takes priority even when someone lives outside their phone country');
+  assert.ok(!text(render(a)).includes(' / '));
+  assert.ok(text(render({id:'traveller',phone:'123456789012345@lid',timeZone:'Asia/Tokyo'})).includes('Asia/Tokyo'));
+  assert.equal(render({id:'group',phone:'123@g.us',isGroup:true,timeZone:'Europe/Paris'}),null);
   assert.ok(render(getExampleNumber('AC', examples).number), 'a region without timezone metadata still shows its country');
   assert.equal(timers.size, 0);
   assert.equal(events.size, 0);

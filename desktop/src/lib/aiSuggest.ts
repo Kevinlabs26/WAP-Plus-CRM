@@ -4,6 +4,7 @@ import { geminiGenerate } from "./gemini.ts";
 import { getOpenAiCompatibleConfig, hasAiCredentials } from "./aiProviders.ts";
 import { ingestString } from "../store/bridgeIngestHelpers.ts";
 import { resolveAiReplyProfile } from "./aiPromptScope.ts";
+import { buildAiTimeContext, resolveAiTimeZones } from "./aiTimeContext.ts";
 
 export interface SuggestResult {
   id: string;
@@ -69,6 +70,7 @@ export function getSuggestionContextKey(
     accountId || contact?.accountId || "",
     settings.aiProvider, settings.aiModel, settings.customAiModel,
     settings.customAiBaseUrl, settings.ollamaUrl,
+    resolveAiTimeZones(contact, settings),
     buildSystemPrompt(contact, { ...settings, aiSystemPrompt: prompt }, opts?.auto, opts?.replyTo),
     opts?.replyTo?.id || "",
     buildUserPrompt(contact, [...recent].sort((a, b) => a.sentAt.localeCompare(b.sentAt)), opts?.auto, opts?.replyTo),
@@ -265,6 +267,7 @@ function buildSystemPrompt(
       `<user_profile>\n${custom.slice(0, 6000)}\n</user_profile>`
     );
   }
+  parts.push("Use the program-provided runtime clock for the current date, weekday and both parties' local times, including daylight-saving offsets. Message timestamps are historical, not the current time. A phone-country estimate is not a verified current location. If the recipient timezone is unknown or multiple candidate zones exist, do not choose one or invent their current time. Do not infer timezones from names, language or a group number; group members may live in different zones. Use time information only when relevant, without forcing a greeting or claiming the person is awake or available. Interpret relative dates in the relevant person's local timezone; ask for clarification when the reference is ambiguous. Profile location descriptions do not override explicit runtime clock facts.");
   return parts.join(" ");
 }
 
@@ -272,7 +275,8 @@ function buildUserPrompt(
   contact: Contact | undefined,
   messages: Message[],
   auto = false,
-  replyTo?: Message
+  replyTo?: Message,
+  timeContext?: string
 ) {
   const history: string[] = [];
   const voice: string[] = [];
@@ -298,6 +302,7 @@ function buildUserPrompt(
     if (text) voice.unshift(`Me: ${JSON.stringify(text)}`);
   }
   return [
+    ...(timeContext ? ["Runtime clock (program-provided; current at generation):", timeContext, ""] : []),
     `Contact: ${contact?.name ?? "Unknown"}`,
     `Phone: ${contact?.phone ?? "-"}`,
     `Company: ${contact?.company ?? "-"}`,
@@ -389,7 +394,7 @@ async function openAiCompatibleSuggest(opts: {
         },
         {
           role: "user",
-          content: buildUserPrompt(opts.contact, opts.messages, opts.auto, opts.replyTo),
+          content: buildUserPrompt(opts.contact, opts.messages, opts.auto, opts.replyTo, buildAiTimeContext(opts.contact, opts.settings || {})),
         },
       ],
       max_tokens: opts.auto || opts.replyTo ? 160 : 300,
@@ -431,7 +436,7 @@ async function geminiSuggest(
     apiKey: settings.geminiKey,
     model: settings.aiModel.trim() || undefined,
     system: buildSystemPrompt(contact, settings, auto, replyTo),
-    user: buildUserPrompt(contact, messages, auto, replyTo),
+    user: buildUserPrompt(contact, messages, auto, replyTo, buildAiTimeContext(contact, settings)),
     temperature: 0.7,
     json: true,
     maxOutputTokens: auto || replyTo ? 160 : 300,
@@ -490,7 +495,7 @@ async function ollamaSuggest(
           role: "system",
           content: buildSystemPrompt(contact, settings, auto, replyTo),
         },
-        { role: "user", content: buildUserPrompt(contact, messages, auto, replyTo) },
+        { role: "user", content: buildUserPrompt(contact, messages, auto, replyTo, buildAiTimeContext(contact, settings || {})) },
       ],
     }),
   });

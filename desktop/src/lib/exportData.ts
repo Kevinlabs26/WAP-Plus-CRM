@@ -1,6 +1,7 @@
 import { isValidAccountId } from "@/types/account";
 import { escapeCsvCell } from "./csv.ts";
 import { getTimezone } from "countries-and-timezones";
+import { validTimeZone } from "./timeZone.ts";
 import type {
   Activity,
   ChatPreview,
@@ -69,6 +70,7 @@ export type SettingsSafeExport = {
   quickReplyRecentIds: string[];
   translateTargetLang: string;
   myLang: string;
+  aiTimeZone: string;
   voiceInputEngine: AppSettings["voiceInputEngine"];
   voiceInputLang: string;
   leadInbox: AppSettings["leadInbox"];
@@ -151,6 +153,7 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     quickReplyRecentIds: settings.quickReplyRecentIds || [],
     translateTargetLang: settings.translateTargetLang,
     myLang: settings.myLang,
+    aiTimeZone: settings.aiTimeZone || "",
     voiceInputEngine: settings.voiceInputEngine,
     voiceInputLang: settings.voiceInputLang,
     leadInbox: settings.leadInbox,
@@ -644,7 +647,7 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
   if (settingsSafe) {
     const allowed = [
       "quickReplies", "quickReplyCustomCategories", "quickReplyRemovedCategories", "quickReplyCategoryLabels", "quickReplyPinnedIds", "quickReplyRecentIds", "translateTargetLang", "myLang",
-      "voiceInputLang", "leadInbox", "chatFolders", "chatFolderClones",
+      "voiceInputLang", "aiTimeZone", "leadInbox", "chatFolders", "chatFolderClones",
       "scheduledMessages", "scheduledPlans", "waAccounts", "accountViewMode", "historySyncNote",
       "historySyncNoteByAccountId", "internalNotesByKey", "chatBackground",
       "salesStageLabels", "salesStageOrder", "theme",
@@ -653,6 +656,7 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
       allowed.filter((key) => Object.hasOwn(settingsSafe!, key))
         .map((key) => [key, (settingsSafe as Record<string, unknown>)[key]])
     ) as Partial<SettingsSafeExport>;
+    if (Object.hasOwn(settingsSafe, "aiTimeZone")) settingsSafe.aiTimeZone = validTimeZone(settingsSafe.aiTimeZone) || "";
     if (Array.isArray(settingsSafe.chatFolders)) {
       settingsSafe.chatFolders = settingsSafe.chatFolders.map(folder => {
         if (!folder || typeof folder !== "object") return folder;

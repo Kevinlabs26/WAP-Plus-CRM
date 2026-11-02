@@ -29,7 +29,7 @@ import {
   backfillChatPreviewFromMessages,
   reconcileChatsForContacts,
 } from "./chatReconcile";
-import { mergeImportedContactChatDuplicates } from "./chatDuplicateMerge";
+import { mergeImportedContactChatDuplicates, protectedGroupChatIds } from "./chatDuplicateMerge";
 import { pruneChatFolderRefs } from "./chatFolderCleanup";
 import { resolveFollowUpRules } from "@/lib/followUpRules";
 import {
@@ -554,13 +554,16 @@ export function createIngestSlice({
           ? mergeImportedContactChatDuplicates(
               chats,
               messages,
-              nextSelectedChatId
+              nextSelectedChatId,
+              { contacts, protectedIds: protectedGroupChatIds(state.settings, state.draftReplyByChatId) }
             )
           : null;
         if (mergedLocalChats?.changed) {
           chats = mergedLocalChats.chats;
           messages = mergedLocalChats.messages;
+          const selectedWasMerged = mergedLocalChats.replacements.has(nextSelectedChatId || "");
           nextSelectedChatId = mergedLocalChats.selectedChatId ?? null;
+          if (selectedWasMerged) nextSelectedContactId = chats.find(chat => chat.id === nextSelectedChatId)?.contactId ?? nextSelectedContactId;
         }
 
         // 会话清理 + 标题回填（有消息/预览/未读/钉选/有效联系人则保留）
@@ -730,6 +733,9 @@ export function createIngestSlice({
           selectedPhoneId: nextSelectedPhoneId,
           selectedContactId: selContact,
           selectedChatId: selChat,
+          ...(state.selectedThreadAccount && chatReplacements.has(state.selectedThreadAccount.chatId)
+            ? { selectedThreadAccount: { ...state.selectedThreadAccount, chatId: chatReplacements.get(state.selectedThreadAccount.chatId)! } }
+            : {}),
           ...(settingsPatch
             ? {
                 settings: {
