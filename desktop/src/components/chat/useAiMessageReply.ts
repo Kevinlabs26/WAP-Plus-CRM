@@ -23,11 +23,12 @@ export function useAiMessageReply(opts: {
   const generation = useRef(0);
   const busy = useRef(false);
   const [cache] = useState(createSuggestionCache);
+  const pendingKey = useRef("");
   const latest = useRef(opts);
   latest.current = opts;
   useEffect(() => {
     setAiReplyingId(null);
-    return () => { generation.current++; busy.current = false; };
+    return () => { generation.current++; busy.current = false; cache.cancelPending(pendingKey.current); };
   }, [opts.chatId, opts.contact?.id, opts.accountId]);
 
   const aiReply = async (message: Message): Promise<boolean> => {
@@ -54,6 +55,7 @@ export function useAiMessageReply(opts: {
     const selectedContact = state.selectedContactId;
     const initialReplyTo = opts.replyTo;
     const contextKey = getSuggestionContextKey(opts.contact, opts.messages, settings, opts.accountId, { replyTo: message });
+    pendingKey.current = contextKey;
     markManualSuggestionContext(getSuggestionContextKey(opts.contact, opts.messages, settings, opts.accountId));
     const sameContext = () => request === generation.current &&
       latest.current.chatId === opts.chatId && latest.current.accountId === opts.accountId &&
@@ -64,7 +66,7 @@ export function useAiMessageReply(opts: {
     setAiReplyingId(message.id);
     try {
       const result = await cache.request(contextKey,
-        () => generateSuggestions(opts.contact, opts.messages, settings, { accountId: opts.accountId, replyTo: message }));
+        (_publish, signal) => generateSuggestions(opts.contact, opts.messages, settings, { accountId: opts.accountId, replyTo: message, signal }));
       if (!sameContext()) return false;
       const current = latest.current;
       const currentTarget = current.messages.find((item) => item.id === message.id);

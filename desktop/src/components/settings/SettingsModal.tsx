@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { SettingsConnectionPanel } from "./SettingsConnectionPanel";
 import { SettingsMessagingPanel } from "./SettingsMessagingPanel";
 import { SettingsAiPanel } from "./SettingsAiPanel";
+import { SettingsTranslationPanel } from "./SettingsTranslationPanel";
 import { SettingsAutoReplyPanel } from "./SettingsAutoReplyPanel";
 import { SettingsQuickRepliesPanel } from "./SettingsQuickRepliesPanel";
 import { SettingsDataPanel } from "./SettingsDataPanel";
@@ -38,6 +39,7 @@ const CATEGORIES = [
   { id: "notifications", labelKey: "settings.notifications", descriptionKey: "settings.notificationsDesc", icon: Bell },
   { id: "blocklist", labelKey: "settings.blocklist", descriptionKey: "settings.blocklistDesc", icon: ShieldBan },
   { id: "ai", labelKey: "settings.ai", descriptionKey: "settings.aiDesc", icon: Bot },
+  { id: "translation", labelKey: "settingsTranslation.title", descriptionKey: "settingsTranslation.shortDescription", icon: MessageSquareText },
   { id: "local-speech", labelKey: "settings.localSpeech", descriptionKey: "settings.localSpeechDesc", icon: AudioLines },
   { id: "auto-reply", labelKey: "settings.autoReply", descriptionKey: "settings.autoReplyDesc", icon: Workflow },
   { id: "scheduled", labelKey: "settings.scheduled", descriptionKey: "settings.scheduledDesc", icon: Clock3 },
@@ -56,13 +58,14 @@ const GROUP_LABELS: Partial<Record<CategoryId, TranslationKey>> = {
   "google-sheets": "settings.group.data",
   appearance: "settings.group.application",
 };
-const AUTO_SAVE_CATEGORIES: CategoryId[] = ["connection", "messaging", "notifications", "ai", "local-speech", "auto-reply", "appearance"];
+const AUTO_SAVE_CATEGORIES: CategoryId[] = ["connection", "messaging", "notifications", "ai", "translation", "local-speech", "auto-reply", "appearance"];
 
 const PANEL_COMPONENTS: Record<CategoryId, ComponentType> = {
   connection: SettingsConnectionPanel,
   messaging: SettingsMessagingPanel,
   blocklist: SettingsBlocklistPanel,
   ai: SettingsAiPanel,
+  translation: SettingsTranslationPanel,
   "local-speech": SettingsSpeechPanel,
   notifications: SettingsNotificationsPanel,
   "auto-reply": SettingsAutoReplyPanel,

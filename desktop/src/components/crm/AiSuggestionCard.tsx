@@ -22,8 +22,9 @@ export function AiSuggestionCard({ text, contextKey, settings, language, onInser
   useEffect(() => {
     if (!language || translations.current.has(key)) return;
     let active = true;
+    const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      void translateDraftText(text, language, settings, { googleFirst: true }).then(value => {
+      void translateDraftText(text, language, settings, { googleFirst: true, signal: controller.signal }).then(value => {
         if (!active) return;
         const valid = !value.fallback && !value.error && value.text.trim() && value.targetLang === language;
         const next = { key, text: valid ? value.text : "", error: valid ? "" : value.error || t("crmPanel.translationFailed") };
@@ -36,7 +37,7 @@ export function AiSuggestionCard({ text, contextKey, settings, language, onInser
         if (active) setResult({ key, text: "", error: error instanceof Error ? error.message : t("crmPanel.translationFailed") });
       });
     }, 120);
-    return () => { active = false; window.clearTimeout(timer); };
+    return () => { active = false; window.clearTimeout(timer); controller.abort(); };
     // The key includes translation configuration; unrelated setting changes must not restart a request.
   }, [key, retry]);
 

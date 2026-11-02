@@ -129,6 +129,7 @@ export function BroadcastView() {
   const [recipientSource, setRecipientSource] = useState<BroadcastRecipientSource>(() => selected.size ? "contacts" : "numbers");
   const [media, setMedia] = useState<BroadcastMedia[]>([]);
   const [mediaMode, setMediaMode] = useState<BroadcastMediaMode>("single");
+  const [mediaBusy, setMediaBusy] = useState(false);
   const [mediaDataUrls, setMediaDataUrls] = useState<Record<string, string>>(
     {}
   );
@@ -270,8 +271,9 @@ export function BroadcastView() {
     running ||
     campaigns[0] ||
     null;
-  const templateValidation = validateBroadcastTemplate(template);
-  const templateError = !templateValidation.ok
+  const templateValidation = validateBroadcastTemplate(template, media.length > 0);
+  const templateError = template.trim() && media.some(item => item.kind === "audio" && item.voiceNote)
+    ? t("broadcast.voiceCaptionUnsupported") : !templateValidation.ok
     ? templateValidation.reason === "请填写发送内容"
       ? t("broadcast.templateRequired")
       : templateValidation.reason.startsWith("正文过长")
@@ -283,7 +285,7 @@ export function BroadcastView() {
               : templateValidation.reason;
           })()
     : "";
-  const launchBlockedReason = !accountId
+  const launchBlockedReason = mediaBusy ? t("broadcast.mediaBusy") : !accountId
     ? t("broadcast.selectAccountRequired")
     : !recipientCount
       ? t("broadcast.addRecipientsRequired")
@@ -330,6 +332,7 @@ export function BroadcastView() {
   };
 
   const validateSetup = () => {
+    if (mediaBusy) { pushToast(t("broadcast.mediaBusy"), "error"); return false; }
     if (!accountId) {
       pushToast(t("broadcast.selectAccountRequired"), "error");
       return false;
@@ -342,9 +345,8 @@ export function BroadcastView() {
       pushToast(t("broadcast.maxRecipientsToast", { count: BROADCAST_HARD_CAP }), "error");
       return false;
     }
-    const v = validateBroadcastTemplate(template);
-    if (!v.ok) {
-      pushToast(templateError || v.reason, "error");
+    if (templateError) {
+      pushToast(templateError, "error");
       return false;
     }
     return true;
@@ -585,6 +587,8 @@ export function BroadcastView() {
                   <BroadcastMediaPicker
                     media={media}
                     mediaMode={mediaMode}
+                    dataUrls={mediaDataUrls}
+                    onBusyChange={setMediaBusy}
                     onChange={(nextMedia, nextMode, dataUrls) => {
                       setMedia(nextMedia);
                       setMediaMode(nextMode);

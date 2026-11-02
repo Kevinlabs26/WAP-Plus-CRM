@@ -63,7 +63,8 @@ test('cards follow the shared reading language without changing the original or 
   assert.equal(nodes(f.render()).filter(n=>n.type==='select').length,0,'no per-card language controls');
   for(const language of TRANSLATE_LANGS){
     f.language(language.code);assert.equal(f.displayed(),f.props.text,'original remains readable while loading');
-    const request=f.requests.at(-1);assert.deepEqual(request.args,[f.props.text,language.code,f.props.settings,{googleFirst:true}]);
+    const request=f.requests.at(-1);assert.deepEqual(request.args.slice(0,3),[f.props.text,language.code,f.props.settings]);
+    assert.equal(request.args[3].googleFirst,true);assert.equal(request.args[3].signal.aborted,false);
     request.resolve({text:`Translation ${language.code}`,targetLang:language.code,fallback:false});await settle();f.render();
     assert.equal(f.displayed(),`Translation ${language.code}`);
     const buttons=f.buttons();assert.equal(buttons[0].props.children,'crmPanel.fillOriginal');assert.equal(buttons[1].props.children,'crmPanel.appendOriginal');
@@ -78,15 +79,19 @@ test('cards follow the shared reading language without changing the original or 
 test('late translations cannot overwrite another language, revised suggestion, chat/account context or unmounted card',async()=>{
   const f=fixture();f.language('zh');const old=f.requests.at(-1);
   f.language('de');const german=f.requests.at(-1);
+  assert.equal(old.args[3].signal.aborted,true,'obsolete language requests are aborted');
   german.resolve({text:'Guten Morgen.',targetLang:'de'});await settle();f.render();
   old.resolve({text:'过期中文',targetLang:'zh'});await settle();f.render();assert.equal(f.displayed(),'Guten Morgen.');
   f.language('es');const oldText=f.requests.at(-1);
   f.props.text='Nouvelle suggestion.';f.render();assert.equal(f.displayed(),f.props.text);
+  assert.equal(oldText.args[3].signal.aborted,true);
   oldText.resolve({text:'OUTDATED TEXT',targetLang:'es'});await settle();f.render();assert.equal(f.displayed(),f.props.text);
   const oldContext=f.requests.at(-1);f.props.contextKey='chat-b:account-b';f.render();
+  assert.equal(oldContext.args[3].signal.aborted,true);
   oldContext.resolve({text:'WRONG CUSTOMER',targetLang:'es'});await settle();f.render();assert.equal(f.displayed(),f.props.text);
   const newest=f.requests.at(-1);newest.resolve({text:'Buenos días.',targetLang:'es'});await settle();f.render();assert.equal(f.displayed(),'Buenos días.');
   f.language('pt');const unmounted=f.requests.at(-1);f.unmount();
+  assert.equal(unmounted.args[3].signal.aborted,true);
   unmounted.reject(Error('late failure'));await settle();assert.equal(f.displayed(),f.props.text);
 });
 

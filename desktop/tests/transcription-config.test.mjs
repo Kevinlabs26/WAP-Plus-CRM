@@ -20,7 +20,7 @@ const mocks={
   '@/channels/sendGate':'export const waitForPendingSends=async()=>{};',
   '@/lib/mediaCache':'export const cacheMediaUrl=async()=>{};export const readMediaCache=async()=>null;export const dropMediaCache=async()=>{};',
 };
-const built=await build({stdin:{contents:`export * from './src/lib/transcriptionConfig.ts';export {defaultSettings,normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {transcribeVoice} from './src/lib/transcribeVoice.ts';export {useMessageActions} from './src/components/chat/useMessageActions.ts';export {SettingsAiPanel} from './src/components/settings/SettingsAiPanel.tsx';export {SettingsSpeechPanel} from './src/components/settings/SettingsSpeechPanel.tsx';export {createSettingsActionsSlice} from './src/store/settingsActionsSlice.ts';export {createBootSlice} from './src/store/bootSlice.ts';`,resolveDir:fileURLToPath(new URL('../',import.meta.url))},
+const built=await build({stdin:{contents:`export * from './src/lib/transcriptionConfig.ts';export * from './src/lib/translationConfig.ts';export {translateDraftText,getTranslationContextKey} from './src/lib/translateDraft.ts';export {listProviderModels} from './src/lib/listModels.ts';export {SettingsTranslationPanel} from './src/components/settings/SettingsTranslationPanel.tsx';export {defaultSettings,normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {transcribeVoice} from './src/lib/transcribeVoice.ts';export {useMessageActions} from './src/components/chat/useMessageActions.ts';export {SettingsAiPanel,AiServiceFields} from './src/components/settings/SettingsAiPanel.tsx';export {SettingsSpeechPanel} from './src/components/settings/SettingsSpeechPanel.tsx';export {createSettingsActionsSlice} from './src/store/settingsActionsSlice.ts';export {createBootSlice} from './src/store/bootSlice.ts';`,resolveDir:fileURLToPath(new URL('../',import.meta.url))},
   bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},
   plugins:[{name:'speech-config-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}],
 });
@@ -38,7 +38,7 @@ function fixture(settings={}) {
   const ctx={get:()=>speechState,set:patch=>Object.assign(speechState,typeof patch==='function'?patch(speechState):patch)};
   Object.assign(speechState,mod.createSettingsActionsSlice(ctx),mod.createBootSlice(ctx));
   const requests=[];globalThis.fetch=async(url,options)=>{requests.push({url,options});return new Response(JSON.stringify({text:'speech transcript'}),{status:200});};
-  return{ctx,requests,render:()=>mod.SettingsAiPanel(),close(){globalThis.fetch=oldFetch;globalThis.window=oldWindow;console.info=oldLog;for(const key of ['speechState','speechSaves','speechSaveFail','speechLocal','speechSnapshot','speechSecrets','speechFlushed','speechGemini','speechTranslate'])delete globalThis[key];}};
+  return{ctx,requests,render:()=>[mod.SettingsAiPanel(),mod.AiServiceFields({settings:speechState.settings,updateSettings:speechState.updateSettings})],close(){globalThis.fetch=oldFetch;globalThis.window=oldWindow;console.info=oldLog;for(const key of ['speechState','speechSaves','speechSaveFail','speechLocal','speechSnapshot','speechSecrets','speechFlushed','speechGemini','speechTranslate'])delete globalThis[key];}};
 }
 
 test('legacy providers migrate once; later text provider/model/key changes cannot change the speech config',()=>{
@@ -78,7 +78,7 @@ test('Gemini receives its independent key/model; local-only mode never uploads a
 });
 
 test('a received voice message transcribes with the speech service, then translates with the text service',async()=>{
-  const ui=fixture({aiProvider:'custom',customAiBaseUrl:'https://text.invalid/v1',customAiKey:'text-key',customAiModel:'text-model',translateService:'ai',myLang:'zh',
+  const ui=fixture({aiProvider:'custom',customAiBaseUrl:'https://reply.invalid/v1',customAiKey:'reply-key',customAiModel:'reply-model',translationProvider:'custom',translationBaseUrl:'https://text.invalid/v1',translationApiKey:'text-key',translationModel:'text-model',translateService:'ai',myLang:'zh',
     transcriptionProvider:'custom',transcriptionBaseUrl:'https://speech.invalid/v1',transcriptionApiKey:'speech-key',transcriptionModel:'speech-model'});
   try {
     const requests=[],patches=[],toasts=[];speechState.messages=[{id:'voice',mediaUrl:'audio',mediaMime:'audio/ogg'}];
@@ -103,7 +103,7 @@ test('missing speech credentials and invalid endpoint protocols fail without upl
 test('the settings page separates speech fields; changing text presets leaves speech intact and provider switching clears the old speech key',async()=>{
   const ui=fixture({aiProvider:'custom',customAiKey:'text-key',customAiBaseUrl:'https://text.invalid/v1',customAiModel:'text-model',transcriptionProvider:'custom',transcriptionApiKey:'speech-key',transcriptionBaseUrl:'https://speech.invalid/v1',transcriptionModel:'speech-model'});
   try {
-    let tree=[ui.render(),mod.SettingsSpeechPanel()];assert.ok(text(tree).includes('语音转文字'));assert.ok(text(tree).includes('文字 AI'));assert.ok(!text(tree).includes('共用的模型服务'));
+    let tree=[ui.render(),mod.SettingsSpeechPanel()];assert.ok(text(tree).includes('语音转文字'));assert.ok(text(tree).includes('回复 AI'));assert.ok(!text(tree).includes('共用的模型服务'));
     const before=mod.resolveTranscriptionConfig(speechState.settings);field(tree,'常用预设').props.onChange({target:{value:'deepseek'}});assert.deepEqual(mod.resolveTranscriptionConfig(speechState.settings),before);
     field(tree,'语音转写模型').props.onChange({target:{value:'audio-updated'}});assert.equal(speechState.settings.customAiModel,'deepseek-chat');assert.equal(speechState.settings.transcriptionModel,'audio-updated');
     const secret=field(tree,'语音服务 API Key');assert.equal(secret.props.type,'password');
@@ -138,6 +138,90 @@ test('failed speech-key migration stops hydration before saving the independent 
   const ui=fixture();try {
     speechSnapshot={phones:[],contacts:[],chats:[],messages:[],followUps:[],settings:{aiProvider:'openai'}};speechSecrets={openaiKey:'old-key',groqKey:'',transcriptionApiKey:''};speechSaveFail=true;
     await assert.rejects(speechState.hydrate(),/语音转写密钥安全迁移失败/);assert.equal(speechFlushed,null);assert.notEqual(speechState.hydrated,true);
+  }finally{ui.close();}
+});
+
+test('legacy translation configuration migrates once, then ignores reply and speech changes',()=>{
+  const migrated=mod.normalizeLoadedSettings({aiProvider:'custom',customAiKey:'legacy-key',customAiBaseUrl:'https://legacy.invalid/v1',customAiModel:'legacy-text'});
+  assert.equal(migrated.translationProvider,'custom');assert.equal(migrated.translationApiKey,'legacy-key');
+  assert.equal(migrated.translationBaseUrl,'https://legacy.invalid/v1');assert.equal(migrated.translationModel,'legacy-text');
+  const changed=mod.normalizeLoadedSettings({...migrated,aiProvider:'gemini',geminiKey:'reply-key',aiModel:'reply-model',transcriptionApiKey:'new-speech-key'});
+  assert.deepEqual(mod.resolveTranslationConfig(changed),mod.resolveTranslationConfig(migrated));
+  assert.equal(mod.normalizeLoadedSettings({aiProvider:'groq',groqKey:'old-key',aiModel:'whisper-large-v3-turbo'}).translationModel,mod.GROQ_TRANSLATION_MODEL);
+});
+
+test('translation requests and caches use only the independent translation service',async()=>{
+  const ui=fixture({aiProvider:'custom',customAiKey:'reply-key',customAiBaseUrl:'https://reply.invalid/v1',customAiModel:'reply-model',
+    translationProvider:'groq',translationApiKey:'translation-key',translationModel:'openai/gpt-oss-20b',translateService:'ai',transcriptionApiKey:'speech-key'});
+  try {
+    const calls=[];globalThis.fetch=async(url,options)=>{calls.push({url,options});return Response.json({choices:[{message:{content:'明天见，我们会确认这笔订单。'}}]});};
+    const source='Bonjour mon ami, nous confirmerons cette commande demain.';
+    const key=mod.getTranslationContextKey(source,'zh',speechState.settings);
+    const result=await mod.translateDraftText(source,'zh',speechState.settings);
+    assert.equal(result.source,'groq');assert.equal(calls.length,1);
+    assert.equal(calls[0].url,'https://api.groq.com/openai/v1/chat/completions');assert.equal(calls[0].options.headers.Authorization,'Bearer translation-key');
+    assert.equal(JSON.parse(calls[0].options.body).model,'openai/gpt-oss-20b');
+    assert.equal(JSON.parse(calls[0].options.body).reasoning_effort,'low');assert.equal(JSON.parse(calls[0].options.body).include_reasoning,false);
+    speechState.updateSettings({aiProvider:'gemini',geminiKey:'other-reply-key',aiModel:'other-reply-model',transcriptionModel:'other-speech-model'});
+    assert.equal(mod.getTranslationContextKey(source,'zh',speechState.settings),key);
+    await mod.translateDraftText(source,'zh',speechState.settings);assert.equal(calls.length,1);
+    speechState.updateSettings({translationApiKey:''});
+    assert.equal((await mod.translateDraftText(source+' Merci.','zh',speechState.settings)).fallback,true);assert.equal(calls.length,1,'never borrow a reply or speech key');
+    await new Promise(resolve=>setImmediate(resolve));
+  }finally{ui.close();}
+});
+
+test('translation controls persist their own key and provider changes clear only that key',async()=>{
+  const ui=fixture({aiProvider:'custom',customAiKey:'reply-key',customAiModel:'reply-model',translationProvider:'groq',translationApiKey:'translation-key',transcriptionApiKey:'speech-key'});
+  try {
+    const panel=mod.SettingsTranslationPanel();const form=nodes(panel).find(node=>node.type===mod.AiServiceFields);
+    const fields=mod.AiServiceFields(form.props);const secret=nodes(fields).find(node=>node.props?.label==='Groq API Key');
+    field(secret.type(secret.props),'Groq API Key').props.onChange({target:{value:'translation-key-updated'}});
+    await new Promise(resolve=>setImmediate(resolve));assert.equal(speechSaves.at(-1).translationApiKey,'translation-key-updated');
+    assert.equal(speechState.settings.customAiKey,'reply-key');assert.equal(speechState.settings.transcriptionApiKey,'speech-key');
+    form.props.updateSettings({aiProvider:'gemini',aiModel:''});
+    assert.equal(speechState.settings.translationProvider,'gemini');assert.equal(speechState.settings.translationApiKey,'');
+    assert.equal(speechState.settings.aiProvider,'custom');assert.equal(speechState.settings.customAiModel,'reply-model');
+    await new Promise(resolve=>setImmediate(resolve));
+  }finally{ui.close();}
+});
+
+test('chat and transcription model lists exclude incompatible tasks',async()=>{
+  const ui=fixture({groqKey:'models-key'});
+  try {
+    globalThis.fetch=async()=>Response.json({data:['openai/gpt-oss-20b','whisper-large-v3','whisper-large-v3-turbo','canopylabs/orpheus-v1-english','text-embedding-3-small','meta-llama/llama-prompt-guard-2-22m'].map(id=>({id}))});
+    assert.deepEqual((await mod.listProviderModels('groq',speechState.settings)).map(m=>m.id),['openai/gpt-oss-20b']);
+    assert.deepEqual((await mod.listProviderModels('groq',speechState.settings,'transcription')).map(m=>m.id),['whisper-large-v3','whisper-large-v3-turbo']);
+  }finally{ui.close();}
+});
+
+test('cloud transcription skips an installed local model and uses only the speech key',async()=>{
+  const ui=fixture({transcriptionProvider:'groq',transcriptionApiKey:'speech-key',transcriptionModel:'whisper-large-v3-turbo',transcriptionLocalFirst:false,groqKey:'reply-key',translationApiKey:'translation-key'});
+  try {
+    globalThis.speechLocal=true;
+    const result=await mod.transcribeVoice('audio','audio/ogg',speechState.settings);
+    assert.equal(result.source,'groq');assert.equal(ui.requests.length,1);
+    assert.equal(ui.requests[0].options.headers.Authorization,'Bearer speech-key');
+    assert.equal(ui.requests[0].options.body.get('model'),'whisper-large-v3-turbo');
+  }finally{ui.close();}
+});
+
+test('a legacy translation key is saved securely during hydration before the independent settings persist',async()=>{
+  const ui=fixture();try {
+    speechSnapshot={phones:[],contacts:[],chats:[],messages:[],followUps:[],settings:{aiProvider:'groq',aiModel:'openai/gpt-oss-20b',transcriptionProvider:'none'}};
+    speechSecrets={openaiKey:'',groqKey:'old-translation-key',transcriptionApiKey:'',translationApiKey:''};
+    await speechState.hydrate();
+    assert.equal(speechSaves.at(-1).translationApiKey,'old-translation-key');assert.equal(speechFlushed.translationProvider,'groq');
+    assert.equal(speechState.settings.translationApiKey,'old-translation-key');
+  }finally{ui.close();}
+});
+
+test('failed translation-only key migration does not persist a half-migrated configuration',async()=>{
+  const ui=fixture();try {
+    speechSnapshot={phones:[],contacts:[],chats:[],messages:[],followUps:[],settings:{aiProvider:'groq',transcriptionProvider:'none'}};
+    speechSecrets={openaiKey:'',groqKey:'old-key',transcriptionApiKey:'',translationApiKey:''};speechSaveFail=true;
+    await assert.rejects(speechState.hydrate(),/密钥安全迁移失败/);
+    assert.equal(speechFlushed,null);assert.notEqual(speechState.hydrated,true);
   }finally{ui.close();}
 });
 

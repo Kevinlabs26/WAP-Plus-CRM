@@ -61,7 +61,8 @@ function harness() {
     baileysUi: { labelsByAccountId: {} }, pushToast() {},
   };
   const requests = []; const timers = new Map(); let timerId = 0; let contextReads = 0;
-  globalThis.window = { setTimeout(fn) { timers.set(++timerId, fn); return timerId; }, clearTimeout(id) { timers.delete(id); } };
+  const delays = [];
+  globalThis.window = { setTimeout(fn, delay) { delays.push(delay); timers.set(++timerId, fn); return timerId; }, clearTimeout(id) { timers.delete(id); } };
   const store = selector => selector(state); store.setState = patch => Object.assign(state, patch); store.getState=()=>state;
   globalThis.panelHooks = hooks;
   globalThis.panelBindings = {
@@ -73,7 +74,7 @@ function harness() {
     useI18n: () => ({ t: key => key }), getQuickReplyCategories: () => [], filterQuickReplies: () => [],
     filterMessagesForAccount: messages => messages, cn: () => "", isWaAccountConnected: () => false,
   };
-  return { state, requests, get contextReads() { return contextReads; },
+  return { state, requests, delays, get contextReads() { return contextReads; },
     async mount() {
       const { CrmAiPanel } = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString("base64")}#${Math.random()}`);
       this.render = () => {
@@ -205,11 +206,14 @@ test("streamed candidates appear while loading and cannot leak across conversati
   progressA(reply("STALE A progress"));
   assert.deepEqual(h.state.aiSuggestions, []);
   Object.assign(h.state, { selectedContactId: "a", selectedChatId: "a" }); h.render(); h.fireTimers();
-  assert.equal(h.requests.length, 2, "returning reuses the pending A request");
-  assert.equal(h.state.aiSuggestions[0].text, "STALE A progress", "progress is replayed only into its own conversation");
+  assert.equal(h.requests.length, 3, "returning starts a new request after cancelling obsolete work");
+  assert.equal(h.requests[0].args[3].signal.aborted, true);
+  assert.equal(h.requests[1].args[3].signal.aborted, true);
+  assert.deepEqual(h.state.aiSuggestions, [], "cancelled streaming progress is never replayed");
   h.unmount(); progressA(reply("AFTER UNMOUNT"));
-  assert.notEqual(h.state.aiSuggestions[0].text, "AFTER UNMOUNT");
-  h.requests[0].resolve(reply("done A")); h.requests[1].resolve(reply("done B")); await settle();
+  assert.equal(h.requests[2].args[3].signal.aborted, true);
+  assert.deepEqual(h.state.aiSuggestions, []);
+  h.requests.forEach(request => request.resolve(reply("done"))); await settle();
 });
 
 test("manual and automatic requests cannot put an old contact's suggestion into a new conversation", async () => {
@@ -250,19 +254,24 @@ test("sent replies automatically generate a continuation while receipts reuse it
   assert.equal(h.state.aiSuggestions[0].text, "new model");
 });
 
-test("switching away preserves pending and completed results; returning never duplicates a request", async () => {
-  for (const finishWhileAway of [false, true]) {
+test("switching away cancels pending work but keeps completed results for instant return", async () => {
+  for (const finishBeforeLeaving of [false, true]) {
     const h = harness(); await h.mount(); h.fireTimers();
+    if (finishBeforeLeaving) { h.requests[0].resolve(reply("A cached")); await settle(); h.render(); }
     Object.assign(h.state, { selectedContactId: "b", selectedChatId: "b" }); h.render(); h.fireTimers();
-    if (finishWhileAway) { h.requests[0].resolve(reply("A cached")); await settle(); }
+    assert.equal(h.requests[0].args[3].signal.aborted, !finishBeforeLeaving);
     Object.assign(h.state, { selectedContactId: "a", selectedChatId: "a" }); h.render(); h.fireTimers();
-    assert.equal(h.requests.length, 2, "reuse A's original request");
-    if (!finishWhileAway) { h.requests[0].resolve(reply("A cached")); await settle(); }
+    assert.equal(h.requests[1].args[3].signal.aborted, true);
+    assert.equal(h.requests.length, finishBeforeLeaving ? 2 : 3);
+    if (!finishBeforeLeaving) {
+      h.requests[0].resolve(reply("cancelled A")); await settle(); assert.deepEqual(h.state.aiSuggestions, []);
+      h.requests[2].resolve(reply("A cached")); await settle();
+    }
     assert.equal(h.state.aiSuggestions[0].text, "A cached");
-    h.requests[1].resolve(reply("B cached")); await settle();
+    h.requests[1].resolve(reply("cancelled B")); await settle();
     assert.equal(h.state.aiSuggestions[0].text, "A cached", "B cannot overwrite A");
     Object.assign(h.state, { selectedContactId: "b", selectedChatId: "b" }); h.render(); h.fireTimers();
-    assert.equal(h.requests.length, 2);
+    h.requests.at(-1).resolve(reply("B cached")); await settle();
     assert.equal(h.state.aiSuggestions[0].text, "B cached");
     h.unmount();
   }
@@ -276,6 +285,7 @@ test("message bursts settle once, manual clicks share pending work, and hidden p
     }] }; h.render();
   };
   addIncoming("1"); addIncoming("2"); h.fireTimers();
+  assert.equal(h.delays.at(-1), 500, 'automatic requests wait for a half-second pause in the message burst');
   assert.equal(h.requests.length, 1);
   assert.equal(h.requests[0].args[1].length, 3);
   h.refresh(); h.refresh(); assert.equal(h.requests.length, 1);
@@ -284,10 +294,13 @@ test("message bursts settle once, manual clicks share pending work, and hidden p
   assert.equal(h.requests.length, 1);
   h.state.crmPanelTab = "customer"; h.render(); h.fireTimers(); assert.equal(h.requests.length, 2);
   h.state.crmPanelCollapsed = true; h.render();
+  assert.equal(h.requests[1].args[3].signal.aborted, true);
   h.requests[1].resolve(reply("while collapsed")); await settle();
   h.state.crmPanelCollapsed = false; h.render(); h.fireTimers();
-  assert.equal(h.requests.length, 2);
-  assert.equal(h.state.aiSuggestions[0].text, "while collapsed");
+  assert.equal(h.requests.length, 3);
+  assert.deepEqual(h.state.aiSuggestions, []);
+  h.requests[2].resolve(reply("reopened")); await settle();
+  assert.equal(h.state.aiSuggestions[0].text, "reopened");
   h.unmount();
 });
 

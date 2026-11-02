@@ -77,3 +77,19 @@ test('recipient cap, minimum sending intervals, connection and warmup guards rem
     assert.equal(h.metrics.created,0,'test never creates or sends a live campaign');
   }finally{h.close();}
 });
+
+test('recording blocks launch, and a voice-only campaign requires no placeholder text',async()=>{
+  const h=await fixture();try{
+    h.picker().onPhoneTextChange('+12025550101');h.render();
+    h.all().find(n=>n.type==='textarea').props.onChange({target:{value:''}});h.render();
+    assert.equal(h.launch().props.disabled,true);
+    let media=h.all().find(n=>n.type==='media-picker').props;
+    media.onBusyChange(true);h.render();assert.equal(h.launch().props.disabled,true);
+    media.onChange([{id:'voice',kind:'audio',mime:'audio/ogg',voiceNote:true}],'single',{voice:'data:audio/ogg;base64,T2dnUw=='});
+    h.render();assert.equal(h.launch().props.disabled,true,'cannot launch before recording has finished');
+    media.onBusyChange(false);h.render();assert.equal(h.launch().props.disabled,false);
+    h.all().find(n=>n.type==='textarea').props.onChange({target:{value:'caption'}});h.render();
+    assert.equal(h.launch().props.disabled,true,'never silently lose a voice caption');
+    assert.equal(h.metrics.created,0);
+  }finally{h.close();}
+});

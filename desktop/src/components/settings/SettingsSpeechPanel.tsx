@@ -4,6 +4,7 @@ import { useI18n } from "@/i18n";
 import { VOICE_INPUT_LANGUAGES } from "@/lib/voiceInputLanguage";
 import { TRANSCRIPTION_DEFAULTS, type TranscriptionProvider } from "@/lib/transcriptionConfig";
 import { SettingsLocalSpeechPanel } from "./SettingsLocalSpeechPanel";
+import { ModelPicker } from "./SettingsAiPanel";
 
 export function SettingsSpeechPanel() {
  const { t } = useI18n();
@@ -57,11 +58,19 @@ export function SettingsSpeechPanel() {
         <p className="mt-2 text-xs leading-relaxed text-zinc-500">{t("settingsAi.speechHint")}</p>
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="block text-2xs text-zinc-500 sm:col-span-2">
+            {t("settingsAi.transcriptionRoute")}
+            <select value={settings.transcriptionLocalFirst === false ? "cloud" : "local"} className="ui-control mt-1 w-full px-2.5 text-[13px]"
+              onChange={event => updateSettings({ transcriptionLocalFirst: event.target.value === "local" })}>
+              <option value="cloud">{t("settingsAi.transcriptionCloud")}</option>
+              <option value="local">{t("settingsAi.transcriptionLocalFirst")}</option>
+            </select>
+          </label>
+          <label className="block text-2xs text-zinc-500 sm:col-span-2">
             {t("settingsAi.speechProvider")}
             <select value={settings.transcriptionProvider} className="ui-control mt-1 w-full px-2.5 text-[13px]"
               onChange={(event) => {
                 const provider = event.target.value as TranscriptionProvider;
-                updateSettings({ transcriptionProvider: provider, transcriptionApiKey: "",
+                updateSettings({ transcriptionProvider: provider, transcriptionApiKey: "", transcriptionLocalFirst: provider === "none",
                   transcriptionBaseUrl: TRANSCRIPTION_DEFAULTS[provider].baseUrl,
                   transcriptionModel: TRANSCRIPTION_DEFAULTS[provider].model });
               }}>
@@ -73,11 +82,15 @@ export function SettingsSpeechPanel() {
             </select>
           </label>
           {settings.transcriptionProvider !== "none" && <>
-            <label className="block text-2xs text-zinc-500">{t("settingsAi.speechKey")}<Input type="password" autoComplete="off" className="mt-1" value={settings.transcriptionApiKey} onChange={e => updateSettings({ transcriptionApiKey: e.target.value })} /></label>
-            <label className="block text-2xs text-zinc-500">
+            <label className="block text-2xs text-zinc-500 sm:col-span-2">{t("settingsAi.speechKey")}<Input type="password" autoComplete="off" className="mt-1" value={settings.transcriptionApiKey} onChange={e => updateSettings({ transcriptionApiKey: e.target.value })} /></label>
+            {settings.transcriptionProvider === "groq" || settings.transcriptionProvider === "openai" ? <ModelPicker
+              purpose="transcription"
+              settings={{ ...settings, aiProvider: settings.transcriptionProvider, aiModel: settings.transcriptionModel, openaiKey: settings.transcriptionApiKey, groqKey: settings.transcriptionApiKey }}
+              onModelChange={transcriptionModel => updateSettings({ transcriptionModel })}
+            /> : <label className="block text-2xs text-zinc-500 sm:col-span-2">
               {t("settingsAi.speechModel")}
               <Input value={settings.transcriptionModel} onChange={(event) => updateSettings({ transcriptionModel: event.target.value })} className="mt-1" placeholder={TRANSCRIPTION_DEFAULTS[settings.transcriptionProvider].model || "whisper-large-v3"} />
-            </label>
+            </label>}
             {settings.transcriptionProvider !== "gemini" && <details key={settings.transcriptionProvider} open={settings.transcriptionProvider === "custom"} className="text-2xs text-zinc-500 sm:col-span-2">
               <summary className="cursor-pointer py-1">{t("settingsAi.speechConnection")}</summary>
               <label className="mt-2 block">

@@ -152,8 +152,12 @@ export function buildCampaignOrError(
   const accountId = String(input.accountId || "").trim();
   if (!accountId) return { ok: false, reason: "请选择发送账号" };
 
-  const v = validateBroadcastTemplate(input.template);
+  const media = normalizeBroadcastMedia(input.media);
+  const v = validateBroadcastTemplate(input.template, media.length > 0);
   if (!v.ok) return v;
+  if (input.template.trim() && media.some(item => item.kind === "audio" && item.voiceNote)) {
+    return { ok: false, reason: "语音条不能附带文字，请清空文案或改为文件发送" };
+  }
 
   if (input.blockWarmup !== false && input.accountCreatedAt) {
     const limits: SendRateLimits = {
@@ -203,7 +207,7 @@ export function buildCampaignOrError(
     if (seenPhones.has(phone)) continue;
     seenPhones.add(phone);
     const body = renderBroadcastTemplate(input.template, c);
-    if (!body) {
+    if (!body && !media.length) {
       items.push({
         id: uid("bi"),
         contactId: c.id,
@@ -231,7 +235,6 @@ export function buildCampaignOrError(
   }
 
   const now = new Date().toISOString();
-  const media = normalizeBroadcastMedia(input.media);
   const mediaMode: BroadcastMediaMode =
     media.length > 1 && input.mediaMode === "random"
       ? "random"
@@ -289,6 +292,7 @@ function normalizeBroadcastMedia(
       kind,
       mime: String(m.mime || "").slice(0, 120) || "application/octet-stream",
       fileName: m.fileName ? String(m.fileName).slice(0, 240) : undefined,
+      ...(kind === "audio" && m.voiceNote === true ? { voiceNote: true } : {}),
     });
     if (out.length >= 10) break;
   }

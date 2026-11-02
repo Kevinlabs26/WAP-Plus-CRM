@@ -45,7 +45,7 @@ export function createSettingsActionsSlice({
       openaiKey: next.openaiKey, groqKey: next.groqKey, geminiKey: next.geminiKey,
       deepseekKey: next.deepseekKey, qwenKey: next.qwenKey, zhipuKey: next.zhipuKey,
       openrouterKey: next.openrouterKey, customAiKey: next.customAiKey,
-      transcriptionApiKey: next.transcriptionApiKey, bridgeToken: next.bridgeToken,
+      transcriptionApiKey: next.transcriptionApiKey, translationApiKey: next.translationApiKey, bridgeToken: next.bridgeToken,
     };
     set({ secretSaveStatus: "saving" });
     const run = secretSaveTail.then(() => saveSecureSecrets(snapshot)).catch(() => false).then(ok => {
@@ -140,7 +140,7 @@ export function createSettingsActionsSlice({
       const secretPatch = patch.openaiKey !== undefined || patch.groqKey !== undefined ||
         patch.geminiKey !== undefined || patch.deepseekKey !== undefined || patch.qwenKey !== undefined ||
         patch.zhipuKey !== undefined || patch.openrouterKey !== undefined || patch.customAiKey !== undefined ||
-        patch.transcriptionApiKey !== undefined || patch.bridgeToken !== undefined;
+        patch.transcriptionApiKey !== undefined || patch.translationApiKey !== undefined || patch.bridgeToken !== undefined;
       if (getStorageEngine() === "sqlite" && secretPatch && (changed || get().secretSaveStatus === "failed")) {
         void saveCurrentSecrets();
       }

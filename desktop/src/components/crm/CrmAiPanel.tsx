@@ -222,7 +222,7 @@ export function CrmAiPanel() {
   }, [aiSuggestions, suggestionKey, collapsed, panelTab, suggestionCache, settings.uiLanguage]);
 
   const requestSuggestions = (key: string, force = false, onProgress?: (result: GenerateSuggestionsResult) => void) => suggestionCache.request(key,
-    publish => generateSuggestions(contact, thread, settings, { accountId: aiAccountId, chatId: selectedChatId || undefined, onProgress: publish }), force, onProgress);
+    (publish, signal) => generateSuggestions(contact, thread, settings, { accountId: aiAccountId, chatId: selectedChatId || undefined, onProgress: publish, signal }), force, onProgress);
 
   const showProgress = (key: string, request: number) => (result: GenerateSuggestionsResult) => {
     if (request !== generation.current || latestSuggestionKey.current !== key || !suggestionCache.get(key)) return;
@@ -337,7 +337,7 @@ export function CrmAiPanel() {
     setAiError("");
     if (collapsed || panelTab !== "customer" || !contact || !aiReady) {
       setLoading(false);
-      return () => { generation.current++; };
+      return () => { generation.current++; suggestionCache.cancelPending(key); };
     }
     const entry = suggestionCache.get(key);
     const cached = entry?.result;
@@ -346,11 +346,11 @@ export function CrmAiPanel() {
       setAiSource(cached.source === "mock" ? t("crmPanel.localTemplate") : cached.source);
       setAiError("");
       setLoading(false);
-      return () => { generation.current++; };
+      return () => { generation.current++; suggestionCache.cancelPending(key); };
     }
     if (isManualSuggestionContext(key)) {
       setLoading(false);
-      return () => { generation.current++; };
+      return () => { generation.current++; suggestionCache.cancelPending(key); };
     }
     let cancelled = false;
     setLoading(true);
@@ -372,11 +372,12 @@ export function CrmAiPanel() {
             setLoading(false);
           }
         });
-    }, suggestionCache.get(key) ? 0 : 200);
+    }, suggestionCache.get(key) ? 0 : 500);
     return () => {
       cancelled = true;
       generation.current++;
       window.clearTimeout(timer);
+      suggestionCache.cancelPending(key);
     };
     // 已发出的消息也更新下一句建议；未发出的内容不改变上下文或重复请求。
     // eslint-disable-next-line react-hooks/exhaustive-deps

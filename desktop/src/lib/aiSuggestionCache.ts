@@ -6,17 +6,25 @@ export const SUGGESTION_MAX_AGE_MS = 5 * 60_000;
 export function createSuggestionCache() {
   type Progress = (result: GenerateSuggestionsResult) => void;
   type Entry = { createdAt: number; expiresAt: number; result?: GenerateSuggestionsResult; promise: Promise<GenerateSuggestionsResult>;
-    updates: { latest?: GenerateSuggestionsResult; listeners: Set<Progress> } };
+    controller: AbortController; updates: { latest?: GenerateSuggestionsResult; listeners: Set<Progress> } };
   const entries = new Map<string, Entry>();
+  const cancelPending = (key: string) => {
+    const entry = entries.get(key);
+    if (!entry || entry.result) return;
+    entries.delete(key);
+    entry.updates.listeners.clear();
+    entry.controller.abort();
+  };
   const get = (key: string) => {
     const entry = entries.get(key);
-    if (entry && (Date.now() >= entry.expiresAt || Date.now() < entry.createdAt)) { entries.delete(key); return; }
+    if (entry && (Date.now() >= entry.expiresAt || Date.now() < entry.createdAt)) { cancelPending(key); entries.delete(key); return; }
     if (entry) { entries.delete(key); entries.set(key, entry); }
     return entry;
   };
   return {
     get,
-    request(key: string, generate: (publish: Progress) => Promise<GenerateSuggestionsResult>, force = false, onProgress?: Progress) {
+    cancelPending,
+    request(key: string, generate: (publish: Progress, signal: AbortSignal) => Promise<GenerateSuggestionsResult>, force = false, onProgress?: Progress) {
       const existing = get(key);
       if (existing && (!force || !existing.result)) {
         if (onProgress && !existing.result) {
@@ -27,14 +35,17 @@ export function createSuggestionCache() {
       }
       const updates: Entry["updates"] = { listeners: new Set(onProgress ? [onProgress] : []) };
       const createdAt = Date.now();
+      const controller = new AbortController();
       const entry: Entry = {
         createdAt, expiresAt: createdAt + SUGGESTION_MAX_AGE_MS,
-        updates,
+        updates, controller,
         promise: generate(result => {
+          if (controller.signal.aborted) return;
           updates.latest = result;
           for (const listener of updates.listeners) listener(result);
-        }).then((result) => {
+        }, controller.signal).then((result) => {
           updates.listeners.clear();
+          controller.signal.throwIfAborted();
           if (Date.now() >= entry.expiresAt || Date.now() < entry.createdAt) {
             if (entries.get(key) === entry) entries.delete(key);
             throw new Error("Reply suggestions expired; please generate again.");
@@ -51,7 +62,11 @@ export function createSuggestionCache() {
         }),
       };
       entries.set(key, entry);
-      while (entries.size > 24) entries.delete(entries.keys().next().value!);
+      while (entries.size > 24) {
+        const oldest = entries.keys().next().value!;
+        cancelPending(oldest);
+        entries.delete(oldest);
+      }
       return entry.promise;
     },
   };

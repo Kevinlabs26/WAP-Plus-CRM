@@ -9,7 +9,7 @@ const mocks = {
   "@/store/appStore": "export const useAppStore={getState:()=>globalThis.campaignState};export const flushPersist=async()=>globalThis.campaignPersist?.();",
   "@/lib/baileys": `export const baileysStatus=async()=>({connection:'connected'});
     export const baileysSend=(...args)=>globalThis.campaignSend(...args);
-    export const baileysSendImage=baileysSend,baileysSendSticker=baileysSend,baileysSendDocument=baileysSend;`,
+    export const baileysSendImage=baileysSend,baileysSendSticker=baileysSend,baileysSendDocument=baileysSend,baileysSendVoice=baileysSend;`,
   "@/lib/bridge": "export const isTauri=()=>true;export const bridgeInvoke=async()=>({});export const getBridgeStatus=async()=>({connected:true});",
   "@/lib/mediaCache": "export const readMediaCache=async()=>globalThis.campaignMedia;",
   "@/i18n": "export const translateCurrent=key=>key;",
@@ -38,13 +38,13 @@ function setup(kind = "text") {
   globalThis.FileReader = class {
     readAsDataURL(file) { file.arrayBuffer().then(bytes => { this.result = `data:${file.type};base64,${Buffer.from(bytes).toString("base64")}`; this.onload(); }); }
   };
-  globalThis.campaignMedia = `data:${kind === "image" ? "image/png" : "application/pdf"};base64,Zml4dHVyZQ==`;
+  globalThis.campaignMedia = `data:${kind === "image" ? "image/png" : kind === "voice" ? "audio/ogg" : "application/pdf"};base64,Zml4dHVyZQ==`;
   globalThis.campaignSend = async (...args) => { sends.push(args); return { ok: true, id: "protocol", jid: "12025550100@s.whatsapp.net" }; };
   let state = { hydrated: true, uiReady: true, messages: [], baileysUi: { connection: "connected" },
     settings: { sendChannel: "baileys", waAccounts: [{ id: "wa-a", status: "connected" }], liveBaileysAccountId: "wa-a", rateLimitEnabled: false, blockSendWhenOverheated: false },
     broadcastCampaigns: [{ id: "campaign", accountId: "wa-a", status: "running", extraGapSec: 5,
-      media: kind === "text" ? undefined : [{ id: "media", kind, mime: kind === "image" ? "image/png" : "application/pdf" }],
-      items: [{ id: "item", status: "pending", contactId: "customer", phoneE164: "+12025550100", bodyRendered: "hello" }] }],
+      media: kind === "text" ? undefined : [{ id: "media", kind: kind === "voice" ? "audio" : kind, mime: kind === "image" ? "image/png" : kind === "voice" ? "audio/ogg" : "application/pdf", ...(kind === "voice" ? { voiceNote: true } : {}) }],
+      items: [{ id: "item", status: "pending", contactId: "customer", phoneE164: "+12025550100", bodyRendered: kind === "voice" ? "" : "hello" }] }],
   };
   const set = patch => { state = { ...state, ...patch }; globalThis.campaignState = state; };
   Object.assign(state, {
@@ -65,7 +65,7 @@ function setup(kind = "text") {
   } };
 }
 
-for (const kind of ["text", "image", "document"]) {
+for (const kind of ["text", "image", "document", "voice"]) {
   test(`${kind}: a definite send failure pauses before the next recipient`, async () => {
     const env = setup(kind);
     try {
@@ -137,6 +137,12 @@ for (const kind of ["text", "image", "document"]) {
       assert.equal(env.sends.length, 1);
       assert.equal(env.get().broadcastCampaigns[0].items[0].status, "sent");
       assert.equal(env.get().messages[0].systemKind, "broadcast_campaign");
+      if (kind === "voice") {
+        assert.equal(env.sends[0][2].ptt, true);
+        assert.equal(env.sends[0][2].accountId, "wa-a");
+        assert.equal(env.get().messages[0].mediaType, "audio");
+        assert.equal(env.get().messages[0].mediaPtt, true);
+      }
     } finally { env.cleanup(); }
   });
   if (kind !== "text") test(`${kind}: resuming after a cooldown reuses the original outgoing record`,async()=>{

@@ -114,8 +114,8 @@ async function transcribeVoiceImpl(
   settings: AppSettings,
   signal?: AbortSignal
 ): Promise<TranscriptResult> {
-  // ① 本地引擎优先：装了模型就离线转写，零 Key 零配额；失败静默回落云端
-  try {
+  // Keep legacy local-first behavior unless the user explicitly selects the cloud service.
+  if (settings.transcriptionLocalFirst !== false) try {
     const { findReadyLocalModel, localTranscribe } = await import("./localSpeech");
     const ready = await findReadyLocalModel();
     signal?.throwIfAborted();
@@ -134,7 +134,7 @@ async function transcribeVoiceImpl(
   }
   const config = resolveTranscriptionConfig(settings);
   const provider = config.provider;
-  if (provider === "none") return failedTranscript("请在 AI 设置中单独配置语音转写服务，或安装本地语音模型");
+  if (provider === "none") return failedTranscript("请在“语音与朗读”中单独配置语音转写服务，或选择本地优先并安装语音模型");
   if (!config.apiKey || !config.model || (provider !== "gemini" && !config.baseUrl))
     return failedTranscript("语音转写服务缺少 API Key、模型名或 Base URL，请检查独立的语音设置");
   try {

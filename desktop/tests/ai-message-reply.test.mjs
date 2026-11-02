@@ -119,6 +119,7 @@ test('late AI replies preserve new typing, edits and quote choices and never cro
     if (change === 'account') f.state.selectedThreadAccount = { accountId: 'b' };
     if (change === 'contact') f.state.selectedContactId = 'other';
     if (change === 'unmount') f.unmount();
+    if (change === 'unmount') assert.equal(f.calls[0].args[3].signal.aborted, true);
     f.calls[0].resolve(success); assert.equal(await run, false, change);
     assert.deepEqual(f.writes, [], change); f.unmount();
   }
@@ -140,6 +141,8 @@ test('switching accounts invalidates the old request without clearing a new requ
   f.opts.accountId = 'b'; f.state.selectedThreadAccount = { accountId: 'b' };
   const next = f.render().aiReply(target);
   assert.equal(f.calls.length, 2);
+  assert.equal(f.calls[0].args[3].signal.aborted, true);
+  assert.equal(f.calls[1].args[3].signal.aborted, false);
   f.calls[0].resolve(success); assert.equal(await old, false);
   assert.equal(f.render().aiReplyingId, target.id);
   assert.deepEqual(f.writes, []);

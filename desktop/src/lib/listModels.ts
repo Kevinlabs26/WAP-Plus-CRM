@@ -1,6 +1,7 @@
 import { readAiJson } from "./aiResponse.ts";
 import type { AppSettings } from "@/store/appStore";
 import { getOpenAiCompatibleConfig } from "./aiProviders.ts";
+import { isChatModel, isTranscriptionModel, type ModelPurpose } from "./modelCapabilities.ts";
 
 export interface ModelOption {
   id: string;
@@ -10,8 +11,15 @@ export interface ModelOption {
 /** 从提供商 API 拉取可用模型列表（供设置页下拉选择）。失败抛错由调用方提示。 */
 export async function listProviderModels(
   provider: AppSettings["aiProvider"],
-  settings: AppSettings
+  settings: AppSettings,
+  purpose: ModelPurpose = "chat"
 ): Promise<ModelOption[]> {
+  const models = await listAllProviderModels(provider, settings);
+  return models.filter(model => purpose === "transcription" && (provider === "groq" || provider === "openai")
+    ? isTranscriptionModel(model.id) : isChatModel(model.id));
+}
+
+async function listAllProviderModels(provider: AppSettings["aiProvider"], settings: AppSettings): Promise<ModelOption[]> {
   switch (provider) {
     case "openai":
       return listOpenAiCompatible(

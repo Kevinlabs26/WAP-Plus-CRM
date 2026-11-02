@@ -39,6 +39,7 @@ import {
 import { dedupeAccountLabels } from "@/lib/accountLabels";
 import { normalizeVoiceInputLanguage } from "@/lib/voiceInputLanguage";
 import { resolveTranscriptionConfig, type TranscriptionProvider } from "@/lib/transcriptionConfig";
+import { resolveTranslationConfig, type TranslationProvider } from "@/lib/translationConfig";
 import { DEFAULT_ACCOUNT_ID } from "@/types/account";
 import {
   DEFAULT_FOLLOW_UP_RULE_SETTINGS,
@@ -146,7 +147,7 @@ export interface SettingsShape {
   customAiBaseUrl: string;
   /** 自定义 OpenAI 兼容提供商 API Key */
   customAiKey: string;
-  /** 自定义提供商聊天/翻译模型名 */
+  /** 回复 AI 的自定义提供商模型名。 */
   customAiModel: string;
   /** 旧版共用服务的转写模型，仅用于迁移。 */
   customWhisperModel: string;
@@ -154,6 +155,11 @@ export interface SettingsShape {
   transcriptionBaseUrl: string;
   transcriptionApiKey: string;
   transcriptionModel: string;
+  transcriptionLocalFirst: boolean;
+  translationProvider: TranslationProvider;
+  translationBaseUrl: string;
+  translationApiKey: string;
+  translationModel: string;
   /** 当前提供商选的模型（OpenAI / Groq / Gemini / Ollama 共用）；空 = 用提供商默认 */
   aiModel: string;
   /**
@@ -177,7 +183,7 @@ export interface SettingsShape {
   /** AI 回复的本人时区；空值跟随电脑时区。 */
   aiTimeZone: string;
   /**
-   * 翻译服务：auto=有 AI Key 用 AI 否则 Google 免费；google=始终 Google 免费；ai=仅 AI（无 Key 演示占位）
+   * 翻译策略：auto=独立翻译模型/Google；google=仅 Google；ai=仅独立翻译模型。
    */
   translateService: "auto" | "google" | "ai";
   autoConnectBridge: boolean;
@@ -332,6 +338,11 @@ export const defaultSettings: SettingsShape = {
   transcriptionBaseUrl: "",
   transcriptionApiKey: "",
   transcriptionModel: "",
+  transcriptionLocalFirst: true,
+  translationProvider: "groq",
+  translationBaseUrl: "https://api.groq.com/openai/v1",
+  translationApiKey: "",
+  translationModel: "",
   aiModel: "",
   aiReplyMode: "semi",
   aiAutoReplyPaused: false,
@@ -598,6 +609,12 @@ export function normalizeLoadedSettings(
   merged.transcriptionBaseUrl = transcription.baseUrl;
   merged.transcriptionApiKey = transcription.apiKey;
   merged.transcriptionModel = transcription.model;
+  merged.transcriptionLocalFirst = src.transcriptionLocalFirst !== false;
+  const translation = resolveTranslationConfig(src);
+  merged.translationProvider = translation.provider;
+  merged.translationBaseUrl = translation.baseUrl;
+  merged.translationApiKey = translation.apiKey;
+  merged.translationModel = translation.model;
   merged.aiModel = String(merged.aiModel || "").trim();
   merged.bridgeToken = String(merged.bridgeToken || "").trim().slice(0, 256);
   merged.aiAutoReplyManualChatIds = Array.isArray(merged.aiAutoReplyManualChatIds)

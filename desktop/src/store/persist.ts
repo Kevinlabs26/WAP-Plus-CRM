@@ -170,6 +170,7 @@ export function buildPersistSlice(
     openrouterKey: "",
     customAiKey: "",
     transcriptionApiKey: "",
+    translationApiKey: "",
     bridgeToken: "",
   };
   return {

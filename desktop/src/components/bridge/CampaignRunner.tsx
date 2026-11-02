@@ -15,7 +15,8 @@ import { openAndroidMediaShare as openAndroidMediaShareAction } from "../chat/op
 import { isWaAccountConnected } from "@/lib/accountConnection";
 import { dataUrlToBlob } from "@/lib/mediaBlob";
 import { isDeliveryUncertain } from "@/store/outgoingRetry";
-import { MediaGateBlockedError } from "@/channels/mediaGate";
+import { gatedMediaSend, MediaGateBlockedError } from "@/channels/mediaGate";
+import { baileysSendVoice } from "@/lib/baileys";
 import { nextBatchTask } from "@/lib/scheduledPlans";
 
 type CampaignSendResult = {
@@ -122,11 +123,28 @@ async function sendBroadcastMedia(opts: {
   };
 
   const caption = item.bodyRendered || undefined;
+  let voiceMessageId: string | null = null;
   try {
-    const ok =
-      picked.kind === "image"
+    let ok: boolean;
+    if (picked.kind === "audio" && picked.voiceNote) {
+      if (!isBaileys || caption?.trim()) return { ok: false, message: "语音条需使用 WhatsApp 通道且不能附带文字" };
+      voiceMessageId = deps.enqueueOutgoingMessage({ body: "[语音]", chatId, contactId: item.contactId,
+        phoneE164: item.phoneE164, channelId: normalizeChannelId(channelId), accountId: campaign.accountId,
+        deviceId: state.selectedPhoneId, deliveryStatus: "pending" });
+      if (!voiceMessageId) return { ok: false, message: "无法创建语音消息" };
+      state.patchMessage(voiceMessageId, { mediaType: "audio", mediaUrl: dataUrl, mediaMime: picked.mime,
+        mediaPtt: true, mediaFileName: picked.fileName });
+      await deps.persistBeforeSend();
+      const raw = await gatedMediaSend({ phoneE164: item.phoneE164, accountId: campaign.accountId },
+        () => baileysSendVoice(item.phoneE164, dataUrl, { mimetype: picked.mime, ptt: true, accountId: campaign.accountId }),
+        opts.canSend, deps.requiredMinGapSec);
+      state.updateMessageDelivery(voiceMessageId, { deliveryStatus: "sent", waMessageId: raw?.id, lastError: undefined });
+      ok = true;
+    } else {
+      ok = picked.kind === "image"
         ? await sendImageMessage(file, false, caption, deps)
         : await sendFileMessage(file, caption, deps);
+    }
     const latest = useAppStore.getState();
     const messageId = latest.broadcastCampaigns.find(c => c.id === campaign.id)?.items.find(i => i.id === item.id)?.messageId;
     const message = latest.messages.find(m => m.id === messageId);
@@ -135,6 +153,9 @@ async function sendBroadcastMedia(opts: {
       error: message && isDeliveryUncertain(message) ? "baileys_delivery_unknown"
         : !opts.canSend() ? "automation_cancelled" : "send_failed" };
   } catch (error) {
+    if (voiceMessageId) state.updateMessageDelivery(voiceMessageId, { deliveryStatus: "failed",
+      lastError: error instanceof Error ? error.message : "语音发送失败",
+      deliveryUncertain: !!error && typeof error === "object" && "deliveryUncertain" in error && error.deliveryUncertain === true });
     return { ok: false, message: error instanceof Error ? error.message : "媒体发送异常",
       error: error instanceof MediaGateBlockedError ? error.gateError
         : error && typeof error === "object" && "deliveryUncertain" in error && error.deliveryUncertain

@@ -63,3 +63,20 @@ test('pending cache replays streaming progress to returning consumers without an
   publish(result);
   assert.equal(returningUpdates.length, 2, 'finished requests release progress subscribers');
 });
+
+test('cancelling pending suggestions aborts transport, rejects late results and retains completed cache entries', async () => {
+  const cache = createSuggestionCache(); let signal, publish, finish;
+  const updates = [];
+  const old = cache.request('cancel', (notify, transport) => {
+    signal = transport; publish = notify;
+    return new Promise(resolve => { finish = resolve; });
+  }, false, value => updates.push(value));
+  const rejected = assert.rejects(old, { name: 'AbortError' });
+  cache.cancelPending('cancel');
+  assert.equal(signal.aborted, true); assert.equal(cache.get('cancel'), undefined);
+  publish(result); assert.deepEqual(updates, []);
+  const retry = await cache.request('cancel', async () => result);
+  finish(result); await rejected;
+  assert.equal(cache.get('cancel').result, retry, 'an obsolete completion cannot evict the new result');
+  cache.cancelPending('cancel'); assert.equal(cache.get('cancel').result, result);
+});

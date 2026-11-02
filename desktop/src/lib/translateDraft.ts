@@ -1,4 +1,5 @@
 import { readAiJson } from "./aiResponse.ts";
+import { getTranslationSettings } from "./translationConfig.ts";
 import type { Contact } from "@/types/crm";
 import type { AppSettings } from "@/store/appStore";
 import { franc } from "franc-min";
@@ -337,11 +338,61 @@ const cache = new Map<
   { text: string; at: number; source: TranslateResult["source"] }
 >();
 const CACHE_MS = 10 * 60_000;
-const inFlight = new Map<string, Promise<TranslateResult>>();
+type TranslationRequest = { promise: Promise<TranslateResult>; controller: AbortController; users: number };
+const inFlight = new Map<string, TranslationRequest>();
+let activeReadingTranslations = 0;
+const readingQueue: (() => void)[] = [];
 
-type TranslationOptions = { googleFirst?: boolean };
+type TranslationOptions = { googleFirst?: boolean; signal?: AbortSignal };
+
+async function readTranslation(run: () => Promise<TranslateResult>, signal: AbortSignal) {
+  if (activeReadingTranslations >= 2) {
+    await new Promise<void>((resolve, reject) => {
+      const start = () => {
+        signal.removeEventListener("abort", cancel);
+        activeReadingTranslations++;
+        resolve();
+      };
+      const cancel = () => {
+        const index = readingQueue.indexOf(start);
+        if (index >= 0) readingQueue.splice(index, 1);
+        reject(signal.reason);
+      };
+      signal.addEventListener("abort", cancel, { once: true });
+      readingQueue.push(start);
+    });
+  } else activeReadingTranslations++;
+  try { signal.throwIfAborted(); return await run(); }
+  finally { activeReadingTranslations--; readingQueue.shift()?.(); }
+}
+
+function joinTranslation(key: string, request: TranslationRequest, signal?: AbortSignal): Promise<TranslateResult> {
+  request.users++;
+  return new Promise((resolve, reject) => {
+    let finished = false;
+    const release = () => {
+      if (finished) return false;
+      finished = true;
+      signal?.removeEventListener("abort", cancel);
+      request.users--;
+      return true;
+    };
+    const cancel = () => {
+      if (!release()) return;
+      if (!request.users) {
+        if (inFlight.get(key) === request) inFlight.delete(key);
+        request.controller.abort();
+      }
+      reject(signal?.reason);
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
+    request.promise.then(value => { if (release()) resolve(value); }, error => { if (release()) reject(error); });
+    if (signal?.aborted) cancel();
+  });
+}
 
 export function getTranslationContextKey(text: string, to: string, settings: AppSettings, opts?: TranslationOptions) {
+  settings = getTranslationSettings(settings);
   text = text.trim();
   to = LANG_NAME[to] ? to : "en";
   const service = settings.translateService || "auto";
@@ -400,6 +451,7 @@ async function chatComplete(opts: {
   settings: AppSettings;
   system: string;
   user: string;
+  signal?: AbortSignal;
 }): Promise<string> {
   if (opts.provider === "gemini") {
     return geminiGenerate({
@@ -408,6 +460,7 @@ async function chatComplete(opts: {
       system: opts.system,
       user: opts.user,
       temperature: 0.2,
+      signal: opts.signal,
     });
   }
   if (opts.provider === "ollama") {
@@ -423,7 +476,7 @@ async function chatComplete(opts: {
           { role: "user", content: opts.user },
         ],
       }),
-      signal: AbortSignal.timeout(60_000),
+      signal: opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
     });
     if (!res.ok) throw new Error(`Ollama ${res.status}`);
     const data = (await readAiJson(res)) as {
@@ -449,12 +502,14 @@ async function chatComplete(opts: {
     body: JSON.stringify({
       model: config.model,
       temperature: 0.2,
+      ...(opts.provider === "groq" && /^openai\/gpt-oss-(20b|120b)$/.test(config.model)
+        ? { reasoning_effort: "low", include_reasoning: false } : {}),
       messages: [
         { role: "system", content: opts.system },
         { role: "user", content: opts.user },
       ],
     }),
-    signal: AbortSignal.timeout(60_000),
+    signal: opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
   });
   if (!res.ok) {
     let detail = res.statusText;
@@ -481,7 +536,8 @@ async function chatComplete(opts: {
 async function googleTranslate(
   text: string,
   to: string,
-  timeoutMs = 30_000
+  timeoutMs = 30_000,
+  signal?: AbortSignal
 ): Promise<string> {
   const url = new URL("https://translate.googleapis.com/translate_a/single");
   url.searchParams.set("client", "gtx");
@@ -490,7 +546,7 @@ async function googleTranslate(
   url.searchParams.set("dt", "t");
   url.searchParams.set("q", text);
   const res = await fetch(url.toString(), {
-    signal: AbortSignal.timeout(timeoutMs),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`Google 翻译 ${res.status}`);
   const data = (await readAiJson(res)) as unknown[];
@@ -515,6 +571,7 @@ export async function translateDraftText(
   settings: AppSettings,
   opts?: TranslationOptions
 ): Promise<TranslateResult> {
+  opts?.signal?.throwIfAborted();
   const src = text.trim();
   const to = (
     LANG_NAME[targetLang] ? targetLang : "en"
@@ -547,14 +604,22 @@ export async function translateDraftText(
   }
   if (hit) cache.delete(ck);
   const pending = inFlight.get(ck);
-  if (pending) return pending;
-  const request = translateDraftTextUncached(src, to, settings, ck, opts);
+  if (pending) return joinTranslation(ck, pending, opts?.signal);
+  const controller = new AbortController();
+  const run = () => translateDraftTextUncached(src, to, settings, ck, { ...opts, signal: controller.signal });
+  const request: TranslationRequest = {
+    controller, users: 0,
+    promise: opts?.googleFirst ? readTranslation(run, controller.signal) : run(),
+  };
   inFlight.set(ck, request);
-  try { return await request; }
-  finally { if (inFlight.get(ck) === request) inFlight.delete(ck); }
+  void request.promise.then(() => { if (inFlight.get(ck) === request) inFlight.delete(ck); },
+    () => { if (inFlight.get(ck) === request) inFlight.delete(ck); });
+  return joinTranslation(ck, request, opts?.signal);
 }
 
 async function translateDraftTextUncached(src: string, to: string, settings: AppSettings, ck: string, opts?: TranslationOptions): Promise<TranslateResult> {
+  opts?.signal?.throwIfAborted();
+  settings = getTranslationSettings(settings);
   const provider = settings.aiProvider;
   const service = settings.translateService || "auto";
   const hasAiKey = hasKey(settings);
@@ -563,7 +628,8 @@ async function translateDraftTextUncached(src: string, to: string, settings: App
   const useGoogle = service === "google" || (service === "auto" && (!hasAiKey || googleFirst));
   if (useGoogle) {
     try {
-      const textOut = await googleTranslate(src, to, googleFirst ? 3_000 : 30_000);
+      const textOut = await googleTranslate(src, to, googleFirst ? 3_000 : 30_000, opts?.signal);
+      opts?.signal?.throwIfAborted();
       if (!translationMatchesTarget(src, textOut, to)) {
         throw new Error(`Google 翻译未返回${LANG_NAME[to]}译文`);
       }
@@ -575,6 +641,7 @@ async function translateDraftTextUncached(src: string, to: string, settings: App
         targetLang: to,
       };
     } catch (e) {
+      opts?.signal?.throwIfAborted();
       // Reading translations fail over promptly; explicit provider choices never change service.
       if (!googleFirst || !hasAiKey) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -595,8 +662,8 @@ async function translateDraftTextUncached(src: string, to: string, settings: App
       source: "mock",
       fallback: true,
       error: provider === "mock"
-        ? "演示模式不提供真实翻译，请选择 Google 翻译或配置 AI"
-        : "未配置可用的 AI，请配置密钥或选择 Google 翻译",
+        ? "未启用翻译模型，请在“文字翻译”中配置服务或选择 Google 翻译"
+        : "未配置可用的翻译服务，请在“文字翻译”中配置密钥或选择 Google 翻译",
       targetLang: to,
     };
   }
@@ -619,7 +686,9 @@ async function translateDraftTextUncached(src: string, to: string, settings: App
       settings,
       system,
       user: `Target language: ${langName}\n<source>\n${src}\n</source>`,
+      signal: opts?.signal,
     });
+    opts?.signal?.throwIfAborted();
     let textOut = stripTranslationFences(raw);
     if (!textOut) throw new Error("译文为空");
 
@@ -630,13 +699,16 @@ async function translateDraftTextUncached(src: string, to: string, settings: App
         settings,
         system: `${system}\nIMPORTANT: Your previous answer used the wrong language. Return ${langName} only.`,
         user: `Translate ONLY into ${langName}:\n<source>\n${src}\n</source>`,
+        signal: opts?.signal,
       });
+      opts?.signal?.throwIfAborted();
       textOut = stripTranslationFences(raw);
     }
 
     // “自动”模式允许在 AI 连续返回错语言时改走已有的 Google 翻译后备。
     if (!translationMatchesTarget(src, textOut, to) && service === "auto" && !googleFirst) {
-      const googleText = await googleTranslate(src, to);
+      const googleText = await googleTranslate(src, to, 30_000, opts?.signal);
+      opts?.signal?.throwIfAborted();
       if (!translationMatchesTarget(src, googleText, to)) {
         throw new Error(`翻译服务未返回${langName}译文`);
       }
@@ -659,6 +731,7 @@ async function translateDraftTextUncached(src: string, to: string, settings: App
       targetLang: to,
     };
   } catch (e) {
+    opts?.signal?.throwIfAborted();
     const msg = e instanceof Error ? e.message : String(e);
     return {
       text: "",

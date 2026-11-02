@@ -11,7 +11,7 @@ const mocks={
  '@/lib/listModels':'export const listProviderModels=(provider,settings)=>new Promise((resolve,reject)=>globalThis.modelRequests.push({provider,key:settings.openaiKey||settings.groqKey,resolve,reject}));',
 };
 const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/settings/SettingsAiPanel.tsx',import.meta.url))],bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},plugins:[{name:'mocks',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
-const {SettingsAiPanel}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
+const {ModelPicker}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
 const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 test('only the latest model request can update the list, including credential changes and unmount',async()=>{
@@ -25,7 +25,6 @@ test('only the latest model request can update the list, including credential ch
   callback(fn,deps){const n=index++;if(!equal(cells[n]?.deps,deps))cells[n]={deps,fn};return cells[n].fn;},
   effect(fn,deps){const n=index++;if(!equal(cells[n]?.deps,deps)){const old=cells[n];cells[n]={deps};effects.push(()=>{old?.cleanup?.();cells[n].cleanup=fn();});}},
  };
- const ModelPicker=nodes(SettingsAiPanel()).find(node=>node.type?.name==='ModelPicker').type;
  const render=()=>{index=0;const tree=ModelPicker({settings:modelStore.settings,onModelChange:()=>{}});effects.splice(0).forEach(fn=>fn());return nodes(tree);};
  const options=()=>render().filter(node=>node.type==='option').map(node=>node.props.value);
  try {

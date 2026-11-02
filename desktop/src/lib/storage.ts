@@ -207,7 +207,7 @@ interface RustSnapshot {
   replace_messages?: boolean;
 }
 
-const SECRET_SETTING_KEYS = ["openaiKey", "groqKey", "geminiKey", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "transcriptionApiKey", "bridgeToken"];
+const SECRET_SETTING_KEYS = ["openaiKey", "groqKey", "geminiKey", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "transcriptionApiKey", "translationApiKey", "bridgeToken"];
 
 function publicSettings(settings: unknown): unknown {
   if (!settings || typeof settings !== "object") return settings;
@@ -490,6 +490,7 @@ export type SecureSecrets = {
   openrouterKey: string;
   customAiKey: string;
   transcriptionApiKey: string;
+  translationApiKey: string;
   bridgeToken: string;
 };
 
@@ -506,6 +507,7 @@ export async function loadSecureSecrets(): Promise<SecureSecrets | null> {
     openrouter_key?: string;
     custom_ai_key?: string;
     transcription_api_key?: string;
+    translation_api_key?: string;
     bridge_token?: string;
   } | null>("secure_load_secrets");
   return secrets
@@ -519,6 +521,7 @@ export async function loadSecureSecrets(): Promise<SecureSecrets | null> {
         openrouterKey: secrets.openrouter_key || "",
         customAiKey: secrets.custom_ai_key || "",
         transcriptionApiKey: secrets.transcription_api_key || "",
+        translationApiKey: secrets.translation_api_key || "",
         bridgeToken: secrets.bridge_token || "",
       }
     : null;
@@ -538,6 +541,7 @@ export async function saveSecureSecrets(
       openrouter_key: secrets.openrouterKey,
       custom_ai_key: secrets.customAiKey,
       transcription_api_key: secrets.transcriptionApiKey,
+      translation_api_key: secrets.translationApiKey,
       bridge_token: secrets.bridgeToken,
     },
   });

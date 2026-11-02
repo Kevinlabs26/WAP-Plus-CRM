@@ -44,10 +44,11 @@ export function renderBroadcastTemplate(
 }
 
 export function validateBroadcastTemplate(
-  template: string
+  template: string,
+  hasMedia = false
 ): { ok: true } | { ok: false; reason: string } {
   const t = String(template || "").trim();
-  if (!t) return { ok: false, reason: "请填写发送内容" };
+  if (!t && !hasMedia) return { ok: false, reason: "请填写发送内容" };
   if (t.length > 2000) return { ok: false, reason: "正文过长（最多 2000 字）" };
   // 仅允许 name/company 占位，避免用户塞奇怪 token
   const unknown = t.match(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g) || [];

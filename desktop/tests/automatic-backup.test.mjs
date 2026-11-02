@@ -115,6 +115,7 @@ test('automatic backup includes cold history, excludes credentials, restores thr
 test('SQLite automatic backup sends only safe metadata and streams persisted data natively', async()=>{
  const state=stateFixture();state.contacts=[{id:'contact',toJSON(){throw new Error('contacts must not cross backup IPC')}}];state.messages=[{toJSON(){throw new Error('messages must not cross backup IPC')}}];
  state.settings.transcriptionApiKey='speech-secret';
+ state.settings.translationApiKey='translation-secret';
  let flushed=false;globalThis.backupFlush=async snapshot=>{assert.equal(snapshot,state);flushed=true};
  const calls=[];globalThis.backupNative=true;globalThis.backupHistoryRead=()=>{throw new Error('must not load all history into the WebView')};
  globalThis.backupInvoke=async(command,args)=>{if(command==='crm_backup_save')assert.equal(flushed,true);calls.push({command,args});return {folder:'fixture',latestDay:null}};
@@ -123,6 +124,7 @@ test('SQLite automatic backup sends only safe metadata and streams persisted dat
   const saved=calls.find(c=>c.command==='crm_backup_save');assert.equal(saved.args.fromDatabase,true);
   const header=JSON.parse(saved.args.content);for(const key of ['contacts','messages','activities','phones','chats','followUps'])assert.deepEqual(header[key],[]);
   assert.ok(!saved.args.content.includes('speech-secret'));
+  assert.ok(!saved.args.content.includes('translation-secret'));
   calls.length=0;globalThis.backupFlush=async()=>{throw new Error('flush failed')};await assert.rejects(runAutomaticBackup(()=>state,true),/flush failed/);assert.ok(!calls.some(c=>c.command==='crm_backup_save'));
  }finally{delete globalThis.backupNative;delete globalThis.backupInvoke;delete globalThis.backupHistoryRead;delete globalThis.backupFlush;}
 });

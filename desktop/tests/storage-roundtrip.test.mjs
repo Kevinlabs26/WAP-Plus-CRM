@@ -476,10 +476,10 @@ test("complete backup reads fail closed instead of exporting only hot history", 
 test("all shared save paths strip credentials without mutating runtime settings", async () => {
   for (const sqlite of [false, true]) {
     const { api, calls } = await setup({ sqlite });
-    const settings = { theme: "dark", customAiKey: "secret", transcriptionApiKey: "speech-secret", bridgeToken: "token", openaiKey: "key" };
+    const settings = { theme: "dark", customAiKey: "secret", transcriptionApiKey: "speech-secret", translationApiKey: "translation-secret", bridgeToken: "token", openaiKey: "key" };
     await api.saveAppState({ phones: [], contacts: [], chats: [], messages: [], followUps: [], settings }, { force: true });
     const saved = sqlite ? calls.find(call => call.cmd === "db_save").args.snapshot : await api.loadAppState();
-    for (const key of ["customAiKey", "transcriptionApiKey", "bridgeToken", "openaiKey"]) assert.equal(saved.settings[key], undefined);
+    for (const key of ["customAiKey", "transcriptionApiKey", "translationApiKey", "bridgeToken", "openaiKey"]) assert.equal(saved.settings[key], undefined);
     assert.equal(saved.settings.theme, "dark");
     assert.equal(settings.customAiKey, "secret");
     assert.equal(settings.transcriptionApiKey, "speech-secret");

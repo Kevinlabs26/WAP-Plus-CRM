@@ -17,7 +17,7 @@ export interface OpenAiCompatibleConfig {
 }
 
 export function getOpenAiCompatibleConfig(
-  settings: AppSettings
+  settings: Partial<AppSettings>
 ): OpenAiCompatibleConfig | null {
   switch (settings.aiProvider) {
     case "openai":

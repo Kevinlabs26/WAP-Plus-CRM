@@ -13,9 +13,22 @@ const result = buildSync({
   write: false,
 });
 
-const { normalizeCampaigns } = await import(
+const { normalizeCampaigns, buildCampaignOrError } = await import(
   `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`
 );
+
+const recordedVoice = { id: "voice", kind: "audio", mime: "audio/ogg", voiceNote: true };
+const voiceInput = { accountId: "wa-a", template: "", contactIds: ["recipient"],
+  contacts: [{ id: "recipient", name: "Recipient", phone: "+12025550123", accountId: "wa-a" }], media: [recordedVoice] };
+const voiceOnly = buildCampaignOrError(voiceInput);
+assert.equal(voiceOnly.ok, true);
+assert.equal(voiceOnly.campaign.items[0].status, "pending");
+assert.equal(voiceOnly.campaign.items[0].bodyRendered, "");
+assert.equal(voiceOnly.campaign.media[0].voiceNote, true);
+assert.equal(normalizeCampaigns([voiceOnly.campaign])[0].media[0].voiceNote, true);
+assert.equal(buildCampaignOrError({ ...voiceInput, media: [] }).ok, false);
+assert.equal(buildCampaignOrError({ ...voiceInput, template: "caption" }).ok, false);
+assert.equal(buildCampaignOrError({ ...voiceInput, template: "caption", media: [{ ...recordedVoice, voiceNote: false }] }).ok, true);
   const [campaign] = normalizeCampaigns([
     {
       id: "campaign-1",

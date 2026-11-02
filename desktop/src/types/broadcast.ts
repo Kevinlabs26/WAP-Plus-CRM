@@ -38,6 +38,8 @@ export interface BroadcastMedia {
   kind: BroadcastMediaKind;
   mime: string;
   fileName?: string;
+  /** Recorded audio is sent as a voice note; existing uploads keep file behavior. */
+  voiceNote?: boolean;
 }
 
 export interface BroadcastCampaign {
