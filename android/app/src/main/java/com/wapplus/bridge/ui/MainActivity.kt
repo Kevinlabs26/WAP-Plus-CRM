@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import com.wapplus.bridge.service.BridgeForegroundService
 import com.wapplus.bridge.BridgeApp
 import com.wapplus.bridge.net.BoundedInput
+import com.wapplus.bridge.net.MediaSharePolicy
 import com.wapplus.bridge.a11y.WaAssistService
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -95,7 +96,12 @@ class MainActivity : ComponentActivity() {
         if (intent?.action != Intent.ACTION_SEND) return
         val uri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM) ?: return
         if (uri.scheme != "content") return
-        val mime = intent.type.orEmpty().ifBlank { contentResolver.getType(uri).orEmpty() }
+        val authority = uri.authority ?: return
+        val providerPackage = runCatching { packageManager.resolveContentProvider(authority, 0)?.packageName }.getOrNull()
+        if (!MediaSharePolicy.isTrustedProvider(providerPackage)) return
+        val ticket = WaAssistService.pendingMediaShareTicket() ?: return
+        val mime = runCatching { intent.type.orEmpty().ifBlank { contentResolver.getType(uri).orEmpty() } }.getOrDefault("")
+        if (!mime.startsWith("audio/", ignoreCase = true)) return
         lifecycleScope.launch(Dispatchers.IO) {
             val bytes = runCatching {
                 contentResolver.openInputStream(uri)?.use { input ->
@@ -105,6 +111,7 @@ class MainActivity : ComponentActivity() {
             val dataUrl = "data:${mime.ifBlank { "audio/ogg" }};base64," +
                 Base64.encodeToString(bytes, Base64.NO_WRAP)
             WaAssistService.acceptSharedMedia(
+                ticket = ticket,
                 mime = mime,
                 fileName = "voice.ogg",
                 dataUrl = dataUrl,

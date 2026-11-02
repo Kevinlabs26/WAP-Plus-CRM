@@ -1,3 +1,4 @@
+import { readAiJson } from "./aiResponse.ts";
 import type { Contact } from "@/types/crm";
 import type { AppSettings } from "@/store/appStore";
 import { franc } from "franc-min";
@@ -425,7 +426,7 @@ async function chatComplete(opts: {
       signal: AbortSignal.timeout(60_000),
     });
     if (!res.ok) throw new Error(`Ollama ${res.status}`);
-    const data = (await res.json()) as {
+    const data = (await readAiJson(res)) as {
       message?: { content?: string };
       response?: string;
     };
@@ -458,14 +459,14 @@ async function chatComplete(opts: {
   if (!res.ok) {
     let detail = res.statusText;
     try {
-      const errBody = (await res.json()) as { error?: { message?: string } };
+      const errBody = (await readAiJson(res)) as { error?: { message?: string } };
       detail = errBody.error?.message || detail;
     } catch {
       /* ignore */
     }
     throw new Error(`${opts.provider} ${res.status}: ${detail}`);
   }
-  const data = (await res.json()) as {
+  const data = (await readAiJson(res)) as {
     choices?: { message?: { content?: string } }[];
   };
   const content = data.choices?.[0]?.message?.content;
@@ -492,7 +493,7 @@ async function googleTranslate(
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) throw new Error(`Google 翻译 ${res.status}`);
-  const data = (await res.json()) as unknown[];
+  const data = (await readAiJson(res)) as unknown[];
   const rows = data[0];
   if (!Array.isArray(rows)) throw new Error("Google 翻译响应异常");
   const out = rows

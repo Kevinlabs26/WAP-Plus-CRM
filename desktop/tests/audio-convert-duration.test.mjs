@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { ensureOggOpusPtt } from '../baileys-bridge/audioConvert.mjs';
+import { ensureOggOpusPtt, ffmpegBinary } from '../baileys-bridge/audioConvert.mjs';
 
 function recording(seconds) {
   const wav=Buffer.alloc(44+16000*2*seconds);
@@ -12,7 +12,7 @@ function recording(seconds) {
 }
 
 test('voice conversion preserves supported audio and rejects overlong files instead of sending a truncated note', {
-  skip: spawnSync('ffmpeg',['-version'],{windowsHide:true}).status!==0,
+  skip: spawnSync(ffmpegBinary,['-version'],{windowsHide:true}).status!==0,
 }, async()=>{
   for(const seconds of [1,2]){
     const result=await ensureOggOpusPtt(recording(seconds),'audio/wav',2);

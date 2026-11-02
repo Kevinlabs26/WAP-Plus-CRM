@@ -5,7 +5,7 @@ export function sheetErrorHint(error: string) {
   if (/\b404\b|invalid spreadsheet id/i.test(error)) return "sheets.error.notFound" as const;
   if (/\b429\b/.test(error)) return "sheets.error.quota" as const;
   if (/headings changed|duplicat|sheet changed during|invalid column|invalid sheet selection/i.test(error)) return "sheets.error.mapping" as const;
-  if (/\b400\b/.test(error)) return "sheets.error.request" as const;
+  if (/\b400\b|response exceeds 32 MiB/i.test(error)) return "sheets.error.request" as const;
   if (/already running|wait for.*google/i.test(error)) return "sheets.error.busy" as const;
   if (/declined|access_denied|cancelled/i.test(error)) return "sheets.error.cancelled" as const;
   if (/timed out|timeout/i.test(error)) return "sheets.error.timeout" as const;

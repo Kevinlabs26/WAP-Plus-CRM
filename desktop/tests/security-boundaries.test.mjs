@@ -6,7 +6,7 @@ import { createBaileysRequestHandler } from '../baileys-bridge/httpServer.mjs';
 import { requestBody, readBoundedStream } from '../baileys-bridge/httpUtil.mjs';
 import { resolveConfig } from 'vite';
 import { openMediaInNewTab, triggerMediaDownload } from '../src/components/chat/messageMediaUtils.ts';
-import { runFfmpegToOggOpus, safeVideoThumbnail } from '../baileys-bridge/audioConvert.mjs';
+import { runFfmpegToOggOpus, safeVideoThumbnail, ffmpegBinary } from '../baileys-bridge/audioConvert.mjs';
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -103,7 +103,7 @@ test('media open/download rejects executable protocols and downloads active docu
 });
 
 test('ffmpeg cannot fetch network resources referenced by an uploaded playlist', {
-  skip: spawnSync('ffmpeg', ['-version'], { windowsHide: true }).status !== 0,
+  skip: spawnSync(ffmpegBinary, ['-version'], { windowsHide: true }).status !== 0,
 }, async () => {
   let requests = 0;
   const server = http.createServer((_req, res) => { requests++; res.end('private'); });

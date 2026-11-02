@@ -1,3 +1,4 @@
+import { readAiJson } from "./aiResponse.ts";
 /**
  * Gemini API 调用（Google 官方 generateContent 接口，非 OpenAI 兼容）。
  * 供回复建议 / 客户卡洞察 / 草稿翻译 / 语音转写共用。
@@ -27,7 +28,7 @@ async function geminiPost(
   if (!res.ok) {
     let detail = res.statusText;
     try {
-      const err = (await res.json()) as { error?: { message?: string } };
+      const err = (await readAiJson(res)) as { error?: { message?: string } };
       detail = err.error?.message || detail;
     } catch {
       /* ignore */
@@ -75,7 +76,7 @@ async function geminiPost(
       reader.releaseLock();
     }
   }
-  const data = (await res.json()) as {
+  const data = (await readAiJson(res)) as {
     candidates?: { content?: { parts?: { text?: string }[] } }[];
   };
   const text =

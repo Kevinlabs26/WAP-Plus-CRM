@@ -207,6 +207,15 @@ fn spawn_account(app: &AppHandle, account_id: &str) -> Result<BaileysProcess, St
     }
 
     let (mut command, bin_label) = resolve_baileys_bin()?;
+    #[cfg(windows)]
+    {
+        let ffmpeg = if cfg!(debug_assertions) {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries/ffmpeg-x86_64-pc-windows-msvc.exe")
+        } else {
+            std::env::current_exe().map_err(|e| e.to_string())?.with_file_name("ffmpeg.exe")
+        };
+        command.env("WAP_FFMPEG_PATH", ffmpeg);
+    }
     let log_path = app
         .path()
         .app_data_dir()

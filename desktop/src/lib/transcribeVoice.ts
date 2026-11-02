@@ -1,3 +1,4 @@
+import { readAiJson } from "./aiResponse.ts";
 /**
  * 语音转文字：使用独立语音服务；旧配置只在迁移时读取文字服务设置。
  * 无 Key / 失败时返回空正文与错误；错误说明不得进入转写或消息草稿。
@@ -60,14 +61,14 @@ async function postTranscription(opts: {
   if (!res.ok) {
     let detail = res.statusText;
     try {
-      const errBody = (await res.json()) as { error?: { message?: string } };
+      const errBody = (await readAiJson(res)) as { error?: { message?: string } };
       detail = errBody.error?.message || detail;
     } catch {
       /* ignore */
     }
     throw new Error(`${provider} ${res.status}: ${detail}`);
   }
-  const data = (await res.json()) as { text?: string };
+  const data = (await readAiJson(res)) as { text?: string };
   const text = (data.text || "").trim();
   if (!text) throw new Error(`${provider} 空转写`);
   return text;

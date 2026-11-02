@@ -1,0 +1,19 @@
+FFmpeg 9.0.2, unmodified Windows x86_64 essentials build by Gyan Doshi.
+This executable runs as a separate process. Its GPLv3 license is included
+as ffmpeg-LICENSE.txt; it is not covered by the CRM's Apache license.
+
+Binary and build information:
+https://github.com/GyanD/codexffmpeg/releases/tag/9.0.2
+https://www.gyan.dev/ffmpeg/builds/
+FFmpeg source revision:
+https://github.com/FFmpeg/FFmpeg/commit/946fcce07b
+Source and build dependency information supplied by the binary distributor:
+https://www.gyan.dev/ffmpeg/builds/#about-these-builds
+
+Archive SHA256:
+60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba
+ffmpeg.exe SHA256:
+3256173f3f8bffd7df12227c68adf68025edb1832273a9530688a7bb1ed8edec
+
+Maintainers must preserve this notice and the GPL license when distributing
+this binary and provide the corresponding source as required by GPLv3.

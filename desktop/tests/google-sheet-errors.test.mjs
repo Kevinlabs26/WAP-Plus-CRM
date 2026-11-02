@@ -6,6 +6,7 @@ test('Google errors produce appropriate recovery guidance without treating every
   ['Google request failed (401)','authorize'],['Google request failed (403)','forbidden'],
   ['Google request failed (404)','notFound'],['Google request failed (429)','quota'],
   ['Column headings changed or are duplicated','mapping'],['Google request failed (400)','request'],
+  ['Google Sheets response exceeds 32 MiB','request'],
   ['Google authorization was declined','cancelled'],['Google login timed out','timeout'],
   ['Cannot read Google Sheets; check your connection','network'],['QuotaExceededError: disk full','storage'],
   ['Google login is not configured in this build','build'],['Google request failed (503)','service'],

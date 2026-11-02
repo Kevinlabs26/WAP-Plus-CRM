@@ -35,10 +35,12 @@ jobs:
         run: |
           $checkDir = Join-Path $env:RUNNER_TEMP 'bridge-security-check'
           New-Item -ItemType Directory -Force -Path $checkDir | Out-Null
-          javac -d $checkDir android/app/src/main/java/com/wapplus/bridge/net/BoundedInput.java android/app/src/main/java/com/wapplus/bridge/net/BridgeWorkers.java android/app/src/test/java/com/wapplus/bridge/net/BoundedInputCheck.java
+          javac -d $checkDir android/app/src/main/java/com/wapplus/bridge/net/BoundedInput.java android/app/src/main/java/com/wapplus/bridge/net/BridgeWorkers.java android/app/src/main/java/com/wapplus/bridge/net/MediaSharePolicy.java android/app/src/test/java/com/wapplus/bridge/net/BoundedInputCheck.java android/app/src/test/java/com/wapplus/bridge/net/MediaSharePolicyCheck.java
           if ($LASTEXITCODE -ne 0) { throw 'Security check compilation failed' }
           java -ea -cp $checkDir com.wapplus.bridge.net.BoundedInputCheck
           if ($LASTEXITCODE -ne 0) { throw 'Security check failed' }
+          java -ea -cp $checkDir com.wapplus.bridge.net.MediaSharePolicyCheck
+          if ($LASTEXITCODE -ne 0) { throw 'Media share security check failed' }
       - name: Run Android unit tests
         if: ${{ hashFiles('android/app/src/test/**/*.kt', 'android/app/src/test/**/*.java', 'android/app/src/androidTest/**/*.kt', 'android/app/src/androidTest/**/*.java') != '' }}
         working-directory: android

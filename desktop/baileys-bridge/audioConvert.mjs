@@ -2,6 +2,11 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+export const ffmpegBinary = process.env.WAP_FFMPEG_PATH || (process.platform === "win32"
+  ? fileURLToPath(new URL("../src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe", import.meta.url))
+  : "ffmpeg");
 
 const FFMPEG_AUDIO_TIMEOUT_MS = 60_000;
 const FFMPEG_GIF_TIMEOUT_MS = 30_000;
@@ -23,7 +28,7 @@ function runFfmpeg(
   { timeoutMs, notFoundMessage, label, captureStdout = false },
 ) {
   return new Promise((resolve, reject) => {
-    const child = spawn("ffmpeg", args, {
+    const child = spawn(ffmpegBinary, args, {
       windowsHide: true,
       stdio: ["ignore", captureStdout ? "pipe" : "ignore", "pipe"],
     });
@@ -110,7 +115,9 @@ export function runFfmpegToOggOpus(inputPath, outputPath, maxSeconds) {
     {
       timeoutMs: FFMPEG_AUDIO_TIMEOUT_MS,
       notFoundMessage:
-        "本机未找到 ffmpeg，无法把录音转成语音条。请安装 ffmpeg 并加入 PATH，或使用支持 Opus 的浏览器录音。",
+        process.platform === "win32"
+          ? "项目 FFmpeg 缺失，无法转换语音。开发环境请运行 npm run ffmpeg:prepare；安装版请重新安装最新版本。"
+          : "本机未找到 ffmpeg，无法把录音转成语音条。请安装 ffmpeg 并加入 PATH。",
       label: "ffmpeg 转码",
     },
   );

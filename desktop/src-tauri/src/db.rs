@@ -1459,6 +1459,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn patched_sqlite_migrates_a_real_3460_file_without_losing_history() {
+        use std::io::Read;
+        assert!(rusqlite::version_number() >= 3_053_002, "bundled SQLite is older than the security baseline");
+        let mut bytes = Vec::new();
+        bzip2::read::BzDecoder::new(include_bytes!("../../tests/fixtures/sqlite-3.46.0.bz2").as_slice())
+            .take(1024 * 1024).read_to_end(&mut bytes).unwrap();
+        assert_eq!(&bytes[..16], b"SQLite format 3\0");
+        assert_eq!(u32::from_be_bytes(bytes[96..100].try_into().unwrap()), 3_046_000);
+        let root = std::env::temp_dir().join(format!("wap-sqlite-upgrade-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("legacy.db");
+        std::fs::write(&path, bytes).unwrap();
+        {
+            let conn = Connection::open(&path).unwrap();
+            migrate(&conn).unwrap();
+            let mut snapshot = load_snapshot(&conn).unwrap().unwrap();
+            assert_eq!(snapshot.contacts[0]["name"], "Legacy 安全测试");
+            assert_eq!(snapshot.messages[0]["body"], "legacy bonjour 你好");
+            assert_eq!(search_messages(&conn, "bonjour", 20).unwrap().len(), 1);
+            snapshot.contacts[0]["notes"] = serde_json::json!("after upgrade");
+            save_snapshot(&conn, &snapshot).unwrap();
+        }
+        {
+            let conn = Connection::open(&path).unwrap();
+            let snapshot = load_snapshot(&conn).unwrap().unwrap();
+            assert_eq!(snapshot.contacts[0]["notes"], "after upgrade");
+            assert_eq!(snapshot.messages[0]["id"], "legacy-message");
+            assert_eq!(search_messages(&conn, "你好", 20).unwrap().len(), 1);
+            assert_eq!(conn.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0)).unwrap(), "ok");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn inbound_lookup_excludes_outgoing_system_events_and_foreign_accounts() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();

@@ -1,3 +1,4 @@
+import { readAiJson } from "./aiResponse.ts";
 import type { Contact, Message, SalesStage } from "@/types/crm";
 import type { AppSettings } from "@/store/appStore";
 import type { AiSource } from "@/lib/aiSuggest";
@@ -202,14 +203,14 @@ async function openAiCompatibleInsight(opts: {
   if (!res.ok) {
     let detail = res.statusText;
     try {
-      const errBody = (await res.json()) as { error?: { message?: string } };
+      const errBody = (await readAiJson(res)) as { error?: { message?: string } };
       detail = errBody.error?.message || detail;
     } catch {
       /* ignore */
     }
     throw new Error(`${opts.label} ${res.status}: ${detail}`);
   }
-  const data = (await res.json()) as {
+  const data = (await readAiJson(res)) as {
     choices?: { message?: { content?: string } }[];
   };
   const content = data.choices?.[0]?.message?.content;
@@ -256,7 +257,7 @@ async function ollamaInsight(
     }),
   });
   if (!res.ok) throw new Error(`Ollama ${res.status}`);
-  const data = (await res.json()) as {
+  const data = (await readAiJson(res)) as {
     message?: { content?: string };
     response?: string;
   };

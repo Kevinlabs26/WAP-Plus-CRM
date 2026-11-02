@@ -43,9 +43,17 @@ fn load(app: &AppHandle) -> Result<Option<Tokens>, String> {
 #[cfg(not(windows))]
 fn load(_: &AppHandle) -> Result<Option<Tokens>, String> { Ok(None) }
 fn http() -> Result<reqwest::Client, String> { reqwest::Client::builder().timeout(Duration::from_secs(30)).redirect(reqwest::redirect::Policy::none()).build().map_err(|_| "Cannot initialize Google connection".into()) }
-async fn json(response: reqwest::Response) -> Result<serde_json::Value, String> {
+async fn json(mut response: reqwest::Response) -> Result<serde_json::Value, String> {
     if !response.status().is_success() { return Err(format!("Google request failed ({}). Check authorization and API access.", response.status().as_u16())); }
-    response.json().await.map_err(|_| "Invalid Google response".into())
+    const LIMIT: usize = 32 * 1024 * 1024;
+    let too_large = || "Google response exceeds 32 MiB; reduce selected data".to_string();
+    if response.content_length().is_some_and(|size| size > LIMIT as u64) { return Err(too_large()); }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "Cannot read Google response".to_string())? {
+        if chunk.len() > LIMIT - bytes.len() { return Err(too_large()); }
+        bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| "Invalid Google response".into())
 }
 
 fn callback_result(target: &str, nonce: &str) -> Option<Result<String, String>> {
@@ -122,6 +130,36 @@ pub async fn google_sheets_connect(app: AppHandle, state: State<'_, GoogleState>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn google_json_bounds_decoded_streams_even_without_content_length() {
+        for mode in ["valid", "declared", "chunked"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 2048];
+                socket.read(&mut request).await.unwrap();
+                match mode {
+                    "valid" => socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{\"ok\":true}").await.unwrap(),
+                    "declared" => socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 33554433\r\n\r\n").await.unwrap(),
+                    _ => {
+                        socket.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n").await.unwrap();
+                        let block = vec![b' '; 1024 * 1024];
+                        for _ in 0..33 {
+                            if socket.write_all(b"100000\r\n").await.is_err()
+                                || socket.write_all(&block).await.is_err()
+                                || socket.write_all(b"\r\n").await.is_err() { return; }
+                        }
+                        let _ = socket.write_all(b"0\r\n\r\n").await;
+                    }
+                }
+            });
+            let response = http().unwrap().get(format!("http://{address}/")).send().await.unwrap();
+            if mode == "valid" { assert_eq!(json(response).await.unwrap()["ok"], true); }
+            else { assert!(json(response).await.unwrap_err().contains("32 MiB")); }
+            server.await.unwrap();
+        }
+    }
     #[test]
     fn callbacks_require_the_random_state_and_unambiguous_code() {
         assert_eq!(callback_result("/?state=nonce&code=abc", "nonce"), Some(Ok("abc".into())));

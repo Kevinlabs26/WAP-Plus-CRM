@@ -14,6 +14,8 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import com.wapplus.bridge.net.MediaSharePolicy
 import android.provider.Settings
 import android.provider.ContactsContract
 import android.util.Log
@@ -815,6 +817,18 @@ class WaAssistService : AccessibilityService() {
 
         private var pendingMedia: JSONObject? = null
         private var pendingMediaEvent: String? = null
+        private var pendingMediaPreparedAt = 0L
+        private var pendingMediaGeneration = 0L
+
+        @Synchronized
+        fun pendingMediaShareTicket(): Long? {
+            if (pendingMedia == null) return null
+            if (instance == null || !MediaSharePolicy.isFresh(pendingMediaPreparedAt, SystemClock.elapsedRealtime())) {
+                pendingMedia = null
+                return null
+            }
+            return pendingMediaGeneration
+        }
 
         @Synchronized
         fun prepareMediaShare(
@@ -825,6 +839,8 @@ class WaAssistService : AccessibilityService() {
             body: String,
             sentAt: Long,
         ) {
+            pendingMediaGeneration++
+            pendingMediaPreparedAt = SystemClock.elapsedRealtime()
             pendingMedia = JSONObject()
                 .put("messageId", messageId)
                 .put("jid", jid)
@@ -835,7 +851,11 @@ class WaAssistService : AccessibilityService() {
         }
 
         @Synchronized
-        fun acceptSharedMedia(mime: String, fileName: String, dataUrl: String): Boolean {
+        fun acceptSharedMedia(ticket: Long, mime: String, fileName: String, dataUrl: String): Boolean {
+            // Capture the ticket before reading the URI so a late result cannot attach to a newer request.
+            if (pendingMediaShareTicket() == null || !MediaSharePolicy.isCurrentRequest(
+                    ticket, pendingMediaGeneration, pendingMediaPreparedAt, SystemClock.elapsedRealtime()
+                )) return false
             val target = pendingMedia ?: return false
             val deviceId = instance?.let {
                 Settings.Secure.getString(it.contentResolver, Settings.Secure.ANDROID_ID)

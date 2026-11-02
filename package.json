@@ -1,7 +1,7 @@
 {
   "name": "wap-plus",
   "private": true,
-  "version": "0.1.62",
+  "version": "0.1.63",
   "packageManager": "npm@10.9.8",
   "type": "module",
   "description": "WAP Plus CRM monorepo (desktop + baileys sidecar)",
@@ -13,17 +13,20 @@
     "dev": "npm run dev -w wap-plus-crm",
     "build": "npm run build -w wap-plus-crm",
     "test": "npm run test -w wap-plus-crm",
-    "check": "npm test && npm run build && npm run baileys:build && npm run bridge:smoke",
+    "check": "npm run ffmpeg:prepare && npm test && npm run build && npm run baileys:build && npm run bridge:smoke",
+    "ffmpeg:prepare": "node -e \"if(process.platform==='win32') require('node:child_process').execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File','tools/prepare-ffmpeg.ps1'],{stdio:'inherit',windowsHide:true})\"",
     "bridge:smoke": "node tools/mock-bridge-smoke.test.mjs",
     "tauri": "npm run tauri -w wap-plus-crm --",
-    "release:win": "npm run baileys:build && npm run tauri -- build",
+    "release:win": "npm run ffmpeg:prepare && npm run baileys:build && npm run tauri -- build",
     "mock-bridge": "node tools/mock-bridge.mjs",
     "baileys:start": "npm run start -w wap-plus-baileys",
     "baileys:build": "npm run build -w wap-plus-baileys",
     "install:all": "npm install"
   },
   "overrides": {
-    "@esbuild-kit/core-utils": { "esbuild": "^0.25.4" },
+    "@esbuild-kit/core-utils": {
+      "esbuild": "^0.25.4"
+    },
     "postcss-selector-parser": "^6.1.5"
   },
   "engines": {

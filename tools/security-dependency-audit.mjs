@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import path from 'node:path';
 
 // Read manifests/locks without executing dependency install scripts.
 const manifests = ['package.json', 'desktop/package.json', 'desktop/baileys-bridge/package.json'];
@@ -16,20 +17,31 @@ for (const file of manifests) {
   const pkg = JSON.parse(await fs.readFile(file, 'utf8'));
   for (const scope of ['dependencies', 'devDependencies']) {
     for (const [name, range] of Object.entries(pkg[scope] || {})) {
-      const local = file.replace('/package.json', '') + '/node_modules/' + name;
-      const resolved = npm.find(p => p.file === 'package-lock.json' && p.path === local)
-        || npm.find(p => p.file === 'package-lock.json' && p.path === 'node_modules/' + name);
+      let resolved;
+      let directory = path.posix.dirname(file);
+      for (;;) {
+        const local = path.posix.join(directory, 'node_modules', name);
+        resolved = npm.find(p => p.file === 'package-lock.json' && p.path === local);
+        if (resolved || directory === '.') break;
+        directory = path.posix.dirname(directory);
+      }
       direct.push({ file, scope, name, range, version: resolved?.version });
     }
   }
 }
-const cargo = await fs.readFile('desktop/src-tauri/Cargo.lock', 'utf8');
-const rust = cargo.split('[[package]]').slice(1).flatMap(block => {
+const rust = [];
+for (const file of ['desktop/src-tauri/Cargo.lock', 'docs/security/native-compatibility/Cargo.lock']) {
+  const cargo = await fs.readFile(file, 'utf8').catch(error => {
+    if (error.code !== 'ENOENT' || file === 'desktop/src-tauri/Cargo.lock') throw error;
+    return '';
+  });
+  rust.push(...cargo.split('[[package]]').slice(1).flatMap(block => {
   const name = block.match(/^name = "([^"]+)"/m)?.[1];
   const version = block.match(/^version = "([^"]+)"/m)?.[1];
   return name && version && block.includes('registry+')
-    ? [{ ecosystem: 'crates.io', name, version, file: 'desktop/src-tauri/Cargo.lock' }] : [];
-});
+    ? [{ ecosystem: 'crates.io', name, version, file }] : [];
+  }));
+}
 const android = [];
 for (const file of ['android/buildscript-gradle.lockfile', 'android/app/gradle.lockfile']) {
   const lock = await fs.readFile(file, 'utf8').catch(error => {
@@ -49,7 +61,7 @@ for (const line of cargoManifest.split('\n')) {
   if (line.trim().startsWith('[')) section = line.trim();
   if (!section.includes('dependencies]')) continue;
   const match = line.match(/^([\w-]+)\s*=\s*(.*)/);
-  if (match) rustDirect.push({ name: match[1], declaration: match[2].trim(), section, versions: rust.filter(p => p.name === match[1]).map(p => p.version) });
+  if (match) rustDirect.push({ name: match[1], declaration: match[2].trim(), section, versions: rust.filter(p => p.name === match[1] && p.file === 'desktop/src-tauri/Cargo.lock').map(p => p.version) });
 }
 const inventory = { direct, rustDirect, npm, rust, android, packages };
 await fs.mkdir('docs/security', { recursive: true });

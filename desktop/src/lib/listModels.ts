@@ -1,3 +1,4 @@
+import { readAiJson } from "./aiResponse.ts";
 import type { AppSettings } from "@/store/appStore";
 import { getOpenAiCompatibleConfig } from "./aiProviders.ts";
 
@@ -52,10 +53,11 @@ async function listOpenAiCompatible(
     signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) throw new Error(`${label} 无法读取模型列表（${res.status}）`);
-  const data = (await res.json()) as { data?: { id?: string }[] };
+  const data = (await readAiJson(res)) as { data?: { id?: string }[] };
   const ids = [
     ...new Set(
-      (data.data || []).map((m) => m.id).filter((id): id is string => Boolean(id))
+      (Array.isArray(data?.data) ? data.data : []).map((m) => m?.id)
+        .filter((id): id is string => typeof id === "string" && !!id.trim())
     ),
   ].sort();
   return ids.map((id) => ({ id, label: id }));
@@ -70,11 +72,11 @@ async function listGeminiModels(apiKey: string): Promise<ModelOption[]> {
     }
   );
   if (!res.ok) throw new Error(`Gemini 无法读取模型列表（${res.status}）`);
-  const data = (await res.json()) as {
+  const data = (await readAiJson(res)) as {
     models?: { name?: string; supportedGenerationMethods?: string[] }[];
   };
-  return (data.models || [])
-    .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
+  return (Array.isArray(data?.models) ? data.models : [])
+    .filter((m) => typeof m?.name === "string" && Array.isArray(m.supportedGenerationMethods) && m.supportedGenerationMethods.includes("generateContent"))
     .map((m) => ({
       id: (m.name || "").replace(/^models\//, ""),
       label: m.name || "",
@@ -88,9 +90,10 @@ async function listOllamaModels(base: string): Promise<ModelOption[]> {
     signal: AbortSignal.timeout(15_000),
   });
   if (!res.ok) throw new Error(`Ollama 无法读取模型列表（${res.status}）`);
-  const data = (await res.json()) as { models?: { name?: string }[] };
-  return (data.models || [])
-    .map((m) => ({ id: m.name || "", label: m.name || "" }))
-    .filter((m) => m.id)
+  const data = (await readAiJson(res)) as { models?: { name?: string }[] };
+  return (Array.isArray(data?.models) ? data.models : [])
+    .map((m) => m?.name)
+    .filter((name): name is string => typeof name === "string" && !!name.trim())
+    .map((name) => ({ id: name, label: name }))
     .sort((a, b) => a.id.localeCompare(b.id));
 }

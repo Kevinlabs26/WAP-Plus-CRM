@@ -12,12 +12,13 @@ test('dependency audit uses current Gradle locks, not obsolete dependency logs',
     const files = {
       'package.json': '{}',
       'desktop/package.json': '{}',
-      'desktop/baileys-bridge/package.json': '{}',
-      'package-lock.json': '{"packages":{}}',
+      'desktop/baileys-bridge/package.json': '{"devDependencies":{"bun":"1.4.4"}}',
+      'package-lock.json': '{"packages":{"desktop/node_modules/bun":{"version":"1.4.4"},"node_modules/bun":{"version":"1.3.14"}}}',
       'desktop/package-lock.json': '{"packages":{}}',
       'desktop/baileys-bridge/package-lock.json': '{"packages":{}}',
       'desktop/src-tauri/Cargo.toml': '',
       'desktop/src-tauri/Cargo.lock': '',
+      'docs/security/native-compatibility/Cargo.lock': '[[package]]\nname = "fixture-crate"\nversion = "1.0.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n',
       'android/buildscript-gradle.lockfile': '',
       'android/app/gradle.lockfile': 'com.google.guava:guava:33.7.2-jre=tooling\n',
       'docs/security/android-build-dependencies.log': '+--- com.google.guava:guava:32.0.1-jre\n',
@@ -28,7 +29,9 @@ test('dependency audit uses current Gradle locks, not obsolete dependency logs',
     }
     execFileSync(process.execPath, [fileURLToPath(new URL('./security-dependency-audit.mjs', import.meta.url))], { cwd: dir });
     const result = JSON.parse(await fs.readFile(path.join(dir, 'docs/security/dependency-inventory.json'), 'utf8'));
-    assert.deepEqual(result.packages.map(p => [p.name, p.version]), [['com.google.guava:guava', '33.7.2-jre']]);
+    assert.deepEqual(result.android.map(p => [p.name, p.version]), [['com.google.guava:guava', '33.7.2-jre']]);
+    assert.equal(result.direct[0].version, '1.4.4', 'resolve the closest hoisted workspace dependency');
+    assert.ok(result.packages.some(p => p.name === 'fixture-crate' && p.version === '1.0.0' && p.file === 'docs/security/native-compatibility/Cargo.lock'));
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

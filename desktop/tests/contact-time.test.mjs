@@ -128,14 +128,15 @@ test("profile clock ticks at minute boundaries, refreshes on focus and clears ti
   globalThis.document = { addEventListener: window.addEventListener, removeEventListener: window.removeEventListener };
   const render = value => { cursor = 0; const view = ContactLocalTime({ contact: typeof value === 'string' ? { id: value, phone: value } : value }); const pending = effects; effects = []; pending.forEach(fn => fn()); return view; };
   const text = view => typeof view === "string" ? view : Array.isArray(view) ? view.map(text).join(" ") : view?.props ? text(view.props.children) : "";
-  assert.ok(text(render("+212600000000")).includes("Morocco"));
-  assert.ok(!text(render("+212600000000")).includes("Estimate"));
+  // Use a UTC country: these assertions test timer updates, not mutable DST policy.
+  assert.ok(text(render("+233200000000")).includes("Ghana"));
+  assert.ok(!text(render("+233200000000")).includes("Estimate"));
   assert.equal(timers.size, 1);
   assert.ok([...timers.values()][0].delay <= 60_020);
   now += 60_000; [...timers.values()][0].fn();
-  assert.ok(text(render("+212600000000")).includes("13:01"));
+  assert.ok(text(render("+233200000000")).includes("12:01"));
   now += 3600_000; events.get("focus")();
-  assert.ok(text(render("+212600000000")).includes("14:01"));
+  assert.ok(text(render("+233200000000")).includes("13:01"));
   assert.equal(render("+243810000000").type, "details");
   assert.equal(timers.size, 1);
   const a = { id: 'person-a', phone: '+243810000000' }, b = { id: 'person-b', phone: '+243810000000' };

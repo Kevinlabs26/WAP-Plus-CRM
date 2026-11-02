@@ -18,7 +18,7 @@ fn official_engine_loads_existing_tiny_model_and_decodes_sample() {
     let root = std::env::var("BRIDGECRM_COMPAT_MODEL_DIR").expect("isolated model directory required");
     let file = |name: &str| std::path::Path::new(&root).join(name).to_string_lossy().into_owned();
     println!("Candidate sherpa: {}; ONNX Runtime: {}", sherpa_onnx::version(), sherpa_onnx::onnxruntime_version());
-    assert_eq!(sherpa_onnx::version(), "1.13.8");
+    assert_eq!(sherpa_onnx::version(), "2.0.1");
     for suffix in ["", ".int8"] {
         let mut config = OfflineRecognizerConfig::default();
         config.model_config.whisper = OfflineWhisperModelConfig {

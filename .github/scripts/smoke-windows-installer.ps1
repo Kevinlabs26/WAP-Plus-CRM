@@ -35,6 +35,16 @@ if (-not (Test-Path -LiteralPath $applicationPath -PathType Leaf)) {
 if (-not (Test-Path -LiteralPath $sidecarPath -PathType Leaf)) {
   throw "The installed Baileys sidecar was not found at $sidecarPath"
 }
+$ffmpegPath = Join-Path $installationDirectory 'ffmpeg.exe'
+if (-not (Test-Path -LiteralPath $ffmpegPath -PathType Leaf) -or
+    (Get-FileHash -LiteralPath $ffmpegPath -Algorithm SHA256).Hash -ne '3256173f3f8bffd7df12227c68adf68025edb1832273a9530688a7bb1ed8edec') {
+  throw 'The installed FFmpeg does not match the verified project binary'
+}
+foreach ($notice in @('ffmpeg-LICENSE.txt', 'ffmpeg-NOTICE.txt')) {
+  if (-not (Test-Path -LiteralPath (Join-Path $installationDirectory "binaries/$notice") -PathType Leaf)) {
+    throw "The installed FFmpeg notice is missing: $notice"
+  }
+}
 
 $application = $null
 $databasePath = Join-Path $dataDirectory "wap-plus.db"

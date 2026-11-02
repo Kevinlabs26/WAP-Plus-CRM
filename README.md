@@ -81,6 +81,7 @@ Common commands:
 | `npm run dev` | Start the Vite desktop UI |
 | `npm run tauri -- dev` | Start the Tauri desktop shell; Rust and WebView2 are required |
 | `npm run release:win` | Build the Windows Tauri installer, including the Baileys sidecar |
+| `npm run ffmpeg:prepare` | Prepare the hash-verified project FFmpeg on Windows; does not change system FFmpeg |
 | `npm test` | Run desktop protocol and unit tests |
 | `npm run mock-bridge` | Start the local mock Android TCP Bridge |
 | `npm run baileys:build` | Build the Baileys sidecar; Bun is required |
@@ -108,6 +109,7 @@ The prebuilt speech runtime requires the newer MSVC standard library; Visual Stu
 
 ```bash
 npm install
+npm run ffmpeg:prepare
 npm run tauri -- dev
 ```
 

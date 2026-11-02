@@ -1,3 +1,4 @@
+import { readAiJson } from "./aiResponse.ts";
 import type { Contact, Message } from "@/types/crm";
 import type { AppSettings } from "@/store/appStore";
 import { geminiGenerate } from "./gemini.ts";
@@ -408,7 +409,7 @@ async function openAiCompatibleSuggest(opts: {
   if (!res.ok) {
     let detail = res.statusText;
     try {
-      const errBody = (await res.json()) as {
+      const errBody = (await readAiJson(res)) as {
         error?: { message?: string };
       };
       detail = errBody.error?.message || detail;
@@ -469,7 +470,7 @@ async function openAiCompatibleSuggest(opts: {
       reader.releaseLock();
     }
   }
-  const data = (await res.json()) as {
+  const data = (await readAiJson(res)) as {
     choices?: { message?: { content?: string } }[];
   };
   const content = data.choices?.[0]?.message?.content;
@@ -555,7 +556,7 @@ async function ollamaSuggest(
     }),
   });
   if (!res.ok) throw new Error(`Ollama ${res.status}`);
-  const data = (await res.json()) as {
+  const data = (await readAiJson(res)) as {
     message?: { content?: string };
     response?: string;
   };
