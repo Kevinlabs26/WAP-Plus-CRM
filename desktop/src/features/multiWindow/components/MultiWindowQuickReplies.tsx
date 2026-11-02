@@ -35,6 +35,8 @@ export function MultiWindowQuickReplies({ chatId, onPick, onClose, variant = "po
       {onClose && <button type="button" onClick={onClose} aria-label={t("multi.closeQuickReplies")} className="rounded p-1 text-zinc-500 hover:bg-zinc-800"><X aria-hidden="true" className="h-4 w-4" /></button>}
     </header>
     <QuickReplyBrowser replies={settings.quickReplies || []} categories={settings.quickReplyCustomCategories || []}
+      removedCategories={settings.quickReplyRemovedCategories}
+      categoryLabels={settings.quickReplyCategoryLabels}
       contextKey={["multi", chatId, accountId, settings.sendChannel, chat?.phoneId].join(":")} compact={!isPanel} disabled={!chat}
       target={chat ? { title: title || chat.contactName || contact?.name || chat.id, account: identity } : undefined}
       pinnedIds={settings.quickReplyPinnedIds} recentIds={settings.quickReplyRecentIds} onTogglePin={togglePin} onUsed={recordUsage}

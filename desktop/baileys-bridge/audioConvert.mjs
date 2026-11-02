@@ -116,7 +116,7 @@ export function runFfmpegToOggOpus(inputPath, outputPath, maxSeconds) {
   );
 }
 
-async function buildWaveform(audioPath) {
+async function buildWaveform(audioPath, maxSeconds) {
   const pcm = await runFfmpeg(
     [
       "-v",
@@ -141,6 +141,9 @@ async function buildWaveform(audioPath) {
       captureStdout: true,
     },
   );
+  if (Number.isFinite(maxSeconds) && maxSeconds > 0 && pcm.length > maxSeconds * 8000 * 2) {
+    throw new Error(`语音条超过 ${maxSeconds} 秒，请改用普通音频或文件发送`);
+  }
   if (pcm.length < 2) return undefined;
 
   const bins = new Uint8Array(64);
@@ -194,10 +197,11 @@ export async function ensureOggOpusPtt(
   const outPath = join(dir, "out.ogg");
   try {
     await writeFile(inPath, parsed.buf);
-    await runFfmpegToOggOpus(inPath, outPath, maxSeconds);
+    // Decode one extra second to reject overlong files instead of silently truncating them.
+    await runFfmpegToOggOpus(inPath, outPath, Number.isFinite(maxSeconds) && maxSeconds > 0 ? maxSeconds + 1 : maxSeconds);
     const out = await readFile(outPath);
     if (!out.length) throw new Error("转码结果为空");
-    const waveform = await buildWaveform(outPath).catch(() => undefined);
+    const waveform = await buildWaveform(outPath, maxSeconds);
     return { buf: out, mimetype: "audio/ogg; codecs=opus", waveform };
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});

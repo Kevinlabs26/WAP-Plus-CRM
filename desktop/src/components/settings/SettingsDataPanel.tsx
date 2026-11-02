@@ -10,7 +10,7 @@ import { parseBackupJson, readJsonFile } from "@/lib/exportData";
 import { useI18n } from "@/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "@/lib/bridge";
-import { runAutomaticBackup, type AutomaticBackupStatus } from "@/lib/automaticBackup";
+import { runAutomaticBackup, readLatestAutomaticBackup, type AutomaticBackupStatus } from "@/lib/automaticBackup";
 
 export function SettingsDataPanel() {
   const [dataPage, setDataPage] = useState<"backup" | "storage">("backup");
@@ -99,12 +99,12 @@ export function SettingsDataPanel() {
     return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(1)} MB`;
   };
 
-  const onPickImport = async (file: File | null) => {
+  const onPickImport = async (file: File | (() => Promise<unknown>) | null) => {
     if (!file || backupBusy.current) return;
     backupBusy.current = true;
     setImporting(true);
     try {
-      const raw = await readJsonFile(file);
+      const raw = typeof file === "function" ? await file() : await readJsonFile(file);
       const preview = parseBackupJson(raw);
       const ok = await requestConfirm({
         title: t("settingsData.restoreTitle"),
@@ -168,8 +168,7 @@ export function SettingsDataPanel() {
           <Button variant="secondary" disabled={automaticBusy || importing || !automaticStatus?.latestDay} onClick={async () => {
             setAutomaticBusy(true);
             try {
-              const content = await invoke<string>("crm_backup_latest");
-              await onPickImport(new File([content], "automatic-backup.json", { type: "application/json" }));
+              await onPickImport(readLatestAutomaticBackup);
             } catch (e) { pushToast(String(e), "error"); }
             finally { setAutomaticBusy(false); }
           }}>{t("backup.restoreLatest")}</Button>

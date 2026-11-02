@@ -459,7 +459,7 @@ fn ack_rank(status: &str) -> u8 {
     match status { "sent" => 1, "server" => 2, "delivered" => 3, "read" => 4, "played" => 5, _ => 0 }
 }
 
-fn read_json_text(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<String> {
+pub(crate) fn read_json_text(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<String> {
     match row.get_ref(index)? {
         rusqlite::types::ValueRef::Text(bytes) => {
             // Preserve legacy rows with damaged text; never rewrite their original bytes on read.

@@ -25,7 +25,16 @@ export type ScheduledPlan = {
   endAt?: string;
   quietHours?: { start: string; end: string };
   nativeMedia?: boolean;
+  audioMode?: "file" | "audio" | "voice";
 };
+export type ScheduledPlanFilter = "all" | "active" | "failed" | "history";
+export function scheduledPlanMatchesFilter(plan: ScheduledPlan, filter: ScheduledPlanFilter): boolean {
+  if (filter === "active") return ["pending", "running", "paused"].includes(plan.status);
+  if (filter === "failed") return plan.status === "expired" || plan.items.some(item => item.status === "failed" || item.status === "unknown");
+  if (filter === "history") return ["done", "cancelled"].includes(plan.status);
+  return true;
+}
+export const scheduledAudioMode = (plan: Pick<ScheduledPlan, "audioMode" | "nativeMedia">) => plan.audioMode ?? (plan.nativeMedia ? "audio" : "file");
 export const MAX_PLAN_STEPS = 20;
 export const planSteps = (plan: Pick<ScheduledPlan, "text" | "media" | "steps">): ScheduledPlanStep[] => [{ text: plan.text, media: plan.media }, ...(plan.steps || [])];
 export const activePlanStep = (plan: ScheduledPlan, item: ScheduledPlanItem) => planSteps(plan)[item.stepIndex || 0];
@@ -160,7 +169,7 @@ export function normalizeScheduledPlans(raw: unknown): ScheduledPlan[] {
       steps.push({ text: step.text, media: attachment, gapSec: Number.isFinite(step.gapSec) ? Math.max(20, Math.min(3600, step.gapSec!)) : undefined });
     }
     if (items.some(item => (item.stepIndex || 0) >= steps.length + 1 && item.status !== "sent")) invalidSteps = true;
-    let mediaUnavailable = p.mediaUnavailable === true || !!p.media && !media || invalidSteps;
+    let mediaUnavailable = p.mediaUnavailable === true || !!p.media && !media || invalidSteps || p.audioMode !== undefined && !["file", "audio", "voice"].includes(p.audioMode);
     if (mediaUnavailable && !["done", "cancelled"].includes(status)) status = "paused";
     const gap = Number(p.gapSec);
     const gapSec = Number.isFinite(gap) ? Math.max(MIN_SCHEDULED_GAP_SEC, Math.min(3600, gap)) : 30;
@@ -174,7 +183,7 @@ export function normalizeScheduledPlans(raw: unknown): ScheduledPlan[] {
     if (invalidWindow) {status = "paused";mediaUnavailable=true;}
     return [{ id: p.id, title: String(p.title || "").slice(0, 80), text: String(p.text || "").slice(0, 4000), media, mediaUnavailable,
       gapSec,
-      steps: steps.length ? steps : undefined, nativeMedia: p.nativeMedia === true, priority: Number.isFinite(p.priority) ? p.priority : 0,
+      steps: steps.length ? steps : undefined, nativeMedia: p.nativeMedia === true, audioMode: ["file", "audio", "voice"].includes(p.audioMode || "") ? p.audioMode : undefined, priority: Number.isFinite(p.priority) ? p.priority : 0,
       endAt: p.endAt ? String(p.endAt) : undefined, quietHours,
       dueAt: String(p.dueAt || ""), timeZone, createdAt: String(p.createdAt || p.dueAt), status, items,
       startedAt: p.startedAt ? String(p.startedAt) : undefined, offlineSince: p.offlineSince ? String(p.offlineSince) : undefined,

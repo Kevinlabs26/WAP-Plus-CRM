@@ -26,6 +26,7 @@ export default {
       colors: {
         brand: {
           DEFAULT: "rgb(var(--brand-rgb) / <alpha-value>)",
+          foreground: "var(--brand-foreground)",
           dark: "#128C7E",
           deeper: "#075E54",
         },

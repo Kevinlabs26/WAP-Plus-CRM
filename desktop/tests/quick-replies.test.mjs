@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   filterQuickReplies,
   normalizeQuickReplyCategory,
+  getQuickReplyCategories,
 } from "../src/lib/quickReplies.ts";
 
 test("legacy quick replies infer useful categories", () => {
@@ -35,6 +36,13 @@ test("custom quick-reply categories are accepted", () => {
     ]),
     "custom-sales"
   );
+});
+
+test("removed default categories stay absent and cannot be inferred back into replies", () => {
+  const removed=["opening","quote","follow-up","after-sales","other"];
+  assert.deepEqual(getQuickReplyCategories([{id:"custom",label:"Faith"}],removed).map(item=>item.id),["other","custom"]);
+  for(const id of removed)assert.equal(normalizeQuickReplyCategory(id,"Hello","售后 报价",[],removed),"other");
+  assert.equal(normalizeQuickReplyCategory(undefined,"Hello","售后 报价",[],removed),"other");
 });
 
 test("search matches all words across fields, ignoring case and French accents", () => {

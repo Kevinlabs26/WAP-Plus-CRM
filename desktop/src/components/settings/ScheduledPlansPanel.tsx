@@ -2,22 +2,19 @@ import { useEffect, useMemo, useState } from "react";
 import { Button, Input } from "@/components/ui/primitives";
 import { useAppStore } from "@/store/appStore";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { ScheduledPlanDialog } from "@/components/chat/ScheduledPlanDialog";
 import { prioritizeBatchTask, updateScheduledPlan } from "@/lib/scheduledPlanActions";
-import { batchTaskOrder, nextBatchTask, planSteps, scheduledPlanOrder, type ScheduledPlan } from "@/lib/scheduledPlans";
+import { batchTaskOrder, nextBatchTask, planSteps, scheduledPlanOrder, scheduledPlanMatchesFilter, type ScheduledPlan, type ScheduledPlanFilter } from "@/lib/scheduledPlans";
 import { estimatePlanMinutes, planItemReceipt } from "@/lib/scheduledPlanProgress";
 import { sendRuntimeFromSettings } from "@/channels";
 import { flushPersist } from "@/store/appStore";
 
-export function ScheduledPlansPanel() {
+export function ScheduledPlansPanel({ filter, onFilterChange: setFilter }: { filter: ScheduledPlanFilter; onFilterChange: (filter: ScheduledPlanFilter) => void }) {
   const { t, locale } = useI18n();
   const plans = useAppStore(state => state.settings.scheduledPlans || []);
   const settings = useAppStore(state=>state.settings);
   const campaigns = useAppStore(state=>state.broadcastCampaigns || []);
   const messages = useAppStore(state=>state.messages || []);
   const messagesById = useMemo(()=>new Map(messages.map(m=>[m.id,m])),[messages]);
-  const [creating, setCreating] = useState(false);
-  const [filter, setFilter] = useState("active");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [itemPage, setItemPage] = useState(0);
   const [replanId, setReplanId] = useState<string | null>(null);
@@ -27,14 +24,12 @@ export function ScheduledPlansPanel() {
   const [busy, setBusy] = useState(false);
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(timer); }, []);
   const reason = (error?: string) => error?.startsWith("planQueue.") ? t(error as TranslationKey) : error;
-  const visible = [...plans].filter(plan => filter === "all" || (filter === "active" ? ["pending", "running", "paused"].includes(plan.status) : filter === "failed" ? plan.status === "expired" || plan.items.some(item => item.status === "failed" || item.status === "unknown") : ["done", "cancelled"].includes(plan.status))).sort(scheduledPlanOrder);
+  const visible = plans.filter(plan => scheduledPlanMatchesFilter(plan, filter)).sort(scheduledPlanOrder);
   const waitUntil = Math.max(0, ...plans.map(plan => Date.parse(plan.cooldownUntil || "") || 0));
   const queue = [...plans.filter(p=>["pending","running","paused"].includes(p.status)),...campaigns.filter(c=>["draft","running","paused"].includes(c.status))].sort(batchTaskOrder);
   const nextId = nextBatchTask(plans,campaigns,now);
 
-  return <div className="mx-auto max-w-5xl space-y-4">
-    {creating && <ScheduledPlanDialog onClose={() => setCreating(false)} />}
-    <header className="flex items-start justify-between gap-3"><div><h3 className="text-lg font-semibold text-zinc-100">{t("settingsScheduled.title")}</h3><p className="mt-1 text-xs leading-relaxed text-zinc-500">{t("planQueue.rules")}</p></div><Button variant="primary" onClick={() => setCreating(true)}>{t("planQueue.create")}</Button></header>
+  return <div className="space-y-4">
     {!!queue.length&&<section className="space-y-2 rounded-xl border border-zinc-700 p-3">
       <h4 className="text-sm font-medium">{t("planQueue.totalQueue")}</h4>
       <p className="text-xs text-zinc-500">{t("planQueue.queueRules")}</p>
@@ -44,8 +39,6 @@ export function ScheduledPlansPanel() {
         {"accountId" in task&&<><Button size="sm" onClick={()=>useAppStore.getState().pauseBroadcastCampaign(task.id)}>{t("planQueue.pause")}</Button><Button size="sm" onClick={()=>useAppStore.getState().setActiveNav("broadcast")}>{t("planQueue.manageLegacy")}</Button></>}
       </div>)}
     </section>}
-    <div className="flex flex-wrap gap-2">{["active", "failed", "history", "all"].map(value => <Button key={value} size="sm" variant={filter === value ? "primary" : "ghost"} onClick={() => setFilter(value)}>{t(`settingsScheduled.filter.${value}` as TranslationKey)}</Button>)}</div>
-    {!visible.length && <div className="rounded-xl border border-dashed border-zinc-700 px-5 py-10 text-center text-sm text-zinc-500"><p>{t("planQueue.empty")}</p><p className="mt-2 text-xs">{t("planQueue.entryHint")}</p></div>}
     {visible.map(plan => {
       const sent = plan.items.filter(item => item.status === "sent").length;
       const failed = plan.items.filter(item => item.status === "failed" || item.status === "unknown").length;

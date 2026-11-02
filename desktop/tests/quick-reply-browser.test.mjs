@@ -27,6 +27,20 @@ function harness(component=QuickReplyBrowser,props={}){
  h.render();return h;
 }
 
+test('renamed default categories appear in the quick-reply shelf with their original IDs',()=>{
+ const h=harness(QuickReplyBrowser,{replies:[reply('one',{category:'opening',media})],categoryLabels:{opening:'日常问候'}});
+ assert.ok(h.find('日常问候'));assert.equal(h.find('quickReply.category.opening'),undefined);
+ h.click('日常问候');assert.equal(h.find('日常问候').props['aria-pressed'],true);assert.ok(h.find('Reply one'));
+});
+
+test('deleting the selected category removes its tab and returns the shelf to All',()=>{
+ const h=harness(QuickReplyBrowser,{replies:[reply('one',{category:'after-sales',media})]});
+ h.click('quickReply.category.after-sales');
+ h.props={...h.props,removedCategories:['after-sales'],replies:[reply('one',{category:'other',media})]};h.render();
+ assert.equal(h.find('quickReply.category.after-sales'),undefined);
+ assert.equal(h.find('multi.all').props['aria-pressed'],true);assert.ok(h.find('Reply one'));
+});
+
 test('1000 replies render one page and search covers attachment filenames',()=>{
  const replies=Array.from({length:1000},(_,i)=>reply(String(i),i===998?{media}:{}));const h=harness(QuickReplyBrowser,{replies});
  assert.equal(h.nodes().filter(n=>n.type==='article').length,50);h.click('quickShelf.nextPage');assert.ok(h.find('Reply 50'));
@@ -90,6 +104,8 @@ test('multi-window shelf labels the chat owner instead of the globally active ac
  const state={settings:{quickReplies:[reply('a')],quickReplyCustomCategories:[],quickReplyPinnedIds:['a'],quickReplyRecentIds:['a'],sendChannel:'baileys',activeAccountId:'wa-a',liveBaileysAccountId:'wa-a',waAccounts:[{id:'wa-a',label:'1',userName:'Alice',status:'connected'},{id:'wa-b',label:'2',userName:'Bob',status:'connected'}]},chats:[{id:'chat-b',contactId:'b',contactName:'Grace',accountId:'wa-b',phoneId:'phone-b'}],contacts:[{id:'b'}],phones:[{id:'phone-b',name:'Pixel'}],baileysUi:{connection:'connected'},toggleQuickReplyPin(){},recordQuickReplyUsage(){},pushToast(){}};
  globalThis.shelfState=state;const picked=[];const h=harness(MultiWindowQuickReplies,{chatId:'chat-b',onPick:text=>picked.push(text)});
  const browser=()=>h.nodes().find(n=>n.type===QuickReplyBrowser).props;
+ state.settings.quickReplyRemovedCategories=['after-sales'];h.render();assert.strictEqual(browser().removedCategories,state.settings.quickReplyRemovedCategories);
+ state.settings.quickReplyCategoryLabels={opening:'Greetings'};h.render();assert.strictEqual(browser().categoryLabels,state.settings.quickReplyCategoryLabels);
  assert.deepEqual(browser().target,{title:'Grace',account:'2: Bob'});assert.strictEqual(browser().pinnedIds,state.settings.quickReplyPinnedIds);assert.strictEqual(browser().onUsed,state.recordQuickReplyUsage);
  const oldContext=browser().contextKey;state.settings.waAccounts[1].userName='Bob updated';h.render();assert.equal(browser().target.account,'2: Bob updated');
  browser().onInsert(reply('a'));assert.deepEqual(picked,['Body a']);

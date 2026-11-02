@@ -179,6 +179,8 @@ pub fn run() {
             crm_backup::crm_backup_status,
             crm_backup::crm_backup_save,
             crm_backup::crm_backup_latest,
+            crm_backup::crm_backup_latest_info,
+            crm_backup::crm_backup_read_part,
             image_library::image_library,
             commands::db_load_full_history,
             commands::db_load_messages_page,

@@ -15,7 +15,7 @@ export function AutomaticBackupWatcher() {
       catch (error) {
         if (!stopped && Date.now() - lastErrorAt > 3600_000) {
           lastErrorAt = Date.now();
-          useAppStore.getState().pushToast(`${t("backup.failed")}：${String(error)}`, "error");
+          useAppStore.getState().pushToast(`${t("backup.failed")}：${error instanceof Error ? error.message : String(error)}`, "error");
         }
       }
     };

@@ -103,9 +103,14 @@ export async function startVoiceRecording(): Promise<{
     }
   };
   const chunks: BlobPart[] = [];
-  const recorder = mimeType
-    ? new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 24000 })
-    : new MediaRecorder(stream, { audioBitsPerSecond: 24000 });
+  let recorder: MediaRecorder;
+  try {
+    recorder = mimeType
+      ? new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 24000 })
+      : new MediaRecorder(stream, { audioBitsPerSecond: 24000 });
+  } catch (error) {
+    stream.getTracks().forEach(track => track.stop()); stopMeter(); throw error;
+  }
   const actualMime = recorder.mimeType || mimeType || "audio/webm";
   const startedAt = Date.now();
   let pausedAt: number | null = null;
@@ -161,7 +166,8 @@ export async function startVoiceRecording(): Promise<{
   };
 
   // 周期性 data，避免部分浏览器只在 stop 才给一大块
-  recorder.start(250);
+  try { recorder.start(250); }
+  catch (error) { stream.getTracks().forEach(track => track.stop()); stopMeter(); throw error; }
 
   return {
     mimeType: actualMime,

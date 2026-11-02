@@ -956,6 +956,8 @@ export function CrmAiPanel() {
             onManage={() => setSettingsOpen(true, "quick-replies")}
             replies={settings.quickReplies || []}
             categories={settings.quickReplyCustomCategories || []}
+            removedCategories={settings.quickReplyRemovedCategories}
+            categoryLabels={settings.quickReplyCategoryLabels}
             contextKey={["main", selectedChatId, quickReplyAccountId, settings.sendChannel, quickReplyChat?.phoneId].join(":")}
             target={quickReplyChat ? { title: quickReplyChat.contactName || contact?.name || quickReplyChat.id, account: quickReplyIdentity } : undefined}
             pinnedIds={settings.quickReplyPinnedIds}

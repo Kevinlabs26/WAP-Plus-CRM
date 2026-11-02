@@ -18,12 +18,12 @@ WAP Plus CRM 使用 Tauri updater，通过 GitHub Release 分发 Windows 更新�
 
 ## 发布更新
 
-1. 同步递增根目录与 `desktop/package.json`、`desktop/src-tauri/tauri.conf.json`、`desktop/src-tauri/Cargo.toml` 的版本，并更新 `package-lock.json`、`desktop/src-tauri/Cargo.lock`。当前版本为 `0.1.59`，变更见 [CHANGELOG.md](../CHANGELOG.md)。
+1. 同步递增根目录与 `desktop/package.json`、`desktop/src-tauri/tauri.conf.json`、`desktop/src-tauri/Cargo.toml` 的版本，并更新 `package-lock.json`、`desktop/src-tauri/Cargo.lock`。当前版本为 `0.1.60`，变更见 [CHANGELOG.md](../CHANGELOG.md)。
 2. 提交并推送版本标签：
 
    ```bash
-   git tag v0.1.59
-   git push origin v0.1.59
+   git tag v0.1.60
+   git push origin v0.1.60
    ```
 
 3. GitHub Actions 先运行前端、sidecar、Bridge 检查和 Rust 测试，再构建签名安装包及 `latest.json`，创建 Draft Release。
@@ -39,6 +39,8 @@ npm run release:win
 ```
 
 ## 客户端行为
+
+自动备份使用分段目录（`crm-日期-唯一标识`），包含 `manifest.json` 和各个 JSON 分段，支持大于 256 MiB 的总数据。复制到外部磁盘时请保存整个目录；不要只复制或修改其中一个分段。原有单文件 JSON 仍可通过恢复最近备份入口读取。手动 JSON 导入的 256 MiB 单文件限制不变。
 
 - 桌面端启动约 12 秒后后台检查一次更新。
 - 用户也可以在 **设置 → 关于与更新** 手动检查。

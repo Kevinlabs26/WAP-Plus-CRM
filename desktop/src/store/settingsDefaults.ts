@@ -187,6 +187,8 @@ export interface SettingsShape {
   rateMinIntervalSec: number;
   quickReplies: SettingsQuickReply[];
   quickReplyCustomCategories: QuickReplyCategoryOption[];
+  quickReplyRemovedCategories: string[];
+  quickReplyCategoryLabels: Record<string, string>;
   quickReplyPinnedIds: string[];
   quickReplyRecentIds: string[];
   translateTargetLang: string;
@@ -347,6 +349,8 @@ export const defaultSettings: SettingsShape = {
   rateMinIntervalSec: 4,
   quickReplies: defaultQuickReplies,
   quickReplyCustomCategories: [],
+  quickReplyRemovedCategories: [],
+  quickReplyCategoryLabels: {},
   quickReplyPinnedIds: [],
   quickReplyRecentIds: [],
   translateTargetLang: "en",
@@ -401,6 +405,15 @@ export function normalizeLoadedSettings(
     ...defaultSettings,
     ...(src as Partial<SettingsShape>),
   };
+  const categoryLabels = merged.quickReplyCategoryLabels;
+  merged.quickReplyCategoryLabels = {};
+  for (const category of QUICK_REPLY_CATEGORIES) {
+    const label = categoryLabels?.[category.id];
+    if (category.id !== "other" && typeof label === "string" && label.trim() && label.trim().length <= 32) merged.quickReplyCategoryLabels[category.id] = label.trim();
+  }
+  merged.quickReplyRemovedCategories = Array.isArray(merged.quickReplyRemovedCategories)
+    ? [...new Set(merged.quickReplyRemovedCategories.filter(id => id !== "other" && QUICK_REPLY_CATEGORIES.some(category => category.id === id)))]
+    : [];
   merged.quickReplyCustomCategories = Array.isArray(
     merged.quickReplyCustomCategories
   )
@@ -422,7 +435,7 @@ export function normalizeLoadedSettings(
   merged.sendChannel =
     ch === "android_bridge" ? "android_bridge" : "baileys";
   if (!Array.isArray(merged.quickReplies)) {
-    merged.quickReplies = defaultQuickReplies;
+    merged.quickReplies = defaultQuickReplies.map(reply => ({ ...reply, category: normalizeQuickReplyCategory(reply.category, reply.title, reply.body, merged.quickReplyCustomCategories, merged.quickReplyRemovedCategories) }));
   } else {
     let quickReplyMediaBytes = 0;
     merged.quickReplies = merged.quickReplies
@@ -472,7 +485,8 @@ export function normalizeLoadedSettings(
             r?.category,
             title,
             body,
-            merged.quickReplyCustomCategories
+            merged.quickReplyCustomCategories,
+            merged.quickReplyRemovedCategories
           ),
         };
       })

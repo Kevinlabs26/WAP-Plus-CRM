@@ -40,6 +40,7 @@ export async function saveScheduledPlan(input: Omit<ScheduledPlan, "id" | "creat
   if ((!startNow && (!Number.isFinite(Date.parse(dueAt)) || Date.parse(dueAt) <= Date.now())) || !Number.isFinite(input.gapSec) || input.gapSec < MIN_SCHEDULED_GAP_SEC || input.gapSec > 3600) throw new Error(translateCurrent("planQueue.invalidTime"));
   if ((!input.text.trim() && !input.media) || input.text.length > 4000 || input.mediaUnavailable) throw new Error(translateCurrent("planQueue.invalidContent"));
   const steps = planSteps(input);
+  if (input.audioMode !== undefined && !["file", "audio", "voice"].includes(input.audioMode)) throw new Error(translateCurrent("planQueue.invalidContent"));
   if (steps.length > MAX_PLAN_STEPS || steps.some(s => typeof s.text !== "string" || s.text.length > 4000 || !s.text.trim() && !s.media || s.gapSec !== undefined && (!Number.isFinite(s.gapSec) || s.gapSec < 20 || s.gapSec > 3600))) throw new Error(translateCurrent("planQueue.invalidContent"));
   if (input.endAt && (!Number.isFinite(Date.parse(input.endAt)) || Date.parse(input.endAt) <= Date.parse(dueAt))) throw new Error(translateCurrent("planQueue.invalidDeadline"));
   if (input.quietHours && (!/^([01]\d|2[0-3]):[0-5]\d$/.test(input.quietHours.start) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(input.quietHours.end) || input.quietHours.start === input.quietHours.end)) throw new Error(translateCurrent("planQueue.invalidTime"));

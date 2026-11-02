@@ -58,6 +58,18 @@ for(const kind of ['audio','video'])test(`native ${kind} uses the correct route 
  }finally{h.cleanup();}
 });
 
+for (const mode of ['voice','audio','file']) test(`explicit ${mode} audio mode uses the owning account and the send gate`,async()=>{
+ const h=setup();try{
+ const p={gapSec:45,text:'',nativeMedia:false,audioMode:mode,media:{kind:'audio',mimeType:'audio/mpeg',fileName:'clip.mp3',dataUrl:'data:audio/mpeg;base64,AA==',size:1}};
+ const id=h.deps.enqueue(p,target);const result=await h.deps.send(p,{...target,messageId:id},()=>true);
+ assert.equal(result.ok,true);assert.equal(h.calls[0][0],mode==='file'?'document':'audio');
+ assert.equal(h.state.messages[0].mediaType,mode==='file'?'document':'audio');assert.equal(h.state.messages[0].mediaPtt,mode==='voice');
+ assert.equal(h.calls[0][1].at(-1).accountId,'owner');assert.equal(globalThis.watcherGates[0].gap,45);
+ if(mode!=='file')assert.equal(h.calls[0][1].at(-1).ptt,mode==='voice');
+ h.calls.length=0;assert.equal((await h.deps.send(p,target,()=>false)).ok,false);assert.equal(h.calls.length,0);
+ }finally{h.cleanup();}
+});
+
 test('unsupported native video is a definite preflight failure rather than an unknown delivery',async()=>{
  const h=setup();try{
  const p={gapSec:30,text:'caption',nativeMedia:true,media:{kind:'video',mimeType:'video/mp4',fileName:'clip.mp4',dataUrl:'data:video/mp4;base64,AA==',size:1}};

@@ -7,7 +7,7 @@ const mocks = {
   react: "export const useState = value => globalThis.sidebarHooks.state(value); export const useRef = value => globalThis.sidebarHooks.ref(value); export const useEffect = (fn, deps) => globalThis.sidebarHooks.effect(fn, deps);",
   "react/jsx-runtime": "export const jsx=(type,props,key)=>({type,props,key}); export const jsxs=jsx; export const Fragment='fragment';",
   "lucide-react": "export const ArrowUpDown=()=>null, Bookmark=ArrowUpDown, Check=ArrowUpDown, ChevronDown=ArrowUpDown, MessageCircle=ArrowUpDown, MoreHorizontal=ArrowUpDown, RefreshCw=ArrowUpDown, Search=ArrowUpDown, UserPlus=ArrowUpDown, Users=ArrowUpDown, UsersRound=ArrowUpDown, CheckCheck=ArrowUpDown, Settings2=ArrowUpDown, UserRoundPlus=ArrowUpDown;",
-  "@/i18n": "export const useI18n=()=>({t:key=>key});",
+  "@/i18n": "export const useI18n=()=>({t:key=>key,locale:'en'});",
   "@/lib/syncDebug": "export const isSyncDebugEnabled=()=>false; export const syncLog=()=>{};",
   "@/components/ui/primitives": "export const SectionLabel='header';",
 };
@@ -38,6 +38,8 @@ function fixture(overrides = {}) {
       effects.push(() => { cells[index].cleanup?.(); cells[index].cleanup = fn(); }); },
   };
   const props = { listTab: "chats", groupFilter: "all", listFilter: "all", sortMode: "recent", filter: "", isBaileys: true,
+    chatsCount: 4412, contactsCount: 20263, leadCount: 30, leadEnabled: true, savedActive: false, leadActive: false,
+    onOpenSaved: () => calls.push("saved"), onOpenLeads: () => calls.push("leads"), onOpenLeadSettings: () => calls.push("lead-settings"),
     onGroupFilterChange: mode => calls.push(mode), getGroupFilterCounts: () => ({ all: 9, hidden: 4, only: 5, unread: 2, pinned: 1, mentions: 1 }),
     onCreateGroup: () => calls.push("create"), onBatchSaveContacts: () => calls.push("batch"), onSync: () => calls.push("sync"),
     syncDisabled: true, sortRef: { current: null }, ...overrides };
@@ -81,11 +83,50 @@ test("Android contact lists keep bulk save and sync without WhatsApp group or le
   try {
     ui.render().find(node => node.type === "button" && node.props["aria-label"] === "sidebar.actions").props.onClick();
     const actions = ui.render().find(node => node.props.id === "sidebar-actions").props.children;
-    assert.equal(actions.length, 1);
-    assert.equal(actions[0].props.children[1], "sidebar.batchSaveContacts");
+    assert.deepEqual(actions.map(n=>n.props["aria-label"]), ["sidebar.saved", "sidebar.syncChats", "sidebar.batchSaveContacts"]);
     const sync = ui.render().find(node => node.type === "button" && node.props["aria-label"] === "sidebar.syncChats");
     assert.equal(sync.props.disabled, false);
     sync.props.onClick();
     assert.deepEqual(ui.calls, ["sync"]);
   } finally { ui.close(); }
+});
+
+test("header tabs stay text-only and show only the current list's exact count",()=>{
+  const ui=fixture();try{
+    let tree=ui.render();
+    assert.ok(tree.some(n=>n.type==="span"&&n.props.children==="4,412"));
+    assert.ok(!tree.some(n=>n.type==="span"&&n.props.children==="20,263"));
+    const chats=tree.find(n=>n.type==="button"&&n.props.children==="sidebar.chats");
+    const contacts=tree.find(n=>n.type==="button"&&n.props.children==="sidebar.contacts");
+    assert.equal(chats.props["aria-pressed"],true);assert.equal(contacts.props["aria-pressed"],false);
+    assert.match(contacts.props.className,/whitespace-nowrap/);
+    ui.props.onTabChange=tab=>ui.props.listTab=tab;
+    ui.render().find(n=>n.type==="button"&&n.props.children==="sidebar.contacts").props.onClick();
+    tree=ui.render();assert.ok(tree.some(n=>n.type==="span"&&n.props.children==="20,263"));
+    assert.ok(!tree.some(n=>n.type==="span"&&n.props.children==="4,412"));
+  }finally{ui.close();}
+});
+
+test("saved items and leads move into more without losing callbacks, active state or exact lead counts",()=>{
+  const ui=fixture({savedActive:true,leadCount:1234});try{
+    let tree=ui.render();assert.ok(!tree.some(n=>n.type==="button"&&n.props["aria-label"]==="sidebar.saved"));
+    assert.ok(tree.some(n=>n.props["aria-label"]==="leadInbox.filterActive"&&n.props.children==="99+"));
+    const open=()=>{ui.render().find(n=>n.type==="button"&&n.props["aria-label"]==="sidebar.actions").props.onClick();return ui.render()};
+    tree=open();const saved=tree.find(n=>n.type==="button"&&n.props["aria-label"]==="sidebar.saved");
+    assert.equal(saved.props["aria-pressed"],true);saved.props.onClick();assert.deepEqual(ui.calls,["saved"]);
+    tree=open();const leads=tree.find(n=>n.type==="button"&&n.props["aria-label"]==="leadInbox.title");
+    assert.ok(nodes(leads).some(n=>n.props.children==="1,234"));leads.props.onClick();
+    assert.deepEqual(ui.calls,["saved","leads"]);assert.ok(!ui.render().some(n=>n.props.id==="sidebar-actions"));
+  }finally{ui.close();}
+});
+
+test("sync remains disabled when unavailable and progress is exposed while the menu is closed",()=>{
+  const ui=fixture({syncDisabled:false});try{
+    const open=()=>{ui.render().find(n=>n.type==="button"&&n.props["aria-label"]==="sidebar.actions").props.onClick();return ui.render()};
+    open().find(n=>n.type==="button"&&n.props["aria-label"]==="sidebar.syncChats").props.onClick();assert.deepEqual(ui.calls,["sync"]);
+    ui.props.syncing=true;ui.props.syncDisabled=true;
+    const tree=ui.render();assert.ok(tree.some(n=>n.type==="button"&&n.props["aria-label"]==="sidebar.actions"&&n.props["aria-busy"]));
+    assert.ok(tree.some(n=>n.props["aria-label"]==="sidebar.syncing"));
+    assert.equal(open().find(n=>n.type==="button"&&n.props["aria-label"]==="sidebar.syncing").props.disabled,true);
+  }finally{ui.close();}
 });

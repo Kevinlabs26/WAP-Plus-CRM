@@ -244,12 +244,19 @@ test('group and folder targets deduplicate by original account and recipient and
  state.chats[0].accountId='b';assert.equal(scheduledPlanTargets(state,['chat1']).length,0,'mismatched owners are rejected');
 });
 
+test('audio sending mode survives restart and invalid values pause the plan',()=>{
+ for(const audioMode of ['voice','audio','file'])assert.equal(normalizeScheduledPlans([plan('mode',undefined,{audioMode})])[0].audioMode,audioMode);
+ const invalid=normalizeScheduledPlans([plan('invalid',undefined,{audioMode:'surprise'})])[0];
+ assert.equal(invalid.status,'paused');assert.equal(invalid.mediaUnavailable,true);
+});
+
 test('backup preserves frozen plan content and attachment but cannot activate restored plans',()=>{
  const media={dataUrl:'data:image/png;base64,AA==',fileName:'frozen.png',mimeType:'image/png',kind:'image',size:1};
- const settings=normalizeLoadedSettings({scheduledPlans:[plan('a',[item('1')],{media})]});
+ const settings=normalizeLoadedSettings({scheduledPlans:[plan('a',[item('1')],{media,audioMode:'voice'})]});
  assert.equal(settings.scheduledPlans[0].media.fileName,'frozen.png');
  const restored=parseBackupJson({version:2,contacts:[{id:'a',name:'A',phone:'12025550123'}],settingsSafe:buildSettingsSafe(settings)});
  assert.equal(restored.settingsSafe.scheduledPlans[0].status,'paused');
  assert.equal(restored.settingsSafe.scheduledPlans[0].text,'FROZEN TEXT');
  assert.equal(restored.settingsSafe.scheduledPlans[0].media.dataUrl,media.dataUrl);
+ assert.equal(restored.settingsSafe.scheduledPlans[0].audioMode,'voice');
 });

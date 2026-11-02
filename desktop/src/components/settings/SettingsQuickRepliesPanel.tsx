@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "@/store/appStore";
 import { Button, Input, SectionLabel, Textarea } from "@/components/ui/primitives";
+import { useDetailsMenu } from "@/components/ui/useDetailsMenu";
 import { baileysRemoveQuickReply, baileysSyncQuickReplies } from "@/lib/baileys";
 import { isWaAccountConnected } from "@/lib/accountConnection";
 import { filterQuickReplies, getQuickReplyCategories, QUICK_REPLY_CATEGORIES, MAX_QUICK_REPLIES, MAX_QUICK_REPLY_CATEGORIES, MAX_QUICK_REPLY_MEDIA_BYTES, MAX_QUICK_REPLY_MEDIA_TOTAL_BYTES } from "@/lib/quickReplies";
@@ -34,11 +35,13 @@ export function SettingsQuickRepliesPanel() {
   const updateSettings = useAppStore((state) => state.updateSettings);
   const connection = useAppStore((state) => state.baileysUi.connection);
   const pushToast = useAppStore((state) => state.pushToast);
+  const requestConfirm = useAppStore((state) => state.requestConfirm);
   const [busy, setBusy] = useState(false);
   const [saveHint, setSaveHint] = useState<"idle" | "saving" | "saved">("idle");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [newCategory, setNewCategory] = useState("");
+  const [categoryDrafts, setCategoryDrafts] = useState<Record<string, string>>({});
   const [listQuery, setListQuery] = useState("");
   const [listCategory, setListCategory] = useState("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -51,15 +54,17 @@ export function SettingsQuickRepliesPanel() {
   const fileInput = useRef<HTMLInputElement>(null);
   const mediaRequests = useRef(new Map<string, symbol>());
   const hintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const categoryDeletePending = useRef(false);
+  const menuRef = useDetailsMenu();
   const replies = settings.quickReplies || [];
   const customCategories = settings.quickReplyCustomCategories || [];
-  const categoryOptions = getQuickReplyCategories(customCategories);
+  const categoryOptions = getQuickReplyCategories(customCategories, settings.quickReplyRemovedCategories, settings.quickReplyCategoryLabels);
   const visibleReplies = useMemo(() => filterQuickReplies(replies, listCategory, listQuery), [listCategory, listQuery, replies]);
   const currentPage = Math.min(page, Math.max(0, Math.ceil(visibleReplies.length / 50) - 1));
   const pageReplies = visibleReplies.slice(currentPage * 50, (currentPage + 1) * 50);
   const editing = visibleReplies.find(reply => reply.id === selectedId) || pageReplies[0];
-  const categoryLabel = (id: string) => QUICK_REPLY_CATEGORIES.some(item => item.id === id)
-    ? t(`quickReply.category.${id}` as TranslationKey) : categoryOptions.find(item => item.id === id)?.label || id;
+  const categoryLabel = (id: string, source = settings) => source.quickReplyCategoryLabels?.[id] || (QUICK_REPLY_CATEGORIES.some(item => item.id === id)
+    ? t(`quickReply.category.${id}` as TranslationKey) : source.quickReplyCustomCategories?.find(item => item.id === id)?.label || id);
   const importPreview = useMemo(() => {
     try { return { ...parseQuickReplyTable(importText), error: false }; }
     catch { return { rows: [], invalidRows: [], error: true }; }
@@ -67,7 +72,7 @@ export function SettingsQuickRepliesPanel() {
   useEffect(() => { setSelectedIds(new Set()); }, [listCategory, listQuery]);
   useEffect(() => {
     if (listCategory !== "all" && !categoryOptions.some(item => item.id === listCategory)) setListCategory("all");
-  }, [listCategory, settings.quickReplyCustomCategories]);
+  }, [listCategory, settings.quickReplyCustomCategories, settings.quickReplyRemovedCategories]);
   const accountId =
     settings.liveBaileysAccountId || settings.activeAccountId || null;
   const connected = isWaAccountConnected(
@@ -103,17 +108,10 @@ export function SettingsQuickRepliesPanel() {
             >
               {t("settingsQuickReplies.add")}
             </Button>
-            <details className="text-xs text-zinc-500" onClick={event => { if ((event.target as HTMLElement).closest("button")) event.currentTarget.open = false; }}>
+            <details ref={menuRef} className="text-xs text-zinc-500" onClick={event => { if ((event.target as HTMLElement).closest("button")) event.currentTarget.open = false; }}>
               <summary className="ui-control cursor-pointer list-none px-3 py-2" aria-label={t("nav.more")}>•••</summary>
               <div className="absolute right-0 top-full z-20 mt-1 flex w-72 max-w-[80vw] flex-col gap-2 rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-xl">
             <Button size="sm" onClick={() => setImportOpen(open => !open)}>{t("quickLibrary.import")}</Button>
-            <Button
-              variant="secondary"
-              size="sm" className="text-2xs"
-              onClick={() => setCategoriesOpen((open) => !open)}
-            >
-              {t("settingsQuickReplies.manageCategories")}
-            </Button>
             <Button
               variant="secondary"
               size="sm" className="text-2xs"
@@ -146,80 +144,6 @@ export function SettingsQuickRepliesPanel() {
         </div>
       </header>
 
-      {categoriesOpen && (
-        <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <SectionLabel>{t("settingsQuickReplies.categoryList")}</SectionLabel>
-            <span className="text-2xs text-zinc-600">{customCategories.length} / {MAX_QUICK_REPLY_CATEGORIES}</span>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Input
-              value={newCategory}
-              maxLength={32}
-              placeholder={t("settingsQuickReplies.categoryPlaceholder")}
-              aria-label={t("settingsQuickReplies.categoryPlaceholder")}
-              onChange={(event) => setNewCategory(event.target.value)}
-            />
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={!newCategory.trim() || customCategories.length >= MAX_QUICK_REPLY_CATEGORIES}
-              onClick={() => {
-                const label = newCategory.trim();
-                if (!label) return;
-                const id = `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-                updateSettings({
-                  quickReplyCustomCategories: [...customCategories, { id, label }],
-                });
-                setNewCategory("");
-                markSavedSoon();
-              }}
-            >
-              {t("settingsQuickReplies.addCategory")}
-            </Button>
-          </div>
-          {customCategories.length > 0 && (
-            <div className="mt-3 space-y-2">
-              {customCategories.map((category) => (
-                <div key={category.id} className="flex items-center gap-2">
-                  <Input
-                    value={category.label}
-                    maxLength={32}
-                    aria-label={category.label}
-                    onChange={(event) => {
-                      const label = event.target.value;
-                      updateSettings({
-                        quickReplyCustomCategories: customCategories.map((item) =>
-                          item.id === category.id ? { ...item, label } : item
-                        ),
-                      });
-                      markSavedSoon();
-                    }}
-                  />
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-2xs text-zinc-500"
-                    onClick={() => {
-                      const used = replies.some((reply) => reply.category === category.id);
-                      if (used) {
-                        pushToast(t("settingsQuickReplies.categoryInUse"), "info");
-                        return;
-                      }
-                      updateSettings({
-                        quickReplyCustomCategories: customCategories.filter((item) => item.id !== category.id),
-                      });
-                      markSavedSoon();
-                    }}
-                  >
-                    {t("common.delete")}
-                  </Button>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
 
       {importOpen && (
         <section className="space-y-3 rounded-xl border border-zinc-800 p-4">
@@ -238,10 +162,28 @@ export function SettingsQuickRepliesPanel() {
       )}
       <section className="grid overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/35 lg:grid-cols-[160px_minmax(240px,0.85fr)_minmax(300px,1.2fr)]">
         <nav aria-label={t("settingsQuickReplies.category")} className="space-y-1 border-b border-zinc-800 p-3 lg:max-h-[720px] lg:overflow-y-auto lg:border-b-0 lg:border-r">
-          <SectionLabel>{t("settingsQuickReplies.category")}</SectionLabel>
-          {[{ id: "all", label: t("starred.all") }, ...categoryOptions].map(category => (
+          <div className="flex items-center justify-between gap-1">
+            <SectionLabel>{t("settingsQuickReplies.category")}</SectionLabel>
+            <Button size="xs" variant="ghost" aria-expanded={categoriesOpen} aria-controls="quick-reply-category-manager" onClick={() => setCategoriesOpen(open => !open)}>{t(categoriesOpen ? "common.close" : "settingsQuickReplies.manageCategories")}</Button>
+          </div>
+          {categoriesOpen && <div id="quick-reply-category-manager" className="space-y-2 py-2">
+            <form className="flex gap-1" onSubmit={event => { event.preventDefault(); addCategory(); }}>
+              <Input autoFocus className="min-w-0 flex-1" size="sm" value={newCategory} maxLength={32} placeholder={t("settingsQuickReplies.categoryPlaceholder")} aria-label={t("settingsQuickReplies.categoryPlaceholder")} onChange={event => setNewCategory(event.target.value)} />
+              <Button type="submit" size="xs" aria-label={t("settingsQuickReplies.addCategory")} title={t("settingsQuickReplies.addCategory")} disabled={!newCategory.trim() || customCategories.length >= MAX_QUICK_REPLY_CATEGORIES}>＋</Button>
+            </form>
+            {categoryOptions.filter(category => category.id !== "other").map(category => <div key={category.id} className="flex items-center gap-1">
+              <Input size="sm" className="min-w-0 flex-1" maxLength={32} aria-label={t("settingsQuickReplies.renameCategory", { name: categoryLabel(category.id) })}
+                value={categoryDrafts[category.id] ?? categoryLabel(category.id)}
+                onChange={event => setCategoryDrafts(values => ({ ...values, [category.id]: event.target.value }))}
+                onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); event.currentTarget.blur(); } }}
+                onBlur={event => { renameCategory(category.id, event.currentTarget.value); setCategoryDrafts(values => { const next = { ...values }; delete next[category.id]; return next; }); }} />
+              <button type="button" className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-rose-400" aria-label={t("settingsQuickReplies.deleteCategoryNamed", { name: categoryLabel(category.id) })} title={t("settingsQuickReplies.deleteCategoryNamed", { name: categoryLabel(category.id) })} onClick={() => void removeCategory(category.id)}>×</button>
+            </div>)}
+          </div>}
+          {!categoriesOpen && [{ id: "all", label: t("starred.all") }, ...categoryOptions].map(category => (
             <button key={category.id} type="button" aria-pressed={listCategory === category.id}
               onClick={() => { setListCategory(category.id); setPage(0); }}
+              onContextMenu={category.id !== "all" && category.id !== "other" ? event => { event.preventDefault(); void removeCategory(category.id); } : undefined}
               className={"flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-xs " + (listCategory === category.id ? "bg-brand/15 text-brand" : "text-zinc-400 hover:bg-zinc-800/50")}>
               <span className="truncate">{category.id === "all" ? category.label : categoryLabel(category.id)}</span>
               <span className="text-2xs opacity-70">{category.id === "all" ? replies.length : replies.filter(item => item.category === category.id).length}</span>
@@ -350,9 +292,56 @@ export function SettingsQuickRepliesPanel() {
     if (next.reduce((bytes, reply) => bytes + (reply.media?.size || 0), 0) > MAX_QUICK_REPLY_MEDIA_TOTAL_BYTES) {
       pushToast(t("quickLibrary.mediaCapacity"), "error"); return false;
     }
-    updateSettings({ quickReplies: next });
+    const latest = useAppStore.getState().settings;
+    const valid = new Set(getQuickReplyCategories(latest.quickReplyCustomCategories, latest.quickReplyRemovedCategories).map(category => category.id));
+    updateSettings({ quickReplies: next.map(reply => valid.has(reply.category) ? reply : { ...reply, category: "other" }) });
     markSavedSoon();
     return true;
+  }
+
+  function addCategory() {
+    const label = newCategory.trim();
+    if (!label || label.length > 32) return;
+    const latest = useAppStore.getState().settings;
+    if ((latest.quickReplyCustomCategories || []).length >= MAX_QUICK_REPLY_CATEGORIES) { pushToast(t("quickLibrary.categoryLimit"), "error"); return; }
+    const options = getQuickReplyCategories(latest.quickReplyCustomCategories, latest.quickReplyRemovedCategories, latest.quickReplyCategoryLabels);
+    if (options.some(category => categoryLabel(category.id, latest).toLocaleLowerCase() === label.toLocaleLowerCase())) { pushToast(t("settingsQuickReplies.categoryExists"), "info"); return; }
+    const id = "custom-" + crypto.randomUUID();
+    updateSettings({ quickReplyCustomCategories: [...(latest.quickReplyCustomCategories || []), { id, label }] });
+    setNewCategory(""); setCategoriesOpen(false); setListCategory(id); setListQuery(""); setPage(0); markSavedSoon();
+  }
+
+  function renameCategory(id: string, value: string) {
+    const label = value.trim();
+    if (!label || label.length > 32) { pushToast(t("settingsQuickReplies.categoryInvalid"), "info"); return; }
+    const latest = useAppStore.getState().settings;
+    const options = getQuickReplyCategories(latest.quickReplyCustomCategories, latest.quickReplyRemovedCategories, latest.quickReplyCategoryLabels);
+    if (id === "other" || !options.some(category => category.id === id)) return;
+    if (categoryLabel(id, latest) === label) return;
+    if (options.some(category => category.id !== id && categoryLabel(category.id, latest).toLocaleLowerCase() === label.toLocaleLowerCase())) { pushToast(t("settingsQuickReplies.categoryExists"), "info"); return; }
+    if (QUICK_REPLY_CATEGORIES.some(category => category.id === id)) updateSettings({ quickReplyCategoryLabels: { ...(latest.quickReplyCategoryLabels || {}), [id]: label } });
+    else updateSettings({ quickReplyCustomCategories: (latest.quickReplyCustomCategories || []).map(category => category.id === id ? { ...category, label } : category) });
+    markSavedSoon();
+  }
+
+  async function removeCategory(id: string) {
+    if (id === "all" || id === "other" || categoryDeletePending.current) return;
+    const before = useAppStore.getState().settings;
+    if (!getQuickReplyCategories(before.quickReplyCustomCategories, before.quickReplyRemovedCategories).some(category => category.id === id)) return;
+    categoryDeletePending.current = true;
+    try {
+      if (!await requestConfirm({ title: t("settingsQuickReplies.deleteCategoryConfirm", { name: categoryLabel(id) }), description: t("settingsQuickReplies.deleteCategoryHint"), tone: "danger" })) return;
+      const latest = useAppStore.getState().settings;
+      const removed = latest.quickReplyRemovedCategories || [];
+      updateSettings({
+        quickReplyCustomCategories: (latest.quickReplyCustomCategories || []).filter(category => category.id !== id),
+        quickReplyRemovedCategories: QUICK_REPLY_CATEGORIES.some(category => category.id === id) ? [...new Set([...removed, id])] : removed,
+        quickReplies: (latest.quickReplies || []).map(reply => reply.category === id ? { ...reply, category: "other" } : reply),
+      });
+      setListCategory(current => current === id ? "all" : current); setBulkCategory(current => current === id ? "" : current); setPage(0);
+      markSavedSoon();
+    } catch { pushToast(t("common.deleteFailed"), "error"); }
+    finally { categoryDeletePending.current = false; }
   }
 
   function updateReply(id: string, patch: Partial<Omit<QuickReply, "id">>) {
@@ -422,7 +411,7 @@ export function SettingsQuickRepliesPanel() {
     const categories = [...(latest.quickReplyCustomCategories || [])];
     const current = latest.quickReplies || [];
     const categoryIds = new Map<string, string>();
-    for (const item of getQuickReplyCategories(categories)) {
+    for (const item of getQuickReplyCategories(categories, latest.quickReplyRemovedCategories, latest.quickReplyCategoryLabels)) {
       categoryIds.set(item.id.toLocaleLowerCase(), item.id);
       categoryIds.set(item.label.toLocaleLowerCase(), item.id);
       if (QUICK_REPLY_CATEGORIES.some(base => base.id === item.id)) {

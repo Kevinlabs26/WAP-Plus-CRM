@@ -3,7 +3,7 @@ import { flushPersist, useAppStore } from "@/store/appStore";
 import { withSendGate, sendRuntimeFromSettings } from "@/channels";
 import { baileysSend, baileysSendImage, baileysSendDocument, baileysSendVoice, baileysSendVideo } from "@/lib/baileysSend";
 import { isWaAccountConnected } from "@/lib/accountConnection";
-import { activePlanStep, nextBatchTask, scheduledPlanTargets } from "@/lib/scheduledPlans";
+import { activePlanStep, nextBatchTask, scheduledAudioMode, scheduledPlanTargets } from "@/lib/scheduledPlans";
 import { updateScheduledPlan } from "@/lib/scheduledPlanActions";
 import { createScheduledPlanRunner } from "@/lib/scheduledPlanRunner";
 import { translateCurrent, type TranslationKey } from "@/i18n";
@@ -33,8 +33,8 @@ export function ScheduledPlanWatcher() {
         }
         const id = state.enqueueOutgoingMessage({ chatId: item.chatId, contactId: item.contactId, phoneE164: item.recipient, accountId: item.accountId,
           channelId: "baileys", systemKind: "scheduled_plan", deliveryStatus: "pending", body: step.text || step.media?.fileName || "[文件]" });
-        if (id && step.media) state.patchMessage(id, { mediaType: step.media.kind === "image" && step.media.size <= 6 * 1024 * 1024 ? "image" : plan.nativeMedia && step.media.kind === "audio" && !step.text ? "audio" : plan.nativeMedia && step.media.kind === "video" && step.media.mimeType === "video/mp4" ? "video" : "document",
-          mediaUrl: step.media.dataUrl, mediaMime: step.media.mimeType, mediaCaption: step.text, mediaFileName: step.media.fileName, mediaPtt:false });
+        if (id && step.media) state.patchMessage(id, { mediaType: step.media.kind === "image" && step.media.size <= 6 * 1024 * 1024 ? "image" : scheduledAudioMode(plan) !== "file" && step.media.kind === "audio" && !step.text ? "audio" : plan.nativeMedia && step.media.kind === "video" && step.media.mimeType === "video/mp4" ? "video" : "document",
+          mediaUrl: step.media.dataUrl, mediaMime: step.media.mimeType, mediaCaption: step.text, mediaFileName: step.media.fileName, mediaPtt:step.media.kind === "audio" && !step.text && scheduledAudioMode(plan) === "voice" });
         return id;
       },
       send: async (plan, item, canSend) => {
@@ -46,7 +46,7 @@ export function ScheduledPlanWatcher() {
             if (!canSend()) return { ok: false, error: "automation_cancelled", message: translateCurrent("planQueue.stopped") };
             if (!step.media) return baileysSend(item.recipient, step.text, { accountId: item.accountId });
             if (step.media.kind === "image" && step.media.size <= 6 * 1024 * 1024) return baileysSendImage(item.recipient, step.media.dataUrl, step.text, { accountId: item.accountId });
-            if (plan.nativeMedia && step.media.kind === "audio" && !step.text) return baileysSendVoice(item.recipient,step.media.dataUrl,{accountId:item.accountId,mimetype:step.media.mimeType,ptt:false});
+            if (scheduledAudioMode(plan) !== "file" && step.media.kind === "audio" && !step.text) return baileysSendVoice(item.recipient,step.media.dataUrl,{accountId:item.accountId,mimetype:step.media.mimeType,ptt:scheduledAudioMode(plan) === "voice"});
             if (plan.nativeMedia && step.media.kind === "video" && step.media.mimeType === "video/mp4") return baileysSendVideo(item.recipient,step.media.dataUrl,step.text,item.accountId,canSend);
             return baileysSendDocument(item.recipient, step.media.dataUrl, step.media.fileName, { accountId: item.accountId, caption: step.text, mimetype: step.media.mimeType });
           }, step.gapSec || plan.gapSec);

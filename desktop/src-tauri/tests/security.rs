@@ -4,6 +4,8 @@ mod account_id;
 mod atomic_file;
 #[path = "../src/crm_backup.rs"]
 mod crm_backup;
+#[path = "../src/db.rs"]
+mod db;
 #[path = "../src/speech_archive.rs"]
 mod speech_archive;
 #[path = "../src/voice.rs"]

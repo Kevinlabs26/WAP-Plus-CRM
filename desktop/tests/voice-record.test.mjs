@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   voiceDurationSeconds,
   voiceSignalLevel,
+  startVoiceRecording,
 } from "../src/lib/voiceRecord.ts";
 import {
   normalizeVoiceInputLanguage,
@@ -23,6 +24,25 @@ test("voice duration requires a complete second", () => {
 test("voice signal level distinguishes silence from microphone activity", () => {
   assert.equal(voiceSignalLevel(new Uint8Array([128, 128, 128])), 0);
   assert.ok(voiceSignalLevel(new Uint8Array([96, 128, 160])) > 0.4);
+});
+
+test("recorder initialization failures release the microphone stream", async () => {
+  const keys=["window","navigator","MediaRecorder","AudioContext"];
+  const descriptors=keys.map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]);
+  try {
+    for(const failure of ["constructor","start"]){
+      let stopped=0;
+      const values={window:{},navigator:{mediaDevices:{getUserMedia:async()=>({getTracks:()=>[{stop(){stopped++;}}]})}},AudioContext:class {constructor(){throw Error("meter unavailable");}},MediaRecorder:class {
+        static isTypeSupported(){return true;}
+        constructor(){if(failure==="constructor")throw Error("recorder failed");}
+        start(){throw Error("recorder failed");}
+      }};
+      for(const key of keys)Object.defineProperty(globalThis,key,{configurable:true,writable:true,value:values[key]});
+      await assert.rejects(startVoiceRecording(),/recorder failed/);assert.equal(stopped,1);
+    }
+  } finally {
+    for(const [key,descriptor] of descriptors){if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}
+  }
 });
 
 test("voice input language is independent from translation language", () => {

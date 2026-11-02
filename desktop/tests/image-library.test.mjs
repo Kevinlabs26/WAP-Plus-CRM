@@ -12,7 +12,7 @@ const bundled = await build({ entryPoints: [root + 'src/lib/imageLibrary.ts'], b
 } }] });
 const api = await import('data:text/javascript;base64,' + Buffer.from(bundled.outputFiles[0].text).toString('base64'));
 const data = 'data:image/png;base64,' + Buffer.from('\x89PNG\r\n\x1a\nfixture','latin1').toString('base64');
-const item = {title:'Invitation',category:'Events',data,pinned:true,usedAt:10};
+const item = {title:'Invitation',category:'Events',caption:'On commence déjà la réunion ? 🎉\nRejoins-nous !',data,pinned:true,usedAt:10};
 const backup = items => ({app:'WAP Plus CRM Image Library',version:1,items});
 
 test('empty custom categories round trip in backups and invalid categories never start restoration', async () => {
@@ -31,8 +31,23 @@ test('empty custom categories round trip in backups and invalid categories never
 
 test('backup validation rejects remote URLs, SVG, malformed or excessive entries before import', () => {
   assert.deepEqual(api.parseImageLibraryBackup(backup([item])),[item]);
+  const {caption,...legacy}=item;
+  assert.equal(api.parseImageLibraryBackup(backup([legacy]))[0].caption,'');
+  for(const caption of [null,123,{},'x'.repeat(2001),'🎉'.repeat(1001)]) assert.throws(()=>api.parseImageLibraryBackup(backup([{...item,caption}])));
   for(const bad of [null,{},backup([{...item,data:'https://example.invalid/a.png'}]),backup([{...item,data:'data:image/svg+xml;base64,PHN2Zz4='}]),backup([{...item,category:'x'.repeat(61)}]),backup(new Array(3001).fill(item))]) assert.throws(()=>api.parseImageLibraryBackup(bad));
   assert.equal(api.parseImageLibraryBackup(backup([{...item,usedAt:Infinity}]))[0].usedAt,0);
+});
+
+test('caption edits validate before IPC and distinguish clearing from an omitted field',async()=>{
+  const calls=[];globalThis.libraryInvoke=async(cmd,{request})=>{calls.push(request);};
+  try {
+    for(const caption of [null,123,'x'.repeat(2001)]) await assert.rejects(api.editLibraryImage({...item,id:'a'.repeat(64),caption}));
+    assert.equal(calls.length,0);
+    await api.editLibraryImage({...item,id:'a'.repeat(64)});
+    await api.editLibraryImage({...item,id:'a'.repeat(64),caption:''});
+    const {caption,...legacy}=item;await api.editLibraryImage({...legacy,id:'a'.repeat(64)});
+    assert.deepEqual(calls.map(call=>call.caption),[item.caption,'',undefined]);
+  } finally {delete globalThis.libraryInvoke;}
 });
 
 test('category/search/favorite/recent filters preserve source rows and sort correctly for 1000 images', () => {
@@ -59,6 +74,7 @@ test('export includes original image data; merge restore preserves duplicate met
     assert.equal(await api.restoreImageLibrary(makeFile(),()=>{}),1);
     assert.equal(calls.find(c=>c.action==='edit').pinned,true);
     assert.equal(calls.find(c=>c.action==='edit').used_at,10);
+    assert.equal(calls.find(c=>c.action==='edit').caption,item.caption);
     calls.length=0;added=false;
     assert.equal(await api.restoreImageLibrary(makeFile(),()=>{}),0);
     assert.equal(calls.some(c=>c.action==='edit'||c.action==='delete'),false);
@@ -97,21 +113,77 @@ test('gallery stages multiple images atomically in selection order and rejects f
 const mocks={
   react:'export const useState=i=>globalThis.libraryHooks.state(i);export const useRef=i=>globalThis.libraryHooks.ref(i);export const useMemo=f=>f();export const useEffect=(f,d)=>globalThis.libraryHooks.effect(f,d);',
   'react/jsx-runtime':'export const Fragment="fragment";export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
-  'lucide-react':'export const ImagePlus="image-plus",Star="star",CheckSquare="check-square",ListChecks="list-checks",X="x";',
+  'lucide-react':'export const ImagePlus="image-plus",Plus="plus",Star="star",CheckSquare="check-square",ListChecks="list-checks",X="x";',
   '@/components/ui/primitives':'export const Button="button";',
   '@/i18n':'export const useI18n=()=>({t:(key)=>key});',
   '@/store/appStore':'export const useAppStore=f=>f(globalThis.libraryState);useAppStore.getState=()=>globalThis.libraryState;',
   '@/lib/bridge':'export const isTauri=()=>true;',
   '@tauri-apps/api/core':'export const invoke=async()=>{};',
   '@/lib/quickReplyMedia':'export const emitQuickReplyMedia=value=>{globalThis.libraryEmitted.push(value);return true;};',
-  '@/lib/imageLibrary':'export const listLibraryImages=async()=>globalThis.libraryRows;export const listLibraryCategories=async()=>globalThis.libraryCategories||[];export const createLibraryCategory=async name=>{globalThis.libraryCategories=[...(globalThis.libraryCategories||[]),name];};export const filterLibraryImages=(...a)=>globalThis.libraryFilter(...a);export const readLibraryImage=id=>globalThis.libraryRead(id);export const editLibraryImage=async()=>{};export const addLibraryImage=async(file,category)=>{globalThis.libraryImportCategory=category;return {added:true};};export const deleteLibraryImages=async()=>{};export const exportImageLibrary=async()=>{};export const restoreImageLibrary=async()=>0;',
+  '@/lib/imageLibrary':'export const listLibraryImages=async()=>globalThis.libraryRows;export const listLibraryCategories=async()=>globalThis.libraryCategories||[];export const deleteLibraryCategory=async name=>globalThis.libraryDeleteCategory?.(name);export const createLibraryCategory=async name=>{globalThis.libraryCategories=[...(globalThis.libraryCategories||[]),name];};export const filterLibraryImages=(...a)=>globalThis.libraryFilter(...a);export const readLibraryImage=id=>globalThis.libraryRead(id);export const editLibraryImage=async image=>globalThis.libraryEdit?.(image);export const addLibraryImage=async(file,category)=>{globalThis.libraryImportCategory=category;return {added:true};};export const deleteLibraryImages=async()=>{};export const exportImageLibrary=async()=>{};export const restoreImageLibrary=async()=>0;',
 };
 const uiBuild=await build({entryPoints:[root+'src/components/chat/ImageLibraryPanel.tsx'],bundle:true,write:false,format:'esm',platform:'node',jsx:'automatic',plugins:[{name:'gallery-ui',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
 const {ImageLibraryPanel}=await import('data:text/javascript;base64,'+Buffer.from(uiBuild.outputFiles[0].text).toString('base64'));
 const allNodes=tree=>Array.isArray(tree)?tree.flatMap(allNodes):tree?.props?[tree,...allNodes(tree.props.children)]:[];
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 
-test('gallery renders only one page, preserves selection order and blocks insertion after account change',async()=>{
+test('saved image captions reopen, insert by default, clear, and remain editable after a failed save',async()=>{
+  const original=globalThis.window;globalThis.window=new EventTarget();
+  globalThis.libraryFilter=api.filterLibraryImages;
+  globalThis.libraryRows=[{...item,id:'photo',mime:'image/png',size:20,thumbnail:data,createdAt:1}];
+  globalThis.libraryRead=async()=>data;
+  globalThis.libraryState={selectedChatId:'chat',pushToast(){}};
+  globalThis.libraryEmitted=[];
+  const edits=[];let fail=false;
+  globalThis.libraryEdit=async image=>{if(fail)throw new Error('disk full');edits.push(image);globalThis.libraryRows=[image];};
+  function mount(component,props) {
+    const slots=[];let cursor=0,effects=[];
+    return {
+      render(next=props){props=next;cursor=0;effects=[];globalThis.libraryHooks={
+        state(initial){const i=cursor++;if(!(i in slots))slots[i]=typeof initial==='function'?initial():initial;return [slots[i],v=>{slots[i]=typeof v==='function'?v(slots[i]):v;}];},
+        ref(initial){const i=cursor++;return slots[i]??(slots[i]={current:initial});},
+        effect(work,deps){const i=cursor++,old=slots[i];if(!old||deps.some((v,j)=>v!==old.deps[j]))effects.push(()=>{old?.cleanup?.();slots[i]={deps,cleanup:work()};});},
+      };const nodes=allNodes(component(props));effects.forEach(f=>f());return nodes;},
+      close(){slots.forEach(slot=>slot?.cleanup?.());},
+    };
+  }
+  const panel=mount(ImageLibraryPanel,{chatId:'chat',contextKey:'chat:a'});
+  let preview;
+  const open=()=>{
+    panel.render().find(n=>n.props['aria-label']==='quickShelf.previewNamed').props.onClick();
+    return panel.render().find(n=>typeof n.type==='function'&&n.props.image);
+  };
+  try {
+    panel.render();await settle();
+    panel.render().find(n=>n.props['aria-label']==='quickShelf.insert').props.onClick();await settle();await settle();
+    assert.equal(globalThis.libraryEmitted[0].caption,item.caption);
+    const dialog=open();preview=mount(dialog.type,dialog.props);
+    let nodes=preview.render();await settle();nodes=preview.render();
+    assert.equal(nodes.find(n=>n.type==='textarea').props.value,item.caption);
+    nodes.find(n=>n.type==='textarea').props.onChange({target:{value:'Nouvelle invitation 🎉\nCe soir !'}});
+    preview.render().find(n=>n.props.children==='gallery.saveInsert').props.onClick();await settle();await settle();
+    assert.equal(edits.at(-1).caption,'Nouvelle invitation 🎉\nCe soir !');
+    assert.equal(globalThis.libraryEmitted.at(-1).caption,'Nouvelle invitation 🎉\nCe soir !');
+    preview.close();const reopened=open();preview=mount(reopened.type,reopened.props);
+    nodes=preview.render();await settle();nodes=preview.render();
+    assert.equal(nodes.find(n=>n.type==='textarea').props.value,'Nouvelle invitation 🎉\nCe soir !');
+    nodes.find(n=>n.type==='textarea').props.onChange({target:{value:''}});
+    fail=true;const before=globalThis.libraryEmitted.length;
+    preview.render().find(n=>n.props.children==='gallery.saveInsert').props.onClick();await settle();await settle();
+    assert.equal(globalThis.libraryEmitted.length,before);
+    const failed=panel.render().find(n=>typeof n.type==='function'&&n.props.image);
+    assert.match(failed.props.saveError,/disk full/);
+    assert.ok(preview.render(failed.props).some(n=>n.props.role==='alert'&&/disk full/.test(n.props.children)));
+    assert.equal(preview.render().find(n=>n.type==='textarea').props.value,'');
+    fail=false;preview.render().find(n=>n.props.children==='common.save').props.onClick();await settle();await settle();
+    assert.equal(globalThis.libraryRows[0].caption,'');
+    assert.equal(globalThis.libraryEmitted.length,before);
+    panel.render().find(n=>n.props['aria-label']==='quickShelf.insert').props.onClick();await settle();await settle();
+    assert.equal(globalThis.libraryEmitted.at(-1).caption,'');
+  } finally {preview?.close();panel.close();globalThis.window=original;delete globalThis.libraryEdit;}
+});
+
+test('gallery paginates, orders insertion, blocks account changes and deletes categories only after confirmation',async()=>{
   const original=globalThis.window;globalThis.window=new EventTarget();
   globalThis.libraryFilter=api.filterLibraryImages;
   globalThis.libraryRows=Array.from({length:1000},(_,i)=>({id:String(i),title:'Photo '+i,category:'Events',mime:'image/png',size:20,thumbnail:data,pinned:false,usedAt:0,createdAt:1000-i}));
@@ -150,5 +222,31 @@ test('gallery renders only one page, preserves selection order and blocks insert
     assert.equal(allNodes(tree).filter(n=>n.type==='article').length,0);
     allNodes(tree).find(n=>n.type==='input'&&n.props.type==='file'&&n.props.multiple).props.onChange({currentTarget:{files:[new File(['image'],'photo.png',{type:'image/png'})],value:'file'}});
     await settle();await settle();render();assert.equal(globalThis.libraryImportCategory,'我的自定义分类');
-  } finally {slots.forEach(slot=>slot?.cleanup?.());globalThis.window=original;}
+    let confirm=false,fail=false;const deleted=[];
+    globalThis.libraryState.requestConfirm=async options=>{assert.equal(options.description,'gallery.deleteCategoryHint');return confirm;};
+    globalThis.libraryDeleteCategory=async name=>{
+      if(fail)throw new Error('database busy');
+      deleted.push(name);globalThis.libraryCategories=(globalThis.libraryCategories||[]).filter(value=>value!==name);
+      globalThis.libraryRows=globalThis.libraryRows.map(image=>image.category===name?{...image,category:''}:image);
+    };
+    const categoryNode=name=>allNodes(tree).find(n=>n.type==='button'&&n.props.title===name);
+    render();
+    categoryNode('我的自定义分类').props.onContextMenu({preventDefault(){}});await settle();await settle();render();
+    assert.equal(deleted.length,0);assert.ok(categoryNode('我的自定义分类'));
+    confirm=true;fail=true;
+    allNodes(tree).find(n=>n.props.children==='gallery.deleteCategory').props.onClick();await settle();await settle();render();
+    assert.equal(deleted.length,0);assert.ok(categoryNode('我的自定义分类'));
+    assert.ok(allNodes(tree).some(n=>n.props.role==='alert'&&/database busy/.test(n.props.children)));
+    fail=false;
+    allNodes(tree).find(n=>n.props.children==='gallery.deleteCategory').props.onClick();await settle();await settle();render();
+    assert.deepEqual(deleted,['我的自定义分类']);assert.equal(categoryNode('我的自定义分类'),undefined);
+    assert.equal(allNodes(tree).some(n=>n.props.children==='gallery.deleteCategory'),false);
+    categoryNode('Events').props.onContextMenu({preventDefault(){}});await settle();await settle();render();
+    assert.deepEqual(deleted,['我的自定义分类','Events']);assert.equal(categoryNode('Events'),undefined);
+    assert.ok(categoryNode('gallery.uncategorized'));
+    assert.equal(categoryNode('multi.all').props.onContextMenu,undefined);
+    assert.equal(categoryNode('gallery.uncategorized').props.onContextMenu,undefined);
+    assert.equal(globalThis.libraryRows.length,1000);
+    assert.ok(globalThis.libraryRows.every(image=>image.category===''));
+  } finally {slots.forEach(slot=>slot?.cleanup?.());globalThis.window=original;delete globalThis.libraryDeleteCategory;}
 });

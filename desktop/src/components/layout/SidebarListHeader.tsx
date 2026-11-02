@@ -3,12 +3,10 @@ import {
   Bookmark,
   Check,
   ChevronDown,
-  MessageCircle,
   MoreHorizontal,
   RefreshCw,
   Search,
   UserPlus,
-  Users,
   UsersRound,
   CheckCheck,
   Settings2,
@@ -122,7 +120,8 @@ export function SidebarListHeader({
   syncTitle,
   onSync,
 }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const currentCount = (listTab === "chats" ? chatsCount : contactsCount).toLocaleString(locale);
   const localizedSortLabel = t(SORT_LABEL_KEYS[sortMode]);
   const [groupFilterOpen, setGroupFilterOpen] = useState(false);
   const [groupFilterCounts, setGroupFilterCounts] =
@@ -136,7 +135,12 @@ export function SidebarListHeader({
     run: () => void;
     disabled?: boolean;
     title?: string;
+    active?: boolean;
+    count?: number;
   }[] = [
+    { label: t("sidebar.saved"), Icon: Bookmark, run: onOpenSaved, active: savedActive },
+    ...(listTab === "chats" ? [{ label: t("leadInbox.title"), Icon: UserRoundPlus, run: onOpenLeads, active: leadActive, count: leadCount, title: !leadEnabled ? t("leadInbox.settings") : t("leadInbox.title") }] : []),
+    { label: syncing ? t("sidebar.syncing") : t("sidebar.syncChats"), Icon: RefreshCw, run: onSync, disabled: syncDisabled, title: syncTitle },
     ...(isBaileys ? [{ label: t("sidebar.newGroup"), Icon: UsersRound, run: onCreateGroup }] : []),
     { label: t("sidebar.batchSaveContacts"), Icon: UserPlus, run: onBatchSaveContacts },
     ...(listTab === "chats" ? [{ label: t("leadInbox.settings"), Icon: Settings2, run: onOpenLeadSettings }] : []),
@@ -165,37 +169,17 @@ export function SidebarListHeader({
 
   return (
     <div className="shrink-0">
-      <div className="mb-2 flex items-center gap-1">
-      <div className="grid min-w-0 flex-1 grid-cols-2 rounded-lg bg-zinc-900 p-0.5 text-xs">
-        <button
-          type="button"
-          onClick={() => onTabChange("chats")}
-          className={cn(
-            "flex items-center justify-center gap-1 rounded-md px-1 py-1.5",
-            listTab === "chats"
-              ? "bg-zinc-700 text-zinc-100"
-              : "text-zinc-500"
-          )}
-        >
-          <MessageCircle className="h-3 w-3" />
-          {t("sidebar.chats")} · {chatsCount}
-        </button>
-        <button
-          type="button"
-          onClick={() => onTabChange("contacts")}
-          className={cn(
-            "flex items-center justify-center gap-1 rounded-md px-1 py-1.5",
-            listTab === "contacts"
-              ? "bg-zinc-700 text-zinc-100"
-              : "text-zinc-500"
-          )}
-        >
-          <Users className="h-3 w-3" />
-          {t("sidebar.contacts")} · {contactsCount}
-        </button>
-      </div>
-        <button type="button" onClick={onOpenSaved} title={t("sidebar.saved")} aria-label={t("sidebar.saved")} aria-pressed={savedActive} className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-md", savedActive ? "bg-brand/10 text-brand" : "text-zinc-500 hover:bg-zinc-900")}><Bookmark className="h-4 w-4" /></button>
-        {listTab === "chats" && <button type="button" onClick={onOpenLeads} aria-label={t("leadInbox.title")} aria-pressed={leadActive} title={!leadEnabled ? t("leadInbox.settings") : t("leadInbox.title")} className={cn("relative flex h-8 w-8 shrink-0 items-center justify-center rounded-md", leadActive ? "bg-brand/10 text-brand" : "text-zinc-500 hover:bg-zinc-900")}><UserRoundPlus className="h-4 w-4" />{leadCount > 0 && <span className="absolute -right-1 -top-1 rounded-full bg-brand px-1 text-[9px] font-semibold text-brand-foreground" aria-label={t("leadInbox.filterActive", { count: leadCount })}>{leadCount > 99 ? "99+" : leadCount}</span>}</button>}
+      <div className="mb-2 flex items-center gap-3 border-b border-zinc-800/70">
+        <div className="flex min-w-0 flex-1 items-center gap-4">
+          {(["chats", "contacts"] as const).map(tab => <button key={tab} type="button"
+            aria-pressed={listTab === tab} onClick={() => onTabChange(tab)}
+            title={t(tab === "chats" ? "sidebar.chats" : "sidebar.contacts")}
+            className={cn("shrink-0 whitespace-nowrap border-b-2 px-0.5 py-2 text-[13px] transition-colors", listTab === tab ? "border-brand font-semibold text-brand" : "border-transparent text-zinc-500 hover:text-zinc-200")}>
+            {t(tab === "chats" ? "sidebar.chats" : "sidebar.contacts")}
+          </button>)}
+        </div>
+        <span className="shrink-0 whitespace-nowrap text-[11px] tabular-nums text-zinc-500"
+          title={t(listTab === "chats" ? "sidebar.chats" : "sidebar.contacts") + " · " + currentCount}>{currentCount}</span>
       </div>
       <div className="mb-2 flex items-center gap-1.5">
         <div className="relative min-w-0 flex-1">
@@ -223,26 +207,23 @@ export function SidebarListHeader({
             className="ui-control h-9 w-full pl-7 pr-2 text-[13px]"
           />
         </div>
-        <button type="button" onClick={onSync} disabled={syncDisabled}
-          aria-label={syncing ? t("sidebar.syncing") : t("sidebar.syncChats")}
-          title={syncTitle} className="ui-btn-secondary h-9 w-9 shrink-0 !px-0">
-          <RefreshCw className={cn("h-4 w-4", syncing && "animate-spin")} />
-        </button>
         <div className="relative shrink-0" ref={actionsRef}>
-          <button type="button" aria-label={t("sidebar.actions")} title={t("sidebar.actions")}
-            aria-expanded={actionsOpen} aria-controls="sidebar-actions"
+          <button type="button" aria-label={t("sidebar.actions")} title={leadCount > 0 && listTab === "chats" ? t("leadInbox.filterActive", { count: leadCount }) : t("sidebar.actions")}
+            aria-expanded={actionsOpen} aria-controls="sidebar-actions" aria-busy={syncing}
             onClick={() => { setGroupFilterOpen(false); if (sortOpen) onToggleSort(); setActionsOpen(open => !open); }}
-            className="ui-btn-secondary h-9 w-9 !px-0">
-            <MoreHorizontal className="h-4 w-4" />
+            className={cn("relative flex h-9 w-8 items-center justify-center rounded-md hover:bg-zinc-900", savedActive || leadActive ? "text-brand" : "text-zinc-500")}>
+            {syncing ? <RefreshCw className="h-4 w-4 animate-spin" aria-label={t("sidebar.syncing")} /> : <MoreHorizontal className="h-4 w-4" />}
+            {listTab === "chats" && leadCount > 0 && <span className="absolute -right-1 -top-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-deeper px-1 text-[11px] font-bold leading-none tabular-nums text-white" aria-label={t("leadInbox.filterActive", { count: leadCount })}>{leadCount > 99 ? "99+" : leadCount}</span>}
           </button>
           {actionsOpen && <div id="sidebar-actions" role="group" aria-label={t("sidebar.actions")}
-            className="absolute right-0 top-[calc(100%+6px)] z-50 w-64 rounded-lg border border-zinc-700 bg-zinc-900 p-1 shadow-xl shadow-black/30">
-            {actions.map(({ label, Icon, run, disabled, title }) => (
-              <button key={label} type="button" disabled={disabled} title={title}
+            className="absolute right-0 top-[calc(100%+6px)] z-50 max-h-[60vh] w-64 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 p-1 shadow-xl shadow-black/30">
+            {actions.map(({ label, Icon, run, disabled, title, active, count }) => (
+              <button key={label} type="button" disabled={disabled} title={title} aria-label={label} aria-pressed={active}
                 onClick={() => { setActionsOpen(false); run(); }}
-                className="flex min-h-9 w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] text-zinc-200 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-45">
+                className={cn("flex min-h-9 w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-45", active ? "bg-brand/10 text-brand" : "text-zinc-200")}>
                 <Icon className={cn("h-4 w-4 shrink-0", Icon === RefreshCw && syncing && "animate-spin")} />
                 {label}
+                {count != null && count > 0 && <span className="ml-auto text-2xs tabular-nums text-brand">{count.toLocaleString(locale)}</span>}
               </button>
             ))}
           </div>}

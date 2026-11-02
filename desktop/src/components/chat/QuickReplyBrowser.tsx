@@ -2,6 +2,7 @@ import { FileText, Image as ImageIcon, Music2, Pin, Play, Search, X } from "luci
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/primitives";
+import { useDetailsMenu } from "@/components/ui/useDetailsMenu";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { filterQuickReplies, getQuickReplyCategories, QUICK_REPLY_CATEGORIES, type QuickReplyCategoryOption } from "@/lib/quickReplies";
 import type { SettingsQuickReply } from "@/store/settingsDefaults";
@@ -11,9 +12,11 @@ const EMPTY_IDS: string[] = [];
 type ReplyTarget = { title: string; account: string };
 const mediaSize = (size: number) => size < 1024 * 1024 ? `${Math.max(1, Math.ceil(size / 1024))} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`;
 
-export function QuickReplyBrowser({ replies, categories = [], contextKey, onInsert, pinnedIds = EMPTY_IDS, recentIds = EMPTY_IDS, onTogglePin, onUsed, target, disabled = false, compact = false, onManage }: {
+export function QuickReplyBrowser({ replies, categories = [], removedCategories = EMPTY_IDS, categoryLabels = {}, contextKey, onInsert, pinnedIds = EMPTY_IDS, recentIds = EMPTY_IDS, onTogglePin, onUsed, target, disabled = false, compact = false, onManage }: {
   replies: SettingsQuickReply[];
   categories?: QuickReplyCategoryOption[];
+  removedCategories?: string[];
+  categoryLabels?: Record<string, string>;
   contextKey: string;
   onInsert: (reply: SettingsQuickReply) => boolean | void;
   pinnedIds?: string[];
@@ -33,7 +36,8 @@ export function QuickReplyBrowser({ replies, categories = [], contextKey, onInse
   const [preview, setPreview] = useState<{ id: string; contextKey: string } | null>(null);
   useEffect(() => setPreview(null), [contextKey]);
   const listRef = useRef<HTMLUListElement>(null);
-  const categoryOptions = useMemo(() => getQuickReplyCategories(categories), [categories]);
+  const menuRef = useDetailsMenu(contextKey);
+  const categoryOptions = useMemo(() => getQuickReplyCategories(categories, removedCategories, categoryLabels), [categories, removedCategories, categoryLabels]);
   const selectedCategory = category !== "all" && categoryOptions.some(c => c.id === category) && replies.some(reply=>reply.category===category) ? category : "all";
   const pinned = useMemo(() => new Set(pinnedIds), [pinnedIds]);
   const filtered = useMemo(() => {
@@ -48,8 +52,8 @@ export function QuickReplyBrowser({ replies, categories = [], contextKey, onInse
   const currentPage = Math.min(page, Math.max(0, Math.ceil(filtered.length / PAGE_SIZE) - 1));
   const pageReplies = filtered.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
   const previewReply = preview?.contextKey === contextKey ? replies.find(reply => reply.id === preview.id) : undefined;
-  const categoryLabel = (id: string) => QUICK_REPLY_CATEGORIES.some(c => c.id === id)
-    ? t(`quickReply.category.${id}` as TranslationKey) : categoryOptions.find(c => c.id === id)?.label || t("quickReply.category.other");
+  const categoryLabel = (id: string) => categoryLabels[id] || (QUICK_REPLY_CATEGORIES.some(c => c.id === id)
+    ? t(`quickReply.category.${id}` as TranslationKey) : categoryOptions.find(c => c.id === id)?.label || t("quickReply.category.other"));
   const resetPage = () => { setPage(0); if (listRef.current) listRef.current.scrollTop = 0; };
   const insert = (reply: SettingsQuickReply) => {
     if (disabled) return;
@@ -64,13 +68,11 @@ export function QuickReplyBrowser({ replies, categories = [], contextKey, onInse
         <label className="relative min-w-0 flex-1"><Search aria-hidden="true" className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
           <input value={query} onChange={e => { setQuery(e.target.value); resetPage(); }} placeholder={t("quickShelf.search")} aria-label={t("multi.searchQuickReplies")} className="ui-control h-8 w-full pl-7 pr-2 text-xs" />
         </label>
-        <details className="relative shrink-0 text-xs text-zinc-500" onClick={event => { if ((event.target as HTMLElement).closest("button")) event.currentTarget.open = false; }}>
+        <details ref={menuRef} className="relative shrink-0 text-xs text-zinc-500" onClick={event => { if ((event.target as HTMLElement).closest("button")) event.currentTarget.open = false; }}>
           <summary aria-label={t("nav.more")} title={t("nav.more")} className="cursor-pointer list-none rounded px-2 py-1.5 hover:bg-zinc-800">•••</summary>
           <div className="absolute right-0 top-full z-10 mt-1 min-w-max space-y-2 rounded-lg border border-zinc-700 bg-zinc-900 p-2 shadow-xl">
             <div className="flex gap-1" role="group" aria-label={t("quickShelf.views")}>{(["all", "pinned", "recent"] as const).map(item => <Button key={item} size="xs" variant={view === item ? "secondary" : "ghost"} aria-pressed={view === item} onClick={() => { setView(item); resetPage(); }}>{t(`quickShelf.view.${item}`)}</Button>)}</div>
             {onManage && <Button size="xs" className="w-full" onClick={onManage}>{t("crmPanel.manage")}</Button>}
-            {target && <p className="max-w-64 truncate px-1 text-2xs" title={`${target.title} · ${target.account}`}>{target.title} · {target.account}</p>}
-            <p className="px-1 text-2xs" role="status">{filtered.length}/{replies.length}</p>
           </div>
         </details>
       </div>

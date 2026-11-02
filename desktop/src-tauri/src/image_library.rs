@@ -15,9 +15,10 @@ pub enum Request {
     List,
     ListCategories,
     CreateCategory { name: String },
+    DeleteCategory { name: String },
     Read { id: String },
     Import { title: String, category: String, data: String, thumbnail: String },
-    Edit { id: String, title: String, category: String, pinned: bool, used_at: i64 },
+    Edit { id: String, title: String, category: String, pinned: bool, used_at: i64, caption: Option<String> },
     Delete { ids: Vec<String> },
 }
 
@@ -68,6 +69,8 @@ fn register_category(conn: &Connection, name: &str) -> Result<(), String> {
 
 fn execute(conn: &Connection, dir: &Path, request: Request) -> Result<Value, String> {
     conn.execute_batch("CREATE TABLE IF NOT EXISTS image_library (id TEXT PRIMARY KEY, title TEXT NOT NULL, category TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL, thumbnail TEXT NOT NULL, pinned INTEGER NOT NULL DEFAULT 0, used_at INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)").map_err(|e| e.to_string())?;
+    let has_caption: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('image_library') WHERE name='caption')", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+    if !has_caption { conn.execute_batch("ALTER TABLE image_library ADD COLUMN caption TEXT NOT NULL DEFAULT ''").map_err(|e| e.to_string())?; }
     let has_categories: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='image_library_categories')", [], |row| row.get(0)).map_err(|e| e.to_string())?;
     if !has_categories {
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
@@ -85,9 +88,18 @@ fn execute(conn: &Connection, dir: &Path, request: Request) -> Result<Value, Str
             register_category(conn, &name)?;
             Ok(Value::Null)
         }
+        Request::DeleteCategory { name } => {
+            let name = name.trim();
+            if name.is_empty() || name == "*" || name.chars().count() > 60 { return Err("Invalid category name".into()); }
+            let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+            tx.execute("UPDATE image_library SET category='' WHERE category=?1", [name]).map_err(|e| e.to_string())?;
+            tx.execute("DELETE FROM image_library_categories WHERE name=?1", [name]).map_err(|e| e.to_string())?;
+            tx.commit().map_err(|e| e.to_string())?;
+            Ok(Value::Null)
+        }
         Request::List => {
-            let mut stmt = conn.prepare("SELECT id,title,category,mime,size,thumbnail,pinned,used_at,created_at FROM image_library ORDER BY created_at DESC,id").map_err(|e| e.to_string())?;
-            let rows = stmt.query_map([], |r| Ok(json!({"id":r.get::<_,String>(0)?,"title":r.get::<_,String>(1)?,"category":r.get::<_,String>(2)?,"mime":r.get::<_,String>(3)?,"size":r.get::<_,i64>(4)?,"thumbnail":r.get::<_,String>(5)?,"pinned":r.get::<_,bool>(6)?,"usedAt":r.get::<_,i64>(7)?,"createdAt":r.get::<_,i64>(8)?}))).map_err(|e| e.to_string())?;
+            let mut stmt = conn.prepare("SELECT id,title,category,mime,size,thumbnail,pinned,used_at,created_at,caption FROM image_library ORDER BY created_at DESC,id").map_err(|e| e.to_string())?;
+            let rows = stmt.query_map([], |r| Ok(json!({"id":r.get::<_,String>(0)?,"title":r.get::<_,String>(1)?,"category":r.get::<_,String>(2)?,"mime":r.get::<_,String>(3)?,"size":r.get::<_,i64>(4)?,"thumbnail":r.get::<_,String>(5)?,"pinned":r.get::<_,bool>(6)?,"usedAt":r.get::<_,i64>(7)?,"createdAt":r.get::<_,i64>(8)?,"caption":r.get::<_,String>(9)?}))).map_err(|e| e.to_string())?;
             Ok(Value::Array(rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?))
         }
         Request::Read { id } => {
@@ -126,10 +138,11 @@ fn execute(conn: &Connection, dir: &Path, request: Request) -> Result<Value, Str
             }
             Ok(json!({"id":id,"added":true}))
         }
-        Request::Edit { id, title, category, pinned, used_at } => {
+        Request::Edit { id, title, category, pinned, used_at, caption } => {
             valid_id(&id)?; labels(&title, &category)?;
+            if caption.as_ref().is_some_and(|text| text.encode_utf16().count() > 2000) { return Err("Image caption exceeds 2000 characters".into()); }
             register_category(conn, &category)?;
-            let changed = conn.execute("UPDATE image_library SET title=?2,category=?3,pinned=?4,used_at=?5 WHERE id=?1", params![id,title.trim(),category.trim(),pinned,used_at.max(0)]).map_err(|e| e.to_string())?;
+            let changed = conn.execute("UPDATE image_library SET title=?2,category=?3,pinned=?4,used_at=?5,caption=COALESCE(?6,caption) WHERE id=?1", params![id,title.trim(),category.trim(),pinned,used_at.max(0),caption]).map_err(|e| e.to_string())?;
             if changed == 0 { return Err("Image no longer exists".into()); }
             Ok(Value::Null)
         }
@@ -162,6 +175,70 @@ pub async fn image_library(app: tauri::AppHandle, request: Request) -> Result<Va
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn deleting_categories_preserves_images_captions_and_rolls_back_on_failure() {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("library.db");
+        let conn = Connection::open(&db).unwrap();
+        let name = "ce a' 🎉";
+        let data = format!("data:image/png;base64,{}", STANDARD.encode(b"\x89PNG\r\n\x1a\nfixture"));
+        let thumb = format!("data:image/jpeg;base64,{}", STANDARD.encode(b"\xff\xd8\xfffixture"));
+        let imported = execute(&conn,&dir,Request::Import {title:"Photo".into(),category:name.into(),data:data.clone(),thumbnail:thumb}).unwrap();
+        let id = imported["id"].as_str().unwrap();
+        execute(&conn,&dir,Request::Edit {id:id.into(),title:"Photo".into(),category:name.into(),pinned:true,used_at:10,caption:Some("Réunion ce soir !".into())}).unwrap();
+        execute(&conn,&dir,Request::CreateCategory {name:"Empty".into()}).unwrap();
+        execute(&conn,&dir,Request::CreateCategory {name:"Other".into()}).unwrap();
+        let before = execute(&conn,&dir,Request::List).unwrap();
+        for invalid in ["", " ", "*", &"x".repeat(61)] {
+            assert!(execute(&conn,&dir,Request::DeleteCategory {name:invalid.into()}).is_err());
+        }
+        conn.execute_batch("CREATE TRIGGER block_category_delete BEFORE DELETE ON image_library_categories BEGIN SELECT RAISE(ABORT,'busy'); END;").unwrap();
+        assert!(execute(&conn,&dir,Request::DeleteCategory {name:name.into()}).is_err());
+        assert_eq!(execute(&conn,&dir,Request::List).unwrap(), before);
+        assert_eq!(execute(&conn,&dir,Request::ListCategories).unwrap().as_array().unwrap().len(),3);
+        conn.execute_batch("DROP TRIGGER block_category_delete").unwrap();
+        for category in [name, "Empty"] { execute(&conn,&dir,Request::DeleteCategory {name:format!(" {category} ")}).unwrap(); }
+        let mut expected = before;
+        expected[0]["category"] = json!("");
+        assert_eq!(execute(&conn,&dir,Request::List).unwrap(), expected);
+        assert_eq!(execute(&conn,&dir,Request::Read {id:id.into()}).unwrap(), data);
+        drop(conn);
+        let conn = Connection::open(&db).unwrap();
+        assert_eq!(execute(&conn,&dir,Request::List).unwrap(), expected);
+        assert_eq!(execute(&conn,&dir,Request::ListCategories).unwrap(), json!(["Other"]));
+        assert_eq!(execute(&conn,&dir,Request::Read {id:id.into()}).unwrap(), data);
+        drop(conn);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn captions_migrate_persist_clear_and_survive_legacy_metadata_edits() {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("library.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch("CREATE TABLE image_library(id TEXT PRIMARY KEY,title TEXT NOT NULL,category TEXT NOT NULL,mime TEXT NOT NULL,size INTEGER NOT NULL,thumbnail TEXT NOT NULL,pinned INTEGER NOT NULL DEFAULT 0,used_at INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL)").unwrap();
+        let id = "a".repeat(64);
+        conn.execute("INSERT INTO image_library VALUES (?1,'Photo','Test','image/png',20,'thumbnail',0,0,1)", [&id]).unwrap();
+        assert_eq!(execute(&conn,&dir,Request::List).unwrap()[0]["caption"], "");
+        let edit = |caption: Option<String>| Request::Edit { id:id.clone(),title:"Photo".into(),category:"Test".into(),pinned:true,used_at:10,caption };
+        let caption = "On commence déjà la réunion ? 🎉\nRejoins-nous !";
+        execute(&conn,&dir,edit(Some(caption.into()))).unwrap();
+        drop(conn);
+        let conn = Connection::open(&db).unwrap();
+        assert_eq!(execute(&conn,&dir,Request::List).unwrap()[0]["caption"], caption);
+        // Old clients omit caption when updating pins or last-used time.
+        let legacy = serde_json::from_value(json!({"action":"edit","id":id,"title":"Photo","category":"Test","pinned":false,"used_at":20})).unwrap();
+        execute(&conn,&dir,legacy).unwrap();
+        assert_eq!(execute(&conn,&dir,Request::List).unwrap()[0]["caption"], caption);
+        assert!(execute(&conn,&dir,edit(Some("🎉".repeat(1001)))).is_err());
+        assert_eq!(execute(&conn,&dir,Request::List).unwrap()[0]["caption"], caption);
+        execute(&conn,&dir,edit(Some("🎉".repeat(1000)))).unwrap();
+        execute(&conn,&dir,edit(Some(String::new()))).unwrap();
+        assert_eq!(execute(&conn,&dir,Request::List).unwrap()[0]["caption"], "");
+        drop(conn);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn custom_categories_exist_without_images_and_survive_reopening() {
         let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());

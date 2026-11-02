@@ -29,13 +29,13 @@ const mocks = {
   '@/lib/accountConnection': 'export const isWaAccountConnected=()=>globalThis.quickState.connected;',
   '@/lib/baileys': 'export const baileysRemoveQuickReply=async()=>{await globalThis.quickState.removeRemote?.();};export const baileysSyncQuickReplies=async items=>{globalThis.quickState.synced=items;return {synced:items.length};};',
 };
-const result = await build({entryPoints:[fileURLToPath(new URL('../src/components/settings/SettingsQuickRepliesPanel.tsx',import.meta.url))],
+const result = await build({stdin:{contents:`export {SettingsQuickRepliesPanel} from './src/components/settings/SettingsQuickRepliesPanel.tsx';export {normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {buildSettingsSafe,parseBackupJson} from './src/lib/exportData.ts';export {getQuickReplyCategories} from './src/lib/quickReplies.ts';`,resolveDir:fileURLToPath(new URL('../',import.meta.url))},
  bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},
  plugins:[{name:'quick-reply-boundaries',setup(b){
  b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);
  b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));
  }}]});
-const {SettingsQuickRepliesPanel}=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].text+'\n//# sourceURL=quick-replies-panel.test-bundle.js').toString('base64'));
+const {SettingsQuickRepliesPanel,normalizeLoadedSettings,buildSettingsSafe,parseBackupJson,getQuickReplyCategories}=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].text+'\n//# sourceURL=quick-replies-panel.test-bundle.js').toString('base64'));
 const nodes=tree=>Array.isArray(tree)?tree.flatMap(nodes):tree?.props?[tree,...nodes(tree.props.children)]:[];
 const reply=(id,extra={})=>({id,title:id,body:'Body '+id,category:'other',...extra});
 const media={dataUrl:'data:image/png;base64,AA==',fileName:'photo.png',mimeType:'image/png',kind:'image',size:1};
@@ -61,6 +61,108 @@ function harness(replies=[reply('a')]) {
  };
  h.render();return h;
 }
+
+test('category management is directly reachable in the sidebar and Enter creates a selected custom category',()=>{
+ const h=harness([reply('a',{media})]);try{
+ const nav=h.nodes().find(n=>n.type==='nav');assert.ok(nodes(nav).some(n=>n.props['aria-controls']==='quick-reply-category-manager'));
+ h.click('settingsQuickReplies.manageCategories');h.type('settingsQuickReplies.categoryPlaceholder','  聚会邀请  ');
+ h.nodes().find(n=>n.type==='form').props.onSubmit({preventDefault(){}});h.render();
+ const category=h.state.settings.quickReplyCustomCategories[0];assert.equal(category.label,'聚会邀请');
+ assert.ok(h.nodes().some(n=>n.type==='button'&&n.props['aria-pressed']&&n.props.children[0]?.props?.children==='聚会邀请'));
+ assert.deepEqual(h.state.settings.quickReplies,[reply('a',{media})]);
+ h.click('settingsQuickReplies.add');assert.equal(h.state.settings.quickReplies[1].category,category.id);
+ }finally{h.close();}
+});
+
+test('default and custom category names can be edited without losing IDs, content or media',()=>{
+ const h=harness([reply('a',{category:'opening',media}),reply('b',{category:'custom-care'})]);try{
+ h.state.settings.quickReplyCustomCategories=[{id:'custom-care',label:'Care'}];h.render();h.click('settingsQuickReplies.manageCategories');
+ const rename=name=>'settingsQuickReplies.renameCategory'+JSON.stringify({name});
+ const blur=(label,value)=>{h.find(label).props.onBlur({currentTarget:{value}});h.render();};
+ blur(rename('quickReply.category.opening'),'quickReply.category.opening');assert.equal(h.state.settings.quickReplyCategoryLabels?.opening,undefined,'unchanged defaults keep following the UI language');
+ h.type(rename('quickReply.category.opening'),'');
+ assert.equal(h.state.settings.quickReplyCategoryLabels?.opening,undefined);assert.equal(h.state.settings.quickReplies[0].category,'opening');
+ blur(rename('quickReply.category.opening'),'');assert.equal(h.state.toasts.at(-1)[0],'settingsQuickReplies.categoryInvalid');
+ h.type(rename('quickReply.category.opening'),'  日常问候  ');blur(rename('quickReply.category.opening'),'  日常问候  ');
+ assert.equal(h.state.settings.quickReplyCategoryLabels.opening,'日常问候');
+ h.type(rename('Care'),'关怀');blur(rename('Care'),'关怀');
+ assert.equal(h.state.settings.quickReplyCustomCategories[0].id,'custom-care');assert.equal(h.state.settings.quickReplyCustomCategories[0].label,'关怀');
+ assert.deepEqual(h.state.settings.quickReplies,[reply('a',{category:'opening',media}),reply('b',{category:'custom-care'})]);
+ h.type(rename('关怀'),'日常问候');blur(rename('关怀'),'日常问候');assert.equal(h.state.toasts.at(-1)[0],'settingsQuickReplies.categoryExists');
+ assert.equal(h.state.settings.quickReplyCustomCategories[0].label,'关怀');
+ h.click('quickLibrary.import');h.type('quickLibrary.import','Added\tHello\t日常问候');h.click('quickLibrary.confirmImport');
+ assert.equal(h.state.settings.quickReplies.at(-1).category,'opening');assert.equal(h.state.settings.quickReplyCustomCategories.length,1);
+ h.type('settingsQuickReplies.categoryPlaceholder','日常问候');h.nodes().find(n=>n.type==='form').props.onSubmit({preventDefault(){}});h.render();assert.equal(h.state.settings.quickReplyCustomCategories.length,1);
+ const loaded=normalizeLoadedSettings(JSON.parse(JSON.stringify(h.state.settings)));
+ const restored=parseBackupJson({version:2,contacts:[{id:'c',name:'C',phone:'12025550123'}],settingsSafe:buildSettingsSafe(loaded)});
+ assert.equal(normalizeLoadedSettings(restored.settingsSafe).quickReplyCategoryLabels.opening,'日常问候');
+ assert.equal(getQuickReplyCategories(loaded.quickReplyCustomCategories,[],loaded.quickReplyCategoryLabels).find(c=>c.id==='opening').label,'日常问候');
+ }finally{h.close();}
+});
+
+test('renaming defaults does not consume custom-category capacity and stored labels reject invalid keys',()=>{
+ const h=harness();try{
+ h.state.settings.quickReplyCustomCategories=Array.from({length:100},(_,i)=>({id:'custom-'+i,label:'Category '+i}));h.render();h.click('settingsQuickReplies.manageCategories');
+ const input=h.find('settingsQuickReplies.renameCategory'+JSON.stringify({name:'quickReply.category.opening'}));
+ input.props.onBlur({currentTarget:{value:'Greeting'}});h.render();assert.equal(h.state.settings.quickReplyCustomCategories.length,100);
+ const loaded=normalizeLoadedSettings({...h.state.settings,quickReplyCategoryLabels:{opening:' Greeting ',quote:'x'.repeat(33),'other':'No',unknown:'No'}});
+ assert.deepEqual(loaded.quickReplyCategoryLabels,{opening:'Greeting'});assert.equal(loaded.quickReplyCustomCategories.length,100);
+ }finally{h.close();}
+});
+
+test('removed-category preferences are validated and invalid reply data cannot recreate deleted defaults',()=>{
+ const settings=normalizeLoadedSettings({quickReplyRemovedCategories:['opening','opening','other','unknown',null],quickReplies:null});
+ assert.deepEqual(settings.quickReplyRemovedCategories,['opening']);assert.ok(settings.quickReplies.every(reply=>reply.category!=='opening'));
+ assert.deepEqual(normalizeLoadedSettings({quickReplyRemovedCategories:'opening'}).quickReplyRemovedCategories,[]);
+});
+
+for(const category of ['after-sales','custom-used','custom-empty']) test(`deleting ${category} preserves content, respects confirmation, and survives reopening and backup`,async()=>{
+ const used=category!=='custom-empty';
+ const h=harness([reply('a',{category:used?category:'other',media}),reply('b')]);
+ const label=category==='after-sales'?'quickReply.category.after-sales':'Faith';
+ try{
+ h.state.settings.quickReplyCustomCategories=category.startsWith('custom')?[{id:category,label}]:[];
+ h.state.settings.quickReplyPinnedIds=['a'];h.state.settings.quickReplyRecentIds=['a'];
+ h.state.requestConfirm=async()=>false;h.render();h.click('settingsQuickReplies.manageCategories');
+ const key='settingsQuickReplies.deleteCategoryNamed'+JSON.stringify({name:label});
+ await h.click(key);await new Promise(setImmediate);h.render();
+ assert.ok(h.find(key),'cancel keeps the category');assert.equal(h.state.settings.quickReplies[0].category,used?category:'other');
+ h.state.requestConfirm=async()=>{throw Error('dialog failed');};h.render();
+ h.click(key);await new Promise(setImmediate);h.render();assert.ok(h.find(key));
+ assert.equal(h.state.toasts.at(-1)[0],'common.deleteFailed');
+ let confirm;h.state.requestConfirm=options=>{assert.equal(options.description,'settingsQuickReplies.deleteCategoryHint');return new Promise(resolve=>{confirm=resolve;});};h.render();
+ h.click(key);
+ h.state.settings.quickReplies[0]={...h.state.settings.quickReplies[0],body:'Edited while confirming'};
+ if(used)h.state.settings.quickReplies.push(reply('late',{category,media}));
+ h.state.settings.quickReplyCustomCategories.push({id:'keep',label:'Keep'});
+ confirm(true);await new Promise(setImmediate);h.render();
+ assert.equal(h.find(key),undefined);assert.ok(h.state.settings.quickReplyCustomCategories.some(item=>item.id==='keep'));
+ assert.equal(h.state.settings.quickReplies.length,used?3:2);
+ assert.ok(h.state.settings.quickReplies.every(item=>item.category==='other'));
+ assert.equal(h.state.settings.quickReplies[0].body,'Edited while confirming');assert.deepEqual(h.state.settings.quickReplies[0].media,media);
+ assert.deepEqual(h.state.settings.quickReplyPinnedIds,['a']);assert.deepEqual(h.state.settings.quickReplyRecentIds,['a']);
+ assert.equal(h.state.synced,undefined);
+ const check=settings=>{assert.equal(getQuickReplyCategories(settings.quickReplyCustomCategories,settings.quickReplyRemovedCategories).some(item=>item.id===category),false);assert.equal(settings.quickReplies.length,used?3:2);assert.equal(settings.quickReplies[0].media.dataUrl,media.dataUrl);};
+ const loaded=normalizeLoadedSettings(JSON.parse(JSON.stringify(h.state.settings)));check(loaded);
+ const restored=parseBackupJson({version:2,contacts:[{id:'c',name:'C',phone:'12025550123'}],settingsSafe:buildSettingsSafe(loaded)});
+ check(normalizeLoadedSettings(restored.settingsSafe));
+ }finally{h.close();}
+});
+
+test('default categories can be deleted by right click, while All and Other remain system entries',async()=>{
+ const h=harness([reply('a',{category:'opening',media})]);try{
+ h.state.requestConfirm=async()=>true;h.render();
+ const category=label=>h.nodes().find(n=>n.type==='button'&&Array.isArray(n.props.children)&&n.props.children[0]?.props?.children===label);
+ assert.equal(category('starred.all').props.onContextMenu,undefined);assert.equal(category('quickReply.category.other').props.onContextMenu,undefined);
+ category('quickReply.category.opening').props.onClick();h.render();
+ category('quickReply.category.opening').props.onContextMenu({preventDefault(){}});await new Promise(setImmediate);h.render();
+ assert.equal(category('quickReply.category.opening'),undefined);assert.equal(category('starred.all').props['aria-pressed'],true);
+ assert.deepEqual(h.state.settings.quickReplies[0],reply('a',{category:'other',media}));
+ h.state.settings.quickReplies=[];h.render();
+ h.click('settingsQuickReplies.applyTemplates');
+ assert.ok(h.state.settings.quickReplies.every(item=>item.category!=='opening'),'templates cannot resurrect a removed default category');
+ }finally{h.close();}
+});
 
 test('1000 replies render at most 50 list entries and one editor; bulk changes only selected entries',()=>{
  const h=harness(Array.from({length:1000},(_,i)=>reply('r'+i)));

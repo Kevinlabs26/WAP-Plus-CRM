@@ -24,11 +24,13 @@ export type QuickReplyCategoryOption = {
 };
 
 export function getQuickReplyCategories(
-  custom: QuickReplyCategoryOption[] = []
+  custom: QuickReplyCategoryOption[] = [],
+  removed: string[] = [],
+  labels: Record<string, string> = {}
 ): QuickReplyCategoryOption[] {
   const seen = new Set<string>(QUICK_REPLY_CATEGORIES.map((item) => item.id));
   return [
-    ...QUICK_REPLY_CATEGORIES,
+    ...QUICK_REPLY_CATEGORIES.filter(item => item.id === "other" || !removed.includes(item.id)).map(item => ({ ...item, label: labels[item.id] || item.label })),
     ...custom.filter((item) => {
       const id = String(item?.id || "").trim();
       const label = String(item?.label || "").trim();
@@ -43,8 +45,10 @@ export function normalizeQuickReplyCategory(
   value: unknown,
   title = "",
   body = "",
-  custom: QuickReplyCategoryOption[] = []
+  custom: QuickReplyCategoryOption[] = [],
+  removed: string[] = []
 ): QuickReplyCategory {
+  if (typeof value === "string" && value !== "other" && removed.includes(value)) return "other";
   if (
     QUICK_REPLY_CATEGORIES.some((category) => category.id === value) ||
     custom.some((category) => category.id === value)
@@ -52,10 +56,10 @@ export function normalizeQuickReplyCategory(
     return value as QuickReplyCategory;
   }
   const text = `${title} ${body}`;
-  if (/招呼|您好|你好|hello|welcome/i.test(text)) return "opening";
-  if (/报价|询价|价格|型号|数量|price|quote/i.test(text)) return "quote";
-  if (/跟进|确认|方案|进展|follow.?up/i.test(text)) return "follow-up";
-  if (/售后|物流|退款|维修|保修|after.?sales/i.test(text)) return "after-sales";
+  if (/招呼|您好|你好|hello|welcome/i.test(text) && !removed.includes("opening")) return "opening";
+  if (/报价|询价|价格|型号|数量|price|quote/i.test(text) && !removed.includes("quote")) return "quote";
+  if (/跟进|确认|方案|进展|follow.?up/i.test(text) && !removed.includes("follow-up")) return "follow-up";
+  if (/售后|物流|退款|维修|保修|after.?sales/i.test(text) && !removed.includes("after-sales")) return "after-sales";
   return "other";
 }
 

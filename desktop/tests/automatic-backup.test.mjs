@@ -11,12 +11,12 @@ const mocks = {
     throw new Error(command);
   };`,
   './bridge': 'export const isTauri = () => true;',
-  '@/lib/storage': 'export const loadFullHistory = async () => globalThis.backupHistoryRead ? globalThis.backupHistoryRead() : globalThis.backupHistory;',
+  '@/lib/storage': 'export const getStorageEngine=()=>globalThis.backupNative ? "sqlite":"idb";export const loadFullHistory = async () => globalThis.backupHistoryRead ? globalThis.backupHistoryRead() : globalThis.backupHistory;',
   '@/lib/mediaCache': 'export const readMediaCache = async () => null; export const waitForMediaCacheWrites = async () => {};',
   '../store/persist': 'export const flushPersist = async get => { await globalThis.backupFlush?.(get()); };',
 };
 const built = await build({
-  stdin: { contents: `export { runAutomaticBackup } from './src/lib/automaticBackup.ts';
+  stdin: { contents: `export { runAutomaticBackup, readLatestAutomaticBackup } from './src/lib/automaticBackup.ts';
     export { defaultSettings } from './src/store/settingsDefaults.ts';
     export { parseBackupJson } from './src/lib/exportData.ts';
     export { beginDataRestore } from './src/store/restoreGuard.ts';`, resolveDir: fileURLToPath(new URL('../', import.meta.url)) },
@@ -28,7 +28,7 @@ const built = await build({
   alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) },
 });
 
-const { runAutomaticBackup, defaultSettings, parseBackupJson, beginDataRestore } = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].text).toString('base64'));
+const { runAutomaticBackup, readLatestAutomaticBackup, defaultSettings, parseBackupJson, beginDataRestore } = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].text+'\n//# sourceURL=automatic-backup-test.js').toString('base64'));
 
 const stateFixture = () => ({ hydrated: true, phones: [], contacts: [], chats: [], messages: [], followUps: [],
   activities: [], broadcastCampaigns: [], settings: { ...defaultSettings } });
@@ -110,4 +110,42 @@ test('automatic backup includes cold history, excludes credentials, restores thr
     try { assert.equal(await runAutomaticBackup(() => state, true), null); }
     finally { finish(); }
   } finally { delete globalThis.backupContent; delete globalThis.backupStatus; delete globalThis.backupHistory; }
+});
+
+test('SQLite automatic backup sends only safe metadata and streams persisted data natively', async()=>{
+ const state=stateFixture();state.contacts=[{id:'contact',toJSON(){throw new Error('contacts must not cross backup IPC')}}];state.messages=[{toJSON(){throw new Error('messages must not cross backup IPC')}}];
+ state.settings.transcriptionApiKey='speech-secret';
+ let flushed=false;globalThis.backupFlush=async snapshot=>{assert.equal(snapshot,state);flushed=true};
+ const calls=[];globalThis.backupNative=true;globalThis.backupHistoryRead=()=>{throw new Error('must not load all history into the WebView')};
+ globalThis.backupInvoke=async(command,args)=>{if(command==='crm_backup_save')assert.equal(flushed,true);calls.push({command,args});return {folder:'fixture',latestDay:null}};
+ try{
+  await runAutomaticBackup(()=>state,true);
+  const saved=calls.find(c=>c.command==='crm_backup_save');assert.equal(saved.args.fromDatabase,true);
+  const header=JSON.parse(saved.args.content);for(const key of ['contacts','messages','activities','phones','chats','followUps'])assert.deepEqual(header[key],[]);
+  assert.ok(!saved.args.content.includes('speech-secret'));
+  calls.length=0;globalThis.backupFlush=async()=>{throw new Error('flush failed')};await assert.rejects(runAutomaticBackup(()=>state,true),/flush failed/);assert.ok(!calls.some(c=>c.command==='crm_backup_save'));
+ }finally{delete globalThis.backupNative;delete globalThis.backupInvoke;delete globalThis.backupHistoryRead;delete globalThis.backupFlush;}
+});
+
+test('segmented automatic backup restores every part under a fixed backup ID and keeps legacy files compatible',async()=>{
+ const state=stateFixture(),header={version:2,app:'WAP Plus CRM',...state,settingsSafe:{}};delete header.settings;
+ const legacy={...header,contacts:[{id:"legacy",name:"Grace",phone:"+12025550100",stage:"new",tags:[]}]};
+ for(const parts of [[legacy],[header,{messages:[{id:'one',chatId:'chat',direction:'in',body:'one',sentAt:'2026-11-01T00:00:00Z'}]},{messages:[{id:'two',chatId:'chat',direction:'in',body:'two',sentAt:'2026-11-01T00:00:01Z'}]},{contacts:[{id:'contact',name:'Grace',phone:'+12025550100',stage:'new',tags:[]}],activities:[]} ]]){
+  const reads=[];globalThis.backupInvoke=async(command,args)=>{if(command==='crm_backup_latest_info')return {id:'crm-fixture',parts:parts.length};assert.equal(command,'crm_backup_read_part');assert.equal(args.id,'crm-fixture');reads.push(args.index);return JSON.stringify(parts[args.index]);};
+  try{const raw=await readLatestAutomaticBackup(),parsed=parseBackupJson(raw);assert.deepEqual(reads,parts.map((_,i)=>i));assert.equal(parsed.messages.length,parts.length>1?2:0);if(parts.length>1)assert.equal(parsed.contacts[0].name,'Grace');}
+  finally{delete globalThis.backupInvoke;}
+ }
+});
+
+test('damaged or unexpected backup parts fail before any restore can start',async()=>{
+ const header={version:2,app:'WAP Plus CRM',phones:[],contacts:[],chats:[],followUps:[],messages:[],activities:[]};
+ for(const bad of [{settingsSafe:[]},{messages:'invalid'},null,{},[],{messages:[],contacts:null}]){
+  globalThis.backupInvoke=async(command,args)=>command==='crm_backup_latest_info'?{id:'fixed',parts:2}:JSON.stringify(args.index===0?header:bad);
+  try{await assert.rejects(readLatestAutomaticBackup(),/分段格式无效/);}finally{delete globalThis.backupInvoke;}
+ }
+ let reads=0;globalThis.backupInvoke=async(command,args)=>{if(command==='crm_backup_latest_info')return {id:'fixed',parts:3};reads++;if(args.index===1)throw new Error('checksum failed');return JSON.stringify(header)};
+ try{await assert.rejects(readLatestAutomaticBackup(),/checksum failed/);assert.equal(reads,2);}finally{delete globalThis.backupInvoke;}
+ for(const count of [0,-1,1.5,4097,Infinity]){
+  globalThis.backupInvoke=async()=>({id:'fixed',parts:count});try{await assert.rejects(readLatestAutomaticBackup(),/清单无效/);}finally{delete globalThis.backupInvoke;}
+ }
 });

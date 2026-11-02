@@ -63,6 +63,8 @@ export type SettingsSafeExport = {
   rateMinIntervalSec: number;
   quickReplies: AppSettings["quickReplies"];
   quickReplyCustomCategories: AppSettings["quickReplyCustomCategories"];
+  quickReplyRemovedCategories: AppSettings["quickReplyRemovedCategories"];
+  quickReplyCategoryLabels: AppSettings["quickReplyCategoryLabels"];
   quickReplyPinnedIds: string[];
   quickReplyRecentIds: string[];
   translateTargetLang: string;
@@ -143,6 +145,8 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     rateMinIntervalSec: settings.rateMinIntervalSec,
     quickReplies: settings.quickReplies,
     quickReplyCustomCategories: settings.quickReplyCustomCategories || [],
+    quickReplyRemovedCategories: settings.quickReplyRemovedCategories || [],
+    quickReplyCategoryLabels: settings.quickReplyCategoryLabels || {},
     quickReplyPinnedIds: settings.quickReplyPinnedIds || [],
     quickReplyRecentIds: settings.quickReplyRecentIds || [],
     translateTargetLang: settings.translateTargetLang,
@@ -639,7 +643,7 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
   // 只恢复客户数据与界面偏好；端点、密钥、自动发送及保护策略沿用本机。
   if (settingsSafe) {
     const allowed = [
-      "quickReplies", "quickReplyCustomCategories", "quickReplyPinnedIds", "quickReplyRecentIds", "translateTargetLang", "myLang",
+      "quickReplies", "quickReplyCustomCategories", "quickReplyRemovedCategories", "quickReplyCategoryLabels", "quickReplyPinnedIds", "quickReplyRecentIds", "translateTargetLang", "myLang",
       "voiceInputLang", "leadInbox", "chatFolders", "chatFolderClones",
       "scheduledMessages", "scheduledPlans", "waAccounts", "accountViewMode", "historySyncNote",
       "historySyncNoteByAccountId", "internalNotesByKey", "chatBackground",

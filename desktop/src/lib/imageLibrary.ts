@@ -5,6 +5,7 @@ import { downloadJson } from "./exportData";
 export type LibraryImage = {
   id: string; title: string; category: string; mime: string; size: number;
   thumbnail: string; pinned: boolean; usedAt: number; createdAt: number;
+  caption?: string;
 };
 export const IMAGE_LIMIT = 8 * 1024 * 1024;
 const BACKUP_LIMIT = 128 * 1024 * 1024;
@@ -17,9 +18,11 @@ function changed() { window.dispatchEvent(new Event("wap:image-library")); }
 export const listLibraryImages = () => command<LibraryImage[]>({ action: "list" });
 export const listLibraryCategories = () => command<string[]>({ action: "listCategories" });
 export const createLibraryCategory = (name: string) => command<void>({ action: "createCategory", name: name.trim() });
+export const deleteLibraryCategory = (name: string) => command<void>({ action: "deleteCategory", name: name.trim() });
 export const readLibraryImage = (id: string) => command<string>({ action: "read", id });
-export async function editLibraryImage(image: Pick<LibraryImage, "id" | "title" | "category" | "pinned" | "usedAt">) {
-  await command({ action: "edit", id: image.id, title: image.title, category: image.category, pinned: image.pinned, used_at: image.usedAt });
+export async function editLibraryImage(image: Pick<LibraryImage, "id" | "title" | "category" | "pinned" | "usedAt" | "caption">) {
+  if (image.caption !== undefined && (typeof image.caption !== "string" || image.caption.length > 2000)) throw new Error("图片说明最多 2000 字符");
+  await command({ action: "edit", id: image.id, title: image.title, category: image.category, pinned: image.pinned, used_at: image.usedAt, caption: image.caption });
 }
 export async function deleteLibraryImages(ids: string[]) {
   await command({ action: "delete", ids });
@@ -65,26 +68,27 @@ export async function saveChatImage(source: string, title: string) {
 export function filterLibraryImages(images: LibraryImage[], query: string, category: string, view: "all" | "pinned" | "recent") {
   const normalize = (text: string) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase();
   const words = normalize(query).trim().split(/\s+/).filter(Boolean);
-  return images.filter(item => (category === "*" || item.category === category) && (view !== "pinned" || item.pinned) && (view !== "recent" || item.usedAt > 0) && words.every(word => normalize(`${item.title} ${item.category}`).includes(word)))
+  return images.filter(item => (category === "*" || item.category === category) && (view !== "pinned" || item.pinned) && (view !== "recent" || item.usedAt > 0) && words.every(word => normalize(`${item.title} ${item.category} ${item.caption || ""}`).includes(word)))
     .sort((a, b) => view === "recent" ? b.usedAt - a.usedAt : Number(b.pinned) - Number(a.pinned) || b.createdAt - a.createdAt);
 }
 
 export async function exportImageLibrary(images: LibraryImage[], categories = [...new Set(images.map(image => image.category).filter(Boolean))]) {
   // Bound JSON memory; large libraries can be exported as several selections.
-  if (images.reduce((sum, image) => sum + image.size * 4 / 3 + 1024, 0) > BACKUP_LIMIT) throw new Error("Backup exceeds 128 MB; select fewer images and export in batches");
+  if (images.reduce((sum, image) => sum + image.size * 4 / 3 + 1024 + new TextEncoder().encode(JSON.stringify(image.caption || "")).length, 0) > BACKUP_LIMIT) throw new Error("Backup exceeds 128 MB; select fewer images and export in batches");
   const items = [];
-  for (const image of images) items.push({ title: image.title, category: image.category, pinned: image.pinned, usedAt: image.usedAt, data: await readLibraryImage(image.id) });
+  for (const image of images) items.push({ title: image.title, category: image.category, caption: image.caption || "", pinned: image.pinned, usedAt: image.usedAt, data: await readLibraryImage(image.id) });
   downloadJson(`wap-image-library-${new Date().toISOString().slice(0, 10)}.json`, { app: "WAP Plus CRM Image Library", version: 1, categories, items });
 }
 
-export function parseImageLibraryBackup(input: unknown): { title: string; category: string; data: string; pinned: boolean; usedAt: number }[] {
+export function parseImageLibraryBackup(input: unknown): { title: string; category: string; caption: string; data: string; pinned: boolean; usedAt: number }[] {
   const value = input as { app?: unknown; version?: unknown; items?: unknown } | null;
   if (!value || value.app !== "WAP Plus CRM Image Library" || value.version !== 1 || !Array.isArray(value.items) || value.items.length > 3000) throw new Error("Invalid image library backup");
   let total = 0;
   return value.items.map(item => {
     if (!item || typeof item.title !== "string" || !item.title.trim() || item.title.length > 160 || typeof item.category !== "string" || item.category.length > 60 || typeof item.data !== "string" || !/^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(item.data) || item.data.length > IMAGE_LIMIT * 4 / 3 + 128) throw new Error("Invalid image in library backup");
-    total += item.data.length; if (total > BACKUP_LIMIT) throw new Error("Backup exceeds 128 MB");
-    return { title: item.title, category: item.category, data: item.data, pinned: item.pinned === true, usedAt: typeof item.usedAt === "number" && Number.isFinite(item.usedAt) && item.usedAt >= 0 && item.usedAt <= Date.now() ? item.usedAt : 0 };
+    if (item.caption !== undefined && (typeof item.caption !== "string" || item.caption.length > 2000)) throw new Error("Invalid image caption in library backup");
+    total += item.data.length + new TextEncoder().encode(JSON.stringify(item.caption || "")).length; if (total > BACKUP_LIMIT) throw new Error("Backup exceeds 128 MB");
+    return { title: item.title, category: item.category, caption: item.caption || "", data: item.data, pinned: item.pinned === true, usedAt: typeof item.usedAt === "number" && Number.isFinite(item.usedAt) && item.usedAt >= 0 && item.usedAt <= Date.now() ? item.usedAt : 0 };
   });
 }
 

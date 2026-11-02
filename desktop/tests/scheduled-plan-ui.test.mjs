@@ -7,11 +7,12 @@ const mocks={
  react:'export const useState=i=>globalThis.planHooks.state(i);export const useRef=i=>globalThis.planHooks.ref(i);export const useMemo=f=>f();export const useEffect=()=>{};',
  'react/jsx-runtime':'export const Fragment="fragment";export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
  '@/components/ui/primitives':'export const Input="input",Button="button",Textarea="textarea";',
+ 'lucide-react':'export const Mic="mic",Square="square",X="x",Clock3="clock",Trash2="trash",XCircle="cancel";',
  '@/store/appStore':'export const useAppStore=f=>f(globalThis.planState);useAppStore.getState=()=>globalThis.planState;useAppStore.setState=patch=>Object.assign(globalThis.planState,patch);export const flushPersist=async()=>{if(globalThis.planState.failPersist)throw Error("disk full");globalThis.planState.persisted++;};',
  '@/i18n':'export const useI18n=()=>({t:(k,p)=>k+(p?JSON.stringify(p):""),locale:"en"});export const translateCurrent=k=>k;',
 };
-const built=await build({stdin:{contents:`export {ScheduledPlanDialog} from './src/components/chat/ScheduledPlanDialog.tsx';export {ScheduledPlansPanel} from './src/components/settings/ScheduledPlansPanel.tsx';export {saveScheduledPlan} from './src/lib/scheduledPlanActions.ts';`,resolveDir:fileURLToPath(new URL('../',import.meta.url))},bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},plugins:[{name:'plan-ui-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
-const {ScheduledPlanDialog,ScheduledPlansPanel,saveScheduledPlan}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text+'\n//# sourceURL=scheduled-plan-ui-test-bundle.js').toString('base64'));
+const built=await build({stdin:{contents:`export {ScheduledPlanDialog} from './src/components/chat/ScheduledPlanDialog.tsx';export {SettingsScheduledMessagesPanel} from './src/components/settings/SettingsScheduledMessagesPanel.tsx';export {saveScheduledPlan} from './src/lib/scheduledPlanActions.ts';`,resolveDir:fileURLToPath(new URL('../',import.meta.url))},bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},plugins:[{name:'plan-ui-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
+const {ScheduledPlanDialog,SettingsScheduledMessagesPanel,saveScheduledPlan}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text+'\n//# sourceURL=scheduled-plan-ui-test-bundle.js').toString('base64'));
 const nodes=tree=>Array.isArray(tree)?tree.flatMap(nodes):tree?.props?[tree,...nodes(tree.props.children)]:[];
 const media={dataUrl:'data:image/png;base64,AA==',mimeType:'image/png',fileName:'template.png',kind:'image',size:1};
 const future=()=>new Date(Date.now()+3600000).toISOString();
@@ -21,14 +22,61 @@ function fixture(){
  state.broadcastCampaigns=[];globalThis.planState=state;return state;
 }
 function harness(component,props={}){
- const state=fixture();let slots=[],cursor=0,tree,closed=0;
- globalThis.planHooks={state(i){const at=cursor++;if(!(at in slots))slots[at]=typeof i==='function'?i():i;return [slots[at],v=>{slots[at]=typeof v==='function'?v(slots[at]):v;}];},ref(i){const at=cursor++;return slots[at]??(slots[at]={current:i});}};
- const h={state,get closed(){return closed;},render(){cursor=0;tree=component({...props,onClose(){closed++;}});return tree;},nodes:()=>nodes(tree),
- find(label){return h.nodes().find(n=>n.props.children===label||n.props['aria-label']===label);},
+ const state=fixture();const childSlots=new Map();let slots=[],cursor=0,tree,closed=0;
+ globalThis.planHooks={state(i){const at=cursor++;if(!(at in slots))slots[at]=typeof i==='function'?i():i;const currentSlots=slots;return [slots[at],v=>{currentSlots[at]=typeof v==='function'?v(currentSlots[at]):v;}];},ref(i){const at=cursor++;return slots[at]??(slots[at]={current:i});}};
+ const expand=tree=>Array.isArray(tree)?tree.map(expand):!tree?.props?tree:(['ScheduledPlansPanel','LegacyScheduledMessagesPanel'].includes(tree.type?.name)?mountChild(tree):{...tree,props:{...tree.props,children:expand(tree.props.children)}});
+ function mountChild(node){const parentSlots=slots,parentCursor=cursor;slots=childSlots.get(node.type)||[];cursor=0;const result=node.type(node.props);childSlots.set(node.type,slots);slots=parentSlots;cursor=parentCursor;return expand(result);}
+ const h={state,get closed(){return closed;},render(){cursor=0;tree=expand(component({...props,onClose(){closed++;}}));return tree;},nodes:()=>nodes(tree),
+ find(label){return h.nodes().find(n=>n.props.children===label||n.props['aria-label']===label)||h.nodes().find(n=>n.type==='button'&&Array.isArray(n.props.children)&&n.props.children.includes(label));},
  async click(label){const n=h.find(label);assert.ok(n,'missing '+label);assert.ok(!n.props.disabled,'disabled '+label);await n.props.onClick();for(let i=0;i<12;i++)await Promise.resolve();h.render();},
  async submit(){h.nodes().find(n=>n.type==='form').props.onSubmit({preventDefault(){}});for(let i=0;i<12;i++)await Promise.resolve();h.render();},
  };h.render();return h;
 }
+
+const tabCount=(h,filter)=>nodes(h.find('settingsScheduled.filter.'+filter)).find(n=>n.type==='span').props.children;
+test('scheduled page shares one header and filters across new plans and every legacy status',async()=>{
+ const h=harness(SettingsScheduledMessagesPanel);
+ h.state.settings.scheduledMessages=['pending','queued','expired','failed','sent','cancelled'].map(status=>({id:status,status,text:'legacy-'+status,contactName:status,dueAt:future()}));
+ h.state.settings.scheduledPlans=['paused','expired','cancelled'].map(status=>({id:status,title:'plan-'+status,status,dueAt:future(),createdAt:future(),text:'body',gapSec:30,items:[{id:'one',status:'unknown'}]}));h.render();
+ assert.equal(h.nodes().filter(n=>n.type==='h3'&&n.props.children==='settingsScheduled.title').length,1);
+ assert.equal(h.nodes().filter(n=>n.props['aria-label']?.startsWith('settingsScheduled.filter.')).length,4);
+ assert.deepEqual(['active','failed','history','all'].map(f=>tabCount(h,f)),[3,5,3,9]);
+ assert.ok(h.find('legacy-pending'));assert.ok(h.find('legacy-queued'));assert.ok(h.find('plan-paused'));assert.equal(h.find('settingsScheduled.emptyActive'),undefined);
+ await h.click('settingsScheduled.filter.failed');assert.ok(h.find('legacy-expired'));assert.ok(h.find('legacy-failed'));assert.ok(h.find('plan-cancelled'));assert.equal(h.find('legacy-sent'),undefined);
+ await h.click('settingsScheduled.filter.history');assert.ok(h.find('legacy-sent'));assert.ok(h.find('legacy-cancelled'));assert.equal(h.find('legacy-pending'),undefined);
+ await h.click('settingsScheduled.filter.all');assert.equal(h.nodes().filter(n=>n.type==='article').length,9);
+});
+
+test('history-only legacy records show one empty state and remain reachable, with a single create entry',async()=>{
+ const h=harness(SettingsScheduledMessagesPanel);
+ h.state.settings.scheduledMessages=[{id:'old',status:'sent',text:'legacy-history',contactName:'Old',dueAt:future()}];h.render();
+ assert.equal(h.nodes().filter(n=>n.props.children==='settingsScheduled.emptyActive').length,1);
+ assert.equal(tabCount(h,'active'),0);assert.equal(tabCount(h,'history'),1);
+ await h.click('settingsScheduled.filter.history');assert.ok(h.find('legacy-history'));assert.equal(h.find('settingsScheduled.empty'),undefined);
+ await h.click('planQueue.create');assert.equal(h.find('settingsScheduled.filter.active').props['aria-pressed'],true);
+ assert.equal(h.nodes().filter(n=>n.type===ScheduledPlanDialog).length,1);
+ assert.ok(h.find('planQueue.create').props.className.includes('whitespace-nowrap'));
+});
+
+test('shared legacy list still cancels, replans, opens the original account and deletes only after confirmation',async()=>{
+ const h=harness(SettingsScheduledMessagesPanel),confirmed=[];let opened;
+ h.state.settings.scheduledMessages=[{id:'old',chatId:'one',accountId:'a',contactName:'One',status:'pending',text:'keep text',dueAt:future()}];
+ h.state.requestConfirm=async options=>{confirmed.push(options);return true;};
+ h.state.cancelScheduledMessage=id=>{h.state.settings.scheduledMessages=h.state.settings.scheduledMessages.map(t=>t.id===id?{...t,status:'cancelled'}:t);return true;};
+ h.state.removeScheduledMessage=id=>{h.state.settings.scheduledMessages=h.state.settings.scheduledMessages.filter(t=>t.id!==id);return true;};
+ h.state.updateScheduledMessage=(id,patch)=>{h.state.settings.scheduledMessages=h.state.settings.scheduledMessages.map(t=>t.id===id?{...t,...patch,status:'pending'}:t);return true;};
+ h.state.setSettingsOpen=()=>{};h.state.setActiveNav=()=>{};h.state.setSelectedChat=(...args)=>{opened=args;};h.render();
+ await h.click('settingsScheduled.openChat');assert.deepEqual(opened,['one','a']);
+ await h.click('common.cancel');assert.equal(h.state.settings.scheduledMessages[0].status,'cancelled');assert.ok(h.find('settingsScheduled.emptyActive'));
+ h.state.settings.scheduledMessages[0].status='expired';await h.click('settingsScheduled.filter.failed');await h.click('scheduled.replan');
+ const dialog=h.nodes().find(n=>n.type?.name==='ChatScheduledMessageDialog');assert.equal(dialog.props.initialText,'keep text');
+ const date=future();dialog.props.onSubmit(date,'edited');h.render();assert.equal(h.find('settingsScheduled.filter.active').props['aria-pressed'],true);assert.ok(h.find('edited'));
+ assert.equal(h.state.settings.scheduledMessages[0].dueAt,date);
+ await h.click('common.cancel');await h.click('settingsScheduled.filter.history');
+ h.state.requestConfirm=async()=>false;h.render();await h.click('settingsScheduled.deleteRecord');assert.equal(h.state.settings.scheduledMessages.length,1);
+ h.state.requestConfirm=async options=>{confirmed.push(options);return true;};h.render();await h.click('settingsScheduled.deleteRecord');assert.equal(h.state.settings.scheduledMessages.length,0);assert.ok(h.find('settingsScheduled.empty'));
+ assert.ok(confirmed.every(c=>c.tone==='danger'));
+});
 
 test('folder schedule selects only its own chats, can explicitly include children, and previews a frozen template',async()=>{
  const h=harness(ScheduledPlanDialog,{folderId:'root'});
@@ -71,6 +119,7 @@ test('invalid pace, changed target ownership and persistence failures cannot cre
  const h=harness(ScheduledPlanDialog,{chatIds:['one']});
  const base={title:'test',text:'text',dueAt:future(),timeZone:'Europe/Paris',gapSec:30,items:[{id:'one',chatId:'one',contactId:'c1',contactName:'One',recipient:'12345@g.us',accountId:'a',status:'pending'}]};
  await assert.rejects(saveScheduledPlan({...base,gapSec:0}),/invalidTime/);
+ await assert.rejects(saveScheduledPlan({...base,audioMode:'invalid'}),/invalidContent/);
  await assert.rejects(saveScheduledPlan({...base,items:[{...base.items[0],accountId:'b'}]}),/targetsChanged/);
  assert.equal(h.state.settings.scheduledPlans.length,0);
  h.state.failPersist=true;await assert.rejects(saveScheduledPlan(base),/disk full/);assert.equal(h.state.settings.scheduledPlans.length,0);
@@ -99,7 +148,7 @@ test('choosing a template cancels a stale attachment read rather than overwritin
 });
 
 test('plan management pauses and resumes without retrying uncertain items, and cancellation keeps sent history',async()=>{
- const h=harness(ScheduledPlansPanel);const p={id:'plan',title:'Plan',text:'Body',dueAt:future(),createdAt:future(),startedAt:future(),gapSec:30,status:'running',items:[
+ const h=harness(SettingsScheduledMessagesPanel);const p={id:'plan',title:'Plan',text:'Body',dueAt:future(),createdAt:future(),startedAt:future(),gapSec:30,status:'running',items:[
  {id:'one',chatId:'one',accountId:'a',contactName:'One',status:'sent'},
  {id:'unknown',chatId:'unknown',accountId:'a',contactName:'Unknown',status:'unknown'},
  {id:'two',chatId:'two',accountId:'a',contactName:'Two',status:'pending'}]};h.state.settings.scheduledPlans=[p];h.render();
@@ -111,7 +160,7 @@ test('plan management pauses and resumes without retrying uncertain items, and c
 });
 
 test('item removal and explicit retry affect only the reviewed item',async()=>{
- const h=harness(ScheduledPlansPanel);h.state.settings.scheduledPlans=[{id:'plan',title:'Plan',text:'Body',dueAt:future(),createdAt:future(),gapSec:30,status:'paused',items:[
+ const h=harness(SettingsScheduledMessagesPanel);h.state.settings.scheduledPlans=[{id:'plan',title:'Plan',text:'Body',dueAt:future(),createdAt:future(),gapSec:30,status:'paused',items:[
  {id:'one',chatId:'one',accountId:'a',contactName:'One',status:'unknown',messageId:'old'},
  {id:'two',chatId:'two',accountId:'a',contactName:'Two',status:'pending'}]}];h.render();
  await h.click('planQueue.details');await h.click('planQueue.removeTarget');
@@ -121,7 +170,7 @@ test('item removal and explicit retry affect only the reviewed item',async()=>{
 });
 
 test('rescheduling a paused plan keeps its sent items and queues only remaining work at the new time',async()=>{
- const h=harness(ScheduledPlansPanel);h.state.settings.scheduledPlans=[{id:'plan',title:'Plan',text:'Frozen',dueAt:future(),createdAt:future(),startedAt:future(),gapSec:30,status:'paused',items:[{id:'one',status:'sent'},{id:'two',status:'pending'}]}];h.render();
+ const h=harness(SettingsScheduledMessagesPanel);h.state.settings.scheduledPlans=[{id:'plan',title:'Plan',text:'Frozen',dueAt:future(),createdAt:future(),startedAt:future(),gapSec:30,status:'paused',items:[{id:'one',status:'sent'},{id:'two',status:'pending'}]}];h.render();
  await h.click('scheduled.replan');const value=new Date(Date.now()+86400000).toISOString().slice(0,16);
  h.nodes().find(n=>n.props.type==='datetime-local').props.onInput({currentTarget:{value}});h.render();
  await h.click('dialog.save');const p=h.state.settings.scheduledPlans[0];
@@ -156,10 +205,59 @@ test('native audio with text is previewed and saved as separate ordered messages
  const h=harness(ScheduledPlanDialog,{chatIds:['one']});
  h.state.settings.quickReplies[0].media={...media,kind:'audio',mimeType:'audio/mpeg',dataUrl:'data:audio/mpeg;base64,AA=='};
  h.nodes().find(n=>n.type==='select').props.onChange({target:{value:'template'}});h.render();
- const label=h.nodes().find(n=>Array.isArray(n.props.children)&&n.props.children.includes('planQueue.nativeMedia'));
- nodes(label).find(n=>n.props.type==='checkbox').props.onChange({target:{checked:true}});h.render();
+ assert.equal(h.find('planQueue.audioMode').props.value,'voice');
  await h.submit();assert.ok(h.nodes().some(n=>Array.isArray(n.props.children)&&n.props.children.includes('planQueue.stepNumber{"number":2}')));
- await h.submit();const p=h.state.settings.scheduledPlans[0];assert.equal(p.media,undefined);assert.equal(p.text,'Original template');assert.equal(p.steps[0].text,'');assert.equal(p.steps[0].media.kind,'audio');assert.equal(p.nativeMedia,true);
+ await h.submit();const p=h.state.settings.scheduledPlans[0];assert.equal(p.media,undefined);assert.equal(p.text,'Original template');assert.equal(p.steps[0].text,'');assert.equal(p.steps[0].media.kind,'audio');assert.equal(p.audioMode,'voice');assert.equal(p.gapSec,30);
+});
+
+for(const mode of ['audio','file']) test(`audio can explicitly be sent as ${mode} without losing its text`,async()=>{
+ const h=harness(ScheduledPlanDialog,{chatIds:['one'],initialStartNow:true});
+ h.state.settings.quickReplies[0].media={...media,kind:'audio',mimeType:'audio/mpeg',dataUrl:'data:audio/mpeg;base64,AA=='};
+ h.nodes().find(n=>n.type==='select').props.onChange({target:{value:'template'}});h.render();
+ h.find('planQueue.audioMode').props.onChange({target:{value:mode}});h.render();
+ const aside=h.nodes().find(n=>n.type==='aside');assert.ok(nodes(aside).some(n=>n.props.children==='planQueue.queueNow'));
+ assert.ok(h.find(`planQueue.summary${JSON.stringify({recipients:1,steps:mode==='file'?1:2,messages:mode==='file'?1:2})}`));
+ await h.submit();assert.equal(h.state.settings.scheduledPlans.length,0);await h.submit();
+ const p=h.state.settings.scheduledPlans[0];assert.equal(p.audioMode,mode);assert.equal(p.text,'Original template');
+ if(mode==='file'){assert.equal(p.media.kind,'audio');assert.equal(p.steps,undefined);}else{assert.equal(p.media,undefined);assert.equal(p.steps[0].media.kind,'audio');}
+ assert.equal(p.gapSec,30);
+});
+
+test('reusing old audio plans preserves their original file or ordinary-audio mode',async()=>{
+ for(const nativeMedia of [false,true]){
+ const h=harness(ScheduledPlanDialog,{chatIds:['one']});
+ h.state.settings.scheduledPlans=[{id:'old',title:'Old audio',text:'',media:{...media,kind:'audio',mimeType:'audio/mpeg',dataUrl:'data:audio/mpeg;base64,AA=='},status:'done',nativeMedia}];
+ h.nodes().find(n=>n.type==='select').props.onChange({target:{value:'plan:old'}});h.render();
+ assert.equal(h.find('planQueue.audioMode').props.value,nativeMedia?'audio':'file');
+ await h.submit();await h.submit();assert.equal(h.state.settings.scheduledPlans[1].audioMode,nativeMedia?'audio':'file');
+ }
+});
+
+test('live recording locks edits and submission, then adds a voice-note preview without creating a plan',async()=>{
+ const h=harness(ScheduledPlanDialog,{chatIds:['one'],initialStartNow:true});
+ const recorder=h.nodes().find(n=>n.type?.name==='PlanVoiceRecorder');assert.ok(recorder);
+ recorder.props.onBusyChange(true);h.render();
+ assert.equal(h.nodes().find(n=>n.type==='fieldset').props.disabled,true);
+ assert.equal(h.nodes().find(n=>n.props.children==='planQueue.addStep').props.disabled,true);
+ assert.equal(h.nodes().find(n=>n.props.type==='submit').props.disabled,true);
+ await h.submit();assert.equal(h.state.settings.scheduledPlans.length,0);
+ recorder.props.onRecorded({...media,kind:'audio',mimeType:'audio/webm',fileName:'recording.webm',dataUrl:'data:audio/webm;base64,AA=='});
+ recorder.props.onBusyChange(false);h.render();
+ assert.ok(h.nodes().some(n=>n.type==='audio'&&n.props.src==='data:audio/webm;base64,AA=='));
+ assert.equal(h.state.settings.scheduledPlans.length,0);await h.submit();assert.equal(h.state.settings.scheduledPlans.length,0);
+ await h.submit();assert.equal(h.state.settings.scheduledPlans[0].audioMode,'voice');assert.equal(h.state.settings.scheduledPlans[0].media.kind,'audio');
+});
+
+test('recording can attach to a later step without replacing earlier content',async()=>{
+ const h=harness(ScheduledPlanDialog,{chatIds:['one'],initialText:'First message'});
+ await h.click('planQueue.addStep');
+ const recorder=h.nodes().filter(n=>n.type?.name==='PlanVoiceRecorder')[1];assert.ok(recorder);
+ recorder.props.onBusyChange(true);h.render();assert.equal(h.find('common.delete').props.disabled,true);
+ recorder.props.onRecorded({...media,kind:'audio',mimeType:'audio/ogg',fileName:'recording.ogg',dataUrl:'data:audio/ogg;base64,AA=='});
+ recorder.props.onBusyChange(false);h.render();
+ assert.ok(h.nodes().some(n=>n.type==='audio'&&n.props.src==='data:audio/ogg;base64,AA=='));
+ await h.submit();await h.submit();const p=h.state.settings.scheduledPlans[0];
+ assert.equal(p.text,'First message');assert.equal(p.media,undefined);assert.equal(p.steps[0].media.fileName,'recording.ogg');assert.equal(p.audioMode,'voice');
 });
 
 test('deadlines and quiet hours are persisted and invalid deadlines cannot be submitted',async()=>{
@@ -180,7 +278,7 @@ test('reusing an existing sequence copies content without copying its recipient 
 });
 
 test('a late confirmed receipt advances a reviewed unknown step instead of re-sending it',async()=>{
- const h=harness(ScheduledPlansPanel);h.state.messages=[{id:'late-receipt',accountId:'a',deliveryStatus:'delivered'}];
+ const h=harness(SettingsScheduledMessagesPanel);h.state.messages=[{id:'late-receipt',accountId:'a',deliveryStatus:'delivered'}];
  h.state.settings.scheduledPlans=[{id:'plan',title:'Plan',text:'first',steps:[{text:'second'}],dueAt:future(),createdAt:future(),gapSec:30,status:'paused',items:[{id:'one',accountId:'a',contactName:'One',status:'unknown',messageId:'late-receipt',stepIndex:0}]}];h.render();
  await h.click('planQueue.details');await h.click('planQueue.reviewRetry');const i=h.state.settings.scheduledPlans[0].items[0];assert.equal(i.stepIndex,1);assert.equal(i.status,'pending');assert.deepEqual(i.messageIds,['late-receipt']);assert.equal(i.messageId,undefined);assert.equal(h.state.settings.scheduledPlans[0].status,'paused');
 });
@@ -195,14 +293,14 @@ test('invalid step intervals, excessive sequences and invalid deadlines are reje
 });
 
 test('moving a plan to the front preserves its timing, cooldown and step progress',async()=>{
- const h=harness(ScheduledPlansPanel);const date=future();
+ const h=harness(SettingsScheduledMessagesPanel);const date=future();
  h.state.settings.scheduledPlans=['a','b'].map(id=>({id,title:id,text:'first',dueAt:date,createdAt:date,timeZone:'Europe/Paris',status:'pending',gapSec:30,cooldownUntil:date,steps:[{text:'second'}],items:[{id,accountId:'a',status:'pending',stepIndex:1,messageIds:['already-sent']}]}));h.render();
  const buttons=h.nodes().filter(n=>n.props.children==='planQueue.prioritize');await buttons[1].props.onClick();for(let i=0;i<12;i++)await Promise.resolve();h.render();
  const p=h.state.settings.scheduledPlans[1];assert.equal(p.priority,1);assert.equal(p.dueAt,date);assert.equal(p.cooldownUntil,date);assert.equal(p.items[0].stepIndex,1);assert.deepEqual(p.items[0].messageIds,['already-sent']);
 });
 
 test('a cancelled plan with an unknown in-flight result stays visible for review without reactivating it',async()=>{
- const h=harness(ScheduledPlansPanel);h.state.settings.scheduledPlans=[{id:'cancelled',title:'Cancelled',text:'text',dueAt:future(),createdAt:future(),gapSec:30,status:'cancelled',error:'planQueue.cancelledUnknown',items:[{id:'one',accountId:'a',contactName:'One',status:'unknown',messageId:'inflight'}]}];h.render();
+ const h=harness(SettingsScheduledMessagesPanel);h.state.settings.scheduledPlans=[{id:'cancelled',title:'Cancelled',text:'text',dueAt:future(),createdAt:future(),gapSec:30,status:'cancelled',error:'planQueue.cancelledUnknown',items:[{id:'one',accountId:'a',contactName:'One',status:'unknown',messageId:'inflight'}]}];h.render();
  await h.click('settingsScheduled.filter.failed');assert.ok(h.find('planQueue.cancelledUnknown'));
  await h.click('planQueue.details');assert.equal(h.find('planQueue.reviewRetry'),undefined);assert.equal(h.find('planQueue.resume'),undefined);assert.equal(h.state.settings.scheduledPlans[0].status,'cancelled');
 });
