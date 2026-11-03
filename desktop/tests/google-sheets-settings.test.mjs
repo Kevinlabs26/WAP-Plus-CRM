@@ -10,11 +10,25 @@ const mocks={
  '@/components/ui/primitives':'export const Button="button",SectionLabel="label";',
  '@/i18n':'export const useI18n=()=>({t:k=>k});',
  '@/lib/googleSheetApi':'export const spreadsheetId=v=>v.includes("abc")?"abc":null;',
- '@/lib/googleSheets':'export const useGoogleSheets=()=>globalThis.sheetSettingsState;export const initializeSheets=async()=>{};export const letter=i=>String.fromCharCode(65+i);export const sheetHeaders=async()=>["Phone","Order"];export const saveSheetConfig=async config=>globalThis.sheetSaved=config;export const readSheet=async()=>({sheets:[]});export const connectSheets=async()=>{};export const disconnectSheets=async()=>{globalThis.sheetDisconnected=true;};export const refreshSheets=async()=>{};',
+ '@/lib/googleSheets':'export const useGoogleSheets=()=>globalThis.sheetSettingsState;export const initializeSheets=async()=>{};export const letter=i=>String.fromCharCode(65+i);export const sheetHeaders=async()=>["Phone","Order"];export const saveSheetConfig=async config=>globalThis.sheetSaved=config;export const readSheet=async()=>({sheets:[]});export const connectSheets=async()=>{};export const cancelSheetsConnect=async()=>{globalThis.sheetConnectCancelled=true;};export const disconnectSheets=async()=>{globalThis.sheetDisconnected=true;};export const refreshSheets=async()=>{};',
 };
 const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/settings/SettingsGoogleSheets.tsx',import.meta.url))],bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},plugins:[{name:'boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
 const {SettingsGoogleSheets}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
 const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
+test('authorization can be cancelled while an account is displayed or connecting for the first time',async()=>{
+ const oldWindow=globalThis.window;globalThis.window={addEventListener(){},removeEventListener(){}};
+ globalThis.sheetSettingsHooks={state:value=>[value,()=>{}],effect(){}};
+ try{
+  for(const email of ['wrong@example.com',null]){
+   globalThis.sheetSettingsState={ready:true,configured:true,email,needsAccess:true,config:null,data:{},error:'',busy:true,authorizing:true};
+   const cancel=nodes(SettingsGoogleSheets({})).find(node=>node.type==='button'&&node.props.children==='sheets.cancelAuthorization');
+   assert.ok(cancel,`cancel button missing for ${email||'a new account'}`);
+   await cancel.props.onClick();
+   assert.equal(globalThis.sheetConnectCancelled,true);
+   delete globalThis.sheetConnectCancelled;
+  }
+ }finally{globalThis.window=oldWindow;delete globalThis.sheetSettingsHooks;delete globalThis.sheetSettingsState;delete globalThis.sheetConnectCancelled;}
+});
 test('reopening a saved connection and reloading headers preserves custom labels and refresh schedules',async()=>{
  const oldWindow=globalThis.window;globalThis.window={addEventListener(){},removeEventListener(){}};
  let index=0;const cells=[],effects=[];
