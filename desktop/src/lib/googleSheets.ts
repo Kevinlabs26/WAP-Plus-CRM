@@ -9,7 +9,7 @@ export type SheetAction = "edit" | "link" | "content";
 export interface SheetField { id: string; label: string; column: SheetColumn; schedule: SheetSchedule; action?: SheetAction }
 export interface SheetConfig { spreadsheet: string; tab: string; headerRow: number; phone: SheetColumn; fields: SheetField[]; actions?: Record<string, SheetAction> }
 export interface SheetCell { value: string; row: number; links: string[]; formula?: boolean }
-interface FieldData { at: number; columnIndex: number; values: Record<string, SheetCell[]> }
+interface FieldData { at: number; columnIndex?: number; values: Record<string, (SheetCell | string)[]> }
 interface SheetState { ready: boolean; configured: boolean; email: string | null; needsAccess: boolean; config: SheetConfig | null; data: Record<string, FieldData>; error: string; busy: boolean; failures: number; retryAt: number | null; pauseReason: "authorization" | "configuration" | null }
 const resetRetry = { failures: 0, retryAt: null, pauseReason: null } as const;
 export const useGoogleSheets = create<SheetState>(() => ({ ready: false, configured: false, email: null, needsAccess: false, config: null, data: {}, error: "", busy: false, ...resetRetry }));
@@ -159,7 +159,7 @@ export function refreshSheets(force = false): Promise<void> {
       const gridColumns = grid?.sheets?.flatMap(sheet => sheet.data || []).map(data => data.rowData || []) || [];
       const next = { ...data };
       fields.forEach((field, fieldIndex) => {
-        const values: Record<string, SheetCell[]> = {};
+        const values: Record<string, (SheetCell | string)[]> = {};
         const actionCells = field.action ? gridColumns[actionFields.indexOf(field)] || [] : [];
         columns[0].forEach((raw, row) => {
           if (row < config.headerRow) return;
@@ -168,10 +168,10 @@ export function refreshSheets(force = false): Promise<void> {
           if (phone) {
             const value = String(columns[fieldIndex + 1][row] ?? "");
             const gridCell = actionCells[row]?.values?.[0];
-            (values[phone] ||= []).push({ value, row: row + 1, links: field.action === "link" || field.action === "content" ? cellLinks(gridCell, value) : [], formula: !!gridCell?.userEnteredValue?.formulaValue });
+            (values[phone] ||= []).push(field.action ? { value, row: row + 1, links: field.action === "link" || field.action === "content" ? cellLinks(gridCell, value) : [], formula: !!gridCell?.userEnteredValue?.formulaValue } : value);
           }
         });
-        next[field.id] = { at: Date.now(), columnIndex: indices[fieldIndex + 1]!, values };
+        next[field.id] = { at: Date.now(), ...(field.action ? { columnIndex: indices[fieldIndex + 1]! } : {}), values };
       });
       useGoogleSheets.setState({ data: next });
       await persist();

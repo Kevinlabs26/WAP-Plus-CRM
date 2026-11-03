@@ -41,7 +41,7 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
     setPhone("heading" in state.config.phone ? state.config.phone.heading : "");
   }, [state.config]);
   const draft = { spreadsheet: spreadsheetId(url) || url.trim(), tab, headerRow: row, phone: { heading: phone }, fields, actions };
-  const baseline = state.config || { spreadsheet: "", tab: "", headerRow: 1, phone: { heading: "" }, fields: [], actions: {} };
+  const baseline = state.config ? { ...state.config, actions: state.config.actions || {} } : { spreadsheet: "", tab: "", headerRow: 1, phone: { heading: "" }, fields: [], actions: {} };
   const dirty = draftReady && JSON.stringify(draft) !== JSON.stringify(baseline);
   const canSave = !!spreadsheetId(url) && !!tab && Number.isInteger(row) && row >= 1 && row <= 1000 && !!phone && fields.length > 0 && fields.length <= MAX_SHEET_DISPLAY_COLUMNS && fields.every(field => !!field.label.trim() && (field.schedule.kind !== "interval" || (Number.isInteger(field.schedule.minutes) && field.schedule.minutes >= 1 && field.schedule.minutes <= 525600)) && (field.schedule.kind !== "daily" || /^([01]\d|2[0-3]):[0-5]\d$/.test(field.schedule.time)));
   async function saveDraft() {

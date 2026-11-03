@@ -31,6 +31,7 @@ function SheetValue({ contact, field, cell, columnIndex, active }: { contact: Co
     setBusy(true); setError("");
     try {
       if (cell.formula) throw new Error("formula cells are protected");
+      if (!Number.isInteger(columnIndex) || columnIndex < 0) throw new Error("Refresh the data before editing.");
       const headers = await sheetHeaders(state.config.spreadsheet, state.config.tab, state.config.headerRow);
       const currentColumn = resolveSheetColumn(headers, field.column);
       const phoneColumn = resolveSheetColumn(headers, state.config.phone);
@@ -85,7 +86,7 @@ export function GoogleSheetInfo({ contact, open = false }: { contact: Contact; o
           <div className="text-zinc-500">{field.label}</div>
           {!cached ? <p>{t("sheets.notLoaded")}</p> : !values.length ? <p>{t("sheets.noMatch")}</p> : values.map((cell, index) => <div key={`${cell.row}-${index}`} className="mb-1">
             {values.length > 1 && <span className="text-zinc-500">{index + 1}. </span>}
-            <SheetValue contact={contact} field={field} cell={cell} columnIndex={cached.columnIndex} active={expanded} />
+            <SheetValue contact={contact} field={field} cell={cell} columnIndex={cached.columnIndex ?? -1} active={expanded} />
           </div>)}
         </div>;
       })}
