@@ -441,7 +441,6 @@ function DeferredWatchers({ interactive }: { interactive: boolean }) {
       <ScheduledPlanWatcher />
       <FollowUpDueWatcher />
       <GroupAutoReadWatcher />
-      <AiAutoReplier />
       <UpdateWatcher />
       <AutomaticBackupWatcher />
       <GoogleSheetsWatcher />
@@ -834,6 +833,9 @@ export default function App() {
           <ConfirmHost />
           <ToastHost />
           <DeferredModals interactive={interactive} />
+          <Suspense fallback={null}>
+            <AiAutoReplier />
+          </Suspense>
           <DeferredWatchers interactive={interactive} />
         </div>
       )}

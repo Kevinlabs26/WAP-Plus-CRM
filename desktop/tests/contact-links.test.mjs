@@ -13,14 +13,14 @@ test('Excel names, accents, unnamed numbers and duplicates generate complete con
   { name: '6. 10/30 Nathalie Mère Brian', phone: '+24106539883', url: 'https://wa.me/24106539883' },
   { name: '7. 10/30', phone: '+18494416486', url: 'https://wa.me/18494416486' },
  ]);
- assert.equal(contactLinksText(entries), entries.map(e => e.name + '\n' + e.url).join('\n\n'));
+ assert.equal(contactLinksText(entries), entries.map(e => e.name + ' ' + e.url).join('\n'));
  assert.equal(parsed.contacts[0].name, 'Jean Yonli');
 });
 
 test('named contacts are numbered in outgoing text and CSV even without a name prefix', () => {
  const contacts = [{name:'Jean Yonli',phone:'+22650789388'},{name:'Nathalie Mère Brian',phone:'+24106539883'},{name:'bedline',phone:'+18494416486'}];
  const entries = buildContactLinks(contacts, rule);
- assert.equal(contactLinksText(entries), '1. Jean Yonli\nhttps://wa.me/22650789388\n\n2. Nathalie Mère Brian\nhttps://wa.me/24106539883\n\n3. bedline\nhttps://wa.me/18494416486');
+ assert.equal(contactLinksText(entries), '1. Jean Yonli https://wa.me/22650789388\n2. Nathalie Mère Brian https://wa.me/24106539883\n3. bedline https://wa.me/18494416486');
  assert.ok(contactLinksCsv(entries).includes('"3. bedline","\'+18494416486","https://wa.me/18494416486"'));
  assert.deepEqual(buildContactLinks(contacts,{...rule,start:10}).map(entry=>entry.name),['10. Jean Yonli','11. Nathalie Mère Brian','12. bedline']);
  assert.equal(buildContactLinks([{name:'',phone:'+18494416486'}],rule)[0].name,'1.');

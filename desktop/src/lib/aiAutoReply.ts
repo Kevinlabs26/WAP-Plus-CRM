@@ -176,9 +176,15 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
   const settings = state.settings;
   const scope = resolveAutoReplyScope(settings, m.chatId);
   if (scope.mode !== "auto") {
-    if (m.contactId && (scope.source === "chat" || scope.source === "folder")) {
-      logAutoSkipOnce(m.chatId, m.contactId, `scope:${scope.source}`, "自动回复：仅人工",
-        scope.source === "folder" ? `来自文件夹「${scope.folderName}」` : "该会话已设置为只人工处理");
+    if (m.contactId) {
+      const detail = scope.source === "folder"
+        ? `来自文件夹「${scope.folderName}」`
+        : scope.source === "chat"
+          ? "该会话已单独设置为只人工处理"
+          : scope.source === "paused"
+            ? "全局自动回复已暂停"
+            : "默认回复模式为仅人工；检查全局或文件夹回复模式";
+      logAutoSkipOnce(m.chatId, m.contactId, `scope:${scope.source}:${scope.mode}`, "自动回复：仅人工", detail);
     }
     return;
   }

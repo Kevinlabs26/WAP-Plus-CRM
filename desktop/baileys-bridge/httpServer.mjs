@@ -493,6 +493,9 @@ if (req.method === "POST" && url.pathname === "/restart") {
         if (!jid || jid === "@s.whatsapp.net")
           return json(res, 400, { error: "无法解析发送目标" });
 
+        const documentName = String(fileName || "file").slice(0, 180) || "file.bin";
+        const isVcardDocument = /\.vcf$/i.test(documentName);
+
         /** @type {Record<string, unknown> | undefined} */
         let quotedOpt;
         if (quoted?.id && (quoted.remoteJid || jid)) {
@@ -646,8 +649,9 @@ if (req.method === "POST" && url.pathname === "/restart") {
         } else if (hasFileUrl) {
           result = await d.socket.sendMessage(jid, {
             document: (await downloadRemoteMedia(fileUrl, 15_000_000)).buffer,
-            mimetype: mimeIn || "application/octet-stream",
-            fileName: String(fileName || "file").slice(0, 180),
+            mimetype: isVcardDocument ? "text/vcard" : mimeIn || "application/octet-stream",
+            fileName: documentName,
+            ...(isVcardDocument ? { contactVcard: true } : {}),
             caption: caption || undefined,
           }, quotedOpt ? { quoted: quotedOpt } : undefined);
         } else if (hasFile) {
@@ -656,14 +660,13 @@ if (req.method === "POST" && url.pathname === "/restart") {
             return json(res, 400, { error: "文件 dataUrl 无效" });
           if (parsed.buf.length > 15_000_000)
             return json(res, 400, { error: "文件过大（限约 15MB）" });
-          const name =
-            String(fileName || "file").slice(0, 180) || "file.bin";
           result = await d.socket.sendMessage(
             jid,
             {
               document: parsed.buf,
-              mimetype: mimeIn || parsed.mime || "application/octet-stream",
-              fileName: name,
+              mimetype: isVcardDocument ? "text/vcard" : mimeIn || parsed.mime || "application/octet-stream",
+              fileName: documentName,
+              ...(isVcardDocument ? { contactVcard: true } : {}),
               caption: caption || undefined,
             },
             quotedOpt ? { quoted: quotedOpt } : undefined

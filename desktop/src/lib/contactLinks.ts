@@ -22,7 +22,7 @@ export function buildContactLinks(contacts: readonly PastedContact[], rule: Cont
 }
 
 export function contactLinksText(entries: readonly ContactLinkEntry[]): string {
-  return entries.map(entry => `${entry.name}\n${entry.url}`).join("\n\n");
+  return entries.map(entry => `${entry.name} ${entry.url}`).join("\n");
 }
 
 export function contactLinksCsv(entries: readonly ContactLinkEntry[]): string {

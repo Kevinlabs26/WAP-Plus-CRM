@@ -749,6 +749,8 @@ export function CrmAiPanel() {
               )}
             </div>
 
+            <GoogleSheetInfo contact={contact} />
+
             <details key={contact.id} className="rounded-lg border border-zinc-800 p-2.5">
               <summary className="cursor-pointer text-xs text-zinc-500">{t("crmPanel.moreDetails")}</summary>
               <div className="mt-3 space-y-3">
@@ -779,8 +781,6 @@ export function CrmAiPanel() {
                 }
               }}
             />
-
-            <GoogleSheetInfo contact={contact} />
 
             {!contact.isGroup && (
               <CommonGroupsPanel
