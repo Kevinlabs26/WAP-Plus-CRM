@@ -51,7 +51,7 @@ function fixture() {
     {id:"b",accountId:"wa-b",name:"Second",phone:"+12025550101",stage:"new",tags:[],company:"Keep company"},
     {id:"c",accountId:"wa-b",name:"Third",phone:"+12025550102",stage:"won",tags:[]}];
   globalThis.stageState={hydrated:false,contacts,chats:[],messages:[],phones:[],followUps:[{id:"follow",contactId:"a",note:"Keep reminder"}],activities:[],peerPresenceByKey:{},stats:{},messagesByChatId:{},baileysUi:{},broadcastCampaigns:[],
-    settings:{...mod.defaultSettings,uiLanguage:"zh-CN",activeAccountId:"wa-a",liveBaileysAccountId:"wa-a",salesStageLabels:{},salesStageOrder:["new","contacted","quoting","won","after_sales"]},
+    settings:{...mod.defaultSettings,uiLanguage:"zh-CN",activeAccountId:"wa-a",liveBaileysAccountId:"wa-a",waAccounts:[{id:"wa-a",label:"A",createdAt:"2020-01-01T00:00:00Z"}],salesStageLabels:{},salesStageOrder:["new","contacted","quoting","won","after_sales"]},
     selectedChatId:null,selectedContactId:null,pushToast:(...args)=>toasts.push(args),logActivity:(...args)=>activities.push(args),recomputeStats(){},setSelectedPhone(){}};
   const ctx={get:()=>stageState,set:patch=>Object.assign(stageState,typeof patch==='function'?patch(stageState):patch)};
   Object.assign(stageState,mod.createSettingsActionsSlice(ctx),mod.createIngestSlice(ctx),mod.createBroadcastSlice(ctx));

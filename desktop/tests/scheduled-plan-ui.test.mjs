@@ -17,7 +17,7 @@ const nodes=tree=>Array.isArray(tree)?tree.flatMap(nodes):tree?.props?[tree,...n
 const media={dataUrl:'data:image/png;base64,AA==',mimeType:'image/png',fileName:'template.png',kind:'image',size:1};
 const future=()=>new Date(Date.now()+3600000).toISOString();
 function fixture(){
- const state={hydrated:true,uiReady:true,persisted:0,chats:[{id:'one',contactId:'c1',accountId:'a'},{id:'two',contactId:'c2',accountId:'a'}],contacts:[{id:'c1',name:'One',phone:'',channelAddress:'12345@g.us',accountId:'a'},{id:'c2',name:'Two',phone:'+12025550123',accountId:'a'}],settings:{waAccounts:[{id:'a',label:'Account A'}],quickReplies:[{id:'template',title:'Welcome',body:'Original template',category:'other',media:{...media}}],scheduledPlans:[],chatFolderClones:[],chatFolders:[{id:'root',chatIds:['one'],scope:{type:'account',accountId:'a'}},{id:'child',parentId:'root',chatIds:['two'],scope:{type:'account',accountId:'a'}}]},
+ const state={hydrated:true,uiReady:true,persisted:0,messages:[],chats:[{id:'one',contactId:'c1',accountId:'a'},{id:'two',contactId:'c2',accountId:'a'}],contacts:[{id:'c1',name:'One',phone:'',channelAddress:'12345@g.us',accountId:'a'},{id:'c2',name:'Two',phone:'+12025550123',accountId:'a'}],settings:{waAccounts:[{id:'a',label:'Account A'}],quickReplies:[{id:'template',title:'Welcome',body:'Original template',category:'other',media:{...media}}],scheduledPlans:[],chatFolderClones:[],chatFolders:[{id:'root',chatIds:['one'],scope:{type:'account',accountId:'a'}},{id:'child',parentId:'root',chatIds:['two'],scope:{type:'account',accountId:'a'}}]},
   updateSettings(patch){state.settings={...state.settings,...patch};},pushToast(){},requestConfirm:async()=>true};
  state.broadcastCampaigns=[];globalThis.planState=state;return state;
 }

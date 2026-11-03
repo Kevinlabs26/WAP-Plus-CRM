@@ -382,7 +382,8 @@ export function applyMessagesSync(opts: {
         if (localIdx >= 0) {
           const prev = messages[localIdx];
           // WhatsApp timestamps have second precision; keep the newer local enqueue time when an echo rounds backward.
-          const reconciledSentAt = Date.parse(prev.sentAt) > echoTs ? prev.sentAt : sentAt;
+          const localTs = Date.parse(prev.sentAt);
+          const reconciledSentAt = item.sentAt == null || localTs > echoTs && localTs - echoTs < 2_000 ? prev.sentAt : sentAt;
           // 始终留在用户正在聊的会话，不跟错误的 contact/E 跑
           const keepChatId = prev.chatId || selectedChat || chatId;
           const keepContactId =

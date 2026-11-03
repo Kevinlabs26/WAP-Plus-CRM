@@ -111,8 +111,9 @@ export function scheduledPlanTargets(state: TargetState, chatIds?: string[], def
     const key = recipientKey("", recipient);
     const accountId = latestAccounts.get(key) || defaultAccountId || sourceAccountId;
     if (!state.settings.waAccounts.some(account => account.id === accountId)) continue;
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const targetKey = recipientKey(sourceAccountId, recipient);
+    if (seen.has(targetKey)) continue;
+    seen.add(targetKey);
     items.push({ id: chat.id, chatId: chat.id, contactId: contact.id, contactName: contact.name || chat.contactName || recipient, recipient, accountId, status: "pending" });
   }
   return items;

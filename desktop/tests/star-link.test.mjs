@@ -14,6 +14,7 @@ const mocks={
  '@/components/DonateModal':'export const DonateModal="modal";',
  '@/components/brand/WapPlusMark':'export const WapPlusMark="mark";',
  './AccountSwitcherMenu':'export const AccountSwitcherMenu="switcher";',
+ './BatchTaskIndicator':'export const BatchTaskIndicator="batch-task-indicator";',
  './MessageInbox':'export const MessageInbox="inbox";',
  '@/lib/accountHealth':'export const computeAllAccountsHealth=()=>[];',
  '@/lib/syncDebug':'export const syncLog=()=>{};',

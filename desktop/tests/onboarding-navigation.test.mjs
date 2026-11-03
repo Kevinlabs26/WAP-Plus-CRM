@@ -18,6 +18,7 @@ const mocks = {
   "@/components/DonateModal": "export const DonateModal=()=>null;",
   "@tauri-apps/plugin-shell": "export const open=url=>{ globalThis.starUrl=url; return Promise.resolve(); };",
   "./AccountSwitcherMenu": "export const AccountSwitcherMenu=()=>null;",
+  "./BatchTaskIndicator": "export const BatchTaskIndicator=()=>null;",
   "./MessageInbox": "export const MessageInbox=()=>null;",
   "@/components/crm/FollowUpWorkRow": "export const FollowUpWorkRow=()=>null; export const buildContactWorkCard=()=>({});",
   "./FollowUpsView": "export const FollowUpsView=()=>null;",
