@@ -18,10 +18,13 @@ fn client() -> Result<Client, String> {
     Ok(client)
 }
 
+const SHEETS_WRITE: &str = "https://www.googleapis.com/auth/spreadsheets";
+const DOCS_READ: &str = "https://www.googleapis.com/auth/documents.readonly";
 #[derive(Serialize, Deserialize)]
-struct Tokens { access: String, refresh: String, expires: u64, email: String }
+struct Tokens { access: String, refresh: String, expires: u64, email: String, #[serde(default)] scopes: String }
 #[derive(Serialize)]
-pub struct GoogleStatus { configured: bool, email: Option<String> }
+#[serde(rename_all = "camelCase")]
+pub struct GoogleStatus { configured: bool, email: Option<String>, needs_access: bool }
 fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() }
 fn path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|_| "Cannot locate application data")?;
@@ -65,9 +68,27 @@ fn callback_result(target: &str, nonce: &str) -> Option<Result<String, String>> 
     Some(pairs.iter().find(|(key, _)| key == "code").map(|(_, value)| value.to_string()).filter(|code| !code.is_empty()).ok_or("Missing Google authorization code".into()))
 }
 
+async fn access_token(app: &AppHandle) -> Result<Tokens, String> {
+    let mut tokens = load(app)?.ok_or("Connect your Google account first")?;
+    if tokens.expires <= now() + 60 {
+        let client = client()?;
+        let value = json(http()?.post("https://oauth2.googleapis.com/token").form(&[("client_id", client.client_id.as_str()), ("client_secret", client.client_secret.as_str()), ("refresh_token", tokens.refresh.as_str()), ("grant_type", "refresh_token")]).send().await.map_err(|_| "Cannot refresh Google authorization")?).await?;
+        tokens.access = value["access_token"].as_str().ok_or("Reconnect your Google account")?.into();
+        tokens.expires = now() + value["expires_in"].as_u64().unwrap_or(3600);
+        save(app, &tokens)?;
+    }
+    Ok(tokens)
+}
+
+fn needs_access(tokens: &Tokens) -> bool {
+    let scopes: Vec<_> = tokens.scopes.split_whitespace().collect();
+    !scopes.contains(&SHEETS_WRITE) || !scopes.contains(&DOCS_READ)
+}
+
 #[tauri::command]
 pub fn google_sheets_status(app: AppHandle) -> Result<GoogleStatus, String> {
-    Ok(GoogleStatus { configured: client().is_ok(), email: load(&app)?.map(|tokens| tokens.email) })
+    let tokens = load(&app)?;
+    Ok(GoogleStatus { configured: client().is_ok(), email: tokens.as_ref().map(|tokens| tokens.email.clone()), needs_access: tokens.as_ref().is_some_and(needs_access) })
 }
 
 #[tauri::command]
@@ -82,7 +103,7 @@ pub async fn google_sheets_connect(app: AppHandle, state: State<'_, GoogleState>
     let mut url = url::Url::parse("https://accounts.google.com/o/oauth2/v2/auth").unwrap();
     url.query_pairs_mut().extend_pairs([
         ("client_id", client.client_id.as_str()), ("redirect_uri", redirect.as_str()),
-        ("response_type", "code"), ("scope", "openid email https://www.googleapis.com/auth/spreadsheets.readonly"),
+        ("response_type", "code"), ("scope", "openid email https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/documents.readonly"),
         ("access_type", "offline"), ("prompt", "consent select_account"),
         ("state", nonce.as_str()), ("code_challenge", challenge.as_str()), ("code_challenge_method", "S256"),
     ]);
@@ -119,12 +140,13 @@ pub async fn google_sheets_connect(app: AppHandle, state: State<'_, GoogleState>
         ("code", code.as_str()), ("code_verifier", verifier.as_str()), ("redirect_uri", redirect.as_str()), ("grant_type", "authorization_code"),
     ]).send().await.map_err(|_| "Cannot complete Google authorization")?;
     let value = json(response).await?;
-    if !value["scope"].as_str().unwrap_or("").split_whitespace().any(|scope| scope == "https://www.googleapis.com/auth/spreadsheets.readonly") { return Err("Google Sheets read permission was not granted".into()); }
-    let mut tokens = Tokens { access: value["access_token"].as_str().ok_or("Missing Google access token")?.into(), refresh: value["refresh_token"].as_str().ok_or("Missing Google refresh token; please authorize again")?.into(), expires: now() + value["expires_in"].as_u64().unwrap_or(3600), email: String::new() };
+    let scopes = value["scope"].as_str().unwrap_or("https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/documents.readonly").to_string();
+    let mut tokens = Tokens { access: value["access_token"].as_str().ok_or("Missing Google access token")?.into(), refresh: value["refresh_token"].as_str().ok_or("Missing Google refresh token; please authorize again")?.into(), expires: now() + value["expires_in"].as_u64().unwrap_or(3600), email: String::new(), scopes };
     let profile = json(http()?.get("https://openidconnect.googleapis.com/v1/userinfo").bearer_auth(&tokens.access).send().await.map_err(|_| "Cannot read Google account")?).await?;
     tokens.email = profile["email"].as_str().ok_or("Cannot identify Google account")?.into();
     save(&app, &tokens)?;
-    Ok(GoogleStatus { configured: true, email: Some(tokens.email) })
+    let needs_access = needs_access(&tokens);
+    Ok(GoogleStatus { configured: true, email: Some(tokens.email), needs_access })
 }
 
 #[cfg(test)]
@@ -186,16 +208,50 @@ pub async fn google_sheets_disconnect(app: AppHandle, state: State<'_, GoogleSta
 pub async fn google_sheets_read(app: AppHandle, state: State<'_, GoogleState>, spreadsheet_id: String, ranges: Vec<String>) -> Result<serde_json::Value, String> {
     if spreadsheet_id.is_empty() || !spreadsheet_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') || ranges.len() > 100 || ranges.iter().any(|range| range.len() > 512) { return Err("Invalid spreadsheet selection".into()); }
     let _lock = state.0.lock().await;
-    let mut tokens = load(&app)?.ok_or("Connect your Google account first")?;
-    if tokens.expires <= now() + 60 {
-        let client = client()?;
-        let value = json(http()?.post("https://oauth2.googleapis.com/token").form(&[("client_id", client.client_id.as_str()), ("client_secret", client.client_secret.as_str()), ("refresh_token", tokens.refresh.as_str()), ("grant_type", "refresh_token")]).send().await.map_err(|_| "Cannot refresh Google authorization")?).await?;
-        tokens.access = value["access_token"].as_str().ok_or("Reconnect your Google account")?.into();
-        tokens.expires = now() + value["expires_in"].as_u64().unwrap_or(3600);
-        save(&app, &tokens)?;
-    }
+    let tokens = access_token(&app).await?;
     let mut url = url::Url::parse(&format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}{}", if ranges.is_empty() { "" } else { "/values:batchGet" })).unwrap();
     if ranges.is_empty() { url.query_pairs_mut().append_pair("fields", "sheets.properties(sheetId,title)"); }
     else { for range in ranges { url.query_pairs_mut().append_pair("ranges", &range); } url.query_pairs_mut().append_pair("majorDimension", "COLUMNS"); }
     json(http()?.get(url).bearer_auth(tokens.access).send().await.map_err(|_| "Cannot read Google Sheets; check your connection")?).await
+}
+
+#[tauri::command]
+pub async fn google_sheets_read_grid(app: AppHandle, state: State<'_, GoogleState>, spreadsheet_id: String, ranges: Vec<String>) -> Result<serde_json::Value, String> {
+    if spreadsheet_id.is_empty() || !spreadsheet_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') || ranges.is_empty() || ranges.len() > 100 || ranges.iter().any(|range| range.is_empty() || range.len() > 512) { return Err("Invalid spreadsheet selection".into()); }
+    let _lock = state.0.lock().await;
+    let tokens = access_token(&app).await?;
+    let mut url = url::Url::parse(&format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}")).unwrap();
+    {
+        let mut query = url.query_pairs_mut();
+        for range in ranges { query.append_pair("ranges", &range); }
+        query.append_pair("includeGridData", "true");
+        query.append_pair("fields", "sheets(data(startRow,rowData(values(formattedValue,hyperlink,userEnteredValue(formulaValue),textFormatRuns(format(link(uri)))))))");
+    }
+    json(http()?.get(url).bearer_auth(tokens.access).send().await.map_err(|_| "Cannot read Google Sheets; check your connection")?).await
+}
+
+#[tauri::command]
+pub async fn google_docs_read(app: AppHandle, state: State<'_, GoogleState>, document_id: String) -> Result<serde_json::Value, String> {
+    if document_id.is_empty() || document_id.len() > 256 || !document_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') { return Err("Invalid Google document link".into()); }
+    let _lock = state.0.lock().await;
+    let tokens = access_token(&app).await?;
+    let url = format!("https://docs.googleapis.com/v1/documents/{document_id}?includeTabsContent=true");
+    json(http()?.get(url).bearer_auth(tokens.access).send().await.map_err(|_| "Cannot read Google document; check access and connection")?).await
+}
+
+#[tauri::command]
+pub async fn google_sheets_update_cell(app: AppHandle, state: State<'_, GoogleState>, spreadsheet_id: String, tab: String, column: u32, row: u32, value: String) -> Result<(), String> {
+    if spreadsheet_id.is_empty() || !spreadsheet_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') || tab.is_empty() || tab.len() > 200 || tab.chars().any(char::is_control) || column > 18_277 || row == 0 || row > 10_000_000 || value.len() > 100_000 { return Err("Invalid spreadsheet cell update".into()); }
+    let _lock = state.0.lock().await;
+    let tokens = access_token(&app).await?;
+    let mut n = column + 1;
+    let mut letters = String::new();
+    while n > 0 { n -= 1; letters.insert(0, char::from(b'A' + (n % 26) as u8)); n /= 26; }
+    let range = format!("'{}'!{letters}{row}", tab.replace('\'', "''"));
+    let mut url = url::Url::parse(&format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/")).unwrap();
+    url.path_segments_mut().map_err(|_| "Invalid spreadsheet URL")?.pop_if_empty().push(&range);
+    url.query_pairs_mut().append_pair("valueInputOption", "RAW");
+    let response = http()?.put(url).bearer_auth(tokens.access).json(&serde_json::json!({"values": [[value]]})).send().await.map_err(|_| "Cannot update Google Sheets; check your connection")?;
+    if !response.status().is_success() { return Err(format!("Google Sheets update failed ({}). Check edit access.", response.status().as_u16())); }
+    Ok(())
 }
