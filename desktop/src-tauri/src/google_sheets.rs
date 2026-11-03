@@ -1,13 +1,13 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{path::PathBuf, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{path::PathBuf, sync::atomic::{AtomicBool, Ordering}, time::{Duration, SystemTime, UNIX_EPOCH}};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_shell::ShellExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Default)]
-pub struct GoogleState(pub tokio::sync::Mutex<()>);
+pub struct GoogleState { operation: tokio::sync::Mutex<()>, cancel_connect: AtomicBool }
 
 #[derive(Deserialize)]
 struct Client { client_id: String, client_secret: String }
@@ -93,7 +93,8 @@ pub fn google_sheets_status(app: AppHandle) -> Result<GoogleStatus, String> {
 
 #[tauri::command]
 pub async fn google_sheets_connect(app: AppHandle, state: State<'_, GoogleState>) -> Result<GoogleStatus, String> {
-    let _lock = state.0.try_lock().map_err(|_| "Google authorization is already running")?;
+    let _lock = state.operation.try_lock().map_err(|_| "Google authorization is already running")?;
+    if state.cancel_connect.load(Ordering::SeqCst) { return Err("Google authorization was cancelled".into()); }
     let client = client()?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.map_err(|_| "Cannot open Google authorization callback")?;
     let redirect = format!("http://127.0.0.1:{}/", listener.local_addr().map_err(|_| "Cannot locate callback")?.port());
@@ -111,7 +112,14 @@ pub async fn google_sheets_connect(app: AppHandle, state: State<'_, GoogleState>
     app.shell().open(url.as_str(), None).map_err(|_| "Cannot open Google login in your browser")?;
     let code = tokio::time::timeout(Duration::from_secs(180), async {
         loop {
-            let (mut socket, _) = listener.accept().await.map_err(|_| "Google callback failed")?;
+            let accepted = tokio::select! {
+                result = listener.accept() => Some(result.map_err(|_| "Google callback failed")?),
+                _ = tokio::time::sleep(Duration::from_millis(200)) => None,
+            };
+            let Some((mut socket, _)) = accepted else {
+                if state.cancel_connect.load(Ordering::SeqCst) { return Err("Google authorization was cancelled".to_string()); }
+                continue;
+            };
             let mut data = Vec::new();
             let read = tokio::time::timeout(Duration::from_secs(3), async {
                 while data.len() < 8192 {
@@ -135,6 +143,7 @@ pub async fn google_sheets_connect(app: AppHandle, state: State<'_, GoogleState>
             return result.unwrap();
         }
     }).await.map_err(|_| "Google login timed out. Please try again.")??;
+    if state.cancel_connect.load(Ordering::SeqCst) { return Err("Google authorization was cancelled".into()); }
     let response = http()?.post("https://oauth2.googleapis.com/token").form(&[
         ("client_id", client.client_id.as_str()), ("client_secret", client.client_secret.as_str()),
         ("code", code.as_str()), ("code_verifier", verifier.as_str()), ("redirect_uri", redirect.as_str()), ("grant_type", "authorization_code"),
@@ -147,6 +156,18 @@ pub async fn google_sheets_connect(app: AppHandle, state: State<'_, GoogleState>
     save(&app, &tokens)?;
     let needs_access = needs_access(&tokens);
     Ok(GoogleStatus { configured: true, email: Some(tokens.email), needs_access })
+}
+
+#[tauri::command]
+pub fn google_sheets_prepare_connect(state: State<'_, GoogleState>) -> Result<(), String> {
+    let _lock = state.operation.try_lock().map_err(|_| "Google authorization is already running")?;
+    state.cancel_connect.store(false, Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn google_sheets_cancel_connect(state: State<'_, GoogleState>) {
+    state.cancel_connect.store(true, Ordering::SeqCst);
 }
 
 #[cfg(test)]
@@ -199,7 +220,7 @@ mod tests {
 
 #[tauri::command]
 pub async fn google_sheets_disconnect(app: AppHandle, state: State<'_, GoogleState>) -> Result<(), String> {
-    let _lock = state.0.try_lock().map_err(|_| "Wait for the current Google operation to finish")?;
+    let _lock = state.operation.try_lock().map_err(|_| "Wait for the current Google operation to finish")?;
     // Local removal also works offline; users can revoke access in their Google account.
     match std::fs::remove_file(path(&app)?) { Ok(()) => Ok(()), Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()), Err(_) => Err("Cannot remove Google authorization".into()) }
 }
@@ -207,7 +228,7 @@ pub async fn google_sheets_disconnect(app: AppHandle, state: State<'_, GoogleSta
 #[tauri::command]
 pub async fn google_sheets_read(app: AppHandle, state: State<'_, GoogleState>, spreadsheet_id: String, ranges: Vec<String>) -> Result<serde_json::Value, String> {
     if spreadsheet_id.is_empty() || !spreadsheet_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') || ranges.len() > 100 || ranges.iter().any(|range| range.len() > 512) { return Err("Invalid spreadsheet selection".into()); }
-    let _lock = state.0.lock().await;
+    let _lock = state.operation.lock().await;
     let tokens = access_token(&app).await?;
     let mut url = url::Url::parse(&format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}{}", if ranges.is_empty() { "" } else { "/values:batchGet" })).unwrap();
     if ranges.is_empty() { url.query_pairs_mut().append_pair("fields", "sheets.properties(sheetId,title)"); }
@@ -218,7 +239,7 @@ pub async fn google_sheets_read(app: AppHandle, state: State<'_, GoogleState>, s
 #[tauri::command]
 pub async fn google_sheets_read_grid(app: AppHandle, state: State<'_, GoogleState>, spreadsheet_id: String, ranges: Vec<String>) -> Result<serde_json::Value, String> {
     if spreadsheet_id.is_empty() || !spreadsheet_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') || ranges.is_empty() || ranges.len() > 100 || ranges.iter().any(|range| range.is_empty() || range.len() > 512) { return Err("Invalid spreadsheet selection".into()); }
-    let _lock = state.0.lock().await;
+    let _lock = state.operation.lock().await;
     let tokens = access_token(&app).await?;
     let mut url = url::Url::parse(&format!("https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}")).unwrap();
     {
@@ -233,7 +254,7 @@ pub async fn google_sheets_read_grid(app: AppHandle, state: State<'_, GoogleStat
 #[tauri::command]
 pub async fn google_docs_read(app: AppHandle, state: State<'_, GoogleState>, document_id: String) -> Result<serde_json::Value, String> {
     if document_id.is_empty() || document_id.len() > 256 || !document_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') { return Err("Invalid Google document link".into()); }
-    let _lock = state.0.lock().await;
+    let _lock = state.operation.lock().await;
     let tokens = access_token(&app).await?;
     let url = format!("https://docs.googleapis.com/v1/documents/{document_id}?includeTabsContent=true");
     json(http()?.get(url).bearer_auth(tokens.access).send().await.map_err(|_| "Cannot read Google document; check access and connection")?).await
@@ -242,7 +263,7 @@ pub async fn google_docs_read(app: AppHandle, state: State<'_, GoogleState>, doc
 #[tauri::command]
 pub async fn google_sheets_update_cell(app: AppHandle, state: State<'_, GoogleState>, spreadsheet_id: String, tab: String, column: u32, row: u32, value: String) -> Result<(), String> {
     if spreadsheet_id.is_empty() || !spreadsheet_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') || tab.is_empty() || tab.len() > 200 || tab.chars().any(char::is_control) || column > 18_277 || row == 0 || row > 10_000_000 || value.len() > 100_000 { return Err("Invalid spreadsheet cell update".into()); }
-    let _lock = state.0.lock().await;
+    let _lock = state.operation.lock().await;
     let tokens = access_token(&app).await?;
     let mut n = column + 1;
     let mut letters = String::new();

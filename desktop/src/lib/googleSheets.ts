@@ -10,9 +10,9 @@ export interface SheetField { id: string; label: string; column: SheetColumn; sc
 export interface SheetConfig { spreadsheet: string; tab: string; headerRow: number; phone: SheetColumn; fields: SheetField[]; actions?: Record<string, SheetAction> }
 export interface SheetCell { value: string; row: number; links: string[]; formula?: boolean }
 interface FieldData { at: number; columnIndex?: number; values: Record<string, (SheetCell | string)[]> }
-interface SheetState { ready: boolean; configured: boolean; email: string | null; needsAccess: boolean; config: SheetConfig | null; data: Record<string, FieldData>; error: string; busy: boolean; failures: number; retryAt: number | null; pauseReason: "authorization" | "configuration" | null }
+interface SheetState { ready: boolean; configured: boolean; email: string | null; needsAccess: boolean; config: SheetConfig | null; data: Record<string, FieldData>; error: string; busy: boolean; authorizing: boolean; failures: number; retryAt: number | null; pauseReason: "authorization" | "configuration" | null }
 const resetRetry = { failures: 0, retryAt: null, pauseReason: null } as const;
-export const useGoogleSheets = create<SheetState>(() => ({ ready: false, configured: false, email: null, needsAccess: false, config: null, data: {}, error: "", busy: false, ...resetRetry }));
+export const useGoogleSheets = create<SheetState>(() => ({ ready: false, configured: false, email: null, needsAccess: false, config: null, data: {}, error: "", busy: false, authorizing: false, ...resetRetry }));
 const KEY = "google-sheet-connection-v1";
 let task: Promise<void> | null = null;
 let configWrite: Promise<void> | null = null;
@@ -34,12 +34,15 @@ async function persist() {
 export async function connectSheets() {
   useGoogleSheets.setState({ busy: true, error: "" });
   try {
+    await invoke("google_sheets_prepare_connect");
+    useGoogleSheets.setState({ authorizing: true });
     const status = await invoke<{ configured: boolean; email: string; needsAccess: boolean }>("google_sheets_connect");
     if (status.email !== useGoogleSheets.getState().email) { await idbDel(KEY); useGoogleSheets.setState({ config: null, data: {} }); }
     useGoogleSheets.setState({ ...status, ...resetRetry });
-  } catch (error) { useGoogleSheets.setState({ error: String(error) }); }
-  finally { useGoogleSheets.setState({ busy: false }); }
+  } catch (error) { const message = String(error); useGoogleSheets.setState({ error: message.includes("Google authorization was cancelled") ? "" : message }); }
+  finally { useGoogleSheets.setState({ busy: false, authorizing: false }); }
 }
+export async function cancelSheetsConnect() { await invoke("google_sheets_cancel_connect"); }
 export async function disconnectSheets() {
   if (configWrite) await configWrite;
   if (task) await task;

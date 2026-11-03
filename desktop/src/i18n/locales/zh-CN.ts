@@ -298,6 +298,7 @@ export default {
   "sheets.connect": "连接 Google",
   "sheets.disconnect": "断开连接并清除表格缓存",
   "sheets.authorizing": "请在浏览器中完成授权…",
+  "sheets.cancelAuthorization": "取消授权",
   "sheets.notConfigured": "此版本尚未启用 Google 登录，请等待提供该功能的版本。",
   "sheets.permission": "Google 会授权软件读取 Google 文档并读写 Google 表格。软件只会读写你配置的表格及字段；断开授权可在本机移除令牌。",
   "sheets.saved": "已配置：{tab} · {count} 个展示列。下方可重新配置。",

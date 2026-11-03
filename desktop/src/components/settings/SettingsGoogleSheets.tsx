@@ -6,7 +6,7 @@ import { useAppStore } from "@/store/appStore";
 import { sheetErrorHint } from "@/lib/googleSheetErrors";
 import { spreadsheetId } from "@/lib/googleSheetApi";
 import { MAX_SHEET_DISPLAY_COLUMNS } from "@/lib/googleSheetMatch";
-import { connectSheets, disconnectSheets, initializeSheets, letter, readSheet, refreshSheets, saveSheetConfig, sheetHeaders, useGoogleSheets, type SheetAction, type SheetField } from "@/lib/googleSheets";
+import { cancelSheetsConnect, connectSheets, disconnectSheets, initializeSheets, letter, readSheet, refreshSheets, saveSheetConfig, sheetHeaders, useGoogleSheets, type SheetAction, type SheetField } from "@/lib/googleSheets";
 
 export interface SheetCloseGuard {
   dirty: boolean; busy: boolean; canSave: boolean;
@@ -86,9 +86,10 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
     </ol>
     <section className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
       <div className="flex items-center justify-between gap-3"><SectionLabel className="!mb-0">{t("sheets.accountStep")}</SectionLabel><span role="status" className={`rounded-full px-2 py-1 text-[10px] ${state.email ? "bg-brand/10 text-brand" : "bg-zinc-800 text-zinc-500"}`}>{state.email ? t("sheets.connected") : t("sheets.disconnected")}</span></div>
-    {state.email ? <div className="flex flex-wrap items-center justify-between gap-3"><span className="min-w-0 break-all text-sm text-zinc-200">{state.email}</span><div className="flex items-center gap-2">{state.needsAccess && <Button variant="secondary" size="xs" disabled={busy || state.busy} onClick={() => void connectSheets()}>{state.busy ? t("sheets.authorizing") : t("sheets.authorizeActions")}</Button>}<Button variant="ghost" size="xs" disabled={busy || state.busy} onClick={() => void confirmDisconnect()}>{t("sheets.disconnect")}</Button></div></div> : <>
+    {state.email ? <div className="flex flex-wrap items-center justify-between gap-3"><span className="min-w-0 break-all text-sm text-zinc-200">{state.email}</span><div className="flex items-center gap-2">{state.authorizing ? <Button variant="secondary" size="xs" onClick={() => void cancelSheetsConnect()}>{t("sheets.cancelAuthorization")}</Button> : <>{state.needsAccess && <Button variant="secondary" size="xs" disabled={busy || state.busy} onClick={() => void connectSheets()}>{t("sheets.authorizeActions")}</Button>}<Button variant="ghost" size="xs" disabled={busy || state.busy} onClick={() => void confirmDisconnect()}>{t("sheets.disconnect")}</Button></>}</div></div> : <>
       <p className="text-xs leading-5 text-zinc-500">{t("sheets.connectHint")}</p>
       <Button variant="primary" className="gap-2" disabled={!state.ready || !state.configured || state.busy} onClick={() => void connectSheets()}>{state.busy ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}{state.busy ? t("sheets.authorizing") : t("sheets.connect")}</Button>
+      {state.authorizing && <Button variant="secondary" size="xs" onClick={() => void cancelSheetsConnect()}>{t("sheets.cancelAuthorization")}</Button>}
       {state.ready && !state.configured && <p className="text-xs text-zinc-500">{t("sheets.notConfigured")}</p>}
     </>}
       <details className="border-t border-zinc-800 pt-3 text-xs text-zinc-500"><summary className="cursor-pointer">{t("sheets.accessDetails")}</summary><p className="mt-2 leading-5">{t("sheets.permission")}</p></details>
@@ -128,7 +129,7 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
             {field && <>
               <input aria-label={t("sheets.label")} className="ui-control px-3 py-2 text-sm leading-5 font-normal w-36" value={field.label} onChange={e => update({ label: e.target.value })} />
               <select aria-label={t("sheets.schedule")} className="ui-control px-3 py-2 text-sm leading-5 font-normal" value={field.schedule.kind} onChange={e => update({ schedule: e.target.value === "daily" ? { kind: "daily", time: "09:00" } : e.target.value === "manual" ? { kind: "manual" } : { kind: "interval", minutes: 15 } })}><option value="interval">{t("sheets.interval")}</option><option value="daily">{t("sheets.daily")}</option><option value="manual">{t("sheets.manual")}</option></select>
-              {field.schedule.kind === "interval" && <label className="flex items-center gap-2 text-sm leading-5"><input aria-label={t("sheets.minutes")} type="number" min={1} max={525600} className="ui-control px-3 py-2 text-sm leading-5 font-normal w-24" value={field.schedule.minutes} onChange={e => update({ schedule: { kind: "interval", minutes: Number(e.target.value) } })} />{t("sheets.minutes")}</label>}
+              {field.schedule.kind === "interval" && <input aria-label={t("sheets.minutes")} type="number" min={1} max={525600} className="ui-control px-3 py-2 text-sm leading-5 font-normal w-24" value={field.schedule.minutes} onChange={e => update({ schedule: { kind: "interval", minutes: Number(e.target.value) } })} />}
               {field.schedule.kind === "daily" && <input aria-label={t("sheets.daily")} type="time" className="ui-control px-3 py-2 text-sm leading-5 font-normal" value={field.schedule.time} onChange={e => update({ schedule: { kind: "daily", time: e.target.value } })} />}
             </>}
             <label className="ml-auto flex shrink-0 items-center gap-2 text-xs"><span>{t("sheets.action")}</span><select aria-label={`${t("sheets.action")} ${header}`} className="ui-control px-2 py-2 text-sm leading-5" value={actions[header] || ""} onChange={e => setAction((e.target.value || undefined) as SheetAction | undefined)}><option value="">—</option><option value="edit">{t("sheets.action.edit")}</option><option value="link">{t("sheets.action.link")}</option><option value="content">{t("sheets.action.content")}</option></select></label>

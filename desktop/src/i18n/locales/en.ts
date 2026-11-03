@@ -298,6 +298,7 @@ export default {
   "sheets.connect": "Connect Google",
   "sheets.disconnect": "Disconnect and clear sheet cache",
   "sheets.authorizing": "Complete authorization in your browser…",
+  "sheets.cancelAuthorization": "Cancel authorization",
   "sheets.notConfigured": "Google login is not enabled in this build.",
   "sheets.permission": "Google authorizes the app to read Google Docs and read or write Google Sheets. The app only reads or updates the configured sheet and fields. You can remove the local token by disconnecting.",
   "sheets.saved": "Configured: {tab} · {count} display columns. Configure again below.",

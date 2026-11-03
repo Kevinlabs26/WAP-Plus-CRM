@@ -298,6 +298,7 @@ export default {
   "sheets.connect": "Connecter Google",
   "sheets.disconnect": "Déconnecter et vider le cache",
   "sheets.authorizing": "Terminez l’autorisation dans le navigateur…",
+  "sheets.cancelAuthorization": "Annuler l’autorisation",
   "sheets.notConfigured": "La connexion Google n’est pas activée dans cette version.",
   "sheets.permission": "Google autorise l’application à lire les documents Google et à lire ou modifier les feuilles. L’application lit ou modifie uniquement la feuille et les champs configurés. La déconnexion supprime le jeton local.",
   "sheets.saved": "Configuré : {tab} · {count} colonnes. Vous pouvez reconfigurer ci-dessous.",
