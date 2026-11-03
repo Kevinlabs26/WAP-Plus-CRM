@@ -51,6 +51,7 @@ export function normalizeCampaigns(raw: unknown): BroadcastCampaign[] {
           id: iid,
           contactId: String(item.contactId || ""),
           contactName: String(item.contactName || ""),
+          accountId: item.accountId ? String(item.accountId).trim().slice(0, 120) || undefined : undefined,
           phoneE164: String(item.phoneE164 || ""),
           bodyRendered: String(item.bodyRendered || ""),
           // 应用退出时仍为 sending 的结果无法确认，不能静默重发。
@@ -130,6 +131,7 @@ export function trimCampaigns(list: BroadcastCampaign[]): BroadcastCampaign[] {
 
 export type BuildCampaignInput = {
   accountId: string;
+  accountByPhone?: Record<string, string>;
   template: string;
   contactIds: string[];
   contacts: Contact[];
@@ -188,8 +190,6 @@ export function buildCampaignOrError(
   for (const cid of idSet) {
     const c = byId.get(cid);
     if (!c) continue;
-    // 仅本账号联系人（无 accountId 的旧数据允许）
-    if (c.accountId && c.accountId !== accountId) continue;
     if (c.isGroup) continue;
     const phone = contactSendablePhone(c);
     if (!phone) {
@@ -223,6 +223,7 @@ export function buildCampaignOrError(
       id: uid("bi"),
       contactId: c.id,
       contactName: c.name || phone,
+      accountId: input.accountByPhone?.[phone] || accountId,
       phoneE164: phone,
       bodyRendered: body,
       status: "pending",
@@ -231,7 +232,7 @@ export function buildCampaignOrError(
 
   const actionable = items.filter((i) => i.status === "pending");
   if (!actionable.length) {
-    return { ok: false, reason: "没有可发送的客户（缺号码或非本账号）" };
+    return { ok: false, reason: "没有可发送的客户（缺少有效号码）" };
   }
 
   const now = new Date().toISOString();

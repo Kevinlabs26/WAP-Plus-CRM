@@ -38,6 +38,7 @@ async function sendBroadcastMedia(opts: {
   canSend: () => boolean;
 }): Promise<CampaignSendResult> {
   const { state, campaign, item, channelId, chatId } = opts;
+  const accountId = item.accountId || campaign.accountId;
   const media = campaign.media || [];
   if (!media.length) return { ok: false, message: "战役没有媒体" };
   const isBaileys = normalizeChannelId(channelId) === "baileys";
@@ -81,7 +82,7 @@ async function sendBroadcastMedia(opts: {
     chatConnected: isBaileys
       ? isWaAccountConnected(
           state.settings.waAccounts,
-          campaign.accountId,
+          accountId,
           state.settings.liveBaileysAccountId,
           state.baileysUi.connection
         )
@@ -106,7 +107,7 @@ async function sendBroadcastMedia(opts: {
     updateMessageDelivery: state.updateMessageDelivery,
     channelId: normalizeChannelId(channelId),
     selectedPhoneId: state.selectedPhoneId,
-    chatAccountId: campaign.accountId,
+    chatAccountId: accountId,
     openAndroidMediaShare: (
       f: File,
       d: string,
@@ -129,14 +130,14 @@ async function sendBroadcastMedia(opts: {
     if (picked.kind === "audio" && picked.voiceNote) {
       if (!isBaileys || caption?.trim()) return { ok: false, message: "语音条需使用 WhatsApp 通道且不能附带文字" };
       voiceMessageId = deps.enqueueOutgoingMessage({ body: "[语音]", chatId, contactId: item.contactId,
-        phoneE164: item.phoneE164, channelId: normalizeChannelId(channelId), accountId: campaign.accountId,
+        phoneE164: item.phoneE164, channelId: normalizeChannelId(channelId), accountId,
         deviceId: state.selectedPhoneId, deliveryStatus: "pending" });
       if (!voiceMessageId) return { ok: false, message: "无法创建语音消息" };
       state.patchMessage(voiceMessageId, { mediaType: "audio", mediaUrl: dataUrl, mediaMime: picked.mime,
         mediaPtt: true, mediaFileName: picked.fileName });
       await deps.persistBeforeSend();
-      const raw = await gatedMediaSend({ phoneE164: item.phoneE164, accountId: campaign.accountId },
-        () => baileysSendVoice(item.phoneE164, dataUrl, { mimetype: picked.mime, ptt: true, accountId: campaign.accountId }),
+      const raw = await gatedMediaSend({ phoneE164: item.phoneE164, accountId },
+        () => baileysSendVoice(item.phoneE164, dataUrl, { mimetype: picked.mime, ptt: true, accountId }),
         opts.canSend, deps.requiredMinGapSec);
       state.updateMessageDelivery(voiceMessageId, { deliveryStatus: "sent", waMessageId: raw?.id, lastError: undefined });
       ok = true;
@@ -185,8 +186,15 @@ export function CampaignRunner() {
         if (!campaign) return;
         if (nextBatchTask(state.settings.scheduledPlans || [],state.broadcastCampaigns) !== campaign.id) return;
 
+        const item = campaign.items.find((i) => i.status === "pending");
+        if (!item) {
+          state.completeBroadcastCampaignIfIdle(campaign.id);
+          return;
+        }
+        const accountId = item.accountId || campaign.accountId;
+
         const settings = state.settings;
-        if ((settings.sendPausedAccountIds || []).includes(campaign.accountId)) {
+        if ((settings.sendPausedAccountIds || []).includes(accountId)) {
           state.pauseBroadcastCampaign(campaign.id);
           state.pushToast("群发已暂停：账号在监测中被暂停发送", "info");
           return;
@@ -197,19 +205,13 @@ export function CampaignRunner() {
           channelId === "baileys" &&
           !isWaAccountConnected(
             settings.waAccounts,
-            campaign.accountId,
+            accountId,
             settings.liveBaileysAccountId,
             state.baileysUi.connection
           )
         ) {
           state.pauseBroadcastCampaign(campaign.id);
           state.pushToast("群发已暂停：WhatsApp 未连接", "info");
-          return;
-        }
-
-        const item = campaign.items.find((i) => i.status === "pending");
-        if (!item) {
-          state.completeBroadcastCampaignIfIdle(campaign.id);
           return;
         }
 
@@ -221,7 +223,7 @@ export function CampaignRunner() {
 
         const chatId = state.ensureChatForContact(
           item.contactId,
-          campaign.accountId
+          accountId
         );
         if (!chatId) {
           state.patchBroadcastItem(campaign.id, item.id, {
@@ -256,7 +258,7 @@ export function CampaignRunner() {
             contactId: item.contactId,
             phoneE164: item.phoneE164,
             channelId,
-            accountId: campaign.accountId,
+            accountId,
             deviceId: state.selectedPhoneId,
             deliveryStatus: "pending",
             // 禁止 SendQueueWatcher 自动重试（与战役 runner 双发）
@@ -290,7 +292,7 @@ export function CampaignRunner() {
               phoneE164: item.phoneE164,
               displayName: item.contactName,
               contactId: item.contactId,
-              accountId: campaign.accountId,
+              accountId,
               deviceId: state.selectedPhoneId,
             },
             {

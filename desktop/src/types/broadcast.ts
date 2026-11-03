@@ -18,6 +18,8 @@ export interface BroadcastItem {
   id: string;
   contactId: string;
   contactName: string;
+  /** Per-recipient account; absent on older campaigns, which use campaign.accountId. */
+  accountId?: string;
   phoneE164: string;
   /** 已替换变量后的正文（开跑时冻结）；作为媒体 caption 或纯文本正文 */
   bodyRendered: string;

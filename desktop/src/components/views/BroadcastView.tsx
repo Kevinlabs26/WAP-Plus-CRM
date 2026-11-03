@@ -39,6 +39,7 @@ import type {
 } from "@/types/broadcast";
 import { cacheMediaUrl } from "@/lib/mediaCache";
 import { isWaAccountConnected } from "@/lib/accountConnection";
+import { lastContactedAccounts, recipientKey } from "@/lib/scheduledPlans";
 import { useI18n } from "@/i18n";
 
 type Step = "setup" | "run";
@@ -48,6 +49,8 @@ export function BroadcastView() {
   const riskDialogRef = useRef<HTMLDialogElement>(null);
   const templateRef = useRef<HTMLTextAreaElement>(null);
   const contacts = useAppStore((s) => s.contacts);
+  const chats = useAppStore((s) => s.chats);
+  const messages = useAppStore((s) => s.messages);
   const campaigns = useAppStore((s) => s.broadcastCampaigns || []);
   const {
     waAccounts,
@@ -89,8 +92,8 @@ export function BroadcastView() {
       const draftAccountId = sessionStorage.getItem(BROADCAST_DRAFT_ACCOUNT_ID_KEY);
       return (
         accounts.find((item) => item.id === draftAccountId)?.id ||
-        liveBaileysAccountId ||
-        activeAccountId ||
+        accounts.find((item) => item.id === liveBaileysAccountId)?.id ||
+        accounts.find((item) => item.id === activeAccountId)?.id ||
         accounts[0]?.id ||
         ""
       );
@@ -115,8 +118,7 @@ export function BroadcastView() {
             const contact = contacts.find((item) => item.id === id);
             return Boolean(
               contact &&
-                contactSendablePhone(contact) &&
-                (!contact.accountId || !accountId || contact.accountId === accountId)
+                contactSendablePhone(contact)
             );
           })
           .slice(0, BROADCAST_HARD_CAP)
@@ -170,16 +172,7 @@ export function BroadcastView() {
   );
 
   const account = accounts.find((a) => a.id === accountId);
-  const accountConnected = isWaAccountConnected(
-    accounts,
-    accountId,
-    liveBaileysAccountId,
-    baileysUi.connection
-  );
-  const warmup = applyAccountWarmup(
-    baseLimits,
-    account?.warmupExempt ? undefined : account?.createdAt
-  );
+  const lastContacted = useMemo(() => lastContactedAccounts(chats, contacts, messages), [chats, contacts, messages]);
 
   const pool = useMemo(() => {
     if (recipientSource !== "contacts") return [];
@@ -187,7 +180,6 @@ export function BroadcastView() {
     const s = deferredQ.trim().toLowerCase();
     const filtered = contacts.filter((c) => {
       if (c.isGroup) return false;
-      if (c.accountId && accountId && c.accountId !== accountId) return false;
       if (stageFilter !== "all" && c.stage !== stageFilter) return false;
       if (tag && !c.tags.some((t) => t.toLowerCase().includes(tag))) return false;
       if (s) {
@@ -228,6 +220,19 @@ export function BroadcastView() {
     }
     return phones.size;
   }, [directPhones, selectedList]);
+
+  const destinationPhones = useMemo(() => [...new Set([
+    ...selectedList.map(contactSendablePhone).filter((phone): phone is string => !!phone),
+    ...directPhones,
+  ])], [directPhones, selectedList]);
+  const destinationAccountIds = useMemo(() => [...new Set(destinationPhones.map(phone => lastContacted.get(recipientKey("", phone)) || accountId).filter((id): id is string => !!id))], [destinationPhones, lastContacted, accountId]);
+  const disconnectedAccount = accounts.find(item => destinationAccountIds.includes(item.id) && !isWaAccountConnected(accounts, item.id, liveBaileysAccountId, baileysUi.connection));
+  const destinationWarmup = destinationAccountIds.map(id => {
+    const target = accounts.find(item => item.id === id);
+    return target ? { account: target, warmup: applyAccountWarmup(baseLimits, target.warmupExempt ? undefined : target.createdAt) } : null;
+  }).find(item => item?.warmup.active) || null;
+  const contactedCount = destinationPhones.filter(phone => lastContacted.has(recipientKey("", phone))).length;
+  const newContactCount = destinationPhones.length - contactedCount;
 
   const previewRecipients = useMemo(() => {
     const rows: Array<{
@@ -293,11 +298,11 @@ export function BroadcastView() {
         ? t("broadcast.recipientLimit", { count: BROADCAST_HARD_CAP })
         : templateError
           ? templateError
-          : warmup.active
+          : destinationWarmup
             ? t("broadcast.warmupActive")
             : sendChannel === "android_bridge"
               ? t("broadcast.bridgeUnsupported")
-              : !accountConnected
+              : disconnectedAccount
                 ? t("broadcast.whatsappDisconnected")
                 : running
                   ? t("broadcast.broadcastRunning")
@@ -354,10 +359,10 @@ export function BroadcastView() {
 
   const launch = async () => {
     if (!validateSetup()) return;
-    if (warmup.active) {
+    if (destinationWarmup) {
       pushToast(
         t("broadcast.editWhileWarmup", {
-          label: t("broadcast.warmupLabel", { hours: warmup.hoursLeft }),
+          label: t("broadcast.warmupLabel", { hours: destinationWarmup.warmup.hoursLeft }),
         }),
         "error"
       );
@@ -368,7 +373,7 @@ export function BroadcastView() {
         pushToast(t("broadcast.connectBridge"), "error");
         return;
       }
-    } else if (!accountConnected) {
+    } else if (disconnectedAccount) {
       pushToast(t("broadcast.connectWhatsApp"), "error");
       return;
     }
@@ -396,6 +401,7 @@ export function BroadcastView() {
         t("broadcast.confirmAccount", {
           account: formatAccountDisplay({ label: account?.label, userName: account?.userName, index1: 1 }),
         }),
+        t("planQueue.accountRoutingSummary", { contacted: contactedCount, new: newContactCount }),
         t("broadcast.confirmRecipients", { count: recipientCount, cap: BROADCAST_HARD_CAP }),
         mediaSummary,
         t("broadcast.confirmGap", { min: extraGapSec, max: extraGapMaxSec }),
@@ -532,12 +538,11 @@ export function BroadcastView() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <SectionLabel className="!mb-0">{t("broadcast.copy")}</SectionLabel>
                   <label className="flex min-w-0 items-center gap-2 text-2xs text-zinc-500">
-                    <span className="shrink-0">{t("broadcast.account")}</span>
+                    <span className="shrink-0">{t("broadcast.newContactAccount")}</span>
                     <select
                       value={accountId}
                       onChange={(event) => {
                         setAccountId(event.target.value);
-                        setSelected(new Set());
                       }}
                       className="ui-control h-8 min-w-0 max-w-56 px-2 text-[12px]"
                     >
@@ -557,6 +562,8 @@ export function BroadcastView() {
                 <p className="mt-1 text-2xs text-zinc-600">
                   {t("broadcast.copyHint")}
                 </p>
+                <p className="mt-1 text-2xs text-zinc-600">{t("planQueue.accountRoutingHint")}</p>
+                <p className="mt-1 text-2xs text-zinc-500">{t("planQueue.accountRoutingSummary", { contacted: contactedCount, new: newContactCount })}</p>
                 <div className="mt-2 flex items-center gap-1.5">
                   <Button
                     variant="ghost"
@@ -679,10 +686,10 @@ export function BroadcastView() {
                     onChange={event => setExtraGapMaxSec(Math.min(120, Math.max(extraGapSec, Number(event.target.value) || 30)))}
                     className="h-8 !w-16" />
                 </div>
-                {warmup.active && (
+                {destinationWarmup && (
                   <p className="order-last w-full text-2xs text-sky-300">
                     {t("broadcast.warmupBlocked", {
-                      label: t("broadcast.warmupLabel", { hours: warmup.hoursLeft }),
+                      label: t("broadcast.warmupLabel", { hours: destinationWarmup.warmup.hoursLeft }),
                     })}
                   </p>
                 )}

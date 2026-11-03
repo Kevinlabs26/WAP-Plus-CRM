@@ -22,8 +22,9 @@ const { createBroadcastSlice } = await import(
 function setup() {
   let state = {
     hydrated: false,
-    settings: { waAccounts: [] },
+    settings: { waAccounts: [{ id: "wa-1" }, { id: "wa-2" }], scheduledPlans: [] },
     contacts: [],
+    chats: [],
     messages: [
       {
         id: "message-1",

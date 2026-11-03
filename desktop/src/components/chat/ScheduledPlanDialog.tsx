@@ -4,7 +4,7 @@ import { useAppStore } from "@/store/appStore";
 import { useI18n } from "@/i18n";
 import { DuplicateScheduledPlanError, saveScheduledPlan } from "@/lib/scheduledPlanActions";
 import { PlanVoiceRecorder } from "./PlanVoiceRecorder";
-import { scheduledAudioMode, scheduledFolderChatIds, scheduledPlanTargets, MAX_SCHEDULED_PLAN_ITEMS, MIN_SCHEDULED_GAP_SEC, MAX_PLAN_STEPS, type ScheduledPlan, type ScheduledPlanStep } from "@/lib/scheduledPlans";
+import { lastContactedAccounts, recipientKey, scheduledAudioMode, scheduledFolderChatIds, scheduledPlanTargets, MAX_SCHEDULED_PLAN_ITEMS, MIN_SCHEDULED_GAP_SEC, MAX_PLAN_STEPS, type ScheduledPlan, type ScheduledPlanStep } from "@/lib/scheduledPlans";
 
 function localTime() {
   const date = new Date(Date.now() + 5 * 60_000);
@@ -18,9 +18,11 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
   const settings = useAppStore(s => s.settings);
   const chats = useAppStore(s => s.chats);
   const contacts = useAppStore(s => s.contacts);
+  const messages = useAppStore(s => s.messages);
   const pushToast = useAppStore(s => s.pushToast);
   const [includeChildren, setIncludeChildren] = useState(false);
   const [selected, setSelected] = useState(() => new Set(chatIds || (folderId ? scheduledFolderChatIds(settings, folderId, false) : [])));
+  const [defaultAccountId, setDefaultAccountId] = useState(() => settings.waAccounts.find(account => account.id === settings.liveBaileysAccountId)?.id || settings.waAccounts.find(account => account.id === settings.activeAccountId)?.id || settings.waAccounts[0]?.id || "");
   const [query, setQuery] = useState("");
   const [templateQuery, setTemplateQuery] = useState("");
   const [title, setTitle] = useState("");
@@ -52,13 +54,27 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
   const gapInput = useRef<HTMLInputElement>(null);
   const folder = settings.chatFolders.find(item => item.id === folderId);
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const lastContacted = useMemo(() => lastContactedAccounts(chats, contacts, messages), [chats, contacts, messages]);
   const candidates = useMemo(() => {
-    const ids = folderId ? scheduledFolderChatIds(settings, folderId, includeChildren) : chatIds;
-    const all = scheduledPlanTargets({ settings, chats, contacts }, ids);
+    let ids = folderId ? scheduledFolderChatIds(settings, folderId, includeChildren) : chatIds;
+    if (folder && folder.scope?.type !== "all") {
+      const sourceAccount = folder.scope?.accountId || settings.liveBaileysAccountId || settings.activeAccountId || "wa-default";
+      const chatsById = new Map(chats.map(chat => [chat.id, chat]));
+      const contactsById = new Map(contacts.map(contact => [contact.id, contact]));
+      ids = ids?.filter(id => {
+        const chat = chatsById.get(id);
+        return chat && (chat.accountId || contactsById.get(chat.contactId)?.accountId || "wa-default") === sourceAccount;
+      });
+    }
+    const all = scheduledPlanTargets({ settings, chats, contacts, messages }, ids, defaultAccountId);
     if (!folder || folder.scope?.type === "all") return all;
     const owner = folder.scope?.accountId || settings.liveBaileysAccountId || settings.activeAccountId || "wa-default";
-    return all.filter(item => item.accountId === owner);
-  }, [settings, chats, contacts, chatIds, folderId, includeChildren]);
+    return all.filter(item => {
+      const chat = chats.find(candidate => candidate.id === item.chatId);
+      const contact = contacts.find(candidate => candidate.id === item.contactId);
+      return (chat?.accountId || contact?.accountId || "wa-default") === owner;
+    });
+  }, [settings, chats, contacts, messages, chatIds, folderId, includeChildren, defaultAccountId]);
   const chosen = candidates.filter(item => selected.has(item.chatId));
   const visible = candidates.filter(item => (!review || selected.has(item.chatId)) && `${item.contactName}\n${item.recipient}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   const currentPage = Math.min(page, Math.max(0, Math.ceil(visible.length / 50) - 1));
@@ -151,6 +167,8 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
         </div>
         <aside className="flex min-h-0 min-w-0 flex-col gap-3 md:overflow-y-auto">
           <h3 className="text-sm font-medium text-zinc-200">{t("planQueue.targets", { count: chosen.length })} {folder ? "· " + folder.name : ""}</h3>
+          <label className="block space-y-1 text-xs text-zinc-400"><span>{t("planQueue.newContactAccount")}</span><select className="ui-control w-full px-2" value={defaultAccountId} onChange={event => setDefaultAccountId(event.target.value)}>{settings.waAccounts.map(account => <option key={account.id} value={account.id}>{account.label || account.id}</option>)}</select><span className="block">{t("planQueue.accountRoutingHint")}</span></label>
+          <p className="text-xs text-zinc-500">{t("planQueue.accountRoutingSummary", { contacted: chosen.filter(item => lastContacted.has(recipientKey("", item.recipient))).length, new: chosen.filter(item => !lastContacted.has(recipientKey("", item.recipient))).length })}</p>
           {folderId && !review && <label className="flex items-center gap-2 text-xs text-zinc-400"><input type="checkbox" aria-label={t("planQueue.includeChildren")} checked={includeChildren} onChange={event => {
             const include = event.target.checked; setIncludeChildren(include); setSelected(new Set(scheduledFolderChatIds(settings, folderId, include))); setPage(0);
           }} />{t("planQueue.includeChildren")}</label>}

@@ -21,7 +21,7 @@ async function fixture(draftIds=[]) {
   const cells=[],storage=new Map([[template.BROADCAST_DRAFT_CONTACT_IDS_KEY,JSON.stringify(draftIds)]]);let cursor=0,tree;
   const oldStorage=globalThis.sessionStorage;globalThis.sessionStorage={getItem:k=>storage.get(k)||null,removeItem:k=>storage.delete(k)};
   const metrics={indexes:0,phones:0,confirmations:0,created:0};
-  const state={contacts,broadcastCampaigns:[],settings:{waAccounts:[{id:'a',label:'Account A'},{id:'b',label:'Account B'}],activeAccountId:'a',liveBaileysAccountId:'a',sendChannel:'baileys'},baileysUi:{connection:'open'},pushToast(){},requestConfirm:async()=>{metrics.confirmations++;return false;},createBroadcastCampaign(){metrics.created++;return {ok:true,id:'demo'};}};
+  const state={contacts,chats:[],messages:[],broadcastCampaigns:[],settings:{waAccounts:[{id:'a',label:'Account A'},{id:'b',label:'Account B'}],activeAccountId:'a',liveBaileysAccountId:'a',sendChannel:'baileys'},baileysUi:{connection:'open'},pushToast(){},requestConfirm:async()=>{metrics.confirmations++;return false;},createBroadcastCampaign(){metrics.created++;return {ok:true,id:'demo'};}};
   const flags={warmup:false,connected:true};
   globalThis.broadcastHooks={
     state(initial){const i=cursor++;cells[i]??={value:typeof initial==='function'?initial():initial};return [cells[i].value,value=>{cells[i].value=typeof value==='function'?value(cells[i].value):value;}];},
@@ -31,7 +31,7 @@ async function fixture(draftIds=[]) {
   globalThis.broadcastBindings={...template,BROADCAST_HARD_CAP,BROADCAST_DEFAULT_EXTRA_GAP_SEC,BROADCAST_DEFAULT_EXTRA_GAP_MAX_SEC,
     useAppStore:selector=>selector(state),useShallow:fn=>fn,useI18n:()=>({t:(key,params)=>key+(params?JSON.stringify(params):'')}),
     cn:(...parts)=>parts.filter(Boolean).join(' '),Button:'button',Input:'input',Textarea:'textarea',SectionLabel:'h4',BroadcastPickStep:'picker',BroadcastMediaPicker:'media-picker',CampaignRunPanel:'run-panel',
-    DEFAULT_RATE_LIMITS:{},applyAccountWarmup:()=>({active:flags.warmup,hoursLeft:24}),isWaAccountConnected:()=>flags.connected,salesStagesWithLabels:()=>[],formatAccountDisplay:account=>account.label,
+    DEFAULT_RATE_LIMITS:{},applyAccountWarmup:()=>({active:flags.warmup,hoursLeft:24}),isWaAccountConnected:()=>flags.connected,lastContactedAccounts:()=>new Map(),recipientKey:(_account,phone)=>phone,salesStagesWithLabels:()=>[],formatAccountDisplay:account=>account.label,
     buildContactLookup:()=>{metrics.indexes++;return new Map();},contactSendablePhone:contact=>{metrics.phones++;return template.contactSendablePhone(contact);},
   };
   const {BroadcastView}=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text+'\n//# sourceURL=broadcast-setup.js').toString('base64')+'#'+Math.random());
@@ -52,13 +52,13 @@ test('ordinary entry defaults to number paste and never builds the 20,000-contac
   }finally{h.close();}
 });
 
-test('source switching preserves pasted numbers, filters and selections; changing sender clears only selected contacts',async()=>{
+test('source switching preserves pasted numbers, filters and selections; changing the new-contact default preserves recipients',async()=>{
   const h=await fixture();try{
     h.picker().onSourceChange('contacts');h.render();h.picker().onToggle('c0');h.picker().onQChange('Contact 0');h.render();
     h.picker().onSourceChange('numbers');h.picker().onPhoneTextChange(contacts[0].phone+'\n+12025550102');h.render();
     assert.equal(h.picker().recipientCount,2,'overlap between list and pasted phones is deduplicated');assert.ok(h.picker().selected.has('c0'));assert.equal(h.picker().q,'Contact 0');
     h.picker().onSourceChange('contacts');h.render();assert.equal(h.picker().phoneText,contacts[0].phone+'\n+12025550102');assert.ok(h.picker().selected.has('c0'));
-    h.account().props.onChange({target:{value:'b'}});h.render();assert.equal(h.picker().selected.size,0);assert.equal(h.picker().directPhoneCount,2);
+    h.account().props.onChange({target:{value:'b'}});h.render();assert.equal(h.picker().selected.size,1);assert.equal(h.picker().directPhoneCount,2);
   }finally{h.close();}
 });
 

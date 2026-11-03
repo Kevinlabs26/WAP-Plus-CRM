@@ -8,6 +8,7 @@ import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { isTauri } from "@/lib/bridge";
 import { WapPlusMark } from "@/components/brand/WapPlusMark";
 import { AccountSwitcherMenu } from "./AccountSwitcherMenu";
+import { BatchTaskIndicator } from "./BatchTaskIndicator";
 import { MessageInbox } from "./MessageInbox";
 import { computeAllAccountsHealth } from "@/lib/accountHealth";
 import { syncLog } from "@/lib/syncDebug";
@@ -236,6 +237,7 @@ export function TopBar({ showDonation = false }: { showDonation?: boolean } = {}
       </nav>
 
       <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        <BatchTaskIndicator />
         {isBaileys && (
           <div className="min-w-0 sm:hidden">
             <AccountSwitcherMenu variant="compact" />

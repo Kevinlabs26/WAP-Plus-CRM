@@ -1,4 +1,4 @@
-import type { ChatPreview, Contact } from "../types/crm";
+import type { ChatPreview, Contact, Message } from "../types/crm";
 import type { SettingsShape, SettingsQuickReply } from "../store/settingsDefaults";
 import { resolveSendTarget } from "./utils";
 import { MAX_QUICK_REPLY_MEDIA_BYTES } from "./quickReplies";
@@ -72,24 +72,45 @@ export function scheduledMediaBytes(media: SettingsQuickReply["media"]): number 
   return match[1].length / 4 * 3 - (match[1].endsWith("==") ? 2 : match[1].endsWith("=") ? 1 : 0);
 }
 
-type TargetState = { chats: ChatPreview[]; contacts: Contact[]; settings: Pick<SettingsShape, "waAccounts" | "liveBaileysAccountId" | "activeAccountId" | "chatFolders" | "chatFolderClones"> };
+type TargetState = { chats: ChatPreview[]; contacts: Contact[]; messages?: Message[]; settings: Pick<SettingsShape, "waAccounts" | "liveBaileysAccountId" | "activeAccountId" | "chatFolders" | "chatFolderClones"> };
 
-/** Resolve each existing thread through its owner, never the currently viewed account. */
-export function scheduledPlanTargets(state: TargetState, chatIds?: string[]) {
+export function lastContactedAccounts(chats: ChatPreview[], contacts: Contact[], messages: Message[]) {
+  const contactsById = new Map(contacts.map(contact => [contact.id, contact]));
+  const chatsById = new Map(chats.flatMap(chat => {
+    const contact = contactsById.get(chat.contactId);
+    const recipient = contact && resolveSendTarget({ phone: contact.phone, channelAddress: contact.channelAddress, entityId: contact.id });
+    return recipient ? [[chat.id, { recipientKey: recipientKey("", recipient), accountId: chat.accountId || contact.accountId }]] : [];
+  }));
+  const latest = new Map<string, { at: number; accountId: string }>();
+  for (const message of messages) {
+    if (message.direction !== "out" || message.deliveryStatus && !["sent", "server", "delivered", "read", "played"].includes(message.deliveryStatus)) continue;
+    const chat = chatsById.get(message.chatId);
+    const accountId = message.accountId || chat?.accountId;
+    const at = Date.parse(message.sentAt);
+    if (!chat || !accountId || !Number.isFinite(at) || at <= (latest.get(chat.recipientKey)?.at ?? -Infinity)) continue;
+    latest.set(chat.recipientKey, { at, accountId });
+  }
+  return new Map([...latest].map(([key, value]) => [key, value.accountId]));
+}
+
+/** Resolve by the most recent successful outgoing message, then the selected default account. */
+export function scheduledPlanTargets(state: TargetState, chatIds?: string[], defaultAccountId?: string) {
   const contacts = new Map(state.contacts.map(contact => [contact.id, contact]));
   const selected = chatIds ? new Set(chatIds) : null;
   const seen = new Set<string>();
+  const latestAccounts = lastContactedAccounts(state.chats, state.contacts, state.messages || []);
   const items: ScheduledPlanItem[] = [];
   for (const chat of state.chats) {
     if (selected && !selected.has(chat.id)) continue;
     const contact = contacts.get(chat.contactId);
     if (!contact) continue;
-    const accountId = chat.accountId || contact.accountId || "wa-default";
-    if (chat.accountId && contact.accountId && chat.accountId !== contact.accountId) continue;
-    if (!state.settings.waAccounts.some(account => account.id === accountId)) continue;
+    const sourceAccountId = chat.accountId || contact.accountId || "wa-default";
+    if (contact.isGroup && chat.accountId && contact.accountId && chat.accountId !== contact.accountId) continue;
     const recipient = resolveSendTarget({ phone: contact.phone, channelAddress: contact.channelAddress, entityId: contact.id });
     if (!recipient || (!/^\+?\d{7,15}$/.test(recipient) && !/^[\w.-]+@(g\.us|s\.whatsapp\.net|c\.us|lid)$/.test(recipient))) continue;
-    const key = recipientKey(accountId, recipient);
+    const key = recipientKey("", recipient);
+    const accountId = latestAccounts.get(key) || defaultAccountId || sourceAccountId;
+    if (!state.settings.waAccounts.some(account => account.id === accountId)) continue;
     if (seen.has(key)) continue;
     seen.add(key);
     items.push({ id: chat.id, chatId: chat.id, contactId: contact.id, contactName: contact.name || chat.contactName || recipient, recipient, accountId, status: "pending" });

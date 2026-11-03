@@ -19,7 +19,7 @@ import {
   baileysSetChatLabel,
 } from "@/lib/baileys";
 import { generateSuggestions, getSuggestionContextKey, hasRealAiKey, type GenerateSuggestionsResult } from "@/lib/aiSuggest";
-import { createSuggestionCache, isManualSuggestionContext } from "@/lib/aiSuggestionCache";
+import { createSuggestionCache, isManualSuggestionContext, SUGGESTION_MAX_AGE_MS } from "@/lib/aiSuggestionCache";
 import { resolveAiReplyProfile } from "@/lib/aiPromptScope";
 import type { Message, WhatsAppLabel } from "@/types/crm";
 import { ContactAvatar } from "./ContactAvatar";
@@ -120,6 +120,7 @@ export function CrmAiPanel() {
   const [readingTarget, setReadingTarget] = useState<string | null>(null);
   const generation = useRef(0);
   const [suggestionCache] = useState(createSuggestionCache);
+  const visibleSuggestionExpiry = useRef<{ key: string; expiresAt: number } | null>(null);
 
   const contact = contacts.find((item) => item.id === selectedContactId);
   const threadAccountId =
@@ -210,14 +211,20 @@ export function CrmAiPanel() {
   useEffect(() => {
     if (!aiSuggestions.length || collapsed || panelTab !== "customer") return;
     const entry = suggestionCache.get(suggestionKey);
+    const expiresAt = entry?.expiresAt || (visibleSuggestionExpiry.current?.key === suggestionKey ? visibleSuggestionExpiry.current.expiresAt : undefined);
     const expire = () => {
       if (latestSuggestionKey.current !== suggestionKey || suggestionCache.get(suggestionKey)) return;
+      if (visibleSuggestionExpiry.current?.key === suggestionKey && Date.now() < visibleSuggestionExpiry.current.expiresAt) {
+        window.setTimeout(expire, visibleSuggestionExpiry.current.expiresAt - Date.now());
+        return;
+      }
       generation.current++;
       useAppStore.setState({ aiSuggestions: [] });
       setLoading(false);
       setAiError(t("crmPanel.suggestionsExpired"));
     };
-    const timer = window.setTimeout(expire, Math.max(0, (entry?.expiresAt || Date.now()) - Date.now()));
+    if (!expiresAt) return;
+    const timer = window.setTimeout(expire, Math.max(0, expiresAt - Date.now()));
     return () => window.clearTimeout(timer);
   }, [aiSuggestions, suggestionKey, collapsed, panelTab, suggestionCache, settings.uiLanguage]);
 
@@ -225,7 +232,9 @@ export function CrmAiPanel() {
     (publish, signal) => generateSuggestions(contact, thread, settings, { accountId: aiAccountId, chatId: selectedChatId || undefined, onProgress: publish, signal }), force, onProgress);
 
   const showProgress = (key: string, request: number) => (result: GenerateSuggestionsResult) => {
-    if (request !== generation.current || latestSuggestionKey.current !== key || !suggestionCache.get(key)) return;
+    const entry = suggestionCache.get(key);
+    if (request !== generation.current || latestSuggestionKey.current !== key || !entry) return;
+    visibleSuggestionExpiry.current = { key, expiresAt: entry.expiresAt };
     useAppStore.setState({ aiSuggestions: result.suggestions });
     setAiSource(result.source);
   };
@@ -315,6 +324,7 @@ export function CrmAiPanel() {
     try {
       const result = await requestSuggestions(key, true, showProgress(key, request));
       if (request !== generation.current || latestSuggestionKey.current !== key) return;
+      if (result.suggestions.length) visibleSuggestionExpiry.current = { key, expiresAt: suggestionCache.get(key)?.expiresAt || Date.now() + SUGGESTION_MAX_AGE_MS };
       useAppStore.setState({ aiSuggestions: result.suggestions });
       setAiSource(result.source === "mock" ? t("crmPanel.localTemplate") : result.source);
       setAiError(result.error || "");
@@ -361,6 +371,7 @@ export function CrmAiPanel() {
       void requestSuggestions(key, false, showProgress(key, request))
         .then((result) => {
           if (cancelled || request !== generation.current || latestSuggestionKey.current !== key) return;
+          if (result.suggestions.length) visibleSuggestionExpiry.current = { key, expiresAt: suggestionCache.get(key)?.expiresAt || Date.now() + SUGGESTION_MAX_AGE_MS };
           useAppStore.setState({ aiSuggestions: result.suggestions });
           setAiSource(result.source === "mock" ? t("crmPanel.localTemplate") : result.source);
           setAiError(result.error || "");
@@ -961,7 +972,8 @@ export function CrmAiPanel() {
                       current.selectedThreadAccount?.chatId === selectedChatId ? current.selectedThreadAccount.accountId : null,
                       current.settings.liveBaileysAccountId);
                     if (getSuggestionContextKey(currentContact, currentThread, current.settings, accountId, { chatId: selectedChatId || undefined }) !== suggestionKey) return;
-                    if (!suggestionCache.get(suggestionKey)) {
+                    const visibleExpiry = visibleSuggestionExpiry.current;
+                    if (!suggestionCache.get(suggestionKey) && (visibleExpiry?.key !== suggestionKey || Date.now() >= visibleExpiry.expiresAt)) {
                       useAppStore.setState({ aiSuggestions: [] });
                       setAiError(t("crmPanel.suggestionsExpired"));
                       return;

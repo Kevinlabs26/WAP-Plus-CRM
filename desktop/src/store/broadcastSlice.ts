@@ -6,7 +6,9 @@ import {
 import type { AppState, SliceContext } from "./types";
 import { resolveActiveSalesStage } from "@/lib/contactWorkflow";
 import { accountCreatedAtOf, persist } from "./persist";
-import { planSteps, recipientKey } from "@/lib/scheduledPlans";
+import { lastContactedAccounts, planSteps, recipientKey } from "@/lib/scheduledPlans";
+import { applyAccountWarmup } from "@/lib/accountWarmup";
+import { DEFAULT_RATE_LIMITS } from "@/channels/rateLimit";
 import {
   contactSendablePhone,
   parseBroadcastPhones,
@@ -36,7 +38,6 @@ export function createBroadcastSlice({
         const existing = contacts.find(
           (contact) =>
             !contact.isGroup &&
-            (!contact.accountId || contact.accountId === input.accountId) &&
             contactSendablePhone(contact) === phone
         );
         if (existing) {
@@ -55,8 +56,32 @@ export function createBroadcastSlice({
         });
         contactIds.push(id);
       }
+      const lastContacted = lastContactedAccounts(state.chats, state.contacts, state.messages);
+      const accountByPhone: Record<string, string> = {};
+      const selectedContactIds = new Set(contactIds);
+      for (const contact of contacts) {
+        if (!selectedContactIds.has(contact.id)) continue;
+        const phone = contactSendablePhone(contact);
+        if (phone) accountByPhone[phone] = lastContacted.get(recipientKey("", phone)) || input.accountId;
+      }
+      for (const phone of parseBroadcastPhones((input.phoneNumbers || []).join("\n"))) {
+        accountByPhone[phone] = lastContacted.get(recipientKey("", phone)) || input.accountId;
+      }
+      const rateLimits = {
+        ...DEFAULT_RATE_LIMITS,
+        perPhonePerMinute: state.settings.ratePerMinute ?? DEFAULT_RATE_LIMITS.perPhonePerMinute,
+        perPhonePerHour: state.settings.ratePerHour ?? DEFAULT_RATE_LIMITS.perPhonePerHour,
+        minIntervalSec: state.settings.rateMinIntervalSec ?? DEFAULT_RATE_LIMITS.minIntervalSec,
+      };
+      for (const id of new Set(Object.values(accountByPhone))) {
+        const account = state.settings.waAccounts.find(item => item.id === id);
+        if (!account) return { ok: false, reason: "发送账号不存在，请重新选择账号" };
+        const warmup = applyAccountWarmup(rateLimits, account.warmupExempt ? undefined : accountCreatedAtOf(state.settings, id));
+        if (warmup.active) return { ok: false, reason: `账号 ${account.label || id} 仍在新号保护期内（${warmup.factorLabel}），暂不可群发` };
+      }
       const res = buildCampaignOrError({
         accountId: input.accountId,
+        accountByPhone,
         template: input.template,
         contactIds,
         contacts,
@@ -65,6 +90,7 @@ export function createBroadcastSlice({
         media: input.media,
         mediaMode: input.mediaMode,
         accountCreatedAt: accountCreatedAtOf(state.settings, input.accountId),
+        blockWarmup: false,
         rateLimits: {
           perPhonePerMinute: state.settings.ratePerMinute,
           perPhonePerHour: state.settings.ratePerHour,
@@ -73,9 +99,9 @@ export function createBroadcastSlice({
       });
       if (!res.ok) return { ok: false, reason: res.reason };
       if (!res.campaign.media?.length) {
-        const targets=new Map(res.campaign.items.filter(i=>i.status==="pending").map(i=>[recipientKey(input.accountId,i.phoneE164),i.bodyRendered.trim()]));
+        const targets=new Map(res.campaign.items.filter(i=>i.status==="pending").map(i=>[recipientKey(i.accountId || input.accountId,i.phoneE164),i.bodyRendered.trim()]));
         const newer=(state.settings.scheduledPlans||[]).filter(p=>!["done","cancelled","expired"].includes(p.status)&&Math.abs(Date.parse(p.dueAt)-Date.now())<=86400_000&&planSteps(p).length===1&&!p.media&&p.items.some(i=>["pending","sending","unknown"].includes(i.status)&&targets.get(recipientKey(i.accountId,i.recipient))===p.text.trim()));
-        const older=state.broadcastCampaigns.filter(c=>["draft","running","paused"].includes(c.status)&&!c.media?.length&&c.items.some(i=>["pending","sending"].includes(i.status)&&targets.get(recipientKey(c.accountId,i.phoneE164))===i.bodyRendered.trim()));
+        const older=state.broadcastCampaigns.filter(c=>["draft","running","paused"].includes(c.status)&&!c.media?.length&&c.items.some(i=>["pending","sending"].includes(i.status)&&targets.get(recipientKey(i.accountId || c.accountId,i.phoneE164))===i.bodyRendered.trim()));
         const duplicateIds=[...newer,...older].map(p=>p.id).filter(id=>!input.confirmedDuplicateIds?.includes(id));
         if(duplicateIds.length)return {ok:false,reason:`发现 ${duplicateIds.length} 个可能重复的未完成任务，请先核对`,duplicateIds};
       }
@@ -225,23 +251,13 @@ export function createBroadcastSlice({
                 }
               : message
           ),
-          broadcastCampaigns: state.broadcastCampaigns.map((campaign) =>
-            campaign.accountId === accountId &&
-            (campaign.status === "draft" ||
-              campaign.status === "running" ||
-              campaign.status === "paused")
-              ? {
-                  ...campaign,
-                  status: "cancelled",
-                  finishedAt: campaign.finishedAt || now,
-                  items: campaign.items.map((item) =>
-                    item.status === "pending"
-                      ? { ...item, status: "skipped", error: "发送账号已删除" }
-                      : item
-                  ),
-                }
-              : campaign
-          ),
+          broadcastCampaigns: state.broadcastCampaigns.map((campaign) => {
+            if (!["draft", "running", "paused"].includes(campaign.status) || !campaign.items.some(item => (item.accountId || campaign.accountId) === accountId && item.status !== "sent")) return campaign;
+            const items = campaign.items.map(item => (item.accountId || campaign.accountId) === accountId && item.status === "pending"
+              ? { ...item, status: "skipped" as const, error: "发送账号已删除" } : item);
+            const hasRemaining = items.some(item => (item.status === "pending" || item.status === "sending") && (item.accountId || campaign.accountId) !== accountId);
+            return { ...campaign, status: hasRemaining ? "paused" as const : "cancelled" as const, finishedAt: hasRemaining ? undefined : campaign.finishedAt || now, items };
+          }),
         };
       });
       persist(get);

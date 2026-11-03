@@ -381,12 +381,15 @@ export function applyMessagesSync(opts: {
         }
         if (localIdx >= 0) {
           const prev = messages[localIdx];
+          // WhatsApp timestamps have second precision; keep the newer local enqueue time when an echo rounds backward.
+          const reconciledSentAt = Date.parse(prev.sentAt) > echoTs ? prev.sentAt : sentAt;
           // 始终留在用户正在聊的会话，不跟错误的 contact/E 跑
           const keepChatId = prev.chatId || selectedChat || chatId;
           const keepContactId =
             prev.contactId || selectedContact || contact.id;
           messages[localIdx] = {
             ...mergeDetails(prev),
+            sentAt: reconciledSentAt,
             waMessageId: waId || prev.waMessageId,
             accountPhoneE164: opts.accountPhoneE164 || prev.accountPhoneE164,
             // 回声只保证至少 sent，不降级已 delivered/read
@@ -408,11 +411,11 @@ export function applyMessagesSync(opts: {
             if (!prevChat.hasMessageHistory && mediaType !== "system" && !systemKind) {
               chats[chatIndex] = { ...prevChat, hasMessageHistory: true };
             }
-            if (!prevChat.updatedAt || sentAt >= prevChat.updatedAt) {
+            if (!prevChat.updatedAt || reconciledSentAt >= prevChat.updatedAt) {
               chats[chatIndex] = {
                 ...chats[chatIndex],
                 lastMessage: body,
-                updatedAt: sentAt,
+                updatedAt: reconciledSentAt,
                 unread: 0,
               };
             }
@@ -422,7 +425,7 @@ export function applyMessagesSync(opts: {
             if (ci >= 0) {
               contacts[ci] = {
                 ...contacts[ci],
-                lastMessageAt: sentAt,
+                lastMessageAt: reconciledSentAt,
               };
             }
           }
