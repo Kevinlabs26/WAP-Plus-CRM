@@ -11,13 +11,16 @@ import {
   MAX_QUICK_REPLY_MEDIA_TOTAL_BYTES,
   type QuickReplyCategory,
   type QuickReplyCategoryOption,
+  type QuickReplySheetLink,
 } from "@/lib/quickReplies";
 
 export interface SettingsQuickReply {
   id: string;
   title: string;
   body: string;
+  translation?: string;
   category: QuickReplyCategory;
+  sheetLink?: QuickReplySheetLink;
   /** 本地快捷话术媒体；WhatsApp 快捷指令同步只同步文字字段 */
   media?: {
     dataUrl: string;
@@ -41,6 +44,8 @@ import { normalizeVoiceInputLanguage } from "@/lib/voiceInputLanguage";
 import { resolveTranscriptionConfig, type TranscriptionProvider } from "@/lib/transcriptionConfig";
 import { resolveTranslationConfig, type TranslationProvider } from "@/lib/translationConfig";
 import { DEFAULT_ACCOUNT_ID } from "@/types/account";
+import { normalizePromptTemplates, type AiPromptTemplate } from "@/lib/aiPromptScope";
+import { normalizeOutreachRule, normalizeOutreachRuns, type AiOutreachRule, type AiOutreachRun } from "@/lib/aiOutreachRules";
 import {
   DEFAULT_FOLLOW_UP_RULE_SETTINGS,
   type FollowUpRuleSetting,
@@ -55,6 +60,8 @@ import {
 export interface SettingsChatFolder {
   id: string;
   name: string;
+  icon?: string;
+  color?: string;
   /** 可选父分组，支持多层嵌套。 */
   parentId?: string;
   sort: number;
@@ -64,6 +71,11 @@ export interface SettingsChatFolder {
   autoReplyMode?: AutoReplyMode;
   /** Empty or absent inherits the nearest parent / account / global identity. */
   aiSystemPrompt?: string;
+  aiPromptMode?: "inherit" | "append" | "replace";
+  aiPromptTemplateId?: string;
+  aiOutreach?: AiOutreachRule;
+  aiReplyMaxChars?: number;
+  aiReplyForbiddenTerms?: string[];
   /**
    * 号内分组 or 全部视图跨号分组。
    * 缺省视为默认账号号内分组（兼容旧数据）。
@@ -85,7 +97,7 @@ export type LeadInboxDateGrouping = "none" | "day" | "week" | "month";
 export type LeadInboxAccountScope = "view" | "all" | "selected";
 export type LeadInboxSort = "first_contact" | "last_message" | "unread";
 
-/** 主动联系智能夹子：只保存规则，成员由消息历史动态计算。 */
+/** 主动联系智能夹子：成员按全部账号最早真实往来识别，账号范围仅影响显示。 */
 export interface LeadInboxSettings {
   enabled: boolean;
   includeGroups: boolean;
@@ -124,6 +136,9 @@ export interface SettingsShape {
   openaiKey: string;
   groqKey: string;
   geminiKey: string;
+  vertexProjectId:string;
+  vertexLocation:string;
+  vertexCredentialId:string;
   deepseekKey: string;
   qwenKey: string;
   zhipuKey: string;
@@ -141,6 +156,8 @@ export interface SettingsShape {
     | "zhipu"
     | "openrouter"
     | "gemini"
+    | "vertex"
+    | "muse"
     | "ollama"
     | "custom";
   /** 自定义 OpenAI 兼容提供商 Base URL（如 https://api.deepseek.com/v1） */
@@ -180,6 +197,12 @@ export interface SettingsShape {
   aiSystemPrompt: string;
   /** WhatsApp 账号级身份覆盖；空值或无条目时继承 aiSystemPrompt */
   aiSystemPromptByAccountId: Record<string, string>;
+  aiPromptTemplates: AiPromptTemplate[];
+  imagePromptTemplates: AiPromptTemplate[];
+  aiContextMode: "compact" | "full";
+  aiOutreachRuns: AiOutreachRun[];
+  aiOutreachPaused: boolean;
+  aiOutreachExcludedRecipients: string[];
   /** AI 回复的本人时区；空值跟随电脑时区。 */
   aiTimeZone: string;
   /**
@@ -198,6 +221,7 @@ export interface SettingsShape {
   quickReplyCustomCategories: QuickReplyCategoryOption[];
   quickReplyRemovedCategories: string[];
   quickReplyCategoryLabels: Record<string, string>;
+  quickReplyCategoryOrder: string[];
   quickReplyPinnedIds: string[];
   quickReplyRecentIds: string[];
   translateTargetLang: string;
@@ -224,6 +248,8 @@ export interface SettingsShape {
   liveBaileysAccountId: string;
   /** 会话列表浏览：全部 or 单号 */
   accountViewMode: AccountViewMode;
+  /** 工作台待办是否包含群聊；通知栏独立显示群聊消息。 */
+  todayIncludeGroups: boolean;
   /**
    * true：强制用 activeAccountId 发送（高级）。
    * false（默认）：发送跟随会话 accountId。
@@ -321,6 +347,9 @@ export const defaultSettings: SettingsShape = {
   openaiKey: "",
   groqKey: "",
   geminiKey: "",
+  vertexProjectId:"",
+  vertexLocation:"global",
+  vertexCredentialId:"",
   deepseekKey: "",
   qwenKey: "",
   zhipuKey: "",
@@ -353,6 +382,12 @@ export const defaultSettings: SettingsShape = {
   aiAutoReplyPolicyByAccountId: {},
   aiSystemPrompt: "",
   aiSystemPromptByAccountId: {},
+  aiPromptTemplates: [],
+  imagePromptTemplates: [],
+  aiContextMode: "full",
+  aiOutreachRuns: [],
+  aiOutreachPaused: false,
+  aiOutreachExcludedRecipients: [],
   aiTimeZone: "",
   translateService: "auto",
   automaticBackupEnabled: true,
@@ -366,6 +401,7 @@ export const defaultSettings: SettingsShape = {
   quickReplyCustomCategories: [],
   quickReplyRemovedCategories: [],
   quickReplyCategoryLabels: {},
+  quickReplyCategoryOrder: [],
   quickReplyPinnedIds: [],
   quickReplyRecentIds: [],
   translateTargetLang: "en",
@@ -380,6 +416,7 @@ export const defaultSettings: SettingsShape = {
   activeAccountId: DEFAULT_ACCOUNT_ID,
   liveBaileysAccountId: DEFAULT_ACCOUNT_ID,
   accountViewMode: { type: "all" },
+  todayIncludeGroups: false,
   lockSendToActiveAccount: false,
   blocklistJids: [],
   blocklistByAccountId: {},
@@ -420,6 +457,7 @@ export function normalizeLoadedSettings(
     ...defaultSettings,
     ...(src as Partial<SettingsShape>),
   };
+  merged.todayIncludeGroups = merged.todayIncludeGroups === true;
   const categoryLabels = merged.quickReplyCategoryLabels;
   merged.quickReplyCategoryLabels = {};
   for (const category of QUICK_REPLY_CATEGORIES) {
@@ -436,6 +474,7 @@ export function normalizeLoadedSettings(
         .map((item, index) => ({
           id: String(item?.id || `custom-${index}`).trim().slice(0, 48),
           label: String(item?.label || "").trim().slice(0, 32),
+          ...(typeof item?.parentId === "string" ? { parentId: item.parentId.trim().slice(0, 48) } : {}),
         }))
         .filter((item, index, items) =>
           item.id &&
@@ -445,6 +484,23 @@ export function normalizeLoadedSettings(
         )
         .slice(0, MAX_QUICK_REPLY_CATEGORIES)
     : [];
+  const quickReplyCategoryIds = new Set(merged.quickReplyCustomCategories.map(category => category.id));
+  const validCategoryIds = new Set<string>([...QUICK_REPLY_CATEGORIES.filter(category => !merged.quickReplyRemovedCategories.includes(category.id)).map(category => category.id), ...quickReplyCategoryIds]);
+  merged.quickReplyCategoryOrder = Array.isArray(merged.quickReplyCategoryOrder)
+    ? [...new Set(merged.quickReplyCategoryOrder.filter(id => typeof id === "string" && validCategoryIds.has(id)))].slice(0, MAX_QUICK_REPLY_CATEGORIES + QUICK_REPLY_CATEGORIES.length)
+    : [];
+  for (const category of merged.quickReplyCustomCategories) {
+    if (!category.parentId || !validCategoryIds.has(category.parentId) || category.parentId === "other" || category.parentId === category.id) delete category.parentId;
+  }
+  for (const category of merged.quickReplyCustomCategories) {
+    const seen = new Set([category.id]);
+    let parentId = category.parentId;
+    while (parentId) {
+      if (seen.has(parentId)) { delete category.parentId; break; }
+      seen.add(parentId);
+      parentId = merged.quickReplyCustomCategories.find(item => item.id === parentId)?.parentId;
+    }
+  }
   const ch = String(merged.sendChannel ?? "");
   merged.scheduledPlans = normalizeScheduledPlans(merged.scheduledPlans);
   merged.sendChannel =
@@ -457,6 +513,7 @@ export function normalizeLoadedSettings(
       .map((r, i) => {
         const title = String(r?.title || "").slice(0, 40);
         const body = String(r?.body || "").slice(0, 2000);
+        const translation = String(r?.translation || "").slice(0, 2000);
         const rawMedia =
           r?.media && typeof r.media === "object"
             ? (r.media as Record<string, unknown>)
@@ -491,10 +548,21 @@ export function normalizeLoadedSettings(
                 size: mediaSize,
               }
             : undefined;
+        const rawLink = r?.sheetLink && typeof r.sheetLink === "object" ? r.sheetLink as Record<string, unknown> : null;
+        const spreadsheetId = String(rawLink?.spreadsheetId || "");
+        const tab = String(rawLink?.tab || "");
+        const row = Number(rawLink?.row);
+        const originalColumn = Number(rawLink?.originalColumn);
+        const translationColumn = Number(rawLink?.translationColumn);
+        const sheetLink = rawLink && /^[a-zA-Z0-9_-]{1,200}$/.test(spreadsheetId) && tab.trim() && tab.length <= 200 && !/[\u0000-\u001f]/.test(tab) && Number.isInteger(row) && row >= 0 && row <= 10_000_000 && Number.isInteger(originalColumn) && originalColumn >= 0 && originalColumn <= 18_277 && Number.isInteger(translationColumn) && translationColumn >= 0 && translationColumn <= 18_277 && originalColumn !== translationColumn
+          ? { spreadsheetId, tab, row, originalColumn, translationColumn, titleSnapshot: String(rawLink.titleSnapshot ?? title).slice(0, 40), originalSnapshot: String(rawLink.originalSnapshot || "").slice(0, 2000), translationSnapshot: String(rawLink.translationSnapshot || "").slice(0, 2000), syncPending: rawLink.syncPending === true || undefined, syncError: String(rawLink.syncError || "").slice(0, 200) || undefined }
+          : undefined;
         return {
           id: String(r?.id || `qr-${i}`),
           title,
           body,
+          ...(translation ? { translation } : {}),
+          ...(sheetLink ? { sheetLink } : {}),
           media,
           category: normalizeQuickReplyCategory(
             r?.category,
@@ -616,11 +684,20 @@ export function normalizeLoadedSettings(
   merged.translationApiKey = translation.apiKey;
   merged.translationModel = translation.model;
   merged.aiModel = String(merged.aiModel || "").trim();
+  merged.vertexProjectId=String(merged.vertexProjectId||"").trim().slice(0,63);
+  merged.vertexLocation=String(merged.vertexLocation||"global").trim().slice(0,40);
+  merged.vertexCredentialId=typeof merged.vertexCredentialId==="string"&&/^[a-f0-9]{64}$/.test(merged.vertexCredentialId)?merged.vertexCredentialId:"";
   merged.bridgeToken = String(merged.bridgeToken || "").trim().slice(0, 256);
   merged.aiAutoReplyManualChatIds = Array.isArray(merged.aiAutoReplyManualChatIds)
     ? [...new Set(merged.aiAutoReplyManualChatIds.map((id) => String(id || "").trim()).filter(Boolean))]
     : [];
   merged.aiAutoReplyPaused = merged.aiAutoReplyPaused === true;
+  merged.aiPromptTemplates = normalizePromptTemplates(merged.aiPromptTemplates);
+  merged.imagePromptTemplates = normalizePromptTemplates(merged.imagePromptTemplates).map(item => ({ ...item, prompt: item.prompt.slice(0, 4000) }));
+  merged.aiContextMode = merged.aiContextMode === "compact" ? "compact" : "full";
+  merged.aiOutreachRuns = normalizeOutreachRuns(merged.aiOutreachRuns);
+  merged.aiOutreachPaused = merged.aiOutreachPaused === true;
+  merged.aiOutreachExcludedRecipients = Array.isArray(merged.aiOutreachExcludedRecipients)?[...new Set(merged.aiOutreachExcludedRecipients.filter((value):value is string=>typeof value==="string"&&!!value.trim()&&value.length<=240).map(value=>value.trim()))].slice(0,50_000):[];
   merged.aiAutoReplyModeByChatId = Object.fromEntries(
     Object.entries(merged.aiAutoReplyModeByChatId && typeof merged.aiAutoReplyModeByChatId === "object" ? merged.aiAutoReplyModeByChatId : {})
       .filter(([id, mode]) => id.trim() && (mode === "auto" || mode === "manual"))
@@ -913,6 +990,8 @@ export function normalizeLoadedSettings(
       return {
         id,
         name,
+        ...(typeof f?.icon === "string" && /^[\p{Emoji_Presentation}\p{Extended_Pictographic}]$/u.test(f.icon) ? { icon: f.icon } : {}),
+        ...(typeof f?.color === "string" && /^#[0-9a-f]{6}$/i.test(f.color) ? { color: f.color } : {}),
         ...(typeof f?.parentId === "string" && f.parentId
           ? { parentId: f.parentId }
           : {}),
@@ -921,6 +1000,11 @@ export function normalizeLoadedSettings(
         ...(f?.autoReplyMode === "auto" || f?.autoReplyMode === "manual" ? { autoReplyMode: f.autoReplyMode } : {}),
         ...(typeof f?.aiSystemPrompt === "string" && f.aiSystemPrompt.trim()
           ? { aiSystemPrompt: f.aiSystemPrompt.trim().slice(0, 6000) } : {}),
+        ...(f?.aiPromptMode === "inherit" || f?.aiPromptMode === "append" || f?.aiPromptMode === "replace" ? {aiPromptMode: f.aiPromptMode} : {}),
+        ...(typeof f?.aiPromptTemplateId === "string" && f.aiPromptTemplateId ? {aiPromptTemplateId: f.aiPromptTemplateId.slice(0,120)} : {}),
+        ...(f?.aiOutreach ? {aiOutreach: normalizeOutreachRule(f.aiOutreach)} : {}),
+        ...(typeof f?.aiReplyMaxChars==="number"&&Number.isFinite(f.aiReplyMaxChars)?{aiReplyMaxChars:Math.min(2000,Math.max(20,Math.round(f.aiReplyMaxChars)))}:{}),
+        ...(Array.isArray(f?.aiReplyForbiddenTerms)?{aiReplyForbiddenTerms:[...new Set(f.aiReplyForbiddenTerms.filter((term):term is string=>typeof term==="string"&&!!term.trim()).map(term=>term.trim().slice(0,100)))].slice(0,50)}:{}),
         chatIds,
         scope,
       };

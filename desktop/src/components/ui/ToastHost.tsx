@@ -69,12 +69,12 @@ export function ToastHost() {
             />
             <div className="min-w-0 flex-1">
               <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-brand">
-                WAP Plus CRM · {translate("toast.newMessage")}
+                WAP Plus CRM
               </p>
               <p className="truncate text-[13px] font-semibold text-zinc-100">
                 {t.title}
               </p>
-              <p className="mt-1 line-clamp-2 break-words text-xs leading-5 text-zinc-400">
+              <p title={t.message} className="mt-1 line-clamp-2 break-words text-xs leading-5 text-zinc-400">
                 {t.message}
               </p>
             </div>

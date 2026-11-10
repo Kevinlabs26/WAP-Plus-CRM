@@ -1,4 +1,4 @@
-import { displayContactLabel } from "@/lib/utils";
+import { displayContactLabel } from "../../lib/utils.ts";
 import type { ChatPreview, Contact } from "@/types/crm";
 
 export function titleOf(chat: ChatPreview, contact?: Contact) {
@@ -13,5 +13,5 @@ export function titleOf(chat: ChatPreview, contact?: Contact) {
 
 export function phoneIdentity(chat: ChatPreview, contact?: Contact) {
   const digits = (contact?.phone || contact?.channelAddress || "").replace(/\D/g, "");
-  return !contact?.isGroup && digits.length >= 7 ? `phone:${digits}` : `chat:${chat.id}`;
+  return !(contact?.isGroup || chat.isGroup) && digits.length >= 7 ? `phone:${digits}` : `chat:${chat.id}`;
 }

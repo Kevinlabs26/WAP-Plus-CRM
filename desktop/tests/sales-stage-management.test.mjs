@@ -113,7 +113,7 @@ test("stage selectors show the same renamed, custom and deleted stage configurat
   const ui=fixture();try {
     stageState.settings.salesStageOrder=["custom","won"];stageState.settings.salesStageLabels={custom:"复购",won:"已签约"};
     const tree=ui.render(mod.SalesStageField,{value:"custom",onChange(){}});
-    assert.deepEqual(nodes(tree).filter(n=>n.type==="option").map(n=>[n.props.value,text(n)]),[["custom","复购"],["won","已签约"]]);assert.ok(button(tree,"管理销售阶段"));
+    assert.deepEqual(nodes(tree).filter(n=>n.type==="option").map(n=>[n.props.value,text(n)]),[["custom","复购"],["won","已签约"]]);assert.ok(button(tree,"管理跟进阶段"));
   }finally{ui.close();}
 });
 
@@ -141,7 +141,7 @@ test("stage creation rechecks the 20-stage limit and the last remaining stage ca
     let tree=ui.render();byLabel(tree,"添加阶段").props.onChange({target:{value:"Extra"}});tree=ui.render();
     stageState.settings.salesStageOrder=Array.from({length:20},(_,i)=>"stage_"+i);
     nodes(tree).find(n=>n.type==="form").props.onSubmit({preventDefault(){}});
-    assert.equal(stageState.settings.salesStageOrder.length,20);assert.equal(ui.toasts.at(-1)[0],"最多保留 20 个销售阶段");
+    assert.equal(stageState.settings.salesStageOrder.length,20);assert.equal(ui.toasts.at(-1)[0],"最多保留 20 个跟进阶段");
     stageState.settings.salesStageOrder=["won"];tree=ui.render();assert.equal(byLabel(tree,"删除阶段 · 成交").props.disabled,true);
   }finally{ui.close();}
 });

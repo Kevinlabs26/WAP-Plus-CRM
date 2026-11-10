@@ -1,14 +1,16 @@
-import { resolveAutoReplyScope, type AutoReplyMode } from "@/lib/autoReplyScope";
+import { resolveAutoReplyScope } from "@/lib/autoReplyScope";
 import { useAutoReplyRuntime } from "@/lib/autoReplyRuntime";
 import {
   CalendarPlus,
   Check,
+  ChevronDown,
   Copy,
-  ExternalLink,
+  Loader2,
   PanelRightClose,
   RefreshCw,
   ShoppingCart,
   Sparkles,
+  TableProperties,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "@/store/appStore";
@@ -29,7 +31,6 @@ import { Button, SectionLabel } from "@/components/ui/primitives";
 import { ContactTagsNotesEditor } from "./ContactTagsNotesEditor";
 import { PersonMultiAccountPanel } from "./PersonMultiAccountPanel";
 import { CommonGroupsPanel } from "./CommonGroupsPanel";
-import { CustomerNoteEditor } from "./CustomerNoteEditor";
 import { WhatsAppLabelMenu } from "@/components/chat/WhatsAppLabelMenu";
 import { workflowForStage } from "@/lib/contactWorkflow";
 import { SalesStageField } from "./SalesStageField";
@@ -43,6 +44,8 @@ import { ImageLibraryPanel } from "@/components/chat/ImageLibraryPanel";
 import { AiSuggestionCard } from "./AiSuggestionCard";
 import { AiSuggestionReadingControl } from "./AiSuggestionReadingControl";
 import { resolveMyLang } from "@/lib/translateDraft";
+import { AiSheetExtractDialog } from "./AiSheetExtractDialog";
+import {MuseQueueStatus} from "@/components/settings/MuseQueueStatus";
 
 function threadForContact(
   messages: Message[],
@@ -83,7 +86,6 @@ export function CrmAiPanel() {
   const setSelectedChat = useAppStore((state) => state.setSelectedChat);
   const aiSuggestions = useAppStore((state) => state.aiSuggestions);
   const settings = useAppStore((state) => state.settings);
-  const updateSettings = useAppStore((state) => state.updateSettings);
   const baileysUi = useAppStore((state) => state.baileysUi);
   const applyAiSuggestion = useAppStore((state) => state.applyAiSuggestion);
   const updateContact = useAppStore((state) => state.updateContact);
@@ -96,7 +98,6 @@ export function CrmAiPanel() {
     (state) => state.syncWhatsAppLabels
   );
   const setActiveNav = useAppStore((state) => state.setActiveNav);
-  const setSelectedContact = useAppStore((state) => state.setSelectedContact);
   const pushToast = useAppStore((state) => state.pushToast);
   const setSettingsOpen = useAppStore((state) => state.setSettingsOpen);
   const collapsed = useAppStore((s) => s.crmPanelCollapsed);
@@ -109,6 +110,8 @@ export function CrmAiPanel() {
     if (!selectedChatId && !selectedContactId) setCrmPanelCollapsed(true);
   }, [selectedChatId, selectedContactId, setCrmPanelCollapsed]);
   const [tagsOpen, setTagsOpen] = useState(false);
+  const [sheetInfoOpen, setSheetInfoOpen] = useState(false);
+  const [moreDetailsOpen, setMoreDetailsOpen] = useState(false);
   const [followSchedulerOpen, setFollowSchedulerOpen] = useState(false);
   const [followDate, setFollowDate] = useState("");
   const [followTime, setFollowTime] = useState("10:00");
@@ -116,8 +119,10 @@ export function CrmAiPanel() {
   const [loading, setLoading] = useState(false);
   const [aiSource, setAiSource] = useState<string>(settings.aiProvider);
   const [aiError, setAiError] = useState("");
+  const [sheetExtractOpen, setSheetExtractOpen] = useState(false);
   const [readingLanguage, setReadingLanguage] = useState("");
   const [readingTarget, setReadingTarget] = useState<string | null>(null);
+  const [suggestionExpansion,setSuggestionExpansion]=useState<{key:string;open:boolean}|null>(null);
   const generation = useRef(0);
   const [suggestionCache] = useState(createSuggestionCache);
   const visibleSuggestionExpiry = useRef<{ key: string; expiresAt: number } | null>(null);
@@ -197,13 +202,14 @@ export function CrmAiPanel() {
     ? baileysUi.labelsByAccountId[labelAccountId] || []
     : [];
   const aiReady = hasRealAiKey(settings);
-  const replyOverride = selectedChatId && settings.aiAutoReplyManualChatIds?.includes(selectedChatId)
-    ? "manual" : settings.aiAutoReplyModeByChatId?.[selectedChatId || ""] || "inherit";
   const replyScope = resolveAutoReplyScope(settings, selectedChatId || "");
-  const groupChat = contact?.isGroup || chats.find(chat => chat.id === selectedChatId)?.isGroup;
 
   const aiProfile = resolveAiReplyProfile(settings, aiAccountId, selectedChatId || undefined);
-  const suggestionKey = useMemo(() => getSuggestionContextKey(contact, thread, settings, aiAccountId, { chatId: selectedChatId || undefined }),
+  const needsHuman=replyScope.mode==="auto"&&autoRuntime?.phase==="human"&&autoRuntime.inboundId===lastIn?.id&&(!autoRuntime.accountId||autoRuntime.accountId===aiAccountId);
+  const expansionKey=JSON.stringify([selectedChatId,aiAccountId,replyScope.mode,needsHuman?lastIn?.id:""]);
+  const suggestionsOpen=suggestionExpansion?.key===expansionKey?suggestionExpansion.open:replyScope.mode!=="auto"||needsHuman;
+  const baseSuggestionKey=useMemo(()=>getSuggestionContextKey(contact,thread,settings,aiAccountId,{chatId:selectedChatId||undefined}),[selectedChatId,selectedContactId,contact,thread,settings,aiAccountId]);
+  const suggestionKey = useMemo(() => getSuggestionContextKey(contact, thread, settings, aiAccountId, { chatId: selectedChatId || undefined,count:1 }),
     [selectedChatId, selectedContactId, contact, thread, settings, aiAccountId]);
   const latestSuggestionKey = useRef(suggestionKey);
   latestSuggestionKey.current = suggestionKey;
@@ -229,7 +235,7 @@ export function CrmAiPanel() {
   }, [aiSuggestions, suggestionKey, collapsed, panelTab, suggestionCache, settings.uiLanguage]);
 
   const requestSuggestions = (key: string, force = false, onProgress?: (result: GenerateSuggestionsResult) => void) => suggestionCache.request(key,
-    (publish, signal) => generateSuggestions(contact, thread, settings, { accountId: aiAccountId, chatId: selectedChatId || undefined, onProgress: publish, signal }), force, onProgress);
+    (publish, signal) => generateSuggestions(contact, thread, settings, { accountId: aiAccountId, chatId: selectedChatId || undefined, count:1, onProgress: publish, signal }), force, onProgress);
 
   const showProgress = (key: string, request: number) => (result: GenerateSuggestionsResult) => {
     const entry = suggestionCache.get(key);
@@ -239,17 +245,6 @@ export function CrmAiPanel() {
     setAiSource(result.source);
   };
 
-
-  const setReplyMode = (mode: string) => {
-    if (!selectedChatId || !["inherit", "auto", "manual"].includes(mode)) return;
-    const modes = { ...settings.aiAutoReplyModeByChatId };
-    if (mode === "inherit") delete modes[selectedChatId];
-    else modes[selectedChatId] = mode as AutoReplyMode;
-    updateSettings({
-      aiAutoReplyModeByChatId: modes,
-      aiAutoReplyManualChatIds: (settings.aiAutoReplyManualChatIds || []).filter(id => id !== selectedChatId),
-    });
-  };
 
   const formatFollowDue = (raw?: string) => {
     if (!raw) return "";
@@ -326,14 +321,16 @@ export function CrmAiPanel() {
       if (request !== generation.current || latestSuggestionKey.current !== key) return;
       if (result.suggestions.length) visibleSuggestionExpiry.current = { key, expiresAt: suggestionCache.get(key)?.expiresAt || Date.now() + SUGGESTION_MAX_AGE_MS };
       useAppStore.setState({ aiSuggestions: result.suggestions });
-      setAiSource(result.source === "mock" ? t("crmPanel.localTemplate") : result.source);
+      setAiSource(result.source);
       setAiError(result.error || "");
+      setSuggestionExpansion({key:expansionKey,open:true});
       pushToast(
         result.fallback ? result.error || "API \u4e0d\u53ef\u7528" : "\u5df2\u751f\u6210\u56de\u590d\u5efa\u8bae",
         result.fallback ? "error" : "success"
       );
     } catch (error) {
       if (request !== generation.current || latestSuggestionKey.current !== key) return;
+      setAiError(error instanceof Error?error.message:t("crmPanel.suggestionError",{error:String(error)}));
       pushToast(error instanceof Error ? error.message : "\u751f\u6210\u5efa\u8bae\u5931\u8d25", "error");
     } finally {
       if (request === generation.current && latestSuggestionKey.current === key) setLoading(false);
@@ -343,9 +340,8 @@ export function CrmAiPanel() {
   useEffect(() => {
     const request = ++generation.current;
     const key = suggestionKey;
-    useAppStore.setState({ aiSuggestions: [] });
-    setAiError("");
-    if (collapsed || panelTab !== "customer" || !contact || !aiReady) {
+    if(visibleSuggestionExpiry.current?.key!==key){useAppStore.setState({ aiSuggestions: [] });setAiError("");}
+    if (collapsed || panelTab !== "customer" || !contact || !aiReady || !suggestionsOpen || replyScope.mode==="auto") {
       setLoading(false);
       return () => { generation.current++; suggestionCache.cancelPending(key); };
     }
@@ -353,12 +349,13 @@ export function CrmAiPanel() {
     const cached = entry?.result;
     if (cached) {
       useAppStore.setState({ aiSuggestions: cached.suggestions });
-      setAiSource(cached.source === "mock" ? t("crmPanel.localTemplate") : cached.source);
+      setAiSource(cached.source);
       setAiError("");
       setLoading(false);
       return () => { generation.current++; suggestionCache.cancelPending(key); };
     }
-    if (isManualSuggestionContext(key)) {
+    if(visibleSuggestionExpiry.current?.key===key&&!entry&&useAppStore.getState().aiSuggestions.length){setLoading(false);return()=>{generation.current++;suggestionCache.cancelPending(key);};}
+    if (isManualSuggestionContext(baseSuggestionKey)) {
       setLoading(false);
       return () => { generation.current++; suggestionCache.cancelPending(key); };
     }
@@ -367,13 +364,13 @@ export function CrmAiPanel() {
     setAiError("");
     const timer = window.setTimeout(() => {
       if (request !== generation.current || latestSuggestionKey.current !== key) return;
-      if (isManualSuggestionContext(key)) { setLoading(false); return; }
+      if (isManualSuggestionContext(baseSuggestionKey)) { setLoading(false); return; }
       void requestSuggestions(key, false, showProgress(key, request))
         .then((result) => {
           if (cancelled || request !== generation.current || latestSuggestionKey.current !== key) return;
           if (result.suggestions.length) visibleSuggestionExpiry.current = { key, expiresAt: suggestionCache.get(key)?.expiresAt || Date.now() + SUGGESTION_MAX_AGE_MS };
           useAppStore.setState({ aiSuggestions: result.suggestions });
-          setAiSource(result.source === "mock" ? t("crmPanel.localTemplate") : result.source);
+          setAiSource(result.source);
           setAiError(result.error || "");
           setLoading(false);
         })
@@ -397,6 +394,8 @@ export function CrmAiPanel() {
     panelTab,
     suggestionKey,
     aiReady,
+    suggestionsOpen,
+    replyScope.mode,
   ]);
 
   const refreshLabels = async () => {
@@ -562,17 +561,6 @@ export function CrmAiPanel() {
                   {displayPhone(contact.phone) || t("crmPanel.whatsappLid")}
                 </div>
                 <ContactLocalTime contact={contact} />
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (contact) setSelectedContact(contact.id);
-                    setActiveNav("crm");
-                  }}
-                  className="mt-1 inline-flex items-center gap-1 text-[10px] text-brand hover:underline"
-                >
-                  <ExternalLink className="h-3 w-3" />
-                  {t("crmPanel.fullDetails")}
-                </button>
               </div>
             </div>
 
@@ -760,11 +748,11 @@ export function CrmAiPanel() {
               )}
             </div>
 
-            <GoogleSheetInfo contact={contact} />
+            <GoogleSheetInfo contact={contact} expanded={sheetInfoOpen} onExpandedChange={setSheetInfoOpen} />
 
-            <details key={contact.id} className="rounded-lg border border-zinc-800 p-2.5">
-              <summary className="cursor-pointer text-xs text-zinc-500">{t("crmPanel.moreDetails")}</summary>
-              <div className="mt-3 space-y-3">
+            <details open={moreDetailsOpen} onToggle={event => setMoreDetailsOpen(event.currentTarget.open)} className="py-1">
+              <summary className="cursor-pointer py-1 text-xs text-zinc-500 hover:text-zinc-300">{t("crmPanel.moreDetails")}</summary>
+              <div className="mt-2 space-y-2">
             <PersonMultiAccountPanel
               variant="card"
               seed={contact}
@@ -877,89 +865,35 @@ export function CrmAiPanel() {
               )}
             </div>
 
-            <CustomerNoteEditor
-              contact={contact}
-              chatId={selectedChatId}
-              compact
-            />
           </div>
         )}
       </section>
 
-      <section className={cn("flex flex-col border-t border-zinc-800/90 p-3", (loading || aiSuggestions.length) && "max-h-[38%] min-h-48")}>
-          <div className={cn("flex items-center gap-2", (loading || aiSuggestions.length) && "mb-2")}>
-          <div className="flex min-w-0 flex-1 items-center gap-1.5 whitespace-nowrap text-xs font-semibold" title={t(`folderAi.source.${aiProfile.source}`, { name: aiProfile.folderName || "" })}>
-            <Sparkles className="h-3.5 w-3.5 text-brand" />
-            {t("crmPanel.replySuggestions")}
-          </div>
-          {selectedChatId && (
-            <label className="shrink-0 text-2xs text-zinc-500">
-              <select
-                value={replyOverride}
-                disabled={!!groupChat}
-                onChange={(event) => setReplyMode(event.target.value)}
-                className="h-7 max-w-32 cursor-pointer rounded-md bg-zinc-800 px-2 text-2xs text-zinc-400"
-                aria-label={t("crmPanel.autoMode")}
-                title={t("autoReplyScope.chatHint")}
-              >
-                <option value="inherit">{t("crmPanel.inheritShort")} · {t(replyScope.mode === "auto" ? "multi.replyMode.auto" : "multi.replyMode.manual")}</option>
-                <option value="auto">{t("multi.replyMode.auto")}</option>
-                <option value="manual">{t("multi.replyMode.manual")}</option>
-              </select>
-            </label>
-          )}
-          {aiReady && (
-            <Button variant="ghost" className="h-7 w-7 shrink-0 justify-center !p-0" aria-label={loading ? t("crmPanel.generating") : aiSuggestions.length ? t("crmPanel.regenerate") : t("crmPanel.generateReply")} title={loading ? t("crmPanel.generating") : aiSuggestions.length ? t("crmPanel.regenerate") : t("crmPanel.generateReply")} disabled={loading} onClick={() => void refreshAi()}>
-              <RefreshCw className={cn("h-3 w-3", loading && "animate-spin")} />
-            </Button>
-          )}
+      <section className="flex max-h-[45%] min-h-0 shrink-0 flex-col border-t border-zinc-800/90 p-2.5">
+        <div className="flex items-center gap-2">
+          <button type="button" className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-xs font-semibold" aria-expanded={suggestionsOpen} aria-controls="crm-reply-suggestion" onClick={()=>setSuggestionExpansion({key:expansionKey,open:!suggestionsOpen})}>
+            <Sparkles className="h-3.5 w-3.5 shrink-0 text-brand" />{t("crmPanel.replySuggestions")}
+            <ChevronDown className={cn("h-3 w-3 text-zinc-500 transition-transform",suggestionsOpen&&"rotate-180")} />
+          </button>
+          {loading&&<span role="status" className="flex shrink-0 items-center gap-1 text-[10px] text-zinc-500"><Loader2 className="h-3 w-3 animate-spin" />{t("crmPanel.generating")}</span>}
+          {aiReady?<Button variant="ghost" size="xs" className="shrink-0 gap-1 !px-1.5" aria-label={loading?t("crmPanel.generating"):aiSuggestions.length?t("crmPanel.regenerate"):t("crmPanel.generateReply")} disabled={loading} onClick={()=>void refreshAi()}>
+            {!loading&&<RefreshCw className="h-3 w-3" />}{t(aiSuggestions.length?"crmPanel.regenerate":"crmPanel.generateReply")}
+          </Button>:<Button variant="ghost" size="xs" onClick={()=>setSettingsOpen(true,"ai")}>{t("crmPanel.configureApi")}</Button>}
+          {contact&&selectedChatId&&<Button variant="ghost" size="xs" className="shrink-0 !px-1.5" title="整理聊天到 Google 表格" aria-label="整理聊天到 Google 表格" onClick={()=>setSheetExtractOpen(true)}><TableProperties className="h-3.5 w-3.5" /></Button>}
         </div>
-        {selectedChatId && !groupChat && replyScope.mode === "auto" && autoRuntime && autoRuntime.inboundId === lastIn?.id && (!autoRuntime.accountId || autoRuntime.accountId === aiAccountId) &&
-          <p className="my-1 text-[11px] leading-4 text-zinc-500">
-            <span role="status" title={autoRuntime.reason} className="text-brand">
-              {t(`multi.replyStatus.${autoRuntime.phase}`)}
-              {autoRuntime.retryAt && <span className="ml-1">{t("autoReplyRuntime.retryAt", { time: new Date(autoRuntime.retryAt).toLocaleTimeString() })}</span>}
-            </span>
-          </p>}
-        {!aiReady ? (
-          <div className="flex min-h-36 flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
-            <p className="text-[12px] font-medium text-zinc-300">
-              {t("crmPanel.noAi")}
-            </p>
-            <p className="text-2xs leading-4 text-zinc-500">
-              {t("crmPanel.noAiHint")}
-            </p>
-            <Button variant="secondary" className="!min-h-8 gap-1.5 !px-3 text-2xs" onClick={() => setSettingsOpen(true, "ai")}>
-              <Sparkles className="h-3 w-3" />
-              {t("crmPanel.configureApi")}
-            </Button>
-          </div>
-        ) : (
-          <>
-            {aiSuggestions.length > 0 && <div className="mb-2 flex shrink-0">
-              <AiSuggestionReadingControl
-                language={readingLanguage}
-                targetLanguage={readingTarget || resolveMyLang(settings)}
-                onChange={language => {
-                  if (language) setReadingTarget(language);
-                  setReadingLanguage(language);
-                }}
-              />
-            </div>}
-            <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto">
-              {!loading && aiError && (
-                <p role="alert" className="rounded-lg border border-amber-800/50 bg-amber-950/20 p-2 text-[11px] leading-4 text-amber-300">
-                  {t("crmPanel.suggestionError", { error: aiError })}
-                </p>
-              )}
-              {aiSuggestions.map((suggestion) => (
-                <AiSuggestionCard
-                  key={JSON.stringify([selectedChatId, aiAccountId, suggestion.text])}
-                  text={suggestion.text}
-                  contextKey={suggestionKey}
-                  settings={settings}
-                  language={readingLanguage}
-                  onInsert={mode => {
+        {suggestionsOpen&&<div id="crm-reply-suggestion" className="min-h-0 overflow-y-auto">
+          {!aiReady?<p className="mt-1 text-[11px] text-zinc-500">{t("crmPanel.noAi")}</p>:<>
+            {settings.aiProvider==="muse"&&<MuseQueueStatus/>}
+            {!loading&&aiError&&<p role="alert" className="mt-2 rounded-lg bg-amber-500/10 p-2 text-[11px] text-amber-500">{aiError}</p>}
+            {aiSuggestions.length>0&&<>
+              <div className="my-1.5 flex items-center justify-between gap-2">
+                <AiSuggestionReadingControl language={readingLanguage} targetLanguage={readingTarget||resolveMyLang(settings)} onChange={language=>{if(language)setReadingTarget(language);setReadingLanguage(language);}} />
+                {aiSource==="mock"&&<span className="text-[10px] text-amber-500">{t("crmPanel.exampleReply")}</span>}
+              </div>
+              {aiSuggestions.slice(0,1).map(suggestion=><AiSuggestionCard
+                key={JSON.stringify([selectedChatId,aiAccountId,suggestionKey,suggestion.text])}
+                text={suggestion.text} contextKey={suggestionKey} settings={settings} language={readingLanguage}
+                  onInsert={(mode,editedText=suggestion.text) => {
                     const current = useAppStore.getState();
                     const currentContact = current.contacts.find(item => item.id === current.selectedContactId);
                     const accountId = (current.selectedThreadAccount?.chatId === current.selectedChatId ? current.selectedThreadAccount.accountId : null)
@@ -971,23 +905,25 @@ export function CrmAiPanel() {
                     const currentThread = filterMessagesForAccount(threadForContact(current.messagesByChatId[selectedChatId || ""] || [], selectedContactId, selectedChatId),
                       current.selectedThreadAccount?.chatId === selectedChatId ? current.selectedThreadAccount.accountId : null,
                       current.settings.liveBaileysAccountId);
-                    if (getSuggestionContextKey(currentContact, currentThread, current.settings, accountId, { chatId: selectedChatId || undefined }) !== suggestionKey) return;
+                    if (getSuggestionContextKey(currentContact, currentThread, current.settings, accountId, { chatId: selectedChatId || undefined,count:1 }) !== suggestionKey) return;
                     const visibleExpiry = visibleSuggestionExpiry.current;
                     if (!suggestionCache.get(suggestionKey) && (visibleExpiry?.key !== suggestionKey || Date.now() >= visibleExpiry.expiresAt)) {
                       useAppStore.setState({ aiSuggestions: [] });
                       setAiError(t("crmPanel.suggestionsExpired"));
                       return;
                     }
-                    applyAiSuggestion(suggestion.text, mode);
+                    if(!editedText.trim())return;
+                    applyAiSuggestion(editedText, mode);
                     pushToast(t(mode === "append" ? "crmPanel.append" : "crmPanel.fillInput"), mode === "append" ? "info" : "success");
                   }}
-                />
-              ))}
-              {loading && <div className="py-6 text-center text-2xs text-zinc-500">{t("crmPanel.generating")}…</div>}
-            </div>
-            {(loading || aiSuggestions.length > 0) && <p className="mt-1.5 break-words text-[9px] text-zinc-600">{t("crmPanel.source", { source: aiSource, count: thread.length })}</p>}
-          </>
-        )}
+              />)}
+              <details className="mt-1 text-[10px] text-zinc-500"><summary className="cursor-pointer">{t("crmPanel.suggestionDetails")}</summary>
+                <p className="mt-1 break-words">{t("crmPanel.source",{source:aiSource==="mock"?t("crmPanel.exampleReply"):aiSource,count:thread.length})}</p>
+                <p>{t(aiProfile.source==="folder"?"folderAi.source.folder":aiProfile.source==="account"?"folderAi.source.account":aiProfile.source==="global"?"folderAi.source.global":"folderAi.source.default",{name:aiProfile.folderName||""})}</p>
+              </details>
+            </>}
+          </>}
+        </div>}
       </section>
         </>
       ) : (
@@ -997,7 +933,7 @@ export function CrmAiPanel() {
             replies={settings.quickReplies || []}
             categories={settings.quickReplyCustomCategories || []}
             removedCategories={settings.quickReplyRemovedCategories}
-            categoryLabels={settings.quickReplyCategoryLabels}
+            categoryLabels={settings.quickReplyCategoryLabels} categoryOrder={settings.quickReplyCategoryOrder}
             contextKey={["main", selectedChatId, quickReplyAccountId, settings.sendChannel, quickReplyChat?.phoneId].join(":")}
             target={quickReplyChat ? { title: quickReplyChat.contactName || contact?.name || quickReplyChat.id, account: quickReplyIdentity } : undefined}
             pinnedIds={settings.quickReplyPinnedIds}
@@ -1017,6 +953,7 @@ export function CrmAiPanel() {
           />
         </section>
       )}
+      {sheetExtractOpen&&contact&&<AiSheetExtractDialog contact={contact} messages={thread} accountId={aiAccountId} settings={settings} onClose={()=>setSheetExtractOpen(false)} onWritten={()=>pushToast("已写入 Google 表格","success")} />}
     </aside>
   );
 }

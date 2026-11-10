@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from "react";
 import { useAppStore, type NavId } from "@/store/appStore";
 import {
   MessageSquare,
@@ -8,10 +9,43 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { CloudUploadBanner } from "@/components/chat/CloudUploadStatus";
+import { filterGroupChats, findUnreadMentionedChatIds, type GroupChatFilter } from "./chatSidebarUtils";
+import { scopeTodayBoard } from "@/lib/todayBoard";
+import { isAwaitingReply } from "@/lib/replyStatus";
+
+function savedGroupFilter(): GroupChatFilter {
+  try {
+    const mode = localStorage.getItem("wap.groupChatFilter");
+    if (mode === "hidden" || mode === "only" || mode === "unread" || mode === "pinned" || mode === "mentions" || mode === "all") return mode;
+    return localStorage.getItem("wap.hideGroupChats") === "1" ? "hidden" : "all";
+  } catch {
+    return "all";
+  }
+}
 
 export function StatsBar() {
   const { t } = useI18n();
   const stats = useAppStore((s) => s.stats);
+  const chats = useAppStore((s) => s.chats);
+  const contacts = useAppStore((s) => s.contacts);
+  const messagesByChatId = useAppStore((s) => s.messagesByChatId);
+  const accountViewMode = useAppStore((s) => s.settings.accountViewMode);
+  const [groupFilter, setGroupFilter] = useState(savedGroupFilter);
+  useEffect(() => {
+    const update = (event: Event) => setGroupFilter(
+      (event as CustomEvent<GroupChatFilter>).detail || savedGroupFilter()
+    );
+    window.addEventListener("wap:group-chat-filter-change", update);
+    return () => window.removeEventListener("wap:group-chat-filter-change", update);
+  }, []);
+  const awaitingReplyCount = useMemo(() => {
+    const scoped = scopeTodayBoard({ contacts, chats, messages: [], followUps: [] }, accountViewMode?.type === "account" ? accountViewMode.accountId : undefined);
+    const contactById = new Map(scoped.contacts.map((contact) => [contact.id, contact]));
+    const mentioned = findUnreadMentionedChatIds(scoped.chats, messagesByChatId);
+    return filterGroupChats(scoped.chats, contactById, groupFilter, "", mentioned).chats
+      .filter((chat) => isAwaitingReply(chat)).length;
+  }, [contacts, chats, accountViewMode, groupFilter, messagesByChatId]);
   const setActiveNav = useAppStore((s) => s.setActiveNav);
   const goToChats = useAppStore((s) => s.goToChats);
   const activeNav = useAppStore((s) => s.activeNav);
@@ -64,10 +98,10 @@ export function StatsBar() {
     {
       id: "awaiting",
       labelKey: "today.awaitingReply",
-      value: stats.awaitingReplyChats || 0,
+      value: awaitingReplyCount,
       icon: Clock,
       active: activeNav === "chats" && chatListFilter === "awaiting",
-      alert: stats.awaitingReplyChats > 0,
+      alert: awaitingReplyCount > 0,
       titleKey: "reply.awaitingHint",
       onClick: () => goToChats(activeNav === "chats" && chatListFilter === "awaiting" ? "all" : "awaiting"),
     },
@@ -94,7 +128,7 @@ export function StatsBar() {
   ];
 
   return (
-    <div className="stats-chips-bar flex h-8 shrink-0 items-center gap-1.5 border-b border-zinc-800/80 bg-zinc-950/70 px-3 backdrop-blur-sm">
+    <div className="stats-chips-bar flex min-h-8 shrink-0 flex-wrap items-center gap-1.5 border-b border-zinc-800/80 bg-zinc-950/70 px-3 py-1 backdrop-blur-sm">
       {items.map(
         ({
           id,
@@ -153,6 +187,7 @@ export function StatsBar() {
           );
         }
       )}
+      <CloudUploadBanner />
       {activeNav === "chats" && crmPanelCollapsed && hasSelection && (
         <button
           type="button"

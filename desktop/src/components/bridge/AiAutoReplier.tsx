@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { onLiveInboundMessages, scheduleAutoReplyInbound, stopAutoReplies } from "@/lib/aiAutoReply";
 import { latestMessagesPerChat } from "@/lib/aiSafety";
+import { tickAiOutreach, stopAiOutreach, noteOutreachOptOut } from "@/lib/aiOutreach";
 
 /**
  * AI 全自动回复：订阅实时入站私聊消息，按设置生成并自动发送回复。
@@ -9,12 +10,14 @@ import { latestMessagesPerChat } from "@/lib/aiSafety";
 export function AiAutoReplier() {
   useEffect(() => {
     const unsubscribe = onLiveInboundMessages((messages) => {
+      noteOutreachOptOut(messages);
       // 同批连续消息按会话合并，只回复该会话最新一条。
       for (const m of latestMessagesPerChat(messages)) {
         scheduleAutoReplyInbound(m);
       }
     });
-    return () => { unsubscribe(); stopAutoReplies(); };
+    const timer=window.setInterval(()=>{void tickAiOutreach().catch(()=>{});},30_000);
+    return () => { window.clearInterval(timer);stopAiOutreach();unsubscribe(); stopAutoReplies(); };
   }, []);
 
   return null;

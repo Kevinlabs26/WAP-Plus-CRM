@@ -35,6 +35,8 @@ async function listAllProviderModels(provider: AppSettings["aiProvider"], settin
       );
     case "gemini":
       return listGeminiModels(settings.geminiKey);
+    case "vertex":
+      return settings.aiModel?[{id:settings.aiModel,label:settings.aiModel}]:[];
     case "ollama":
       return listOllamaModels(settings.ollamaUrl);
     default:

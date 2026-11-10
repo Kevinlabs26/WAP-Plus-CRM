@@ -33,6 +33,7 @@ export interface WaAccount {
   createdAt: string;
   updatedAt: string;
   lastSyncAt?: string;
+  syncStorageWarning?: string;
   /** 用户确认该 WhatsApp 账号并非新号时，跳过本机 72h 新号保护 */
   warmupExempt?: boolean;
 }

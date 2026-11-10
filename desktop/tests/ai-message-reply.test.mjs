@@ -31,7 +31,7 @@ test('selected-message replies request one draft across all provider paths, with
     assert.match(user, /SELECTED QUESTION/);
     assert.match(user, /NEWER MESSAGE/);
     assert.match(user, /specifically to this selected message/);
-    assert.equal(provider === 'gemini' ? body.generationConfig.maxOutputTokens : provider === 'ollama' ? body.options.num_predict : body.max_tokens, 160);
+    assert.equal(provider === 'gemini' ? body.generationConfig.maxOutputTokens : provider === 'ollama' ? body.options.num_predict : body.max_tokens, 512);
     mock.mock.restore();
   }
 });

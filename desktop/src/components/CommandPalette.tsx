@@ -72,6 +72,7 @@ export function CommandPalette() {
   const followUps = useAppStore((s) => s.followUps);
   const phones = useAppStore((s) => s.phones);
   const setActiveNav = useAppStore((s) => s.setActiveNav);
+  const openContacts = useAppStore((s) => s.openContacts);
   const goToChats = useAppStore((s) => s.goToChats);
   const setSelectedContact = useAppStore((s) => s.setSelectedContact);
   const setSelectedChat = useAppStore((s) => s.setSelectedChat);
@@ -175,12 +176,12 @@ export function CommandPalette() {
         run: () => goToChats("all"),
       },
       {
-        id: "nav-crm",
-        label: t("palette.open", { target: t("nav.crm") }),
-        hint: t("palette.crmHint"),
+        id: "nav-contacts",
+        label: t("palette.open", { target: t("sidebar.contacts") }),
+        hint: t("contactManage.hint"),
         icon: User,
         kind: "nav",
-        run: () => setActiveNav("crm"),
+        run: () => openContacts("manage"),
       },
       {
         id: "nav-broadcast",
@@ -189,6 +190,14 @@ export function CommandPalette() {
         icon: Megaphone,
         kind: "nav",
         run: () => setActiveNav("broadcast"),
+      },
+      {
+        id: "nav-ai-outreach",
+        label: t("palette.open", { target: t("nav.aiOutreach") }),
+        hint: t("aiOutreach.tasks"),
+        icon: Megaphone,
+        kind: "nav",
+        run: () => setActiveNav("ai-outreach"),
       },
       {
         id: "nav-phones",
@@ -348,6 +357,7 @@ export function CommandPalette() {
     followUps,
     phones,
     setActiveNav,
+    openContacts,
     setSelectedChat,
     setSelectedContact,
     openContactWorkspace,

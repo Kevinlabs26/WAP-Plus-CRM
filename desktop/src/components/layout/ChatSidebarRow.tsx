@@ -23,6 +23,7 @@ import type {
 } from "@/types/crm";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
+import { openAvatarCloudMenu } from "@/lib/googleDrive";
 
 function formatSidebarTime(raw?: string, yesterdayLabel = "Yesterday") {
   if (!raw) return "";
@@ -189,7 +190,7 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
         onContextMenu={(e) => onOpenMenu(e, chat.id, memberChatIds)}
         className={cn("!items-center gap-2.5 !py-2 !pr-0", active && "bg-brand/15 ring-1 ring-inset ring-brand/30")}
       >
-        <div className="relative shrink-0">
+        <div className="relative shrink-0" onContextMenu={event=>{if(c&&!chat.localOnly)openAvatarCloudMenu(event,c,chat.accountId||chat.phoneId);}}>
           <Avatar
             name={label}
             seed={c?.phone || chat.contactId}

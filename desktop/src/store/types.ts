@@ -30,10 +30,10 @@ import type {
 export type NavId =
   | "phones"
   | "chats"
-  | "crm"
   | "stats"
   | "today"
   | "broadcast"
+  | "ai-outreach"
   | "starred"
   | "monitor";
 export type ChatListFilter = "all" | "unread" | "awaiting" | "today" | "leads";
@@ -117,8 +117,7 @@ export interface AppState extends PersistSlice {
   selectedContactId: string | null;
   selectedChatId: string | null;
   selectedThreadAccount: { chatId: string; accountId: string } | null;
-  /** 聊天右上角「客户资料」跳转时，客户库定位到该联系人（一次性，消费后清空） */
-  crmFocusContactId: string | null;
+  sidebarTab: "chats" | "contacts" | "manage";
   aiSuggestions: AiSuggestion[];
   draftReply: string;
   draftReplyByChatId: Record<string, string>;
@@ -214,6 +213,7 @@ export interface AppState extends PersistSlice {
         | "mediaMime"
         | "mediaFileName"
         | "mediaCaption"
+        | "mediaUpload"
         | "mediaThumbUrl"
         | "mediaPending"
         | "mediaError"
@@ -263,6 +263,7 @@ export interface AppState extends PersistSlice {
     extraGapMaxSec?: number;
     media?: import("@/types/broadcast").BroadcastMedia[];
     mediaMode?: import("@/types/broadcast").BroadcastMediaMode;
+    variants?: import("@/types/broadcast").BroadcastVariant[];
     confirmedDuplicateIds?: string[];
   }) => { ok: true; id: string } | { ok: false; reason: string; duplicateIds?: string[] };
   startBroadcastCampaign: (
@@ -287,10 +288,11 @@ export interface AppState extends PersistSlice {
   clearChatMessages: (chatId: string) => void;
   markChatUnreadLocal: (chatId: string, unread?: number) => void;
   markReplyHandled: (chatId: string) => void;
+  clearPendingChats: (chatIds: string[]) => void;
   toggleMessageStarred: (id: string) => void;
   listStarredMessages: () => Message[];
   isMessageSaved: (id: string) => boolean;
-  saveMessageToSelf: (id: string) => boolean;
+  saveMessageToSelf: (id: string) => Promise<boolean>;
   toggleSavedMessagePinned: (id: string) => void;
   setSavedMessagesPinned: (ids: string[], pinned: boolean) => void;
   setSavedMessageTags: (id: string, tags: string[]) => void;
@@ -305,6 +307,7 @@ export interface AppState extends PersistSlice {
   setCrmPanelTab: (tab: "customer" | "quick-replies" | "images") => void;
   setChatListFilter: (f: ChatListFilter) => void;
   goToChats: (filter?: ChatListFilter) => void;
+  openContacts: (tab?: "contacts" | "manage") => void;
   pushToast: (
     message: string,
     tone?: ToastTone,
@@ -333,6 +336,7 @@ export interface AppState extends PersistSlice {
   ) => void;
   activitiesForContact: (contactId: string) => Activity[];
   deleteContactLocal: (id: string) => void;
+  deleteContactsLocal: (ids: string[]) => void;
   updateContact: (id: string, patch: Partial<Contact>) => void;
   /** 批量更新多个联系人（一次 setState；mergeTags 为追加标签） */
   batchUpdateContacts: (
@@ -346,6 +350,7 @@ export interface AppState extends PersistSlice {
   /** 批量导入联系人：静默建联系人+会话行，返回新增数 */
   importContacts: (contacts: Omit<Contact, "id">[]) => number;
   toggleFollowUp: (id: string) => void;
+  completeFollowUps: (ids: string[]) => number;
   /** 只取消指定的未完成提醒，保留历史并重新计算下一条提醒。 */
   cancelFollowUp: (id: string) => boolean;
   addFollowUp: (f: Omit<FollowUp, "id" | "done">) => void;

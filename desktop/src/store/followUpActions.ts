@@ -177,6 +177,28 @@ export function createFollowUpActions({
       finish();
     },
 
+    completeFollowUps(ids: string[]) {
+      const selected = new Set(ids);
+      const current = getState().followUps;
+      const changed = current.filter((item) => selected.has(item.id) && !item.done);
+      if (!changed.length) return 0;
+      const contactIds = new Set(changed.map((item) => item.contactId));
+      setState((state) => {
+        const followUps = state.followUps.map((item) => selected.has(item.id) && !item.done
+          ? { ...item, done: true, cancelled: undefined }
+          : item);
+        return {
+          followUps,
+          contacts: state.contacts.map((contact) => contactIds.has(contact.id)
+            ? { ...contact, nextFollowUpAt: getNextOpenFollowUp(followUps, contact.id)?.dueAt }
+            : contact),
+        };
+      });
+      changed.forEach((item) => clearNotification?.(item.id));
+      finish();
+      return changed.length;
+    },
+
     cancelFollowUp(id: string) {
       const followUp = getState().followUps.find((item) => item.id === id);
       if (!followUp || followUp.done) return false;

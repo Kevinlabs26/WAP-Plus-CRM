@@ -1,8 +1,9 @@
 import type { ChannelId } from "@/channels";
 import { gatedMediaSend } from "@/channels/mediaGate";
 import type { AppState } from "@/store/appStore";
-import { baileysSendDocument } from "@/lib/baileys";
+import { baileysSendDocument, baileysSendVideo } from "@/lib/baileys";
 import { translateCurrent } from "@/i18n";
+import { cacheMediaBlob } from "@/lib/mediaCache";
 
 type SendResult = object;
 
@@ -55,22 +56,30 @@ export async function sendFileMessage(
     deps.setBaileysLoginOpen(true);
     return false;
   }
-  if (file.size > 14 * 1024 * 1024) {
-    deps.pushToast(translateCurrent("runtime.fileTooLarge"), "error");
+  const nativeVideo = deps.isBaileys && (file.type === "video/mp4" || /\.mp4$/i.test(file.name));
+  if (file.size > (nativeVideo ? 100 : 14) * 1024 * 1024) {
+    deps.pushToast(translateCurrent(nativeVideo ? "runtime.videoTooLarge" : "runtime.fileTooLarge"), "error");
     return false;
   }
   deps.setSending(true);
   const caption = captionOverride ?? deps.getDraftReply();
   let msgId: string | null = null;
+  let lastPercent = -1;
+  const onUploadProgress = (loaded: number, total: number) => {
+    const percent = Math.min(100, Math.floor(loaded / total * 100));
+    if (!msgId || percent === lastPercent) return;
+    lastPercent = percent;
+    deps.patchMessage(msgId, {mediaUpload:{percent, stage:percent === 100 ? "waiting" : "uploading"}});
+  };
   try {
-    const dataUrl = await new Promise<string>((resolve, reject) => {
+    let dataUrl = nativeVideo ? "" : await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(String(reader.result || ""));
-      reader.onerror = () => reject(new Error(translateCurrent("runtime.fileReadFailed")));
+      reader.onerror = reader.onabort = () => reject(new Error(translateCurrent("runtime.fileReadFailed")));
       reader.readAsDataURL(file);
     });
     msgId = deps.enqueueOutgoingMessage({
-      body: caption || `[文件] ${file.name}`,
+      body: caption || `${nativeVideo ? "[视频]" : "[文件]"} ${file.name}`,
       chatId: deps.chatId,
       phoneE164: recipient,
       contactId: contact.id,
@@ -78,23 +87,28 @@ export async function sendFileMessage(
       deviceId: deps.selectedPhoneId,
       accountId: deps.chatAccountId || undefined,
       deliveryStatus: "pending",
+      mediaType: nativeVideo ? "video" : undefined,
     });
     if (msgId) {
+      if (nativeVideo) {
+        dataUrl = await cacheMediaBlob(msgId, file);
+      }
       deps.patchMessage(msgId, {
-        mediaType: "document",
+        mediaType: nativeVideo ? "video" : "document",
         mediaUrl: dataUrl,
         mediaFileName: file.name,
-        mediaMime: file.type,
+        mediaMime: nativeVideo ? "video/mp4" : file.type,
         mediaCaption: caption || undefined,
       });
     }
+    if (nativeVideo && !msgId) throw new Error("无法保存视频消息，请重试");
     if (!msgId && deps.requiredMinGapSec !== undefined) throw new Error("无法保存出站消息，群发已停止");
     await deps.persistBeforeSend?.();
     const raw = deps.isBaileys
       ? await gatedMediaSend(
           { phoneE164: recipient, accountId: deps.chatAccountId },
           () =>
-            baileysSendDocument(recipient, dataUrl, file.name, {
+            nativeVideo ? baileysSendVideo(recipient, file, caption, deps.chatAccountId, deps.canSend, onUploadProgress) : baileysSendDocument(recipient, dataUrl, file.name, {
               mimetype: file.type || "application/octet-stream",
               caption,
               accountId: deps.chatAccountId,
@@ -123,6 +137,7 @@ export async function sendFileMessage(
             : `${recipient.replace(/\D/g, "")}@s.whatsapp.net`);
         deps.updateMessageDelivery(msgId, {
           deliveryStatus: "sent",
+          mediaUpload: undefined,
           waMessageId: waId,
           lastError: undefined,
           ...(waId && remoteJid
@@ -142,6 +157,7 @@ export async function sendFileMessage(
     if (msgId) {
       deps.updateMessageDelivery(msgId, {
         deliveryStatus: "failed",
+        mediaUpload: undefined,
         lastError: message,
         deliveryUncertain: !!e && typeof e === "object" && "deliveryUncertain" in e && e.deliveryUncertain === true,
       });

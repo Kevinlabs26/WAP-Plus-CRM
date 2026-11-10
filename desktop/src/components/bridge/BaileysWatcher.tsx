@@ -12,7 +12,7 @@ import { syncLog } from "@/lib/syncDebug";
 import { isComposerTypingBusy } from "@/lib/composerActivity";
 import { hasRealtimeIngestEvents } from "@/lib/ingestGate";
 import { useAppStore } from "@/store/appStore";
-import { flushPersist, persist } from "@/store/persist";
+import { flushPersist, persist, prunePersistedMessageMemory } from "@/store/persist";
 import { useI18n } from "@/i18n";
 import { waitForMediaCacheWrites } from "@/lib/mediaCache";
 import { resolveAccountIdentity } from "@/lib/accountIdentity";
@@ -48,7 +48,9 @@ const DURABLE_EVENT_TYPES = new Set([
   "messages.ack",
   "contacts.sync",
   "chats.delete",
+  "history.sync_status",
 ]);
+const storageWarningByAccount = new Map<string,string>();
 
 function hasDurableEvents(events: BridgeEvent[]) {
   return events.some((event) => DURABLE_EVENT_TYPES.has(event.type));
@@ -88,10 +90,12 @@ function scheduleAccountsPersist() {
 type AcctRuntime = {
   sessionEpoch: number;
   cursor: number;
+  realtimeCursor: number;
   prevConnected: boolean;
   syncing: boolean;
   lastEventAt: number;
   lastCatchupAt: number;
+  catchupComplete: boolean;
   failStreak: number;
   lastConfirmedConnectedAt: number;
   labelsSyncing: boolean;
@@ -107,10 +111,12 @@ function emptyRt(): AcctRuntime {
   return {
     sessionEpoch: 0,
     cursor: 0,
+    realtimeCursor: 0,
     prevConnected: false,
     syncing: false,
     lastEventAt: Date.now(),
     lastCatchupAt: 0,
+    catchupComplete: false,
     failStreak: 0,
     lastConfirmedConnectedAt: 0,
     labelsSyncing: false,
@@ -153,42 +159,72 @@ export function BaileysWatcher() {
     let ingestIdle: number | null = null;
     let ingestDelayTimer: number | null = null;
     let ingestQueue: BridgeEvent[][] = [];
+    let realtimeIngestQueue: BridgeEvent[][] = [];
     // 只在消息真正交给 store 后持久化游标；应用在排队期间退出时，旧游标会让下次启动重新拉取。
     const pendingCursorByAccount = new Map<string, number>();
+    const pendingHistoryComplete = new Map<string, number>();
     const INGEST_CHUNK_SIZE = 4;
     let ingestInFlight = false;
+    let ingestInFlightEvents: BridgeEvent[] = [];
     let lastIngestAt = Date.now();
     let checkpointInFlight = false;
     let checkpointRetryTimer: number | null = null;
 
     const commitPendingCursors = () => {
       if (cancelled || checkpointInFlight || checkpointRetryTimer != null ||
-          !pendingCursorByAccount.size || !useAppStore.getState().hydrated ||
-          pendingEvents.length || ingestQueue.length || ingestInFlight) return;
+          !pendingCursorByAccount.size || !useAppStore.getState().hydrated) return;
+      const savedPrefix = (accountId: string, cursor: number) => {
+        let through = cursor;
+        const inspect = (events: BridgeEvent[]) => {
+          for (const event of events) {
+            if (event.deviceId !== accountId) continue;
+            through = typeof event.seq === "number" ? Math.min(through, event.seq - 1) : 0;
+          }
+        };
+        inspect(pendingEvents);
+        inspect(ingestInFlightEvents);
+        for (const chunk of ingestQueue) inspect(chunk);
+        for (const chunk of realtimeIngestQueue) inspect(chunk);
+        return through;
+      };
+      // A continuously busy account must still acknowledge its fully ingested prefix.
+      const cursorSnapshot = new Map([...pendingCursorByAccount]
+        .map(([accountId, cursor]): [string, number] => [accountId, savedPrefix(accountId, cursor)])
+        .filter(([accountId, cursor]) => cursor > readCursor(accountId)));
+      if (!cursorSnapshot.size) return;
       checkpointInFlight = true;
       let retryDelay = 0;
-      const cursorSnapshot = new Map(pendingCursorByAccount);
       const epochs = new Map([...cursorSnapshot.keys()].map(id => [id, baileysSessionEpoch(id)]));
       void Promise.all([
         waitForMediaCacheWrites(),
         flushPersist(() => useAppStore.getState()),
       ])
         .then(() => {
-          if (cancelled || pendingEvents.length || ingestQueue.length || ingestInFlight) return;
+          if (cancelled) return;
           for (const [accountId, cursor] of cursorSnapshot) {
-            // Newer events may have arrived while SQLite was saving; keep
-            // their cursor pending until the next durable snapshot.
-            if (epochs.get(accountId) === baileysSessionEpoch(accountId) &&
-                pendingCursorByAccount.get(accountId) === cursor) {
+            // A saved prefix stays durable even when newer events arrive during the save.
+            if (epochs.get(accountId) === baileysSessionEpoch(accountId)) {
               writeCursor(accountId, cursor);
-              pendingCursorByAccount.delete(accountId);
+              if (pendingCursorByAccount.get(accountId) === cursor) {
+                pendingCursorByAccount.delete(accountId);
+              }
+              const completeAt = pendingHistoryComplete.get(accountId);
+              if (completeAt !== undefined && completeAt <= cursor) {
+                pendingHistoryComplete.delete(accountId);
+                pushToast(t("runtime.historySyncComplete"), "success");
+              }
             }
+          }
+          if (!pendingCursorByAccount.size) {
+            prunePersistedMessageMemory(useAppStore.getState, useAppStore.setState);
           }
         })
         .catch(() => { retryDelay = 15_000; })
         .finally(() => {
           checkpointInFlight = false;
-          if (cancelled || !pendingCursorByAccount.size) return;
+          if (cancelled || !pendingCursorByAccount.size || ![...pendingCursorByAccount].some(
+            ([accountId, cursor]) => savedPrefix(accountId, cursor) > readCursor(accountId)
+          )) return;
           checkpointRetryTimer = window.setTimeout(() => {
             checkpointRetryTimer = null;
             commitPendingCursors();
@@ -214,10 +250,11 @@ export function BaileysWatcher() {
       if (ingestInFlight) return;
       if (cancelled) {
         ingestQueue = [];
+        realtimeIngestQueue = [];
         return;
       }
       const typing = isComposerTypingBusy() || hasPendingUserInput();
-      const realtimePending = ingestQueue.some(hasRealtimeIngestEvents);
+      const realtimePending = realtimeIngestQueue.length > 0 || ingestQueue.some(hasRealtimeIngestEvents);
       if (typing && !realtimePending && Date.now() - lastIngestAt < 1000) {
         scheduleIngestPump();
         return;
@@ -226,8 +263,9 @@ export function BaileysWatcher() {
       // 空闲时继续合并历史，减少克隆和重渲次数。
       let merged: BridgeEvent[] = [];
       let mergedItems = 0;
-      while (ingestQueue.length) {
-        const chunk = ingestQueue[0] as BridgeEvent[];
+      while (realtimeIngestQueue.length || ingestQueue.length) {
+        const queue = realtimeIngestQueue.length ? realtimeIngestQueue : ingestQueue;
+        const chunk = queue[0] as BridgeEvent[];
         let chunkItems = 0;
         for (const event of chunk) {
           const p =
@@ -239,7 +277,7 @@ export function BaileysWatcher() {
         }
         if (merged.length && (mergedItems + chunkItems > (typing ? 48 : 480) ||
             merged.length + chunk.length > 40)) break;
-        merged.push(...(ingestQueue.shift() as BridgeEvent[]));
+        merged.push(...(queue.shift() as BridgeEvent[]));
         mergedItems += chunkItems;
         // 一帧内别把预算全吃掉：合并本身也要留时间给新输入
         if (
@@ -256,11 +294,13 @@ export function BaileysWatcher() {
         const id = event.deviceId || "";
         if (epoch === undefined || epoch === baileysSessionEpoch(id)) return true;
         pendingCursorByAccount.delete(id);
+        pendingHistoryComplete.delete(id);
         writeCursor(id, 0);
         return false;
       });
       if (merged.length) {
         ingestInFlight = true;
+        ingestInFlightEvents = merged;
         try {
           await ingest(merged);
           lastIngestAt = Date.now();
@@ -273,9 +313,10 @@ export function BaileysWatcher() {
           return;
         } finally {
           ingestInFlight = false;
+          ingestInFlightEvents = [];
         }
         if (cancelled) return;
-        if (!ingestQueue.length && pendingCursorByAccount.size) {
+        if (pendingCursorByAccount.size) {
           if (!useAppStore.getState().hydrated) {
             scheduleIngestPump();
             return;
@@ -288,8 +329,8 @@ export function BaileysWatcher() {
           return;
         }
       }
-      if (!merged.length && !ingestQueue.length) commitPendingCursors();
-      if (ingestQueue.length) scheduleIngestPump();
+      if (!merged.length && pendingCursorByAccount.size) commitPendingCursors();
+      if (realtimeIngestQueue.length || ingestQueue.length) scheduleIngestPump();
     };
 
     const scheduleIngestPump = () => {
@@ -302,7 +343,7 @@ export function BaileysWatcher() {
       )
         return;
       if ((isComposerTypingBusy() || hasPendingUserInput()) &&
-          !ingestQueue.some(hasRealtimeIngestEvents) && Date.now() - lastIngestAt < 1000) {
+          !realtimeIngestQueue.length && !ingestQueue.some(hasRealtimeIngestEvents) && Date.now() - lastIngestAt < 1000) {
         ingestDelayTimer = window.setTimeout(() => {
           ingestDelayTimer = null;
           scheduleIngestPump();
@@ -311,7 +352,7 @@ export function BaileysWatcher() {
       }
       if (typeof window.requestIdleCallback === "function") {
         ingestIdle = window.requestIdleCallback(pumpIngestQueue, {
-          timeout: ingestQueue.some(hasRealtimeIngestEvents) ? 50 : 500,
+          timeout: realtimeIngestQueue.length || ingestQueue.some(hasRealtimeIngestEvents) ? 50 : 500,
         });
       } else if (document.hidden) {
         // 隐藏窗口的动画帧可能暂停，不能把收消息绑在绘制上。
@@ -326,7 +367,7 @@ export function BaileysWatcher() {
 
     // History/snapshot can contain hundreds of items. Keep each store update
     // small enough to yield between frames so navigation and typing stay responsive.
-    const queueIngestBatch = (events: BridgeEvent[]) => {
+    const queueIngestBatch = (events: BridgeEvent[], realtime = false) => {
       if (!events.length || cancelled) return;
       const chunks: BridgeEvent[][] = [];
       let smallBatch: BridgeEvent[] = [];
@@ -360,7 +401,7 @@ export function BaileysWatcher() {
               payload: {
                 ...payload,
                 items: items.slice(i, end),
-                syncBatchFinal: end === items.length,
+                syncBatchFinal: payload?.syncBatchFinal !== false && end === items.length,
               } as BridgeEvent["payload"],
             },
           ]);
@@ -368,7 +409,7 @@ export function BaileysWatcher() {
       }
       flushSmallBatch();
 
-      ingestQueue.push(...chunks);
+      (realtime ? realtimeIngestQueue : ingestQueue).push(...chunks);
       scheduleIngestPump();
     };
 
@@ -439,6 +480,7 @@ export function BaileysWatcher() {
       if (r && r.sessionEpoch !== epoch) {
         r = undefined;
         pendingCursorByAccount.delete(accountId);
+        pendingHistoryComplete.delete(accountId);
         writeCursor(accountId, 0);
       }
       if (!r) {
@@ -514,6 +556,8 @@ export function BaileysWatcher() {
       const r = rt(accountId);
       if (r.syncing || cancelled) return;
       r.syncing = true;
+      r.catchupComplete = false;
+      r.lastCatchupAt = Date.now();
       const epoch = baileysSessionEpoch(accountId);
       try {
         await new Promise((res) =>
@@ -524,6 +568,7 @@ export function BaileysWatcher() {
         if (cancelled || epoch !== baileysSessionEpoch(accountId)) return;
         // 空快照也算一次完整尝试；历史数据会通过 events 主动到达，禁止首分钟循环 /sync。
         r.lastCatchupAt = Date.now();
+        r.catchupComplete = true;
         const n = result.contacts?.length ?? 0;
         const m = result.messages?.length ?? 0;
         if (n > 0 || m > 0 || result.deletionEvents?.length) {
@@ -654,11 +699,12 @@ export function BaileysWatcher() {
           const nextName = identity.userName;
           const nextPhoneE164 = identity.phoneE164;
           const nextAvatar = identity.avatarUrl;
+          const syncStorageWarning=(status as typeof status & {syncStorage?:{warning?:string}}).syncStorage?.warning||undefined;
           if (
             prev.status !== nextStatus ||
             prev.userName !== nextName ||
             prev.phoneE164 !== nextPhoneE164 ||
-            prev.avatarUrl !== nextAvatar
+            prev.avatarUrl !== nextAvatar || prev.syncStorageWarning!==syncStorageWarning
           ) {
             const next = accounts.map((a, i) =>
               i === idx
@@ -668,6 +714,7 @@ export function BaileysWatcher() {
                     userName: nextName,
                     phoneE164: nextPhoneE164,
                     avatarUrl: nextAvatar,
+                    syncStorageWarning,
                     // 仅状态变化时戳时间，避免无意义对象抖动
                     updatedAt: new Date().toISOString(),
                   }
@@ -811,6 +858,7 @@ export function BaileysWatcher() {
       if (r.pollInFlight || cancelled) return;
       const now = Date.now();
       const priority = accountId === liveId() || accountId === focusedAccountId();
+      if (!force && r.failStreak && now - r.lastPollAt < Math.min(30_000, 2000 * 2 ** Math.min(r.failStreak - 1, 4))) return;
       if (!force && !priority && r.slowUntil > now) return;
       if (!force && r.lastPollAt && now - r.lastPollAt < minIntervalFor(accountId)) {
         return;
@@ -836,6 +884,11 @@ export function BaileysWatcher() {
         let connected = r.prevConnected;
         let userName: string | null = null;
         if (status) {
+          const syncStorage = (status as typeof status & {syncStorage?:{warning?:string;warningCode?:string}}).syncStorage;
+          const warning = syncStorage?.warning || "";
+          const warningCode = syncStorage?.warningCode || warning;
+          if(warning && storageWarningByAccount.get(accountId)!==warningCode)useAppStore.getState().pushToast(`${accountId}：${warning}`,"error");
+          if(warning)storageWarningByAccount.set(accountId,warningCode);else storageWarningByAccount.delete(accountId);
           connected = applyUiFromStatus(accountId, status);
           userName =
             extractAccountHumanName(status.user?.name) ||
@@ -851,7 +904,7 @@ export function BaileysWatcher() {
           userName = slot?.userName || null;
         }
 
-        const result = await baileysEvents(r.cursor, accountId);
+        const result = await baileysEvents(r.cursor, accountId, readCursor(accountId), r.realtimeCursor);
         if (cancelled || epoch !== baileysSessionEpoch(accountId)) return;
 
         r.failStreak = 0;
@@ -918,13 +971,27 @@ export function BaileysWatcher() {
             if ((ev as { type?: string }).type === "history.sync_status") {
               const p = (ev as { payload?: { status?: string } }).payload || {};
               const st = String(p.status || "");
-              if (st === "complete") pushToast(t("runtime.historySyncComplete"), "success");
+              if (st === "complete") pendingHistoryComplete.set(accountId,
+                typeof ev.seq === "number" ? ev.seq : result.cursor);
               else if (st === "paused")
                 pushToast(t("runtime.historySyncPaused"), "info");
             }
           }
           queueEvents(tagged as BridgeEvent[]);
           r.lastEventAt = Date.now();
+        }
+
+        if (result.realtimeEvents?.length) {
+          const tagged = result.realtimeEvents.map(event => tagAccount(event as unknown as Record<string, unknown>, accountId));
+          queueIngestBatch(tagged as BridgeEvent[], true);
+          eventCount += tagged.length;
+          r.lastEventAt = Date.now();
+        }
+        if (typeof result.realtimeCursor === "number") r.realtimeCursor = result.realtimeCursor;
+        if (result.recentEvents?.length) {
+          const tagged = result.recentEvents.map(event => tagAccount(event as unknown as Record<string, unknown>, accountId));
+          queueIngestBatch(tagged as BridgeEvent[], true);
+          eventCount += tagged.length;
         }
 
         if (connected && !r.prevConnected) {
@@ -946,12 +1013,13 @@ export function BaileysWatcher() {
           void runAutoSync(accountId, userName);
         }
 
-        // 空闲全量 /sync 过频会重复灌库导致列表抖；拉长间隔，cursor 正常推进时不必常补
+        // Healthy event polling already reports gaps; silence alone is not missing history.
         if (
           connected &&
           r.prevConnected &&
           !r.syncing &&
           Date.now() - r.lastEventAt > 180_000 &&
+          !r.catchupComplete &&
           Date.now() - r.lastCatchupAt > 300_000
         ) {
           void runAutoSync(accountId, userName, { quiet: true });
@@ -1072,6 +1140,7 @@ export function BaileysWatcher() {
       if (checkpointRetryTimer != null) window.clearTimeout(checkpointRetryTimer);
       pendingEvents = [];
       ingestQueue = [];
+      realtimeIngestQueue = [];
       // 丢弃尚未处理的队列时，下一次挂载必须从已落盘游标重拉。
       byAccount.current.clear();
       window.clearTimeout(first);

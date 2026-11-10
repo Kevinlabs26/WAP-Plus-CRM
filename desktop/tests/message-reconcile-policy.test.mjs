@@ -40,3 +40,14 @@ test("completed history work and deletes still run full repair", () => {
     true
   );
 });
+
+test('protocol history chunks only run full repair after the final chunk', () => {
+  for (let index = 0; index < 100; index++) {
+    assert.equal(needsFullMessageReconcile([{ type: 'messages.sync', payload: {
+      source: 'history', live: false, syncBatchFinal: true, historyChunk: { index, total: 100 },
+    } }]), index === 99);
+  }
+  assert.equal(needsFullMessageReconcile([{ type: 'messages.sync', payload: {
+    source: 'history', syncBatchFinal: false, historyChunk: { index: 99, total: 100 },
+  } }]), false, 'last protocol chunk can still have unfinished frontend slices');
+});

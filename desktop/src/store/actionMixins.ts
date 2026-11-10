@@ -1,7 +1,7 @@
 import { resolveActiveSalesStage, resolveSalesStageLabel } from "@/lib/contactWorkflow";
 import { clearFollowUpNotifyDedupe } from "@/lib/followUpDueNotify";
 import type { SliceContext } from "./types";
-import { persist, scheduleStatsRecompute } from "./persist";
+import { persist, flushPersist, scheduleStatsRecompute } from "./persist";
 import { createChatFolderActions } from "./chatFolderActions";
 import { createFollowUpActions } from "./followUpActions";
 import { createActivityActions } from "./activityActions";
@@ -89,7 +89,7 @@ export function createActionMixins({ set, get }: SliceContext) {
     getChats: () => get().chats,
     getContacts: () => get().contacts,
     setState: (patch) => set(patch),
-    persist: () => persist(get),
+    persist: () => flushPersist(get),
   });
   const contactMergeActions = createContactMergeActions({ set, get });
 

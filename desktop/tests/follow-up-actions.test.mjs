@@ -39,6 +39,12 @@ actions.toggleFollowUp("f1");
 assert.equal(state.followUps.find((item) => item.id === "f1").done, false);
 assert.equal(state.contacts.find((item) => item.id === "c1").nextFollowUpAt, "2026-08-20");
 
+const beforeBulkPersist = persisted;
+assert.equal(actions.completeFollowUps(["f1", "missing"]), 1);
+assert.equal(state.followUps.find((item) => item.id === "f1").done, true);
+assert.equal(actions.completeFollowUps(["f1"]), 0);
+assert.equal(persisted, beforeBulkPersist + 1);
+
 const before = state.followUps.length;
 actions.addFollowUp({
   contactId: "c1",
@@ -46,8 +52,9 @@ actions.addFollowUp({
   dueAt: "2026-08-22",
   note: "改期",
 });
-assert.equal(state.followUps.length, before);
-assert.equal(state.followUps.find((item) => item.id === "f1").dueAt, "2026-08-22");
+assert.equal(state.followUps.length, before + 1);
+assert.equal(state.followUps.find((item) => item.id === "f1").dueAt, "2026-08-20");
+assert.equal(state.followUps.find((item) => item.contactId === "c1" && !item.done).dueAt, "2026-08-22");
 assert.equal(state.contacts.find((item) => item.id === "c1").nextFollowUpAt, "2026-08-22");
 
 console.log("follow-up-actions.test.mjs ok");

@@ -14,9 +14,11 @@ import {
 import { BaileysConnectCard } from "@/components/settings/BaileysConnectCard";
 import type { WaAccount } from "@/types/account";
 import { useI18n } from "@/i18n";
+import { CloneCallBinding, type useCloneCallBindings } from "./CloneCallBinding";
 
 export type AccountSlotCardProps = {
   account: WaAccount;
+  cloneClients: ReturnType<typeof useCloneCallBindings>;
   idx: number;
   isDefaultSend: boolean;
   isConnectionFocus: boolean;
@@ -53,6 +55,7 @@ export type AccountSlotCardProps = {
  */
 export function AccountSlotCard({
   account: a,
+  cloneClients,
   idx,
   isDefaultSend,
   isConnectionFocus,
@@ -99,6 +102,7 @@ export function AccountSlotCard({
           : "border-zinc-800/90 bg-zinc-900/50 hover:border-zinc-700"
       )}
     >
+      {a.syncStorageWarning&&<p role="alert" className="mb-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-500">{a.syncStorageWarning}</p>}
       <div className="flex flex-wrap items-start gap-2.5">
         <button
           type="button"
@@ -173,6 +177,7 @@ export function AccountSlotCard({
             </>
           )}
         </div>
+        <CloneCallBinding account={a} clients={cloneClients} />
         <div
           className="relative shrink-0 self-start"
           data-account-slot-menu

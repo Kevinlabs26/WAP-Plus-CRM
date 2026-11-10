@@ -9,9 +9,9 @@ const mocks = {
   "@/store/appStore": "export const useAppStore={getState:()=>globalThis.campaignState};export const flushPersist=async()=>globalThis.campaignPersist?.();",
   "@/lib/baileys": `export const baileysStatus=async()=>({connection:'connected'});
     export const baileysSend=(...args)=>globalThis.campaignSend(...args);
-    export const baileysSendImage=baileysSend,baileysSendSticker=baileysSend,baileysSendDocument=baileysSend,baileysSendVoice=baileysSend;`,
+    export const baileysSendImage=baileysSend,baileysSendSticker=baileysSend,baileysSendDocument=baileysSend,baileysSendVoice=baileysSend,baileysSendVideo=baileysSend;`,
   "@/lib/bridge": "export const isTauri=()=>true;export const bridgeInvoke=async()=>({});export const getBridgeStatus=async()=>({connected:true});",
-  "@/lib/mediaCache": "export const readMediaCache=async()=>globalThis.campaignMedia;",
+  "@/lib/mediaCache": "export const readMediaCache=async()=>globalThis.campaignMedia;export const cacheMediaBlob=async()=>{};",
   "@/i18n": "export const translateCurrent=key=>key;",
 };
 const result = await build({
@@ -26,6 +26,35 @@ const result = await build({
 });
 const { CampaignRunner, withSendGate, clearRateLimitState } = await import("data:text/javascript;base64," + Buffer.from(result.outputFiles[0].text+'\n//# sourceURL=campaign-safety-test.js').toString("base64"));
 const settle = () => new Promise(setImmediate);
+
+test('a random version sends its frozen media and caption', async () => {
+  const env = setup('image');
+  try {
+    const campaign = env.get().broadcastCampaigns[0];
+    campaign.variants = [{ id: 'a', template: 'Unused', media: [{ id: 'unused', kind: 'video', mime: 'video/mp4' }] },
+      { id: 'b', template: 'Chosen', media: campaign.media }];
+    campaign.media = undefined;
+    Object.assign(campaign.items[0], { variantId: 'b', mediaId: 'media', bodyRendered: 'Chosen caption' });
+    CampaignRunner(); await settle();
+    assert.equal(env.sends.length, 1);
+    assert.ok(JSON.stringify(env.sends[0]).includes('Chosen caption'));
+    assert.equal(env.get().broadcastCampaigns[0].items[0].status, 'sent');
+  } finally { env.cleanup(); }
+});
+
+test('a broken version attachment pauses before either text or media can leave', async () => {
+  const env = setup('text');
+  try {
+    const campaign = env.get().broadcastCampaigns[0];
+    campaign.variants = [{ id: 'a', template: 'Hello', media: [{ id: 'expected', kind: 'image', mime: 'image/png' }] }];
+    Object.assign(campaign.items[0], { variantId: 'a', mediaId: 'missing' });
+    CampaignRunner(); await settle();
+    assert.equal(env.sends.length, 0);
+    assert.equal(env.get().broadcastCampaigns[0].status, 'paused');
+    assert.match(env.get().broadcastCampaigns[0].items[0].error, /附件/);
+    assert.equal(env.get().messages.length, 0);
+  } finally { env.cleanup(); }
+});
 
 function setup(kind = "text") {
   clearRateLimitState();

@@ -35,8 +35,12 @@ export function needsFullMessageReconcile(
     }
     if (event.type !== "messages.sync") return false;
     const payload = payloadObject(event.payload);
+    const chunk = payloadObject(payload.historyChunk);
+    const moreHistoryChunks = Number.isInteger(chunk.index) && Number.isInteger(chunk.total) &&
+      Number(chunk.index) >= 0 && Number(chunk.index) < Number(chunk.total) - 1;
     return (
       payload.syncBatchFinal !== false &&
+      !moreHistoryChunks &&
       !isLiveMessagesSyncPayload(payload)
     );
   });

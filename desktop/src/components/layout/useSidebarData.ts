@@ -19,7 +19,7 @@ import {
 import type { ChatFolder, ChatFolderClone } from "@/store/appStore";
 import { chatInView } from "@/store/accountScope";
 import {
-  leadCandidateForChat,
+  leadCandidatesForChats,
   leadDateBucket,
   leadDateLabel,
   type LeadCandidate,
@@ -33,7 +33,7 @@ const EMPTY_CLONES: ChatFolderClone[] = [];
 const EMPTY_CHAT_BY_CONTACT = new Map<string, ChatPreview>();
 
 export type UseSidebarDataArgs = {
-  listTab: "chats" | "contacts";
+  listTab: "chats" | "contacts" | "manage";
   query: string;
   showArchived: boolean;
   chatSort: ChatSortMode;
@@ -112,6 +112,7 @@ export function useSidebarData({
         : 0;
     const currentAccountId =
       viewMode.type === "account" ? viewMode.accountId : filterFallback;
+    const eligible = leadCandidatesForChats(chats, contactById, messagesByChatId, leadInbox, filterFallback);
     for (const chat of chats) {
       if (dismissed.has(chat.id)) continue;
       const contact = contactById.get(chat.contactId);
@@ -135,13 +136,7 @@ export function useSidebarData({
       ) {
         continue;
       }
-      const candidate = leadCandidateForChat(
-        chat,
-        contact,
-        messagesByChatId[chat.id] || [],
-        leadInbox,
-        accountId
-      );
+      const candidate = eligible.get(chat.id);
       if (!candidate) continue;
       if (rangeStart && Date.parse(candidate.firstInboundAt) < rangeStart) continue;
       candidates.set(chat.id, candidate);
@@ -179,7 +174,7 @@ export function useSidebarData({
     () =>
       filterSidebarContacts(
         contacts,
-        listTab === "contacts" ? query : "",
+        listTab !== "chats" ? query : "",
         selfName,
         viewMode,
         filterFallback,
@@ -355,13 +350,7 @@ export function useSidebarData({
     return full.slice(0, 1).toUpperCase();
   };
   const folderDisplayName = (folder: (typeof chatFolders)[number]) => {
-    if (!isAllAccountsView) return folder.name;
-    if (folder.scope?.type === "all") return `${folder.name} · 全部`;
-    const aid =
-      folder.scope?.type === "account"
-        ? folder.scope.accountId
-        : dataAccountId;
-    return `${folder.name} · ${accountLabelOf(aid)}`;
+    return folder.name;
   };
   const primaryFolderIdOf = (chatId: string) => {
     const f = chatFolders.find((x) => x.chatIds.includes(chatId));
@@ -371,7 +360,7 @@ export function useSidebarData({
   const sidebarItems: SidebarVirtItem[] = useMemo(
     () =>
       buildSidebarItems({
-        listTab,
+        listTab: listTab === "manage" ? "contacts" : listTab,
         archivedCount,
         showArchived,
         isAllAccountsView,

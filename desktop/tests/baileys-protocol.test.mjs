@@ -25,6 +25,19 @@ assert.deepEqual([...boundedMessages.keys()], ["b", "c"]);
 boundedMessages.set("b", 4);
 assert.deepEqual([...boundedMessages.entries()], [["c", 3], ["b", 4]]);
 
+const byteBounded = new BoundedMessageMap(2000, 1024);
+for (let i = 0; i < 1000; i++) byteBounded.set(i, { data: Buffer.alloc(400) });
+assert.ok(byteBounded.size <= 2, 'raw protocol cache must be bounded by bytes as well as count');
+assert.ok(byteBounded.totalBytes <= 1024);
+byteBounded.set('huge', { data: Buffer.alloc(2048) });
+assert.equal(byteBounded.has('huge'), false);
+assert.equal(byteBounded.has(999), true);
+byteBounded.delete(999);
+assert.ok(byteBounded.totalBytes < 500);
+byteBounded.clear();
+assert.equal(byteBounded.totalBytes, 0);
+assert.equal(byteBounded.entryBytes.size, 0);
+
 const server = readFileSync(
   new URL("../baileys-bridge/httpServer.mjs", import.meta.url),
   "utf8"

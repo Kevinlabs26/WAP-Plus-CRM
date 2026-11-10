@@ -7,7 +7,7 @@ const source = await readFile(
 );
 
 assert.match(source, /useAppStore\.setState\(\{ aiSuggestions: \[\] \}\)/);
-assert.match(source, /const suggestionKey = useMemo[\s\S]*?getSuggestionContextKey\(contact, thread, settings, aiAccountId, \{ chatId: selectedChatId \|\| undefined \}\)/);
+assert.match(source, /const suggestionKey = useMemo[\s\S]*?getSuggestionContextKey\(contact, thread, settings, aiAccountId, \{ chatId: selectedChatId \|\| undefined,\s*count:1 \}\)/);
 assert.match(source, /useLayoutEffect\([\s\S]*?\[selectedChatId, selectedContactId, setCrmPanelCollapsed\]/);
 assert.match(source, /\}, \[selectedChatId, selectedContactId\]\)/);
 assert.match(source, /const request = \+\+generation\.current/);
@@ -15,6 +15,6 @@ assert.match(source, /suggestionCache/);
 assert.match(source, /window\.setTimeout\(\(\) =>/);
 assert.match(source, /latestSuggestionKey\.current !== key/);
 assert.match(source, /requestSuggestions\(key, false, showProgress\(key, request\)\)/);
-assert.match(source, /\[\s*collapsed,\s*panelTab,\s*suggestionKey,\s*aiReady,\s*\]/);
+assert.match(source, /\[\s*collapsed,\s*panelTab,\s*suggestionKey,\s*aiReady,\s*suggestionsOpen,\s*replyScope.mode,\s*\]/);
 
 console.log("ai-panel-refresh.test.mjs ok");

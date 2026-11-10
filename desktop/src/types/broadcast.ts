@@ -23,6 +23,9 @@ export interface BroadcastItem {
   phoneE164: string;
   /** 已替换变量后的正文（开跑时冻结）；作为媒体 caption 或纯文本正文 */
   bodyRendered: string;
+  /** 创建任务时冻结版本及附件，暂停/重试不重新抽取。 */
+  variantId?: string;
+  mediaId?: string;
   status: BroadcastItemStatus;
   error?: string;
   sentAt?: string;
@@ -44,6 +47,15 @@ export interface BroadcastMedia {
   voiceNote?: boolean;
 }
 
+export interface BroadcastVariant {
+  id: string;
+  template: string;
+  media?: BroadcastMedia[];
+  mediaMode?: BroadcastMediaMode;
+}
+
+export const BROADCAST_MAX_VARIANTS = 10;
+
 export interface BroadcastCampaign {
   id: string;
   accountId: string;
@@ -53,6 +65,7 @@ export interface BroadcastCampaign {
   /** 可选媒体池（大小限制内）；发送时按 mediaMode 分配 */
   media?: BroadcastMedia[];
   mediaMode?: BroadcastMediaMode;
+  variants?: BroadcastVariant[];
   status: BroadcastCampaignStatus;
   createdAt: string;
   startedAt?: string;

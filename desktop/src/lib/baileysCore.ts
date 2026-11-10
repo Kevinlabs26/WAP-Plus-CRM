@@ -146,10 +146,37 @@ export async function baileysResetAccount(accountId?: string | null) {
   return reset;
 }
 
+/** XHR exposes real upload bytes; response and account checks remain in request(). */
+export function uploadWithProgress(url: string, init: RequestInit, progress?: (loaded: number, total: number) => void): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const abort = () => xhr.abort();
+    const cleanup = () => init.signal?.removeEventListener("abort", abort);
+    xhr.open(init.method || "POST", url);
+    new Headers(init.headers).forEach((value, key) => xhr.setRequestHeader(key, value));
+    xhr.upload.onprogress = event => { if (event.lengthComputable) progress?.(event.loaded, event.total); };
+    xhr.upload.onload = () => { if (init.body instanceof Blob) progress?.(init.body.size, init.body.size); };
+    xhr.onload = () => {
+      cleanup();
+      try { resolve(new Response(xhr.responseText, {status:xhr.status})); }
+      catch (error) { reject(error); }
+    };
+    xhr.onerror = () => { cleanup(); reject(new TypeError("Failed to fetch")); };
+    xhr.onabort = () => { cleanup(); reject(init.signal?.reason || new DOMException("上传已取消", "AbortError")); };
+    init.signal?.addEventListener("abort", abort, {once:true});
+    if (init.signal?.aborted) { cleanup(); reject(init.signal.reason); return; }
+    try {
+      if (init.body instanceof Blob) progress?.(0, init.body.size);
+      xhr.send(init.body as Blob);
+    } catch (error) { cleanup(); reject(error); }
+  });
+}
+
 export async function request<T>(
   path: string,
   init?: RequestInit,
-  accountId?: string | null
+  accountId?: string | null,
+  onUploadProgress?: (loaded: number, total: number) => void
 ): Promise<T> {
   let lastError: unknown;
   const id = resolveBaileysAccountId(accountId);
@@ -163,7 +190,7 @@ export async function request<T>(
     AbortSignal.timeout(method === "GET" || method === "HEAD" ? 15_000 : 30_000);
   // 写操作若已到达 WhatsApp、但响应途中丢失，自动重放会造成双发。
   // 读取可重试；POST/PUT/DELETE 只执行一次，由上层明确呈现“结果未知”。
-  const maxAttempts = method === "GET" || method === "HEAD" ? 8 : 1;
+  const maxAttempts = (method === "GET" || method === "HEAD") && !path.startsWith("/events?") ? 8 : 1;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     let sendStarted = false;
     try {
@@ -178,7 +205,8 @@ export async function request<T>(
       }
       signal.throwIfAborted();
       sendStarted = isSendRequest;
-      const response = await fetch(`${runtime.baseUrl}${path}`, {
+      const sendRequest = onUploadProgress ? uploadWithProgress : fetch;
+      const response = await sendRequest(`${runtime.baseUrl}${path}`, {
         ...init,
         signal,
         headers: {
@@ -188,7 +216,7 @@ export async function request<T>(
           ...(identity.phoneE164 ? { "X-Wap-Expected-Phone": identity.phoneE164 } : {}),
           ...init?.headers,
         },
-      });
+      }, onUploadProgress);
       const data = await response.json().catch((error) => {
         if (isSendRequest && response.ok) throw error;
         return {};
@@ -204,6 +232,9 @@ export async function request<T>(
             `Baileys HTTP ${response.status}`
         );
         (error as Error & { status?: number }).status = response.status;
+        if (path === "/message/media" && typeof data.retryable === "boolean") {
+          (error as Error & { retryable?: boolean }).retryable = data.retryable;
+        }
         throw error;
       }
       if (data?.accountId && data.accountId !== sessionId) {
@@ -216,7 +247,7 @@ export async function request<T>(
         throw new Error("Baileys 发送响应未确认成功");
       }
       if (data?.accountId) data.accountId = id;
-      for (const key of ["events", "deletionEvents"]) {
+      for (const key of ["events", "deletionEvents", "realtimeEvents", "recentEvents"]) {
         if (Array.isArray(data?.[key])) data[key] = data[key].map((event: Record<string, unknown>) => ({
           ...event, accountId: id, deviceId: id,
           payload: { ...(event.payload as Record<string, unknown>), accountId: id },
@@ -292,9 +323,9 @@ export const baileysStatus = async (accountId?: string | null) => {
   return status;
 };
 
-export const baileysEvents = async (after = 0, accountId?: string | null) => {
+export const baileysEvents = async (after = 0, accountId?: string | null, acknowledged = 0, realtimeAfter = 0) => {
   const result = await request<BaileysEventsResponse>(
-    `/events?after=${after}`,
+    `/events?after=${after}&ack=${acknowledged}&realtimeAfter=${realtimeAfter}${realtimeAfter === 0 ? "&recent=1" : ""}`,
     undefined,
     accountId
   );

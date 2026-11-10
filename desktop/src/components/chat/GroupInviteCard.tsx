@@ -90,7 +90,7 @@ export function GroupInviteCard({
         let opened = openJoinedGroup({
           accountId: owner,
           groupJid: res.groupJid,
-          group: res.group,
+          group: res.group || info || undefined,
           ingest: (events) =>
             store.ingestBridgeEvents(
               events as Parameters<typeof store.ingestBridgeEvents>[0]

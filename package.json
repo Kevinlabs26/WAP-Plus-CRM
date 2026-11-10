@@ -1,7 +1,7 @@
 {
   "name": "wap-plus",
   "private": true,
-  "version": "0.1.68",
+  "version": "0.1.69",
   "packageManager": "npm@10.9.8",
   "type": "module",
   "description": "WAP Plus CRM monorepo (desktop + baileys sidecar)",
@@ -13,6 +13,7 @@
     "dev": "npm run dev -w wap-plus-crm",
     "build": "npm run build -w wap-plus-crm",
     "test": "npm run test -w wap-plus-crm",
+    "diagnose:desktop": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/observe-desktop.ps1",
     "check": "npm run ffmpeg:prepare && npm test && npm run build && npm run baileys:build && npm run bridge:smoke",
     "ffmpeg:prepare": "node -e \"if(process.platform==='win32') require('node:child_process').execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File','tools/prepare-ffmpeg.ps1'],{stdio:'inherit',windowsHide:true})\"",
     "bridge:smoke": "node tools/mock-bridge-smoke.test.mjs",
@@ -30,6 +31,6 @@
     "postcss-selector-parser": "^6.1.5"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.23.4"
   }
 }

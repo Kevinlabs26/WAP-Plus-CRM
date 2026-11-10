@@ -11,6 +11,19 @@ import { useI18n } from "@/i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "@/lib/bridge";
 import { runAutomaticBackup, readLatestAutomaticBackup, type AutomaticBackupStatus } from "@/lib/automaticBackup";
+import {encryptPortableBackup,decryptPortableBackup,downloadPortableBackup} from "@/lib/portableBackup";
+import {createBackupBundle} from "@/store/exportDataActions";
+import {flushPersist} from "@/store/persist";
+
+type AppStorageUsage = {
+  totalBytes: number;
+  databaseBytes: number;
+  whatsappAccountsBytes: number;
+  backupsBytes: number;
+  otherAppDataBytes: number;
+  localProfileBytes: number;
+  scanIncomplete: boolean;
+};
 
 export function SettingsDataPanel() {
   const [dataPage, setDataPage] = useState<"backup" | "storage">("backup");
@@ -41,6 +54,11 @@ export function SettingsDataPanel() {
     try { return localStorage.getItem("crm-last-backup") || ""; } catch { return ""; }
   });
   const backupBusy = useRef(false);
+  const [portableMode,setPortableMode]=useState<"export"|"import"|null>(null);
+  const [portableFile,setPortableFile]=useState<File|null>(null);
+  const [backupPassword,setBackupPassword]=useState("");
+  const [backupPasswordRepeat,setBackupPasswordRepeat]=useState("");
+  const portableFileRef=useRef<HTMLInputElement>(null);
   const onExport = async () => {
     if (backupBusy.current) return;
     backupBusy.current = true;
@@ -56,6 +74,8 @@ export function SettingsDataPanel() {
   const [clearingMedia, setClearingMedia] = useState(false);
   const [mediaCacheStats, setMediaCacheStats] = useState<MediaCacheStats | null>(null);
   const [clearingData, setClearingData] = useState(false);
+  const [storageBusy, setStorageBusy] = useState(false);
+  const [storageUsage, setStorageUsage] = useState<AppStorageUsage | null>(null);
   const [releasingHistory, setReleasingHistory] = useState(false);
   const [releaseDays, setReleaseDays] = useState(90);
   const [importOpen, setImportOpen] = useState(false);
@@ -99,6 +119,24 @@ export function SettingsDataPanel() {
     return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(1)} MB`;
   };
 
+  const formatBytes = (bytes: number) => {
+    if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+    if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+    return `${(bytes / 1024).toFixed(0)} KB`;
+  };
+
+  const scanStorage = async () => {
+    if (!isTauri() || storageBusy) return;
+    setStorageBusy(true);
+    try {
+      setStorageUsage(await invoke<AppStorageUsage>("app_storage_usage"));
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : String(error), "error");
+    } finally {
+      setStorageBusy(false);
+    }
+  };
+
   const onPickImport = async (file: File | (() => Promise<unknown>) | null) => {
     if (!file || backupBusy.current) return;
     backupBusy.current = true;
@@ -116,17 +154,37 @@ export function SettingsDataPanel() {
         cancelLabel: t("common.cancel"),
         tone: "danger",
       });
-      if (!ok) return;
+      if (!ok) return false;
       const result = await importBackup(raw);
       if (!result.ok) throw new Error(result.reason || t("settingsData.restoreFailed"));
       pushToast(t("settingsData.restoreDone"), "success");
+      return true;
     } catch (e) {
       pushToast(e instanceof Error ? e.message : t("settingsData.restoreFailed"), "error");
+      return false;
     } finally {
       backupBusy.current = false;
       setImporting(false);
       if (fileRef.current) fileRef.current.value = "";
     }
+  };
+
+  const runPortable=async()=>{
+    if(backupBusy.current||backupPassword.length<10)return;
+    if(portableMode==="import"&&portableFile){
+      const ok=await onPickImport(()=>decryptPortableBackup(portableFile,backupPassword));
+      setBackupPassword("");if(ok){setPortableMode(null);setPortableFile(null);}return;
+    }
+    if(portableMode!=="export")return;
+    if(backupPassword!==backupPasswordRepeat){pushToast(t("backup.passwordMismatch"),"error");return;}
+    backupBusy.current=true;setExporting(true);
+    try{
+      await flushPersist(useAppStore.getState);
+      const {bundle}=await createBackupBundle(useAppStore.getState(),includeMedia);
+      downloadPortableBackup(await encryptPortableBackup(bundle,backupPassword));
+      pushToast(t("backup.portableSaved"),"success");setPortableMode(null);
+    }catch(error){pushToast(String(error),"error");}
+    finally{backupBusy.current=false;setExporting(false);setBackupPassword("");setBackupPasswordRepeat("");}
   };
 
   return (
@@ -152,6 +210,7 @@ export function SettingsDataPanel() {
           {t("backup.enabled")}
         </label>
         <p className="mt-2 text-zinc-400">{t("backup.hint")}</p>
+        <p className="mt-1 text-amber-500">{t("backup.localAccountOnly")}</p>
         <p className="mt-2 break-all text-zinc-500">{automaticStatus?.folder}</p>
         <p className="mt-1 text-zinc-400">{t("backup.latest")}：{automaticStatus?.latestDay || t("backup.none")}</p>
         <div className="mt-3 flex gap-2">
@@ -174,6 +233,23 @@ export function SettingsDataPanel() {
           }}>{t("backup.restoreLatest")}</Button>
         </div>
       </section>}
+
+      <section className="space-y-3 border-t border-zinc-800 pt-4">
+        <SectionLabel>{t("backup.portableTitle")}</SectionLabel>
+        <p className="text-xs leading-5 text-zinc-500">{t("backup.portableHint")}</p>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" disabled={importing||exporting||automaticBusy} onClick={()=>{setPortableMode("export");setBackupPassword("");setBackupPasswordRepeat("");}}>{t("backup.portableExport")}</Button>
+          <Button size="sm" disabled={importing||exporting||automaticBusy} onClick={()=>portableFileRef.current?.click()}>{t("backup.portableImport")}</Button>
+          <input ref={portableFileRef} type="file" accept=".wapbackup" className="hidden" onChange={event=>{const file=event.target.files?.[0];if(file){setPortableFile(file);setPortableMode("import");setBackupPassword("");setBackupPasswordRepeat("");}event.target.value="";}}/>
+        </div>
+        {portableMode&&<div className="space-y-2">
+          {portableMode==="import"&&<p className="truncate text-xs text-zinc-400">{portableFile?.name}</p>}
+          <input type="password" autoComplete="new-password" className="ui-control w-full px-3" maxLength={1024} aria-label={t("backup.password")} placeholder={t("backup.password")} value={backupPassword} disabled={importing||exporting} onChange={event=>setBackupPassword(event.target.value)}/>
+          {portableMode==="export"&&<input type="password" autoComplete="new-password" className="ui-control w-full px-3" maxLength={1024} aria-label={t("backup.passwordRepeat")} placeholder={t("backup.passwordRepeat")} value={backupPasswordRepeat} disabled={exporting} onChange={event=>setBackupPasswordRepeat(event.target.value)}/>}
+          <p className="text-xs text-amber-500">{t("backup.passwordWarning")}</p>
+          <div className="flex gap-2"><Button size="sm" variant="primary" disabled={importing||exporting||backupPassword.length<10||portableMode==="export"&&backupPassword!==backupPasswordRepeat} onClick={()=>void runPortable()}>{t(portableMode==="export"?"backup.portableExport":"backup.portableImport")}</Button><Button size="sm" variant="ghost" disabled={importing||exporting} onClick={()=>{setPortableMode(null);setBackupPassword("");setBackupPasswordRepeat("");setPortableFile(null);}}>{t("common.cancel")}</Button></div>
+        </div>}
+      </section>
 
       <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
         <SectionLabel>{t("settingsData.privacy")}</SectionLabel>
@@ -267,6 +343,30 @@ export function SettingsDataPanel() {
       </div>
 
       <div hidden={dataPage !== "storage"} className="space-y-6">
+
+      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <SectionLabel>{t("settingsData.appStorage")}</SectionLabel>
+          <Button variant="secondary" size="sm" className="text-2xs" disabled={!isTauri() || storageBusy} onClick={() => void scanStorage()}>
+            {storageBusy ? t("settingsData.scanningStorage") : t("settingsData.scanStorage")}
+          </Button>
+        </div>
+        <p className="mt-2 text-[11px] leading-5 text-zinc-400">{t("settingsData.appStorageHint")}</p>
+        {storageUsage && <>
+          <p className="mt-3 text-sm font-semibold text-zinc-100">{t("settingsData.totalStorage")}: {formatBytes(storageUsage.totalBytes)}</p>
+          <dl className="mt-2 grid gap-x-4 gap-y-1 text-2xs text-zinc-400 sm:grid-cols-2">
+            {([
+              ["settingsData.storageDatabase", storageUsage.databaseBytes],
+              ["settingsData.storageAccounts", storageUsage.whatsappAccountsBytes],
+              ["settingsData.storageBackups", storageUsage.backupsBytes],
+              ["settingsData.storageOther", storageUsage.otherAppDataBytes],
+              ["settingsData.storageLocalProfile", storageUsage.localProfileBytes],
+            ] as const).map(([label, bytes]) => <div key={label} className="flex justify-between gap-3"><dt>{t(label)}</dt><dd className="tabular-nums text-zinc-200">{formatBytes(bytes)}</dd></div>)}
+          </dl>
+          {storageUsage.scanIncomplete && <p className="mt-2 text-2xs text-amber-300">{t("settingsData.storagePartial")}</p>}
+        </>}
+        {!isTauri() && <p className="mt-2 text-2xs text-zinc-500">{t("settingsData.desktopOnly")}</p>}
+      </section>
 
       <section className="rounded-xl border border-amber-900/50 bg-amber-950/10 p-4">
         <SectionLabel>{t("settingsData.releaseHistory")}</SectionLabel>

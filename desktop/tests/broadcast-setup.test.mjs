@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {build} from 'esbuild';
 import * as template from '../src/lib/broadcastTemplate.ts';
-import {BROADCAST_HARD_CAP,BROADCAST_DEFAULT_EXTRA_GAP_SEC,BROADCAST_DEFAULT_EXTRA_GAP_MAX_SEC} from '../src/types/broadcast.ts';
+import {BROADCAST_HARD_CAP,BROADCAST_DEFAULT_EXTRA_GAP_SEC,BROADCAST_DEFAULT_EXTRA_GAP_MAX_SEC,BROADCAST_MAX_VARIANTS} from '../src/types/broadcast.ts';
 
 const entry=fileURLToPath(new URL('../src/components/views/BroadcastView.tsx',import.meta.url));
 const source=await readFile(entry,'utf8');
@@ -20,15 +20,19 @@ const contacts=Array.from({length:20000},(_,i)=>({id:'c'+i,name:'Contact '+i,pho
 async function fixture(draftIds=[]) {
   const cells=[],storage=new Map([[template.BROADCAST_DRAFT_CONTACT_IDS_KEY,JSON.stringify(draftIds)]]);let cursor=0,tree;
   const oldStorage=globalThis.sessionStorage;globalThis.sessionStorage={getItem:k=>storage.get(k)||null,removeItem:k=>storage.delete(k)};
-  const metrics={indexes:0,phones:0,confirmations:0,created:0};
+  const metrics={indexes:0,phones:0,confirmations:0,created:0,cached:[],started:0,input:null};
   const state={contacts,chats:[],messages:[],broadcastCampaigns:[],settings:{waAccounts:[{id:'a',label:'Account A'},{id:'b',label:'Account B'}],activeAccountId:'a',liveBaileysAccountId:'a',sendChannel:'baileys'},baileysUi:{connection:'open'},pushToast(){},requestConfirm:async()=>{metrics.confirmations++;return false;},createBroadcastCampaign(){metrics.created++;return {ok:true,id:'demo'};}};
-  const flags={warmup:false,connected:true};
+  const flags={warmup:false,connected:true,confirm:false,cacheFails:false};
+  state.requestConfirm=async()=>{metrics.confirmations++;return flags.confirm;};
+  state.createBroadcastCampaign=input=>{metrics.created++;metrics.input=input;return {ok:true,id:'demo'};};
+  state.startBroadcastCampaign=()=>{metrics.started++;return {ok:true};};
   globalThis.broadcastHooks={
     state(initial){const i=cursor++;cells[i]??={value:typeof initial==='function'?initial():initial};return [cells[i].value,value=>{cells[i].value=typeof value==='function'?value(cells[i].value):value;}];},
     ref(initial){const i=cursor++;return cells[i]??={current:initial};},
     memo(fn,deps){const i=cursor++,old=cells[i];if(!old||deps.some((d,j)=>!Object.is(d,old.deps[j])))cells[i]={value:fn(),deps};return cells[i].value;},
   };
-  globalThis.broadcastBindings={...template,BROADCAST_HARD_CAP,BROADCAST_DEFAULT_EXTRA_GAP_SEC,BROADCAST_DEFAULT_EXTRA_GAP_MAX_SEC,
+  globalThis.broadcastBindings={...template,BROADCAST_HARD_CAP,BROADCAST_DEFAULT_EXTRA_GAP_SEC,BROADCAST_DEFAULT_EXTRA_GAP_MAX_SEC,BROADCAST_MAX_VARIANTS,
+    cacheMediaUrl:async(...args)=>{if(flags.cacheFails)throw Error('disk full');metrics.cached.push(args);},
     useAppStore:selector=>selector(state),useShallow:fn=>fn,useI18n:()=>({t:(key,params)=>key+(params?JSON.stringify(params):'')}),
     cn:(...parts)=>parts.filter(Boolean).join(' '),Button:'button',Input:'input',Textarea:'textarea',SectionLabel:'h4',BroadcastPickStep:'picker',BroadcastMediaPicker:'media-picker',CampaignRunPanel:'run-panel',
     DEFAULT_RATE_LIMITS:{},applyAccountWarmup:()=>({active:flags.warmup,hoursLeft:24}),isWaAccountConnected:()=>flags.connected,lastContactedAccounts:()=>new Map(),recipientKey:(_account,phone)=>phone,salesStagesWithLabels:()=>[],formatAccountDisplay:account=>account.label,
@@ -64,6 +68,65 @@ test('source switching preserves pasted numbers, filters and selections; changin
 
 test('explicit selections imported from the CRM still open the contact list instead of hiding the chosen people',async()=>{
   const h=await fixture(['c0','missing']);try{assert.equal(h.picker().source,'contacts');assert.equal(h.picker().selected.size,1);assert.equal(h.picker().recipientCount,1);}finally{h.close();}
+});
+
+test('random version tabs keep independent text and media, validate every version, and submit no inline data URLs', async()=>{
+  const h=await fixture();try{
+    const button=key=>h.all().find(n=>n.type==='button'&&n.props.children===key);
+    const tab=n=>h.all().filter(n=>n.props.role==='tab')[n];
+    const editor=()=>h.all().find(n=>n.type==='textarea');
+    const mediaPicker=()=>h.all().find(n=>n.type==='media-picker');
+    h.picker().onPhoneTextChange('+12025550101');h.render();
+    editor().props.onChange({target:{value:'Hello {name}'}});h.render();
+    mediaPicker().props.onChange([{id:'a',kind:'image',mime:'image/png'}],'single',{a:'data:image/png;base64,YQ=='});h.render();
+    button('broadcast.randomVersions').props.onClick();h.render();
+    assert.equal(h.launch().props.disabled,true,'the second, still empty version blocks launch');
+    tab(1).props.onClick();h.render();
+    assert.equal(editor().props.value,'');assert.deepEqual(mediaPicker().props.media,[]);
+    editor().props.onChange({target:{value:'Bonjour {company}'}});h.render();
+    mediaPicker().props.onChange([{id:'b',kind:'video',mime:'video/mp4'}],'single',{b:'data:video/mp4;base64,Yg=='});h.render();
+    assert.equal(h.launch().props.disabled,false);
+    button('broadcast.fixedContent').props.onClick();h.render();
+    assert.equal(editor().props.value,'Hello {name}');assert.equal(mediaPicker().props.media[0].id,'a');
+    button('broadcast.randomVersions').props.onClick();h.render();
+    assert.equal(editor().props.value,'Bonjour {company}');assert.equal(mediaPicker().props.media[0].id,'b');
+    mediaPicker().props.onBusyChange(true);h.render();
+    assert.ok(h.all().filter(n=>n.props.role==='tab').every(n=>n.props.disabled));
+    assert.equal(button('broadcast.addVariant').props.disabled,true);assert.equal(h.launch().props.disabled,true);
+    mediaPicker().props.onBusyChange(false);h.render();
+    h.flags.confirm=true;h.launch().props.onClick();await new Promise(setImmediate);
+    assert.equal(h.metrics.created,1);assert.equal(h.metrics.started,1);
+    assert.deepEqual(h.metrics.input.variants.map(v=>[v.template,v.media[0].id]),[['Hello {name}','a'],['Bonjour {company}','b']]);
+    assert.ok(h.metrics.input.variants.every(v=>!('dataUrls' in v)));
+    assert.equal(h.metrics.input.media,undefined);
+    assert.deepEqual(h.metrics.cached.map(args=>[args[0],args[2]]),[['a',true],['b',true]]);
+  }finally{h.close();}
+});
+
+test('version count is bounded and deletion or mode switching preserves remaining drafts', async()=>{
+  const h=await fixture();try{
+    const button=key=>h.all().find(n=>n.type==='button'&&n.props.children===key);
+    button('broadcast.randomVersions').props.onClick();h.render();
+    assert.equal(button('broadcast.removeVariant').props.disabled,false);
+    for(let n=2;n<BROADCAST_MAX_VARIANTS;n++){button('broadcast.addVariant').props.onClick();h.render();}
+    assert.equal(h.all().filter(n=>n.props.role==='tab').length,BROADCAST_MAX_VARIANTS);
+    assert.equal(button('broadcast.addVariant').props.disabled,true);
+    button('broadcast.removeVariant').props.onClick();h.render();
+    assert.equal(h.all().filter(n=>n.props.role==='tab').length,BROADCAST_MAX_VARIANTS-1);
+    assert.equal(button('broadcast.addVariant').props.disabled,false);
+    assert.ok(h.all().find(n=>n.type==='textarea').props.value.startsWith('您好'));
+    while(h.all().filter(n=>n.props.role==='tab').length>0){button('broadcast.removeVariant').props.onClick();h.render();}
+    assert.equal(button('broadcast.fixedContent').props['aria-pressed'],true);
+  }finally{h.close();}
+});
+
+test('media storage failure never starts a broadcast', async()=>{
+  const h=await fixture();try{
+    h.picker().onPhoneTextChange('+12025550101');h.render();
+    h.all().find(n=>n.type==='media-picker').props.onChange([{id:'a',kind:'image',mime:'image/png'}],'single',{a:'data:image/png;base64,YQ=='});h.render();
+    h.flags.confirm=true;h.flags.cacheFails=true;h.launch().props.onClick();await new Promise(setImmediate);
+    assert.equal(h.metrics.created,0);assert.equal(h.metrics.started,0);
+  }finally{h.close();}
 });
 
 test('recipient cap, minimum sending intervals, connection and warmup guards remain in the setup page',async()=>{

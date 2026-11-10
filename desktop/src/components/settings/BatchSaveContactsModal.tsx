@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { UsersRound, X } from "lucide-react";
 import { useAppStore } from "@/store/appStore";
 import { Button, Input } from "@/components/ui/primitives";
@@ -7,6 +7,8 @@ import { savePhoneContacts } from "@/lib/bridge";
 import { baileysSaveContacts } from "@/lib/baileys";
 import type { WaAccount } from "@/types/account";
 import { useI18n } from "@/i18n";
+import { contactInView } from "@/store/accountScope";
+import { formatAccountDisplay } from "@/lib/accountLabels";
 
 type Props = {
   open: boolean;
@@ -85,6 +87,8 @@ export function BatchSaveContactsModal({
 }: Props) {
   const { t } = useI18n();
   const importContacts = useAppStore((state) => state.importContacts);
+  const contacts = useAppStore(state => state.contacts);
+  const liveAccountId = useAppStore(state => state.settings.liveBaileysAccountId || state.settings.activeAccountId);
   const pushToast = useAppStore((state) => state.pushToast);
   const phones = useAppStore((state) => state.phones);
   const selectedPhoneId = useAppStore((state) => state.selectedPhoneId);
@@ -98,12 +102,15 @@ export function BatchSaveContactsModal({
   const [syncToPhone, setSyncToPhone] = useState(false);
   const [targetPhoneId, setTargetPhoneId] = useState("");
   const [saving, setSaving] = useState(false);
+  const opened = useRef(false);
   const availablePhones = useMemo(() => phones.filter((phone) => phone.online), [phones]);
   const selectedAccountConnected = connectedAccountIds.includes(selectedAccountId);
   const canSaveToWhatsapp = cloudAvailable && selectedAccountConnected;
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) { opened.current = false; return; }
+    if (opened.current) return;
+    opened.current = true;
     const preferredAccountId =
       (accountId && accounts.some((account) => account.id === accountId)
         ? accountId
@@ -179,9 +186,13 @@ export function BatchSaveContactsModal({
       source: t("batchContacts.source"),
       stage: "new" as const,
       tags: [],
+      accountId: cloudAvailable ? selectedAccountId || undefined : undefined,
     }));
     try {
-      const count = importContacts(inputs);
+      const existing = new Set(contacts.filter(contact => cloudAvailable
+        ? contactInView(contact, {type: "account", accountId: selectedAccountId}, liveAccountId, liveAccountId) : true)
+        .map(contact => normalizePhone(contact.phone)));
+      const count = importContacts(inputs.filter(input => !existing.has(input.phone)));
       let cloudResult: { saved: number; failed: number } | null = null;
       let phoneResult: Awaited<ReturnType<typeof savePhoneContacts>> | null = null;
       if (saveToWhatsapp) {
@@ -280,9 +291,9 @@ export function BatchSaveContactsModal({
                 className="ui-control mt-1 h-8 w-full px-2.5 text-[11px]"
               >
                 {!accounts.length && <option value="">{t("batchContacts.noAccount")}</option>}
-                {accounts.map((account) => {
+                {accounts.map((account, index) => {
                   const connected = connectedAccountIds.includes(account.id);
-                  const accountName = account.label || account.userName || account.phoneE164 || account.id;
+                  const accountName = formatAccountDisplay({...account, index1: index + 1});
                   const detail = account.phoneE164 || account.userName;
                   return (
                     <option key={account.id} value={account.id} disabled={!connected}>

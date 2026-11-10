@@ -15,15 +15,17 @@ const customerCard = await readFile(
 );
 
 assert.match(gemini, /maxOutputTokens/);
-assert.match(suggestions, /max_tokens: opts\.auto \|\| opts\.replyTo \? 160 : 300/);
-assert.match(suggestions, /num_predict: auto \|\| replyTo \? 160 : 300/);
+assert.match(suggestions, /const SINGLE_REPLY_TOKENS = 512/);
+assert.match(suggestions, /const MULTI_REPLY_TOKENS = 1536/);
+assert.match(suggestions, /chatCompletionOptions\([^\n]+opts\.auto \|\| opts\.replyTo \|\| opts\.count === 1 \? SINGLE_REPLY_TOKENS : MULTI_REPLY_TOKENS\)/);
+assert.match(suggestions, /num_predict: auto \|\| replyTo \|\| count === 1 \? SINGLE_REPLY_TOKENS : MULTI_REPLY_TOKENS/);
 assert.equal(
   [...suggestions.matchAll(/signal: .*AbortSignal\.timeout\(60_000\)/g)].length,
   2
 );
 assert.equal(
   [...customerCard.matchAll(/signal: AbortSignal\.timeout\(60_000\)/g)].length,
-  2
+  4
 );
 
 console.log("ai-token-budget.test.mjs ok");

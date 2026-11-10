@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import EmojiPicker, {
   EmojiStyle,
   Theme,
   type EmojiClickData,
 } from "emoji-picker-react";
-import { Sticker, X } from "lucide-react";
+import { ImagePlus, X } from "lucide-react";
 import { useAppStore } from "@/store/appStore";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
@@ -14,8 +14,7 @@ type Props = {
   isBaileys: boolean;
   /** 点击一个 emoji：父组件把字符追加进草稿并 flush */
   onPickEmoji: (emoji: string) => void;
-  /** 容器内"制作贴纸"按钮选中本地图片的入口 */
-  onPickStickerFile: () => void;
+  onImportStickerFiles: (files: File[]) => Promise<void>;
   /** "选择本地 GIF"入口 */
   onPickGifFile: () => void;
   favoriteStickers: string[];
@@ -33,7 +32,7 @@ export function EmojiStickerGifPanel({
   open,
   isBaileys,
   onPickEmoji,
-  onPickStickerFile,
+  onImportStickerFiles,
   onPickGifFile,
   favoriteStickers,
   recentStickers,
@@ -44,6 +43,8 @@ export function EmojiStickerGifPanel({
   const [pickerTab, setPickerTab] = useState<"emoji" | "sticker" | "gif">(
     "emoji"
   );
+  const [importing, setImporting] = useState(false);
+  const stickerInput = useRef<HTMLInputElement>(null);
   const theme = useAppStore((s) => s.settings.theme);
   const { t } = useI18n();
   if (!open) return null;
@@ -85,15 +86,24 @@ export function EmojiStickerGifPanel({
       )}
       {pickerTab === "sticker" && (
         <div className="h-80 overflow-y-auto p-3">
+          <input ref={stickerInput} type="file" accept="image/png,image/jpeg,image/webp" multiple className="hidden" onChange={event => {
+            const files = Array.from(event.currentTarget.files || []);
+            event.currentTarget.value = "";
+            if (!files.length) return;
+            setImporting(true);
+            void onImportStickerFiles(files).catch(() => undefined).finally(() => setImporting(false));
+          }} />
           <button
             type="button"
-            disabled={!isBaileys}
+            disabled={importing}
             className="mb-3 flex w-full items-center justify-center gap-2 rounded-lg bg-zinc-800 px-3 py-2 text-[12px] text-zinc-200 hover:bg-zinc-700 disabled:opacity-40"
-            onClick={onPickStickerFile}
+            onClick={() => stickerInput.current?.click()}
           >
-            <Sticker className="h-4 w-4 text-amber-400" />
-            {t("emoji.makeSticker")}
+            <ImagePlus className="h-4 w-4 text-amber-400" />
+            {t(importing ? "emoji.importingStickers" : "emoji.importMakeSticker")}
           </button>
+          <p className="mb-3 text-[10px] leading-4 text-zinc-500">{t("emoji.importStickerHint")}</p>
+          {!isBaileys && <p className="mb-3 text-[10px] leading-4 text-amber-500">{t("emoji.stickerBaileysOnly")}</p>}
           {favoriteStickers.length > 0 && (
             <>
               <div className="mb-1 text-2xs text-zinc-500">{t("emoji.favorites")}</div>
@@ -105,6 +115,7 @@ export function EmojiStickerGifPanel({
                   >
                     <button
                       type="button"
+                      disabled={!isBaileys}
                       className="flex h-full w-full items-center justify-center rounded-lg bg-zinc-800/60 p-1 hover:bg-zinc-700"
                       onClick={() => onSendFavoriteSticker(dataUrl)}
                     >
@@ -136,6 +147,7 @@ export function EmojiStickerGifPanel({
                 <button
                   key={`${dataUrl.slice(-24)}-${index}`}
                   type="button"
+                  disabled={!isBaileys}
                   className="flex aspect-square items-center justify-center rounded-lg bg-zinc-800/60 p-1 hover:bg-zinc-700"
                   onClick={() => onSendRecentSticker(dataUrl)}
                 >

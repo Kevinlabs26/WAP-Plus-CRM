@@ -124,6 +124,9 @@ type Props = {
   onToggleDone: () => void;
   onOpen: () => void;
   onFollowDraft: () => void;
+  selectionMode?: boolean;
+  selected?: boolean;
+  onSelect?: () => void;
   /** 行内保存显示名 / CRM 备注 */
   onSaveContact?: (patch: { name?: string; notes?: string }) => void;
 };
@@ -138,6 +141,9 @@ export function FollowUpWorkRow({
   onToggleDone,
   onOpen,
   onFollowDraft,
+  selectionMode = false,
+  selected = false,
+  onSelect,
   onSaveContact,
 }: Props) {
   const { t } = useI18n();
@@ -206,14 +212,14 @@ export function FollowUpWorkRow({
             : ""
       )}
     >
-      <button
+      {selectionMode ? <input type="checkbox" checked={selected} onChange={onSelect} onClick={(event) => event.stopPropagation()} aria-label={t("today.selectFollowUp", { title: card.title })} className="h-4 w-4 shrink-0 accent-emerald-500" /> : <button
         type="button"
         onClick={onToggleDone}
         className="shrink-0 text-zinc-500 hover:text-brand"
         title={t("tooltip.markComplete")}
       >
         <Circle className="h-5 w-5" />
-      </button>
+      </button>}
 
       <div className="min-w-0 flex-1">
         <div className="flex items-start gap-2.5">

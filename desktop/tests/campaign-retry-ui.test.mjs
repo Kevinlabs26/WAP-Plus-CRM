@@ -4,7 +4,7 @@ import {build} from 'esbuild';
 import {fileURLToPath} from 'node:url';
 const mocks={
  react:'export const useState=()=>[globalThis.retrySelected,v=>{globalThis.retrySelected=typeof v==="function"?v(globalThis.retrySelected):v;}];',
- 'react/jsx-runtime':'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
+ 'react/jsx-runtime':'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;export const Fragment="fragment";',
  'lucide-react':'export const Pause="pause",Play="play",RotateCcw="retry",Square="square";',
  '@/components/ui/primitives':'export const Button="button";',
  '@/store/appStore':'export const useAppStore=f=>f(globalThis.retryState);',

@@ -16,10 +16,17 @@ pub use crate::protocol::make_envelope;
 pub const BRIDGE_EVENT: &str = "bridge://event";
 pub const BRIDGE_STATUS_EVENT: &str = "bridge://status";
 
-fn read_bounded_line<R: BufRead>(reader: &mut R, line: &mut String, limit: usize) -> std::io::Result<usize> {
+fn read_bounded_line<R: BufRead>(
+    reader: &mut R,
+    line: &mut String,
+    limit: usize,
+) -> std::io::Result<usize> {
     let size = reader.take(limit as u64 + 1).read_line(line)?;
     if size > limit {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Bridge line too long"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Bridge line too long",
+        ));
     }
     Ok(size)
 }
@@ -123,11 +130,7 @@ impl BridgeState {
     }
 
     pub fn snapshot(&self) -> BridgeConnectionInfo {
-        let mut info = self
-            .info
-            .lock()
-            .map(|g| g.clone())
-            .unwrap_or_default();
+        let mut info = self.info.lock().map(|g| g.clone()).unwrap_or_default();
         info.connected &= self.alive.load(Ordering::SeqCst);
         info
     }
@@ -143,10 +146,16 @@ impl BridgeState {
         if let Some(mut live) = live {
             let _ = live.writer.shutdown(Shutdown::Both);
             // 旧读线程完全退出后才允许下一次连接复用共享状态。
-            if let Some(reader) = live.reader.take() { let _ = reader.join(); }
+            if let Some(reader) = live.reader.take() {
+                let _ = reader.join();
+            }
         }
-        if let Ok(mut pending) = self.pending.lock() { pending.clear(); }
-        if let Ok(mut info) = self.info.lock() { info.connected = false; }
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.clear();
+        }
+        if let Ok(mut info) = self.info.lock() {
+            info.connected = false;
+        }
         if emit {
             self.emit_status();
         }
@@ -169,13 +178,13 @@ impl BridgeState {
 
         let addr_label = format!("{host}:{port}");
         // 先按 IP 字面量解析；失败再走系统域名解析（支持 localhost / 主机名）。
-        let resolved = addr_label
-            .parse::<std::net::SocketAddr>()
-            .ok()
-            .or_else(|| {
-                use std::net::ToSocketAddrs;
-                (host, port).to_socket_addrs().ok().and_then(|mut addrs| addrs.next())
-            });
+        let resolved = addr_label.parse::<std::net::SocketAddr>().ok().or_else(|| {
+            use std::net::ToSocketAddrs;
+            (host, port)
+                .to_socket_addrs()
+                .ok()
+                .and_then(|mut addrs| addrs.next())
+        });
         let Some(sock_addr) = resolved else {
             return Err(format!("地址无效 {addr_label}"));
         };
@@ -185,12 +194,8 @@ impl BridgeState {
         let stream = TcpStream::connect_timeout(&sock_addr, Duration::from_secs(3))
             .map_err(|e| format!("连接 Bridge 失败 {addr_label}: {e}"))?;
 
-        stream
-            .set_read_timeout(Some(Duration::from_secs(3)))
-            .ok();
-        stream
-            .set_write_timeout(Some(Duration::from_secs(3)))
-            .ok();
+        stream.set_read_timeout(Some(Duration::from_secs(3))).ok();
+        stream.set_write_timeout(Some(Duration::from_secs(3))).ok();
         stream.set_nodelay(true).ok();
 
         let mut reader_stream = stream
@@ -233,7 +238,11 @@ impl BridgeState {
         let auth_response = read_line(&mut reader_stream)?;
         let auth_response = serde_json::from_str::<serde_json::Value>(&auth_response)
             .map_err(|e| format!("Bridge 鉴权响应无效: {e}"))?;
-        if auth_response.pointer("/payload/ok").and_then(|v| v.as_bool()) != Some(true) {
+        if auth_response
+            .pointer("/payload/ok")
+            .and_then(|v| v.as_bool())
+            != Some(true)
+        {
             let message = auth_response
                 .pointer("/payload/message")
                 .and_then(|v| v.as_str())
@@ -269,15 +278,15 @@ impl BridgeState {
         #[cfg(not(test))]
         let app_for_thread = {
             // 读线程需要能 emit：复制当前 AppHandle（若已 attach）
-            self.app
-                .lock()
-                .ok()
-                .and_then(|g| g.clone())
+            self.app.lock().ok().and_then(|g| g.clone())
         };
 
         {
             let mut sock = self.socket.lock().map_err(|e| e.to_string())?;
-            *sock = Some(LiveSocket { writer, reader: None });
+            *sock = Some(LiveSocket {
+                writer,
+                reader: None,
+            });
         }
 
         let mut device = ConnectedDevice {
@@ -367,7 +376,9 @@ impl BridgeState {
                 }
             }
             alive.store(false, Ordering::SeqCst);
-            if let Ok(mut pending) = pending.lock() { pending.clear(); }
+            if let Ok(mut pending) = pending.lock() {
+                pending.clear();
+            }
             if let Ok(mut info) = info_arc.lock() {
                 info.connected = false;
                 let snap = info.clone();
@@ -381,7 +392,9 @@ impl BridgeState {
             }
         });
         if let Ok(mut socket) = self.socket.lock() {
-            if let Some(live) = socket.as_mut() { live.reader = Some(reader_handle); }
+            if let Some(live) = socket.as_mut() {
+                live.reader = Some(reader_handle);
+            }
         }
 
         tracing::info!(%addr_label, "bridge connected");
@@ -447,8 +460,12 @@ impl BridgeState {
                 pending.remove(&id);
             }
             match error {
-                mpsc::RecvTimeoutError::Disconnected => "Android Bridge 已断开，未收到执行回执".to_string(),
-                mpsc::RecvTimeoutError::Timeout => format!("等待 Android ACK 超时（{} 秒）", timeout.as_secs()),
+                mpsc::RecvTimeoutError::Disconnected => {
+                    "Android Bridge 已断开，未收到执行回执".to_string()
+                }
+                mpsc::RecvTimeoutError::Timeout => {
+                    format!("等待 Android ACK 超时（{} 秒）", timeout.as_secs())
+                }
             }
         })?;
         if ack
@@ -498,7 +515,12 @@ mod tests {
         assert_eq!(read_bounded_line(&mut input, &mut line, 8).unwrap(), 3);
         assert_eq!(line, "ok\n");
         line.clear();
-        assert_eq!(read_bounded_line(&mut input, &mut line, 8).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(
+            read_bounded_line(&mut input, &mut line, 8)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::InvalidData
+        );
         assert_eq!(line.len(), 9);
     }
 
@@ -506,7 +528,10 @@ mod tests {
     fn remote_bridge_is_rejected_before_sending_auth() {
         let state = BridgeState::default();
         for host in ["192.168.1.10", "8.8.8.8", "[2001:4860:4860::8888]"] {
-            assert!(state.connect(host, 17890, "test-token").unwrap_err().contains("仅允许"));
+            assert!(state
+                .connect(host, 17890, "test-token")
+                .unwrap_err()
+                .contains("仅允许"));
         }
     }
 
@@ -538,8 +563,16 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .to_string();
-            writeln!(socket, r#"{{"type":"device.status","payload":{{"online":true}}}}"#).unwrap();
-            writeln!(socket, r#"{{"type":"ack","payload":{{"refId":"{id}","ok":true}}}}"#).unwrap();
+            writeln!(
+                socket,
+                r#"{{"type":"device.status","payload":{{"online":true}}}}"#
+            )
+            .unwrap();
+            writeln!(
+                socket,
+                r#"{{"type":"ack","payload":{{"refId":"{id}","ok":true}}}}"#
+            )
+            .unwrap();
         });
 
         let state = BridgeState::default();
@@ -558,7 +591,9 @@ mod tests {
         let server = std::thread::spawn(move || {
             for i in 0..10 {
                 let (mut socket, _) = listener.accept().unwrap();
-                socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
                 let mut reader = BufReader::new(socket.try_clone().unwrap());
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
@@ -569,7 +604,11 @@ mod tests {
                     reader.read_line(&mut line).unwrap();
                     let value: serde_json::Value = serde_json::from_str(&line).unwrap();
                     let id = value["id"].as_str().unwrap();
-                    writeln!(socket, r#"{{"type":"ack","payload":{{"refId":"{id}","ok":true}}}}"#).unwrap();
+                    writeln!(
+                        socket,
+                        r#"{{"type":"ack","payload":{{"refId":"{id}","ok":true}}}}"#
+                    )
+                    .unwrap();
                     line.clear();
                 }
                 assert_eq!(reader.read_line(&mut line).unwrap(), 0);
@@ -581,7 +620,9 @@ mod tests {
             assert!(state.snapshot().connected);
         }
         let message = make_envelope("wa.open_and_send", None, serde_json::json!({}));
-        assert!(state.send_json_wait_ack(&message, Duration::from_secs(1)).is_ok());
+        assert!(state
+            .send_json_wait_ack(&message, Duration::from_secs(1))
+            .is_ok());
         state.disconnect();
         assert!(!state.snapshot().connected);
         server.join().unwrap();

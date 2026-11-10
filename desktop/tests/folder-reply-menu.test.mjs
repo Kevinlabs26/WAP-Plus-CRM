@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { translate } from '../src/i18n/core.ts';
 
 const mocks={
- react:'export const useState=v=>globalThis.folderMenuHooks.state(v);export const useRef=v=>globalThis.folderMenuHooks.ref(v);export const useEffect=(f,d)=>globalThis.folderMenuHooks.effect(f,d);',
+ '@/store/appStore':'export const useAppStore=f=>f({settings:{theme:"dark"}});',
+ 'emoji-picker-react':'export default "emoji-picker";export const EmojiStyle={NATIVE:"native"};export const Theme={DARK:"dark"};',
+ react:'export const useState=v=>globalThis.folderMenuHooks.state(v);export const useRef=v=>globalThis.folderMenuHooks.ref(v);export const useEffect=(f,d)=>globalThis.folderMenuHooks.effect(f,d);export const useLayoutEffect=useEffect;',
  'react-dom':'export const createPortal=children=>children;',
  'react/jsx-runtime':'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
  'lucide-react':['Clock3', 'Check','Copy','ChevronDown','ChevronRight','Folder','FolderPlus','Link2','GripVertical','LayoutGrid','MoreHorizontal','Pencil','Trash2','Upload','Users','UserRoundX'].map(n=>`export const ${n}="${n}";`).join(''),
@@ -28,7 +30,7 @@ function fixture(mode,rect={left:700,right:940,top:650,bottom:682}) {
   removeEventListener(name,fn){listeners.get(name)?.delete(fn);}};
  globalThis.folderMenuTranslate=(key,params)=>translate('zh-CN',key,params);
  globalThis.folderMenuHooks={
-  state(v){const n=index++;cells[n]??={value:v};return[cells[n].value,value=>{cells[n].value=value;}];},
+  state(v){const n=index++;cells[n]??={value:v};return[cells[n].value,value=>{cells[n].value=typeof value==="function"?value(cells[n].value):value;}];},
   ref(v){return cells[index++]??={current:v};},
   effect(fn,deps){const n=index++,old=cells[n];if(!old||!deps.every((v,i)=>Object.is(v,old.deps[i]))){
    cells[n]={deps,cleanup:old?.cleanup};effects.push(()=>{cells[n].cleanup?.();cells[n].cleanup=fn();});}},
@@ -37,14 +39,14 @@ function fixture(mode,rect={left:700,right:940,top:650,bottom:682}) {
  const ui={props,changes,listeners,
   render(){index=0;tree=FolderHeaderRow(props);const list=nodes(tree);
    for(const node of list){if(!node.props.ref)continue;let el=elements.get(node.props.ref);
-    if(!el){el={focus(){document.activeElement=this;},getBoundingClientRect:()=>rect};elements.set(node.props.ref,el);}
+    if(!el){el={focus(){document.activeElement=this;},getBoundingClientRect(){const n=this.node;if(n.props.role!=='menu')return {...rect,width:rect.right-rect.left,height:rect.bottom-rect.top};return {left:n.props.style.left,top:n.props.style.top,width:224,height:n.props.id?.includes('reply')?184:112};}};elements.set(node.props.ref,el);}
     el.node=node;node.props.ref.current=el;
     el.querySelectorAll=selector=>nodes(el.node).filter(n=>n!==el.node&&n.props.role===(selector.includes('menuitemradio')?'menuitemradio':'menuitem')).map(n=>ui.element(n));
     el.querySelector=selector=>{const selected=nodes(el.node).find(n=>selector.includes('aria-checked')?n.props.role==='menuitemradio'&&n.props['aria-checked']:n.props.role==='menuitem');return selected?ui.element(selected):null;};
    }
    while(effects.length)effects.shift()();return list;
   },
-  element(node){let el=elements.get(node);if(!el){el={node,focus(){document.activeElement=this;},getBoundingClientRect:()=>rect};elements.set(node,el);}return node.props.ref?.current||el;},
+  element(node){const key=node.props.role+JSON.stringify(node.props.children);let el=elements.get(key);if(!el){el={focus(){document.activeElement=this;},getBoundingClientRect:()=>rect};elements.set(key,el);}el.node=node;return node.props.ref?.current||el;},
   get tree(){return nodes(tree);},
   get root(){return this.tree.find(n=>n.props.role==='menu'&&!n.props.id);},
   get submenu(){return this.tree.find(n=>n.props.id==='folder-reply-f');},
@@ -79,7 +81,7 @@ test('reply settings are only in a submenu, preserve the selected rule and apply
 });
 
 test('submenu flips at the right edge and stays vertically inside the viewport',()=>{
- const ui=fixture();try{ui.open();ui.expand();assert.equal(ui.submenu.props.style.left,474);assert.equal(ui.submenu.props.style.top,536);}finally{ui.close();}
+ const ui=fixture();try{ui.open();ui.expand();assert.equal(ui.submenu.props.style.left,474);assert.equal(ui.submenu.props.style.top,528);}finally{ui.close();}
  const left=fixture('manual',{left:20,right:260,top:40,bottom:72});try{left.open();left.expand();assert.equal(left.submenu.props.style.left,262);assert.equal(left.submenu.props.style.top,40);}finally{left.close();}
 });
 
@@ -142,7 +144,7 @@ test('folder bulk send and scheduled send are separate actions and each closes t
 });
 
 const item=(ui,label)=>ui.tree.find(n=>n.props.role==='menuitem'&&nodes(n).some(child=>child.props.children===label||Array.isArray(child.props.children)&&child.props.children.includes(label)));
-for(const [kind,label,first,last] of [['import','导入与添加','导入号码','选择已加入的群组'],['organize','整理文件夹','新建子分组','清空分组成员']]){
+for(const [kind,label,first,last] of [['import','导入与添加','导入号码','选择已加入的群组'],['organize','整理文件夹','新建子分组','清空此文件夹及子文件夹']]){
  test(`${kind} opens a side submenu on hover and stays open while crossing the pointer gap`,()=>{
   const ui=fixture();try{
    ui.open();const trigger=item(ui,label);trigger.props.onMouseEnter(ui.event(trigger));ui.render();

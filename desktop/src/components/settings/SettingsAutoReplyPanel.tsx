@@ -1,30 +1,14 @@
 import { useState } from "react";
 import { useAppStore } from "@/store/appStore";
-import { generateSuggestions, hasRealAiKey } from "@/lib/aiSuggest";
 import {
-  evaluateAutoReplyDecision,
-  getAutoReplyOutputBlockReason,
-  parseAutoReplyReplay,
   resolveAutoReplyPolicy,
   type AiAutoReplyPolicy,
 } from "@/lib/aiSafety";
 import { formatAccountDisplay } from "@/lib/accountLabels";
-import { Button, Input, SectionLabel, Textarea } from "@/components/ui/primitives";
+import { Button, Input, SectionLabel, Switch, Textarea } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
-import { useI18n, type TranslationKey } from "@/i18n";
-
-function localizeSafetyReason(reason: string, t: (key: TranslationKey, params?: Record<string, string | number>) => string) {
-  if (reason.includes("生效时段")) return t("settingsAutoReply.reason.outsideHours");
-  if (reason.includes("手动回复")) return t("settingsAutoReply.reason.manualTakeover");
-  if (reason.includes("敏感信息")) return t("settingsAutoReply.reason.sensitive");
-  if (reason.includes("付款、合同")) return t("settingsAutoReply.reason.financial");
-  if (reason.includes("价格")) return t("settingsAutoReply.reason.pricing");
-  if (reason.includes("投诉")) return t("settingsAutoReply.reason.complaint");
-  if (reason.includes("消息为空")) return t("settingsAutoReply.reason.empty");
-  if (reason.includes("未经确认")) return t("settingsAutoReply.reason.promise");
-  if (reason.includes("低风险")) return t("settingsAutoReply.reason.safe");
-  return reason;
-}
+import { useI18n } from "@/i18n";
+import { AiPromptLibrary } from "./AiPromptLibrary";
 
 /**
  * AI 自动回复设置：回复模式、自动回复行为、聊天身份与偏好。
@@ -35,12 +19,6 @@ export function SettingsAutoReplyPanel() {
   const { t } = useI18n();
   const settings = useAppStore((state) => state.settings);
   const updateSettings = useAppStore((state) => state.updateSettings);
-  const [testMessage, setTestMessage] = useState(
-    t("settingsAutoReply.testDefault")
-  );
-  const [testReplies, setTestReplies] = useState<string[]>([]);
-  const [testError, setTestError] = useState("");
-  const [testing, setTesting] = useState(false);
   const [profileAccountId, setProfileAccountId] = useState("");
 
   const accountPrompt = profileAccountId
@@ -99,48 +77,6 @@ export function SettingsAutoReplyPanel() {
     updateSettings({ aiAutoReplyPolicyByAccountId: next });
   };
 
-  const replayMessages = parseAutoReplyReplay(testMessage);
-  const lastReplayInbound = [...replayMessages]
-    .reverse()
-    .find((message) => message.direction === "in");
-  const replayDecision = lastReplayInbound
-    ? evaluateAutoReplyDecision(
-        replayMessages,
-        lastReplayInbound,
-        Date.now(),
-        effectivePolicy
-      )
-    : null;
-
-  const testReply = async () => {
-    if (!lastReplayInbound || !replayDecision) return;
-    setTesting(true);
-    setTestError("");
-    try {
-      const result = await generateSuggestions(undefined, replayMessages, settings, {
-        auto: replayDecision.allow,
-        accountId: profileAccountId || undefined,
-      });
-      const replies = result.suggestions
-        .slice(0, replayDecision.allow ? 1 : 3)
-        .map((suggestion) => suggestion.text);
-      const outputBlock = replayDecision.allow
-        ? getAutoReplyOutputBlockReason(replies[0] || "", {
-            allowPricing: effectivePolicy.allowPricing,
-          })
-        : null;
-      if (outputBlock) {
-        setTestError(t("settingsAutoReply.outputBlocked", { reason: localizeSafetyReason(outputBlock, t) }));
-      }
-      setTestReplies(replies);
-    } catch (error) {
-      setTestReplies([]);
-      setTestError(error instanceof Error ? error.message : t("settingsAutoReply.testFailed"));
-    } finally {
-      setTesting(false);
-    }
-  };
-
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <header>
@@ -152,10 +88,17 @@ export function SettingsAutoReplyPanel() {
 
       <label className="flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950/35 p-4 text-sm">
         {t("autoReplyScope.pauseAll")}
-        <input type="checkbox" checked={settings.aiAutoReplyPaused} onChange={event => updateSettings({ aiAutoReplyPaused: event.target.checked })} />
+        <Switch checked={settings.aiAutoReplyPaused} onChange={event => updateSettings({ aiAutoReplyPaused: event.target.checked })} />
       </label>
       <p className="text-xs text-zinc-500">{t("autoReplyScope.defaultHint")}</p>
 
+      <AiPromptLibrary />
+      <Button onClick={() => { useAppStore.getState().setActiveNav("ai-outreach"); useAppStore.getState().setSettingsOpen(false); }}>{t("aiOutreach.tasks")}</Button>
+      <label className="block rounded-xl border border-zinc-800 p-3 text-xs">{t("aiLibrary.context")}
+        <select value={settings.aiContextMode||"full"} onChange={event=>updateSettings({aiContextMode:event.target.value as "compact"|"full"})} className="ui-control mt-2 w-full px-2 py-2">
+          <option value="full">{t("aiLibrary.full")}</option><option value="compact">{t("aiLibrary.compact")}</option>
+        </select>
+      </label>
       <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
         <SectionLabel>{t("autoReplyScope.defaultMode")}</SectionLabel>
         <div className="mt-3 grid grid-cols-2 gap-3">
@@ -219,8 +162,6 @@ export function SettingsAutoReplyPanel() {
               value={profileAccountId}
               onChange={(event) => {
                 setProfileAccountId(event.target.value);
-                setTestReplies([]);
-                setTestError("");
               }}
               className="ui-control h-8 max-w-52 px-2 text-[11px]"
               aria-label={t("settingsAutoReply.selectAccount")}
@@ -342,69 +283,6 @@ export function SettingsAutoReplyPanel() {
         </label>
       </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
-        <SectionLabel>{t("settingsAutoReply.replay")}</SectionLabel>
-        <p className="mt-1 text-2xs leading-4 text-zinc-600">
-          {t("settingsAutoReply.replayHint", { identity: profileLabel })}
-          {!hasRealAiKey(settings) && ` ${t("settingsAutoReply.demoNotice")}`}
-        </p>
-        <Textarea
-          value={testMessage}
-          onChange={(event) => {
-            setTestMessage(event.target.value);
-            setTestReplies([]);
-            setTestError("");
-          }}
-          className="mt-2 min-h-32 w-full"
-          placeholder={
-            t("settingsAutoReply.replayPlaceholder")
-          }
-        />
-        {replayDecision ? (
-          <p
-            className={cn(
-              "mt-2 rounded-lg border px-3 py-2 text-2xs leading-4",
-              replayDecision.allow
-                ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-200"
-                : "border-amber-500/25 bg-amber-500/10 text-amber-200"
-            )}
-          >
-            {replayDecision.allow ? t("settingsAutoReply.allowed") : t("settingsAutoReply.manual")}: {localizeSafetyReason(replayDecision.reason, t)}
-          </p>
-        ) : (
-          <p className="mt-2 text-2xs text-amber-300">
-            {t("settingsAutoReply.needInbound")}
-          </p>
-        )}
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          className="mt-2"
-          disabled={testing || !lastReplayInbound}
-          onClick={() => void testReply()}
-        >
-          {testing ? t("settingsAutoReply.generating") : t("settingsAutoReply.runReplay")}
-        </Button>
-        {testError && <p className="mt-2 text-2xs text-red-300">{testError}</p>}
-        {testReplies.length > 0 && (
-          <div className="mt-3 space-y-2">
-            <p className="text-[10px] text-zinc-500">
-              {replayDecision?.allow && !testError
-                ? t("settingsAutoReply.proposedAutoReply")
-                : t("settingsAutoReply.manualSuggestion")}
-            </p>
-            {testReplies.map((reply, index) => (
-              <div
-                key={`${index}-${reply}`}
-                className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2 text-[12px] leading-5 text-zinc-200"
-              >
-                {reply}
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
     </div>
   );
 }

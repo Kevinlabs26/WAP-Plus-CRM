@@ -12,6 +12,9 @@ import type { ChatPreview, Contact, FollowUp, PhoneDevice } from "@/types/crm";
 import { formatFollowDueLabel } from "./chatPanelHelpers";
 import { ChatHeaderMoreMenu } from "./ChatHeaderMoreMenu";
 import { useI18n } from "@/i18n";
+import { CloneCallButton } from "./CloneCallButton";
+import { cloneCallTarget } from "@/lib/cloneCalls";
+import { openAvatarCloudMenu } from "@/lib/googleDrive";
 
 type Props = {
   activeChat: ChatPreview | null;
@@ -24,6 +27,7 @@ type Props = {
   chatConnected: boolean;
   chatAccount?: WaAccount;
   chatAccountId?: string;
+  callAccountId?: string;
   settings: Pick<
     AppSettings,
     | "liveBaileysAccountId"
@@ -75,6 +79,7 @@ export function ChatPanelHeader({
   chatConnected,
   chatAccount,
   chatAccountId,
+  callAccountId,
   settings,
   baileysUi,
   activePhone,
@@ -107,6 +112,7 @@ export function ChatPanelHeader({
   onToggleScreen,
 }: Props) {
   const { t } = useI18n();
+  const callTarget = cloneCallTarget(activeChat, activeContact, settings.waAccounts, callAccountId);
   const blocked = (() => {
     if (!activeContact || activeContact.isGroup) return false;
     if (activeChat?.isGroup) return false;
@@ -128,6 +134,7 @@ export function ChatPanelHeader({
       <div className="flex items-start gap-3">
         <div className="flex min-w-0 items-center gap-2.5">
           {activeChat && (
+            <span onContextMenu={event=>{if(activeContact&&!localOnlyChat)openAvatarCloudMenu(event,activeContact,chatAccountId);}}>
             <Avatar
               name={displayContactLabel(
                 activeContact?.name || activeChat.contactName,
@@ -143,6 +150,7 @@ export function ChatPanelHeader({
               online={activePeerOnline}
               onlineTitle={t("common.online")}
             />
+            </span>
           )}
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-1.5">
@@ -240,6 +248,12 @@ export function ChatPanelHeader({
         )}
         {localOnlyChat && <div className="min-w-0 flex-1" />}
         <div className="flex shrink-0 items-center gap-1.5">
+          {activeChat && isBaileys && !localOnlyChat && !activeChat.isGroup && !activeContact?.isGroup && (
+            <CloneCallButton
+              key={`${activeChat.id}:${callTarget?.accountId}:${callTarget?.ownerPhone}:${callTarget?.recipientPhone}`}
+              target={callTarget}
+            />
+          )}
           {activeChat && (
             <Button
               variant="secondary"

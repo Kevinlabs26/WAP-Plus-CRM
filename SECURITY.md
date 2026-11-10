@@ -18,6 +18,7 @@ database files, exported backups, or real customer data.
 
 ## Scope notes
 
-- Local SQLite and Baileys auth data are not content-encrypted in the current MVP.
+- On Windows, SQLite uses SQLCipher; database keys, application credentials, and Muse handoff records are protected with user-bound DPAPI. Existing plaintext Muse records migrate when read.
+- Baileys authentication files and raw message/media caches still contain sensitive local session data. Protect the Windows user profile and do not share these directories.
 - The Android Bridge relies on user-granted Accessibility permission and a local token.
 - Baileys and WhatsApp behavior can change independently of this project.

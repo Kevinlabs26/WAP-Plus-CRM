@@ -1,0 +1,158 @@
+import { useAppStore, flushPersist } from "@/store/appStore";
+import { isDataRestoreActive, getDataRestoreGeneration } from "@/store/restoreGuard";
+import { generateSuggestions, hasRealAiKey } from "./aiSuggest";
+import { hashAiReplyContext } from "./aiReplyContext";
+import { outreachCandidate, outreachContextKey, isOutreachOptOut } from "./aiOutreachContext";
+import { getAutoReplyOutputBlockReason } from "./aiSafety";
+import { resolveSendTarget } from "./utils";
+import type { AiOutreachRun } from "./aiOutreachRules";
+import { normalizeOutreachRule, outreachClock, outreachGoal } from "./aiOutreachRules";
+import type { Message } from "@/types/crm";
+import { retainMessageChats } from "@/store/messageMemory";
+import { hydrateOutreachHistory } from "./aiOutreachHistory";
+import { lastContactedAccounts, recipientKey } from "./scheduledPlans";
+
+let running=false;
+let lastTick=0;
+let controller: AbortController|undefined;
+const approvals=new Set<string>();
+export function stopAiOutreach(){controller?.abort();retainMessageChats("ai-outreach",[]);}
+async function saveRun(run:AiOutreachRun) {
+  const state=useAppStore.getState(),runs=state.settings.aiOutreachRuns||[];
+  state.updateSettings({aiOutreachRuns:runs.some(item=>item.id===run.id)?runs.map(item=>item.id===run.id?run:item):[...runs,run]});
+  retainMessageChats("ai-outreach",useAppStore.getState().settings.aiOutreachRuns.filter(item=>["generating","draft","queued"].includes(item.status)).map(item=>item.chatId));
+  await flushPersist(useAppStore.getState);
+}
+export function noteOutreachOptOut(messages:Message[]) {
+  const folders=useAppStore.getState().settings.chatFolders;
+  const ids=messages.filter(item=>!item.isGroup&&folders.some(folder=>folder.aiOutreach?.enabled&&folder.chatIds.includes(item.chatId))&&isOutreachOptOut(item.transcript||item.body)).map(item=>item.chatId);
+  if (!ids.length) return;
+  const state=useAppStore.getState();
+  state.updateSettings({aiAutoReplyManualChatIds:[...new Set([...(state.settings.aiAutoReplyManualChatIds||[]),...ids])]});
+}
+export async function queueOutreachDraft(id:string,approved=true) {
+  const epoch=getDataRestoreGeneration();
+  const initial=useAppStore.getState();
+  if(isDataRestoreActive()||!initial.hydrated||!initial.uiReady)return false;
+  if(approvals.has(id))return false;
+  approvals.add(id);
+  try {
+    let state=useAppStore.getState();
+    const run=state.settings.aiOutreachRuns.find(item=>item.id===id);
+    if(state.settings.aiAutoReplyPaused||state.settings.aiOutreachPaused||run&&(state.settings.chatFolders.find(folder=>folder.id===run.folderId)?.aiOutreach?.paused||run.recipient&&state.settings.aiOutreachExcludedRecipients?.includes(recipientKey("",run.recipient))))return false;
+    if (!run||run.status!=="draft"||!run.text||!approved&&state.settings.chatFolders.find(folder=>folder.id===run.folderId)?.aiOutreach?.mode!=="auto") return false;
+    const key=outreachContextKey(state,run.folderId,run.chatId,run.id);
+    const hash=key?await hashAiReplyContext(key):undefined;
+    if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return false;
+    if (!key||hash!==run.contextHash) {await saveRun({...run,status:"cancelled",error:"上下文或规则已变化，请重新生成"});return false;}
+    state=useAppStore.getState();
+    if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return false;
+    if (outreachContextKey(state,run.folderId,run.chatId,run.id)!==key||state.settings.aiOutreachRuns.find(item=>item.id===id)?.status!=="draft") return false;
+    const candidate=outreachCandidate(state,run.folderId,run.chatId,Date.now(),run.id);
+    if (!candidate) return false;
+    const recipient=resolveSendTarget({phone:candidate.contact.phone,channelAddress:candidate.contact.channelAddress,entityId:candidate.contact.id});
+    if (!recipient) {await saveRun({...run,status:"failed",error:"联系人号码不可用"});return false;}
+    const draft=state.draftReply;
+    const messageId=state.enqueueOutgoingMessage({chatId:run.chatId,contactId:candidate.contact.id,body:run.text,accountId:run.accountId,
+      channelId:"baileys",deviceId:run.accountId,phoneE164:recipient,systemKind:"ai_proactive",aiReplyContextHash:run.contextHash,
+      deliveryStatus:"pending"});
+    if (useAppStore.getState().draftReply!==draft) useAppStore.getState().setDraftReply(draft);
+    if (!messageId) return false;
+    try {
+      await saveRun({...run,status:"queued",messageId,approved});
+      const fresh=useAppStore.getState();
+      if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return false;
+      if(fresh.settings.aiOutreachRuns.find(item=>item.id===id)?.status!=="queued"||fresh.messages.find(item=>item.id===messageId)?.deliveryStatus!=="pending")return false;
+      useAppStore.getState().updateMessageDelivery(messageId,{deliveryStatus:"queued",nextAttemptAt:new Date(Date.now()).toISOString()});
+      await flushPersist(useAppStore.getState);
+    }
+    catch(error){if(getDataRestoreGeneration()===epoch&&!isDataRestoreActive())useAppStore.getState().updateMessageDelivery(messageId,{deliveryStatus:"failed",retryCount:5,nextAttemptAt:undefined,lastError:"主动联系任务保存失败"});throw error;}
+    return true;
+  } finally {approvals.delete(id);}
+}
+export async function tickAiOutreach(now=Date.now()) {
+  const epoch=getDataRestoreGeneration();
+  const initial=useAppStore.getState();
+  if (running||isDataRestoreActive()||!initial.hydrated||!initial.uiReady||now-lastTick<30_000) return;
+  lastTick=now;running=true;
+  try {
+    for (const run of initial.settings.aiOutreachRuns||[]) {
+      if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return;
+      if(run.status==="draft"){
+        const folder=initial.settings.chatFolders.find(folder=>folder.id===run.folderId),rule=folder?.aiOutreach&&normalizeOutreachRule(folder.aiOutreach);
+        const clock=rule&&outreachClock(rule.timeZone,now),minutes=(value:string)=>Number(value.slice(0,2))*60+Number(value.slice(3));
+        if(!rule||clock!.day!==run.day||minutes(clock!.time)-minutes(rule.time)>=120)await saveRun({...run,status:"cancelled",error:"草稿已过期，未自动发送"});
+      }
+      if (run.status==="generating") await saveRun({...run,status:"failed",error:"生成被中断，未自动重试以避免重复花费"});
+      if (run.status==="queued") {
+        const message=initial.messages.find(item=>item.id===run.messageId);
+        if (message&&["sent","server","delivered","read","played"].includes(message.deliveryStatus||"")) await saveRun({...run,status:"sent",at:message.sentAt});
+        else if (!message||message.deliveryStatus==="failed"&&!message.nextAttemptAt) await saveRun({...run,status:"failed",error:message?.lastError||"出站记录不可用"});
+      }
+    }
+    const state=useAppStore.getState();
+    if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return;
+    // shortcut: Stop at 10k audit entries rather than evict deduplication history; archive before larger deployments.
+    if (state.settings.aiAutoReplyPaused||state.settings.aiOutreachPaused||state.settings.sendChannel!=="baileys"||!hasRealAiKey(state.settings)||(state.settings.aiOutreachRuns||[]).length>=10_000) return;
+    const folders=state.settings.chatFolders.filter(folder=>folder.aiOutreach?.enabled&&!folder.aiOutreach.paused);
+    if(!folders.length)return;
+    const lastRunByFolder=new Map<string,number>();
+    for(const run of state.settings.aiOutreachRuns||[])lastRunByFolder.set(run.folderId,Math.max(lastRunByFolder.get(run.folderId)||0,Date.parse(run.at)||0));
+    folders.sort((a,b)=>(lastRunByFolder.get(a.id)||0)-(lastRunByFolder.get(b.id)||0));
+    const chats=new Map(state.chats.map(chat=>[chat.id,chat])),contacts=new Map(state.contacts.map(contact=>[contact.id,contact]));
+    const lastAccounts=folders.some(folder=>folder.scope?.type==="all")?lastContactedAccounts(state.chats,state.contacts,state.messages):undefined;
+    for (const folder of folders) {
+      if (!folder.aiOutreach?.enabled) continue;
+      const rule=normalizeOutreachRule(folder.aiOutreach),clock=outreachClock(rule.timeZone,now);
+      const minutes=(value:string)=>Number(value.slice(0,2))*60+Number(value.slice(3));
+      if(clock.time<rule.time||minutes(clock.time)-minutes(rule.time)>=120||(state.settings.aiOutreachRuns||[]).filter(run=>run.folderId===folder.id&&run.day===clock.day).length>=rule.dailyLimit)continue;
+      const members=new Set(folder.chatIds);
+      for (const chatId of folder.chatIds) {
+        const chat=chats.get(chatId),contact=chat&&contacts.get(chat.contactId);
+        if(!chat||!contact||rule.trigger==="new"&&(chat.hasMessageHistory||chat.lastMessage||chat.lastMessageDirection||contact.lastMessageAt)||
+          rule.trigger==="daily"&&now-Date.parse(chat.updatedAt)<rule.minIdleHours*3600_000)continue;
+        const candidate=outreachCandidate(state,folder.id,chatId,now,undefined,undefined,{chat,contact,members,clock,lastAccounts});
+        if (!candidate) continue;
+        await generateOutreach(folder.id,chatId,crypto.randomUUID(),now);
+        return; // One generation per tick, no parallel requests or bulk token bursts.
+      }
+    }
+  } finally {running=false;}
+}
+
+async function generateOutreach(folderId:string,chatId:string,id:string,now=Date.now()) {
+  const epoch=getDataRestoreGeneration();
+  await hydrateOutreachHistory(chatId);
+  if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return false;
+  const state=useAppStore.getState(),candidate=outreachCandidate(state,folderId,chatId,now,id);
+  const key=candidate&&outreachContextKey(state,folderId,chatId,id,now);
+  if(!candidate||!key)return false;
+  let run:AiOutreachRun={id,folderId,chatId,accountId:candidate.accountId,recipient:candidate.recipient,day:candidate.day,basisAt:candidate.basisAt,at:new Date(now).toISOString(),status:"generating"};
+  await saveRun(run);
+  if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch||useAppStore.getState().settings.aiOutreachRuns.find(item=>item.id===id)?.status!=="generating"||outreachContextKey(useAppStore.getState(),folderId,chatId,id)!==key)return false;
+  controller=new AbortController();
+  try {
+    const result=await generateSuggestions(candidate.contact,candidate.thread,useAppStore.getState().settings,
+      {auto:true,accountId:candidate.accountId,chatId,outreach:outreachGoal(candidate.rule),signal:controller.signal});
+    const text=result.suggestions[0]?.text.trim();
+    if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return false;
+    if(controller.signal.aborted||useAppStore.getState().settings.aiOutreachRuns.find(item=>item.id===id)?.status!=="generating"||outreachContextKey(useAppStore.getState(),folderId,chatId,id)!==key){
+      await saveRun({...run,status:"cancelled",error:"生成期间上下文或规则发生变化"});return false;
+    }
+    const block=text&&getAutoReplyOutputBlockReason(text,{allowPricing:candidate.policy.allowPricing});
+    if(result.fallback||result.source==="mock"||!text||block){await saveRun({...run,status:"failed",error:result.error||block||"AI 没有返回有效内容"});return false;}
+    const hash=await hashAiReplyContext(key);
+    if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return false;
+    if(useAppStore.getState().settings.aiOutreachRuns.find(item=>item.id===id)?.status!=="generating"||outreachContextKey(useAppStore.getState(),folderId,chatId,id)!==key)return false;
+    run={...run,status:"draft",text,contextHash:hash};
+    await saveRun(run);
+    if(candidate.rule.mode==="auto")await queueOutreachDraft(id,false);
+    return true;
+  } catch(error){if(!isDataRestoreActive()&&getDataRestoreGeneration()===epoch)await saveRun({...run,status:"failed",error:String(error)});return false;}
+  finally{controller=undefined;}
+}
+export async function retryAiOutreach(id:string){
+  const state=useAppStore.getState(),run=state.settings.aiOutreachRuns.find(item=>item.id===id);
+  if(running||isDataRestoreActive()||!state.hydrated||!state.uiReady||!run||run.messageId||!["failed","cancelled","draft"].includes(run.status))return false;
+  running=true;try{return await generateOutreach(run.folderId,run.chatId,id);}finally{running=false;}
+}

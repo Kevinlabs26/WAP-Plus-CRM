@@ -138,6 +138,11 @@ export function CampaignRunPanel({
                 {it.status==="sent"?t(`planQueue.receipt.${planItemReceipt({status:"sent",messageId:it.messageId},messagesById)}`):t(ITEM_STATUS_LABELS[it.status] || "broadcast.run.item.pending")}
               </span>
             </div>
+            {it.variantId && <p className="mt-1 text-2xs text-zinc-500">
+              {t("broadcast.variant", { number: (c.variants?.findIndex(v => v.id === it.variantId) ?? -1) + 1 })}
+              {" · "}{it.bodyRendered.slice(0, 80)}
+              {it.mediaId && <> · {c.variants?.find(v => v.id === it.variantId)?.media?.find(m => m.id === it.mediaId)?.fileName || t("broadcast.mediaCount", { count: 1 })}</>}
+            </p>}
             {it.error && (
               <p className="mt-0.5 truncate text-2xs text-zinc-600">{it.error}</p>
             )}

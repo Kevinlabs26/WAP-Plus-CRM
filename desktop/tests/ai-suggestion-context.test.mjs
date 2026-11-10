@@ -6,7 +6,7 @@ const settings = { aiProvider: "custom", customAiBaseUrl: "https://example.inval
 const contact = { id: "person", name: "Alice", accountId: "a", tags: [], notes: "" };
 const message = (id, patch = {}) => ({ id, chatId: "chat-a", accountId: "a", direction: "in", body: id, sentAt: new Date(Date.UTC(2026, 0, 1, 0, Number(id) || 0)).toISOString(), ...patch });
 
-test("context includes earlier conversation, real voice examples, transcripts and quotes without treating unsent messages as spoken", async (t) => {
+test("extended context includes earlier conversation, real voice examples, transcripts and quotes without treating unsent messages as spoken", async (t) => {
   let input;
   t.mock.method(globalThis, "fetch", async (_url, opts) => {
     input = JSON.parse(opts.body).messages[1].content;
@@ -18,7 +18,7 @@ test("context includes earlier conversation, real voice examples, transcripts an
   history[25].body = "IMPORTANT EARLIER DETAIL";
   history[49] = message("49", { mediaType: "audio", body: "[audio]", transcript: "Le rendez-vous est mardi.", quoted: { id: "25", body: "À quelle date ?", fromMe: true } });
   history.push(message("50", { direction: "out", deliveryStatus: "queued", body: "NOT SENT YET" }));
-  const result = await generateSuggestions(contact, history, settings);
+  const result = await generateSuggestions(contact, history, {...settings,aiContextMode:"full"});
   assert.equal(result.fallback, false);
   assert.ok(input.includes("IMPORTANT EARLIER DETAIL"));
   assert.ok(input.includes("Le rendez-vous est mardi."));

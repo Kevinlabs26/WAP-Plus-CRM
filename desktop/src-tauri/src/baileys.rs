@@ -12,6 +12,36 @@ use tauri::{AppHandle, Manager};
 
 const MAX_BRIDGE_LOG_BYTES: u64 = 5 * 1024 * 1024;
 
+fn sync_cache_key(auth_dir: &std::path::Path) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        use ring::rand::SecureRandom;
+        let name=auth_dir.file_name().and_then(|name|name.to_str()).ok_or("同步缓存账号无效")?;
+        let path=auth_dir.with_file_name(format!("{name}-sync-key.dpapi"));
+        let key=match std::fs::read(&path) {
+            Ok(protected)=>crate::commands::unprotect_secrets(&protected)?,
+            Err(error) if error.kind()==std::io::ErrorKind::NotFound=>{
+                // A missing key must never silently replace the key of an encrypted backlog.
+                let cache=auth_dir.with_file_name(format!("{name}-sync-events"));
+                if cache.exists() { return Err("同步缓存密钥缺失，已保留缓存，拒绝生成新密钥".into()); }
+                let mut bytes=[0u8;32];ring::rand::SystemRandom::new().fill(&mut bytes).map_err(|_|"无法生成同步加密密钥")?;
+                let protected=crate::commands::protect_secrets(&bytes)?;
+                match std::fs::OpenOptions::new().write(true).create_new(true).open(&path){
+                    Ok(mut file)=>{file.write_all(&protected).and_then(|_|file.sync_all()).map_err(|e|format!("同步密钥保存失败：{e}"))?;},
+                    Err(error) if error.kind()==std::io::ErrorKind::AlreadyExists=>return sync_cache_key(auth_dir),
+                    Err(error)=>return Err(format!("同步密钥保存失败：{error}")),
+                }
+                bytes.to_vec()
+            },
+            Err(error)=>return Err(format!("无法读取同步加密密钥：{error}")),
+        };
+        if key.len()!=32{return Err("同步加密密钥无效".into());}
+        return Ok(key.iter().map(|byte|format!("{byte:02x}")).collect());
+    }
+    #[cfg(not(windows))]
+    { let _=auth_dir;Err("安全同步缓存需要 Windows DPAPI".into()) }
+}
+
 pub struct BaileysState {
     registry: Mutex<BaileysRegistry>,
     ready: Condvar,
@@ -193,7 +223,7 @@ fn spawn_account(app: &AppHandle, account_id: &str) -> Result<BaileysProcess, St
                     let name = ent.file_name();
                     let n = name.to_string_lossy();
                     // 跳过子账号目录
-                    if n.starts_with("wa-") && ent.path().is_dir() {
+                    if n.ends_with("-sync-key.dpapi") || n.ends_with("-sync-events") || n.starts_with("wa-") && ent.path().is_dir() {
                         continue;
                     }
                     let dest = auth_dir.join(&name);
@@ -206,13 +236,17 @@ fn spawn_account(app: &AppHandle, account_id: &str) -> Result<BaileysProcess, St
         }
     }
 
+    let sync_key = sync_cache_key(&auth_dir)?;
     let (mut command, bin_label) = resolve_baileys_bin()?;
     #[cfg(windows)]
     {
         let ffmpeg = if cfg!(debug_assertions) {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries/ffmpeg-x86_64-pc-windows-msvc.exe")
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("binaries/ffmpeg-x86_64-pc-windows-msvc.exe")
         } else {
-            std::env::current_exe().map_err(|e| e.to_string())?.with_file_name("ffmpeg.exe")
+            std::env::current_exe()
+                .map_err(|e| e.to_string())?
+                .with_file_name("ffmpeg.exe")
         };
         command.env("WAP_FFMPEG_PATH", ffmpeg);
     }
@@ -236,6 +270,7 @@ fn spawn_account(app: &AppHandle, account_id: &str) -> Result<BaileysProcess, St
     command
         .env("WAP_BAILEYS_PORT", port.to_string())
         .env("WAP_BAILEYS_TOKEN", &token)
+        .env("WAP_SYNC_KEY_HEX", sync_key)
         .env("WAP_BAILEYS_AUTH_DIR", &auth_dir)
         .env("WAP_BAILEYS_ACCOUNT_ID", &account_id)
         .env("WAP_PARENT_PID", std::process::id().to_string())
@@ -345,7 +380,11 @@ impl BaileysState {
         Ok(())
     }
 
-    pub fn reset_account(&self, auth_root: &std::path::Path, account_id: &str) -> Result<(), String> {
+    pub fn reset_account(
+        &self,
+        auth_root: &std::path::Path,
+        account_id: &str,
+    ) -> Result<(), String> {
         let key = crate::account_id::validate_account_id(account_id)?;
         let mut guard = self.registry.lock().map_err(|e| e.to_string())?;
         while guard.starting.contains(&key) {
@@ -356,7 +395,12 @@ impl BaileysState {
         }
         // 保持注册表锁直到清理完成，阻止轮询在旧凭据被移除前启动另一进程。
         if let Some(process) = guard.processes.get_mut(&key) {
-            if process.child.try_wait().map_err(|e| e.to_string())?.is_none() {
+            if process
+                .child
+                .try_wait()
+                .map_err(|e| e.to_string())?
+                .is_none()
+            {
                 process.child.kill().map_err(|e| e.to_string())?;
             }
             process.child.wait().map_err(|e| e.to_string())?;
@@ -430,7 +474,11 @@ pub fn baileys_reset_account(
     state: tauri::State<'_, BaileysState>,
     account_id: String,
 ) -> Result<(), String> {
-    let auth_root = app.path().app_data_dir().map_err(|e| e.to_string())?.join("baileys-auth");
+    let auth_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("baileys-auth");
     state.reset_account(&auth_root, &account_id)
 }
 
@@ -458,6 +506,18 @@ impl Drop for BaileysState {
 mod tests {
     use super::*;
 
+    #[cfg(windows)]
+    #[test]
+    fn sync_keys_survive_auth_reset_and_missing_keys_never_replace_encrypted_cache_keys(){
+        let root=std::env::temp_dir().join(format!("wap-sync-key-test-{}",uuid::Uuid::new_v4()));
+        let auth=root.join("wa-test");std::fs::create_dir_all(&auth).unwrap();
+        let first=sync_cache_key(&auth).unwrap();assert_eq!(first.len(),64);assert_eq!(sync_cache_key(&auth).unwrap(),first);
+        std::fs::remove_dir(&auth).unwrap();assert_eq!(sync_cache_key(&auth).unwrap(),first);
+        std::fs::create_dir(root.join("wa-test-sync-events")).unwrap();std::fs::remove_file(root.join("wa-test-sync-key.dpapi")).unwrap();
+        assert!(sync_cache_key(&auth).is_err());assert!(!root.join("wa-test-sync-key.dpapi").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn resets_only_the_requested_auth_directory_and_preserves_crm() {
         let root = std::env::temp_dir().join(format!("wap-session-reset-{}", uuid::Uuid::new_v4()));
@@ -472,20 +532,30 @@ mod tests {
         assert!(auth.join("wa-a/creds.json").exists());
         state.reset_account(&auth, "wa-a").unwrap();
         assert!(!auth.join("wa-a").exists());
-        assert_eq!(std::fs::read_to_string(auth.join("wa-b/creds.json")).unwrap(), "keep-b");
-        assert_eq!(std::fs::read_to_string(root.join("wap-plus.db")).unwrap(), "keep history");
+        assert_eq!(
+            std::fs::read_to_string(auth.join("wa-b/creds.json")).unwrap(),
+            "keep-b"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("wap-plus.db")).unwrap(),
+            "keep history"
+        );
         state.reset_account(&auth, "wa-a").unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn resetting_default_does_not_restore_legacy_credentials() {
-        let root = std::env::temp_dir().join(format!("wap-session-legacy-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("wap-session-legacy-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("creds.json"), "old default account").unwrap();
         remove_account_auth(&root, "wa-default").unwrap();
         assert!(!root.join("wa-default/creds.json").exists());
-        assert!(std::fs::read_dir(root.join("wa-default")).unwrap().next().is_some());
+        assert!(std::fs::read_dir(root.join("wa-default"))
+            .unwrap()
+            .next()
+            .is_some());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -493,17 +563,33 @@ mod tests {
     #[test]
     fn reset_stops_the_old_process_before_creating_a_new_session() {
         use std::os::windows::process::CommandExt;
-        let root = std::env::temp_dir().join(format!("wap-session-process-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("wap-session-process-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("wa-a")).unwrap();
         let child = Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 60"])
-            .creation_flags(0x0800_0000).stdout(Stdio::null()).stderr(Stdio::null())
-            .spawn().unwrap();
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 60",
+            ])
+            .creation_flags(0x0800_0000)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
         let state = BaileysState::default();
-        state.registry.lock().unwrap().processes.insert("wa-a".into(), BaileysProcess {
-            child,
-            runtime: BaileysRuntime { account_id: "wa-a".into(), base_url: "http://127.0.0.1:1".into(), token: "test".into() },
-        });
+        state.registry.lock().unwrap().processes.insert(
+            "wa-a".into(),
+            BaileysProcess {
+                child,
+                runtime: BaileysRuntime {
+                    account_id: "wa-a".into(),
+                    base_url: "http://127.0.0.1:1".into(),
+                    token: "test".into(),
+                },
+            },
+        );
         state.reset_account(&root, "wa-a").unwrap();
         assert!(state.registry.lock().unwrap().processes.is_empty());
         assert!(!root.join("wa-a").exists());

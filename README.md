@@ -30,18 +30,18 @@ See the [requirements](docs/REQUIREMENTS.md), [architecture](docs/ARCHITECTURE.m
 
 ## Privacy and security boundaries
 
-- Messages, contacts, the SQLite database, and Baileys login credentials are stored locally by default. This release does not provide end-to-end cloud synchronization and does not guarantee encryption at rest for the local database.
+- Messages, contacts, the SQLite database, and Baileys login credentials are stored locally by default. On Windows, the desktop database, automatic backups, cloud-upload recovery records, and durable sync backlog are encrypted with keys protected by the current Windows user. This does not encrypt every local file: login credentials, media caches, and manual JSON exports require separate care. There is no end-to-end cloud synchronization.
 - API keys are used only for local AI requests. When you use a third-party AI provider, the content sent to the model depends on the feature you trigger and the provider you choose. Review the provider's privacy policy first.
 - Never commit `reasonix.toml`, `.reasonix/`, `baileys-auth/`, databases, logs, exports, real tokens, or API keys.
 - Do not include phone numbers, chat content, QR codes, login credentials, or complete logs in public issues. For security reports, see [SECURITY.md](SECURITY.md).
 
 ## Backups, notifications, and accounts
 
-- Desktop automatically saves one local JSON backup per day while running and retains the latest seven. Settings → Data & Privacy lets you disable it, back up now, or restore the latest backup with confirmation. Automatic backups exclude credentials and cached attachments; keep an external copy against disk failure.
+- Desktop automatically saves one local backup per day while running and retains the latest seven. On Windows these backups are encrypted for the current Windows user. Settings → Data & Privacy lets you disable it, back up now, or restore the latest backup with confirmation. Automatic backups exclude credentials and cached attachments; keep an external copy against disk failure.
 - Unread and awaiting handling are separate. Reading does not finish a task; mark it handled in the workbench. A newer customer message reopens it, and failed or queued sends do not count as replies.
 - Failed translations keep the original draft and allow retry. Edits made while translating are retained.
 
-- Export or restore JSON backups in **Settings → Data & Privacy**, optionally including locally cached attachments. Backups exclude API keys, the Bridge token, and WhatsApp login credentials; configure keys and log in again on a new computer.
+- Export or restore backups in **Settings → Data & Privacy**, optionally including locally cached attachments. For another computer or Windows user, choose the password-encrypted `.wapbackup` format; its password is not stored or recoverable. Legacy JSON export remains available and is plaintext. Backups exclude API keys, the Bridge token, and WhatsApp login credentials; configure keys and log in again on a new computer.
 - Restore replaces CRM data. New sends pause while incoming events are buffered and processed afterward. Restored AI replies use assisted mode, and unsent scheduled tasks require a new time confirmation.
 - Notification privacy supports full content, contact name only, or hidden content.
 - The customer account bar shows four accounts. Open **+N** to scroll through additional accounts; keyboard navigation is supported.
@@ -89,6 +89,8 @@ Common commands:
 You can also work from `desktop/` or `desktop/baileys-bridge/`. The `shared/` package is consumed through the Desktop `@shared/*` path alias. The Android project is opened in Android Studio or built with Gradle.
 
 ## Quick start
+
+Use Node.js 22.23.4 as pinned in `.nvmrc`. On Windows, an official portable runtime at `.audit-cache/node-v22.23.4-win-x64` can be used with `powershell -NoProfile -ExecutionPolicy Bypass -File tools/project-node.ps1 run dev` (or `run tauri -- dev`). The helper scopes Node and the required full Perl to the command; Tauri dev also gets an isolated WebView2 data folder under `.audit-cache`, leaving the installed app profile and system settings untouched.
 
 ### Desktop UI
 

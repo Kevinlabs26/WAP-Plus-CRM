@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 const mocks={
  react:'export const useEffect=()=>{};export const useMemo=f=>f();export const useRef=v=>({current:v});export const useState=v=>[v,()=>{}];',
  'react/jsx-runtime':'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
- 'lucide-react':'export const ChevronDown="icon",Coffee="icon",Star="icon",Settings="icon",Search="icon";',
- '@/store/appStore':'export const useAppStore=Object.assign(selector=>selector({followUps:[],stats:{},settings:{waAccounts:[]}}),{getState:()=>({pushToast:()=>globalThis.starTest.errors++})});',
+ 'lucide-react':'export const LockKeyhole="icon",ChevronDown="icon",Coffee="icon",Star="icon",Settings="icon",Search="icon";',
+ '@/store/appStore':'export const useAppStore=Object.assign(selector=>selector({followUps:[],chats:[],contacts:[],stats:{},settings:{waAccounts:[]}}),{getState:()=>({pushToast:()=>globalThis.starTest.errors++})});',
  '@/lib/utils':'export const cn=(...v)=>v.join(" ");',
  '@/lib/bridge':'export const isTauri=()=>globalThis.starTest.native;',
  '@tauri-apps/plugin-shell':'export const open=()=>globalThis.starTest.open();',

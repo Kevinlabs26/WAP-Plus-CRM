@@ -43,6 +43,7 @@ const ChatMediaPanel = lazy(() =>
   import("./ChatMediaPanel").then((m) => ({ default: m.ChatMediaPanel }))
 );
 import { ChatInternalNoteBar } from "@/components/chat/ChatInternalNoteBar";
+import { ChatAiStatusBar } from "./ChatAiStatusBar";
 import {
   filterMessagesForAccount,
   type PersonThreadRow,
@@ -95,9 +96,10 @@ import { retryMessage as retryMessageAction } from "./retryMessageAction";
 import { reloadMedia as reloadMediaAction } from "./reloadMediaAction";
 import { searchContact } from "./searchContactAction";
 import { openAndroidMediaShare as openAndroidMediaShareAction } from "./openAndroidMediaShare";
+import { compareMessageOrder } from "@/store/messageOrdering";
 import { toggleBlock } from "./toggleBlockAction";
 import { createStickerFavoriteActions } from "./stickerFavoriteActions";
-import { loadStickerFavorites } from "@/lib/stickerFavorites";
+import { loadStickerFavorites, normalizeStickerFavorites, saveStickerFavorites } from "@/lib/stickerFavorites";
 import { workflowForStage } from "@/lib/contactWorkflow";
 import {
   imageToStickerDataUrl,
@@ -226,7 +228,6 @@ export function ChatPanel() {
   const setFocusMessageId = useAppStore((s) => s.setFocusMessageId);
   const setSelectedChat = useAppStore((s) => s.setSelectedChat);
   const setSelectedContact = useAppStore((s) => s.setSelectedContact);
-  const setActiveNav = useAppStore((s) => s.setActiveNav);
   const openContactWorkspace = useAppStore((s) => s.openContactWorkspace);
   const updateSettings = useAppStore((s) => s.updateSettings);
   const markChatUnreadLocal = useAppStore((s) => s.markChatUnreadLocal);
@@ -281,7 +282,7 @@ export function ChatPanel() {
       return previous.value;
     }
     const matched = s.messages.filter((message) => message.chatId === chatId);
-    matched.sort((a, b) => (a.sentAt || "").localeCompare(b.sentAt || ""));
+    matched.sort(compareMessageOrder);
     chatMessagesFallbackRef.current = {
       chatId,
       messages: s.messages,
@@ -306,6 +307,8 @@ export function ChatPanel() {
       settings.liveBaileysAccountId,
     ]
   );
+  const chatMessagesRef = useRef(chatMessages);
+  chatMessagesRef.current = chatMessages;
 
   const {
     chatSearchOpen,
@@ -405,9 +408,7 @@ export function ChatPanel() {
   /** 用户上翻看历史时不强制吸底；切会话 / 自己发消息时强制到底 */
   const stickToBottomRef = useRef(true);
   const prevChatIdRef = useRef<string | null>(null);
-  /** 受控滚动：事件驱动。订阅 store 总 messages 长度（真正入库的新消息才触发），
-   *  不依赖 chatMessages（其长度会随 owner 过滤条件波动，导致反复滚动闪烁）。 */
-  const prevMessageCountRef = useRef(0);
+  /** 只跟随当前会话尾部的新消息；前插历史和表情更新不能触发吸底。 */
   useEffect(() => {
     // 切会话：无条件滚到底
     const chatChanged = prevChatIdRef.current !== selectedChatId;
@@ -415,23 +416,30 @@ export function ChatPanel() {
       prevChatIdRef.current = selectedChatId;
       stickToBottomRef.current = true;
     }
-    prevMessageCountRef.current = selectedChatId
-      ? useAppStore.getState().messagesByChatId[selectedChatId]?.length || 0
-      : 0;
+    let lastMessageId = selectedChatId
+      ? useAppStore.getState().messagesByChatId[selectedChatId]?.at(-1)?.id
+      : undefined;
+    let scrollFrame: number | undefined;
     // 只观察当前聊天的索引桶；其它聊天入库不能推动当前滚动条。
-    return useAppStore.subscribe((state) => {
-      const count = selectedChatId
-        ? state.messagesByChatId[selectedChatId]?.length || 0
-        : 0;
-      const prevCount = prevMessageCountRef.current;
-      if (count === prevCount) return;
-      prevMessageCountRef.current = count;
-      if (count <= prevCount) return;
+    const unsubscribe = useAppStore.subscribe((state) => {
+      const nextMessageId = selectedChatId
+        ? state.messagesByChatId[selectedChatId]?.at(-1)?.id
+        : undefined;
+      if (nextMessageId === lastMessageId) return;
+      lastMessageId = nextMessageId;
+      if (!nextMessageId) return;
       if (!stickToBottomRef.current) return;
-      requestAnimationFrame(() => {
-        messageListRef.current?.scrollToBottom("auto");
+      if (scrollFrame !== undefined) cancelAnimationFrame(scrollFrame);
+      scrollFrame = requestAnimationFrame(() => {
+        if (stickToBottomRef.current && useAppStore.getState().selectedChatId === selectedChatId) {
+          messageListRef.current?.scrollToBottom("auto");
+        }
       });
     });
+    return () => {
+      unsubscribe();
+      if (scrollFrame !== undefined) cancelAnimationFrame(scrollFrame);
+    };
   }, [selectedChatId]);
   const mediaResyncAtRef = useRef(new Map<string, number>());
   const mediaInFlightRef = useRef(new Set<string>());
@@ -457,6 +465,47 @@ export function ChatPanel() {
   useEffect(() => {
     void loadStickerFavorites().then(setFavoriteStickers);
   }, []);
+
+  const importStickerFiles = useCallback(async (files: File[]) => {
+    let storedFavorites: string[];
+    try {
+      storedFavorites = await loadStickerFavorites();
+    } catch {
+      pushToast(t("emoji.importStickerFailed"), "error");
+      return;
+    }
+    const currentFavorites = normalizeStickerFavorites([...favoriteStickers, ...storedFavorites]);
+    const capacity = Math.max(0, 24 - currentFavorites.length);
+    if (!capacity) {
+      pushToast(t("emoji.stickerLimit"), "error");
+      return;
+    }
+    const supported = files.filter(file => ["image/png", "image/jpeg", "image/webp"].includes(file.type));
+    let failed = files.length - supported.length;
+    const converted: string[] = [];
+    for (const file of supported.slice(0, capacity)) {
+      if (file.size > 20 * 1024 * 1024) {
+        failed++;
+        continue;
+      }
+      try {
+        const sticker = await imageToStickerDataUrl(file);
+        if (!currentFavorites.includes(sticker) && !converted.includes(sticker)) converted.push(sticker);
+      } catch {
+        failed++;
+      }
+    }
+    const next = normalizeStickerFavorites([...converted, ...currentFavorites]);
+    try {
+      setFavoriteStickers(await saveStickerFavorites(next));
+    } catch {
+      pushToast(t("emoji.importStickerFailed"), "error");
+      return;
+    }
+    if (converted.length) pushToast(t("emoji.importedStickers", { count: converted.length }), "success");
+    if (failed) pushToast(t("emoji.importStickerFailed"), "error");
+    if (supported.length > capacity) pushToast(t("emoji.stickerLimit"), "error");
+  }, [favoriteStickers, pushToast, t]);
 
   const channelId = (
     settings.sendChannel === "android_bridge" ? "android_bridge" : "baileys"
@@ -906,7 +955,7 @@ export function ChatPanel() {
     let tries = 0;
     let timer: number;
     const tick = () => {
-      const idx = chatMessages.findIndex((m) => m.id === focusMessageId);
+      const idx = chatMessagesRef.current.findIndex((m) => m.id === focusMessageId);
       if (idx >= 0) {
         messageListRef.current?.scrollToMessage(focusMessageId, "smooth");
         timer = window.setTimeout(() => setFocusMessageId(null), 2200);
@@ -917,7 +966,7 @@ export function ChatPanel() {
     };
     timer = window.setTimeout(tick, 40);
     return () => window.clearTimeout(timer);
-  }, [focusMessageId, selectedChatId, setFocusMessageId, chatMessages]);
+  }, [focusMessageId, selectedChatId, setFocusMessageId]);
 
   useEffect(() => {
     if (!msgMenu) return;
@@ -1488,6 +1537,7 @@ export function ChatPanel() {
           chatConnected={chatConnected}
           chatAccount={chatAccount}
           chatAccountId={chatAccountId}
+          callAccountId={selectedThreadAccountId || activeChat.accountId || activeContact?.accountId || activeChat.lastSuccessfulOutgoing?.accountId}
           settings={settings}
           baileysUi={baileysUi}
           activePhone={activePhone}
@@ -1512,10 +1562,7 @@ export function ChatPanel() {
           onOpenCrmProfile={() => {
             if (activeContact) {
               setSelectedContact(activeContact.id);
-              // 一次性标记：客户库挂载后定位到该客户并打开详情，
-              // 避免 quickFilter 过滤 + 看板详情默认收起导致「跳过去一片空白」。
-              useAppStore.setState({ crmFocusContactId: activeContact.id });
-              setActiveNav("crm");
+              useAppStore.setState({ crmPanelCollapsed: false, crmPanelTab: "customer" });
             }
           }}
           onSaveContact={() => void handleSaveContact()}
@@ -1544,6 +1591,7 @@ export function ChatPanel() {
           onToggleScreen={() => setShowScreen((v) => !v)}
         />
 
+        {!activeChat.localOnly&&!activeChat.isGroup&&!activeContact?.isGroup&&<ChatAiStatusBar key={`${activeChat.id}:${requestedChatAccountId||chatAccountId}`} chatId={activeChat.id} accountId={requestedChatAccountId||chatAccountId} thread={chatMessages} recipient={resolveSendTarget({phone:activeContact?.phone,channelAddress:activeContact?.channelAddress,entityId:activeContact?.id})} connected={isBaileys?isWaAccountConnected(settings.waAccounts,requestedChatAccountId||chatAccountId,settings.liveBaileysAccountId,baileysUi.connection):bridgeConnected}/>}
         <div className="flex min-h-0 flex-1">
         {showScreen && (
           <aside className="flex w-72 shrink-0 items-center justify-center overflow-hidden border-r border-zinc-800/90 bg-black">
@@ -1792,6 +1840,7 @@ export function ChatPanel() {
           recentStickers={recentStickers}
           onSendRecentSticker={composerOnSendRecentSticker}
           favoriteStickers={favoriteStickers}
+          onImportStickerFiles={importStickerFiles}
           onRemoveFavoriteSticker={composerOnRemoveFavoriteSticker}
           onSendAudio={composerOnSendAudio}
           onSendFile={composerOnSendFile}

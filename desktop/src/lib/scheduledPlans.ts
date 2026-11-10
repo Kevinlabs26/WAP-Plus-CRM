@@ -82,8 +82,13 @@ export function lastContactedAccounts(chats: ChatPreview[], contacts: Contact[],
     return recipient ? [[chat.id, { recipientKey: recipientKey("", recipient), accountId: chat.accountId || contact.accountId }]] : [];
   }));
   const latest = new Map<string, { at: number; accountId: string }>();
+  for(const chat of chats){
+    const target=chatsById.get(chat.id),at=Date.parse(chat.lastSuccessfulOutgoing?.at||"");
+    const accountId=chat.lastSuccessfulOutgoing?.accountId||target?.accountId;
+    if(target&&accountId&&Number.isFinite(at)&&at>(latest.get(target.recipientKey)?.at??-Infinity))latest.set(target.recipientKey,{at,accountId});
+  }
   for (const message of messages) {
-    if (message.direction !== "out" || message.deliveryStatus && !["sent", "server", "delivered", "read", "played"].includes(message.deliveryStatus)) continue;
+    if (message.direction !== "out" || message.mediaType==="system" || message.deliveryUncertain || message.deliveryStatus && !["sent", "server", "delivered", "read", "played"].includes(message.deliveryStatus)) continue;
     const chat = chatsById.get(message.chatId);
     const accountId = message.accountId || chat?.accountId;
     const at = Date.parse(message.sentAt);
@@ -111,9 +116,8 @@ export function scheduledPlanTargets(state: TargetState, chatIds?: string[], def
     const key = recipientKey("", recipient);
     const accountId = latestAccounts.get(key) || defaultAccountId || sourceAccountId;
     if (!state.settings.waAccounts.some(account => account.id === accountId)) continue;
-    const targetKey = recipientKey(sourceAccountId, recipient);
-    if (seen.has(targetKey)) continue;
-    seen.add(targetKey);
+    if (seen.has(key)) continue;
+    seen.add(key);
     items.push({ id: chat.id, chatId: chat.id, contactId: contact.id, contactName: contact.name || chat.contactName || recipient, recipient, accountId, status: "pending" });
   }
   return items;

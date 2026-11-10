@@ -11,6 +11,13 @@ import {
 } from "../src/store/chatDuplicateMerge.ts";
 import { collapseAllAccountFolderChats } from "../src/components/layout/folderChatDisplay.ts";
 
+assert.equal(collapseAllAccountFolderChats([
+ {id:'group-a',contactId:'a',isGroup:true},
+ {id:'group-b',contactId:'b',isGroup:true},
+],new Map([
+ ['a',{phone:'12025550100'}],['b',{phone:'12025550100'}],
+])).length,2,'group chats must stay separate even before contact group metadata arrives');
+
 assert.deepEqual(
   parseFolderPhoneEntries(
     "12025550122\n1 202 555 0123\n+1-202-555-0124\n(1) 2025550125"

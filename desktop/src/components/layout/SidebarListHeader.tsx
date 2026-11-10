@@ -11,6 +11,7 @@ import {
   CheckCheck,
   Settings2,
   UserRoundPlus,
+  Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { isSyncDebugEnabled, syncLog } from "@/lib/syncDebug";
@@ -51,8 +52,8 @@ const SORT_LABEL_KEYS: Record<ChatSortMode, TranslationKey> = {
 };
 
 type Props = {
-  listTab: "chats" | "contacts";
-  onTabChange: (tab: "chats" | "contacts") => void;
+  listTab: "chats" | "contacts" | "manage";
+  onTabChange: (tab: "chats" | "contacts" | "manage") => void;
   chatsCount: number;
   contactsCount: number;
   filteredCount: number;
@@ -84,6 +85,8 @@ type Props = {
   syncDisabled: boolean;
   syncTitle: string;
   onSync: () => void;
+  folderCount: number;
+  onClearAllFolders: () => void;
 };
 
 export function SidebarListHeader({
@@ -119,6 +122,8 @@ export function SidebarListHeader({
   syncDisabled,
   syncTitle,
   onSync,
+  folderCount,
+  onClearAllFolders,
 }: Props) {
   const { t, locale } = useI18n();
   const currentCount = (listTab === "chats" ? chatsCount : contactsCount).toLocaleString(locale);
@@ -144,6 +149,7 @@ export function SidebarListHeader({
     ...(isBaileys ? [{ label: t("sidebar.newGroup"), Icon: UsersRound, run: onCreateGroup }] : []),
     { label: t("sidebar.batchSaveContacts"), Icon: UserPlus, run: onBatchSaveContacts },
     ...(listTab === "chats" ? [{ label: t("leadInbox.settings"), Icon: Settings2, run: onOpenLeadSettings }] : []),
+    ...(listTab === "chats" && folderCount > 0 ? [{ label: t("folder.clearAll"), Icon: Trash2, run: onClearAllFolders }] : []),
   ];
 
   useEffect(() => {
@@ -171,11 +177,11 @@ export function SidebarListHeader({
     <div className="shrink-0">
       <div className="mb-2 flex items-center gap-3 border-b border-zinc-800/70">
         <div className="flex min-w-0 flex-1 items-center gap-4">
-          {(["chats", "contacts"] as const).map(tab => <button key={tab} type="button"
+          {(["chats", "contacts", "manage"] as const).map(tab => <button key={tab} type="button"
             aria-pressed={listTab === tab} onClick={() => onTabChange(tab)}
-            title={t(tab === "chats" ? "sidebar.chats" : "sidebar.contacts")}
+            title={t(tab === "chats" ? "sidebar.chats" : tab === "manage" ? "contactManage.tab" : "sidebar.contacts")}
             className={cn("shrink-0 whitespace-nowrap border-b-2 px-0.5 py-2 text-[13px] transition-colors", listTab === tab ? "border-brand font-semibold text-brand" : "border-transparent text-zinc-500 hover:text-zinc-200")}>
-            {t(tab === "chats" ? "sidebar.chats" : "sidebar.contacts")}
+            {t(tab === "chats" ? "sidebar.chats" : tab === "manage" ? "contactManage.tab" : "sidebar.contacts")}
           </button>)}
         </div>
         <span className="shrink-0 whitespace-nowrap text-[11px] tabular-nums text-zinc-500"
@@ -207,7 +213,7 @@ export function SidebarListHeader({
             className="ui-control h-9 w-full pl-7 pr-2 text-[13px]"
           />
         </div>
-        <div className="relative shrink-0" ref={actionsRef}>
+        {listTab !== "manage" && <div className="relative shrink-0" ref={actionsRef}>
           <button type="button" aria-label={t("sidebar.actions")} title={leadCount > 0 && listTab === "chats" ? t("leadInbox.filterActive", { count: leadCount }) : t("sidebar.actions")}
             aria-expanded={actionsOpen} aria-controls="sidebar-actions" aria-busy={syncing}
             onClick={() => { setGroupFilterOpen(false); if (sortOpen) onToggleSort(); setActionsOpen(open => !open); }}
@@ -227,7 +233,7 @@ export function SidebarListHeader({
               </button>
             ))}
           </div>}
-        </div>
+        </div>}
       </div>
       <div className="mb-2 space-y-2">
         <div className="flex flex-wrap items-center gap-1.5">

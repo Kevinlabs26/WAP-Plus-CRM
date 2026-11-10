@@ -1,5 +1,5 @@
 import type { AutoReplyMode } from "@/lib/autoReplyScope";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Check,
@@ -21,10 +21,14 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
+import EmojiPicker, { EmojiStyle, Theme, type EmojiClickData } from "emoji-picker-react";
+import { useAppStore } from "@/store/appStore";
 
 type FolderHeaderRowProps = {
   folderId: string;
   name: string;
+  icon?: string;
+  color?: string;
   collapsed: boolean;
   depth: number;
   total: number;
@@ -34,6 +38,7 @@ type FolderHeaderRowProps = {
   folderDropActive: boolean;
   dragging: boolean;
   autoReplyMode?: AutoReplyMode;
+  onAppearanceChange?: (icon?: string, color?: string) => void;
   onAutoReplyModeChange?: (mode: AutoReplyMode | undefined) => void;
   onAiPrompt?: () => void;
   onSchedule?: () => void;
@@ -47,14 +52,17 @@ type FolderHeaderRowProps = {
   onSelectGroups: () => void;
   onRename: () => void;
   onClear: () => void;
+  onClearTree: () => void;
   onCopyUnreplied?: () => void;
   onDelete: () => void;
 };
-type SubmenuKind = "reply" | "import" | "organize";
+type SubmenuKind = "reply" | "import" | "organize" | "appearance";
 
 export function FolderHeaderRow({
   folderId,
   name,
+  icon,
+  color,
   collapsed,
   depth,
   total,
@@ -64,6 +72,7 @@ export function FolderHeaderRow({
   folderDropActive,
   dragging,
   autoReplyMode,
+  onAppearanceChange,
   onAutoReplyModeChange,
   onAiPrompt,
   onSchedule,
@@ -77,17 +86,20 @@ export function FolderHeaderRow({
   onSelectGroups,
   onRename,
   onClear,
+  onClearTree,
   onCopyUnreplied,
   onDelete,
 }: FolderHeaderRowProps) {
   const { t } = useI18n();
+  const theme = useAppStore(s => s.settings.theme);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [submenu, setSubmenu] = useState<{ kind: SubmenuKind; left: number; top: number; focus: boolean } | null>(null);
   const replyTrigger = useRef<HTMLButtonElement>(null);
   const importTrigger = useRef<HTMLButtonElement>(null);
   const organizeTrigger = useRef<HTMLButtonElement>(null);
-  const submenuTriggers = { reply: replyTrigger, import: importTrigger, organize: organizeTrigger };
+  const submenuTriggers = { reply: replyTrigger, import: importTrigger, organize: organizeTrigger, appearance: organizeTrigger };
   const submenuPopup = useRef<HTMLDivElement>(null);
+  const menuPopup = useRef<HTMLDivElement>(null);
   const actionsTrigger = useRef<HTMLButtonElement>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelClose = () => {
@@ -98,10 +110,12 @@ export function FolderHeaderRow({
   const openSubmenu = (kind: SubmenuKind, anchor: HTMLButtonElement, focus = false) => {
     cancelClose();
     const rect = anchor.getBoundingClientRect();
+    const width = kind === "appearance" ? 352 : 224;
+    const height = kind === "appearance" ? 420 : kind === "reply" ? 184 : kind === "organize" && onCopyUnreplied ? 144 : 112;
     setSubmenu({
       kind,
-      left: Math.max(8, Math.min(rect.right + 2 + 224 <= window.innerWidth - 8 ? rect.right + 2 : rect.left - 226, window.innerWidth - 232)),
-      top: Math.max(8, Math.min(rect.top, window.innerHeight - (kind === "reply" ? 184 : kind === "organize" && onCopyUnreplied ? 144 : 112))),
+      left: Math.max(8, Math.min(rect.right + 2 + width <= window.innerWidth - 8 ? rect.right + 2 : rect.left - width - 2, window.innerWidth - width - 8)),
+      top: Math.max(8, Math.min(rect.top, window.innerHeight - height - 8)),
       focus,
     });
   };
@@ -111,6 +125,18 @@ export function FolderHeaderRow({
   };
 
   useEffect(() => () => cancelClose(), []);
+  useLayoutEffect(() => {
+    const popup = submenu ? submenuPopup.current : menu ? menuPopup.current : null;
+    if (!popup) return;
+    const bounds = popup.getBoundingClientRect();
+    const left = Math.max(8, Math.min(bounds.left, window.innerWidth - bounds.width - 8));
+    const top = Math.max(8, Math.min(bounds.top, window.innerHeight - bounds.height - 8));
+    if (submenu && (left !== submenu.left || top !== submenu.top)) {
+      setSubmenu(current => current ? { ...current, left, top } : current);
+    } else if (!submenu && menu && (left !== menu.x || top !== menu.y)) {
+      setMenu({ x: left, y: top });
+    }
+  }, [menu, submenu]);
   useEffect(() => { if (menu) replyTrigger.current?.focus(); }, [menu]);
   useEffect(() => {
     if (submenu?.focus) submenuPopup.current?.querySelector<HTMLButtonElement>(submenu.kind === "reply" ? '[aria-checked="true"]' : '[role="menuitem"]')?.focus();
@@ -178,6 +204,7 @@ export function FolderHeaderRow({
           dropActive && "bg-brand/10 ring-1 ring-brand/40",
           folderDropActive && "bg-brand/15 ring-1 ring-brand/60"
         )}
+        style={color ? { backgroundColor: `${color}18` } : undefined}
         onContextMenu={(event) => {
           event.preventDefault();
           openMenu(event.clientX, event.clientY);
@@ -194,7 +221,7 @@ export function FolderHeaderRow({
           ) : (
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
           )}
-          <Folder className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+          {icon ? <span className="w-4 shrink-0 text-center text-sm leading-4" style={{ filter: color ? `drop-shadow(0 0 2px ${color})` : undefined }} aria-hidden="true">{icon}</span> : <Folder className="h-3.5 w-3.5 shrink-0" style={{ color: color || "#71717a" }} />}
           <span
             className="min-w-0 flex-1 truncate text-[13px] font-medium text-zinc-400"
             title={name}
@@ -246,6 +273,7 @@ export function FolderHeaderRow({
       </div>
       {menu && createPortal(
         <div
+          ref={menuPopup}
           data-folder-action-menu={folderId}
           role="menu"
           aria-label={t("folder.actionsFor", { name })}
@@ -312,6 +340,10 @@ export function FolderHeaderRow({
             }}>
             <span className="flex-1">{t(kind === "import" ? "folder.importMenu" : "folder.organizeMenu")}</span><ChevronRight className="h-3.5 w-3.5" />
           </button>)}
+          {onAppearanceChange && <button ref={organizeTrigger} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={submenu?.kind === "appearance"}
+            className={itemClass} onMouseEnter={event => openSubmenu("appearance", event.currentTarget)} onClick={event => openSubmenu("appearance", event.currentTarget, true)}>
+            <span className="flex-1">文件夹图标和颜色</span><ChevronRight className="h-3.5 w-3.5" />
+          </button>}
 
           <div className="mt-1 border-t border-zinc-800 pt-1">
           <button
@@ -329,7 +361,7 @@ export function FolderHeaderRow({
       {menu && submenu && createPortal(
         <div ref={submenuPopup} id={`folder-${submenu.kind}-${folderId}`} data-folder-action-menu={folderId} role="menu"
           aria-label={submenu.kind === "reply" ? t("autoReplyScope.folderRuleFor", { name }) : t(submenu.kind === "import" ? "folder.importMenu" : "folder.organizeMenu")}
-          className="fixed z-[10000] w-56 max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/50"
+          className={`fixed z-[10000] ${submenu.kind === "appearance" ? "w-[22rem]" : "w-56"} max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/50`}
           style={{ left: submenu.left, top: submenu.top }} onMouseEnter={cancelClose} onMouseLeave={scheduleClose}
           onContextMenu={event => event.preventDefault()}
           onKeyDown={event => {
@@ -409,6 +441,29 @@ export function FolderHeaderRow({
             <UserRoundX className="h-3.5 w-3.5 text-zinc-500" />
             {t("folder.clearMembers")}
           </button>
+          <button type="button" role="menuitem" className={`${itemClass} text-rose-300 hover:bg-rose-500/10`} onClick={() => run(onClearTree)}>
+            <Trash2 className="h-3.5 w-3.5" />{t("folder.clearTree")}
+          </button>
+          </div>}
+          {submenu.kind === "appearance" && <div className="p-2" onMouseEnter={cancelClose}>
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-medium text-zinc-500">图标颜色</span>
+              <div className="flex gap-1">
+                <button type="button" className="rounded px-2 py-1 text-xs hover:bg-zinc-200" style={{ backgroundColor: theme === "light" ? "#e4e4e7" : "#3f3f46", color: theme === "light" ? "#3f3f46" : "#e4e4e7" }} onClick={() => run(() => onAppearanceChange?.(undefined, color))}>恢复默认图标</button>
+                <button type="button" className="rounded px-2 py-1 text-xs hover:bg-zinc-200" style={{ backgroundColor: theme === "light" ? "#e4e4e7" : "#3f3f46", color: theme === "light" ? "#3f3f46" : "#e4e4e7" }} onClick={() => run(() => onAppearanceChange?.(icon, undefined))}>恢复默认颜色</button>
+              </div>
+            </div>
+            <div className="mb-2 flex items-center justify-between gap-2 rounded-lg border border-zinc-200 px-2.5 py-2" style={{ backgroundColor: theme === "light" ? "#f4f4f5" : "#27272a" }}>
+              <span className="shrink-0 whitespace-nowrap text-xs" style={{ color: theme === "light" ? "#71717a" : "#a1a1aa" }}>文件夹颜色</span>
+              <div className="flex shrink-0 gap-1">{["#71717a", "#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#3b82f6", "#a855f7", "#ec4899"].map(value => <button key={value} type="button" aria-label={value} aria-pressed={color === value} className="h-5 w-5 shrink-0 rounded-full border border-black/10 ring-offset-1 hover:scale-110 aria-pressed:ring-2 aria-pressed:ring-zinc-500" style={{ backgroundColor: value }} onClick={() => run(() => onAppearanceChange?.(icon, value))} />)}
+                <label title="自定义颜色" aria-label="自定义颜色" className="relative flex h-5 w-5 cursor-pointer items-center justify-center rounded-full border border-dashed border-zinc-400 text-sm leading-none text-zinc-500 hover:bg-zinc-200">+
+                  <input type="color" aria-label="选择自定义颜色" value={/^#[0-9a-f]{6}$/i.test(color || "") ? color : "#71717a"} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" onChange={event => onAppearanceChange?.(icon, event.target.value)} />
+                </label>
+              </div>
+            </div>
+            <div className="overflow-hidden rounded-lg border border-zinc-200" onKeyDown={event => { if (event.key === "Escape") close(); }}>
+              <EmojiPicker theme={theme === "light" ? Theme.LIGHT : Theme.DARK} emojiStyle={EmojiStyle.NATIVE} width="100%" height={300} lazyLoadEmojis searchPlaceHolder={t("emoji.search")} previewConfig={{ showPreview: false }} onEmojiClick={(data: EmojiClickData) => run(() => onAppearanceChange?.(data.emoji, color))} />
+            </div>
           </div>}
         </div>, document.body
       )}

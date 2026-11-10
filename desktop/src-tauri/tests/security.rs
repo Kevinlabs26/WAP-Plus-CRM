@@ -2,6 +2,10 @@
 mod account_id;
 #[path = "../src/atomic_file.rs"]
 mod atomic_file;
+#[path = "../src/dpapi.rs"]
+mod commands;
+#[path = "../src/db_encryption.rs"]
+mod db_encryption;
 #[path = "../src/crm_backup.rs"]
 mod crm_backup;
 #[path = "../src/db.rs"]

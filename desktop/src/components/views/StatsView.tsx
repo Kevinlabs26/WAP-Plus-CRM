@@ -103,6 +103,7 @@ export function StatsView() {
     (s) => s.settings.salesStageOrder || []
   );
   const setActiveNav = useAppStore((s) => s.setActiveNav);
+  const openContacts = useAppStore((s) => s.openContacts);
   const goToChats = useAppStore((s) => s.goToChats);
   const updateSettings = useAppStore((s) => s.updateSettings);
 
@@ -176,16 +177,6 @@ export function StatsView() {
     [trend7d]
   );
 
-  const openCrmStage = (stageId: string) => {
-    try {
-      localStorage.setItem("wap.crmMode", "board");
-      localStorage.setItem("wap.crmQuickFilter", "all");
-      localStorage.setItem("wap.crmStageFocus", stageId);
-    } catch {
-      /* ignore */
-    }
-    setActiveNav("crm");
-  };
 
   const openScopedChats = (filter: "today" | "awaiting") => {
     updateSettings({
@@ -222,7 +213,7 @@ export function StatsView() {
       label: t("stats.won"),
       value: scoped.dealsWon,
       hint: t("stats.wonTitle"),
-      onClick: () => openCrmStage("won"),
+      onClick: () => openContacts("manage"),
     },
   ];
 
@@ -338,7 +329,7 @@ export function StatsView() {
             <button
               type="button"
               className="text-brand hover:underline"
-              onClick={() => setActiveNav("crm")}
+              onClick={() => openContacts("manage")}
             >
               {t("stats.openCrm")}
             </button>
@@ -555,12 +546,9 @@ export function StatsView() {
             {stageDistribution.map(({ id, label, count: n }) => {
               const pct = Math.round((n / funnelTotal) * 100);
               return (
-                <button
+                <div
                   key={id}
-                  type="button"
-                  className="flex w-full items-center gap-3 rounded-md py-0.5 text-left text-[12px] hover:bg-zinc-900/70"
-                  onClick={() => openCrmStage(id)}
-                  title={`${t("stats.openCrm")} · ${label}`}
+                  className="flex w-full items-center gap-3 rounded-md py-0.5 text-left text-[12px]"
                 >
                   <span className="w-14 shrink-0 text-zinc-400">{label}</span>
                   <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-800">
@@ -575,7 +563,7 @@ export function StatsView() {
                   <span className="w-12 text-right text-2xs tabular-nums text-zinc-600">
                     {pct}%
                   </span>
-                </button>
+                </div>
               );
             })}
             <p className="pt-1 text-2xs text-zinc-600">

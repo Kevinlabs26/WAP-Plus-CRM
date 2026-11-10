@@ -7,11 +7,33 @@ const built=await build({stdin:{contents:`export {applyMessagesSync} from './src
 const {applyMessagesSync,mergeMessagesByTime,cleanHydratedMessages}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text+'\n//# sourceURL=message-sync-ordering-test.js').toString('base64'));
 const peer={jid:'12025550123@s.whatsapp.net',phoneE164:'+12025550123',displayName:'Example'};
 const time=minute=>`2026-10-31T12:${minute}:00.000Z`;
+test('an older live replay cannot move a fresh preview backward or notify the same message twice',()=>{
+ const bag={contacts:[],chats:[],messages:[],nextSelectedChatId:null,nextSelectedContactId:null};
+ const sync=(id,minute)=>applyMessagesSync({bag,items:[{...peer,id,direction:'in',body:id,sentAt:time(minute)}],payload:{source:'notify',live:true},deviceId:'wa-a',selfName:''});
+ sync('fresh','19');sync('old','18');
+ assert.equal(bag.chats[0].updatedAt,time('19'));
+ assert.equal(bag.chats[0].lastMessage,'fresh');
+ const unread=bag.chats[0].unread;
+ sync('fresh','19');assert.equal(bag.chats[0].unread,unread);assert.equal(bag.messages.length,2);
+});
 function setup(){
  const bag={contacts:[],chats:[],messages:[],nextSelectedChatId:null,nextSelectedContactId:null};
  const sync=items=>{applyMessagesSync({bag,items:items.map(item=>({...peer,direction:'out',...item})),payload:{source:'snapshot',live:false},deviceId:'wa-a',selfName:''});bag.messages=mergeMessagesByTime(bag.messages,[]);return bag.messages;};
  return {bag,sync};
 }
+
+test('repeated snapshots preserve message identity while real key and mention edits still update',()=>{
+ const {bag,sync}=setup();
+ const item={id:'stable',direction:'in',body:'Hello',sentAt:time('19'),waKey:{id:'stable',remoteJid:peer.jid,fromMe:false},mentionedJids:['12025550101@s.whatsapp.net']};
+ sync([item]);const original=bag.messages[0];
+ for(let i=0;i<50;i++)sync([structuredClone(item)]);
+ assert.equal(bag.messages[0],original,'JSON transport creates new objects, not new message content');
+ sync([{...item,waKey:{...item.waKey,participant:'12025550102@s.whatsapp.net'}}]);
+ assert.notEqual(bag.messages[0],original);
+ const changedKey=bag.messages[0];
+ sync([{...item,waKey:{...item.waKey,participant:'12025550102@s.whatsapp.net'},mentionedJids:['12025550103@s.whatsapp.net']}]);
+ assert.notEqual(bag.messages[0],changedKey);
+});
 
 test('distinct outgoing texts, photos and voices with identical bodies survive replay and media enrichment',()=>{
  const {bag,sync}=setup();

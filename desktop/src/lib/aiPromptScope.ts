@@ -1,7 +1,18 @@
 import type { SettingsShape, SettingsChatFolder } from "../store/settingsDefaults";
 
-type PromptSettings = Pick<SettingsShape, "aiSystemPrompt" | "aiSystemPromptByAccountId" | "chatFolders" | "liveBaileysAccountId" | "activeAccountId">;
-export type AiReplyProfile = { prompt: string; source: "folder" | "account" | "global" | "default"; folderId?: string; folderName?: string; primaryFolderIds?: string[] };
+export type AiPromptTemplate = { id: string; name: string; prompt: string };
+export const MAX_EFFECTIVE_PROMPT_CHARS = 24_000;
+export function normalizePromptTemplates(value: unknown): AiPromptTemplate[] {
+  const seen = new Set<string>();
+  return (Array.isArray(value) ? value : []).slice(0,100).flatMap(item => {
+    if (!item || typeof item.id !== "string" || !item.id || item.id.length > 120 || seen.has(item.id) ||
+        typeof item.name !== "string" || !item.name.trim() || typeof item.prompt !== "string" || !item.prompt.trim()) return [];
+    seen.add(item.id);
+    return [{id: item.id, name: item.name.trim().slice(0,80), prompt: item.prompt.trim().slice(0,6000)}];
+  });
+}
+type PromptSettings = Pick<SettingsShape, "aiSystemPrompt" | "aiSystemPromptByAccountId" | "chatFolders" | "liveBaileysAccountId" | "activeAccountId"> & {aiPromptTemplates?: AiPromptTemplate[]};
+export type AiReplyProfile = { prompt: string; source: "folder" | "account" | "global" | "default"; folderId?: string; folderName?: string; primaryFolderIds?: string[]; error?: string; templateIds?: string[] };
 
 function scopeKey(settings: PromptSettings, folder: SettingsChatFolder): string {
   return folder.scope?.type === "all" ? "all"
@@ -10,9 +21,9 @@ function scopeKey(settings: PromptSettings, folder: SettingsChatFolder): string 
 
 function defaultProfile(settings: PromptSettings, accountId?: string): AiReplyProfile {
   const account = accountId && settings.aiSystemPromptByAccountId?.[accountId]?.trim();
-  if (account) return { prompt: account, source: "account" };
-  const prompt = settings.aiSystemPrompt?.trim() || "";
-  return { prompt, source: prompt ? "global" : "default" };
+  const prompt = account || settings.aiSystemPrompt?.trim() || "";
+  const source = account ? "account" : prompt ? "global" : "default";
+  return prompt.length > MAX_EFFECTIVE_PROMPT_CHARS ? {prompt:"",source,error:"提示词超过 24000 字符，请精简后重试"} : {prompt, source};
 }
 
 /** Only ancestors in the same account scope can supply a folder's identity. */
@@ -22,13 +33,30 @@ export function resolveFolderAiProfile(settings: PromptSettings, folderId: strin
   let folder = byId.get(folderId);
   const scope = folder ? scopeKey(settings, folder) : "";
   const seen = new Set<string>();
+  const additions: string[] = [];
+  const templateIds=new Set<string>();
+  let source: SettingsChatFolder | undefined;
+  let base: AiReplyProfile | undefined;
   while (folder && !seen.has(folder.id) && scopeKey(settings, folder) === scope) {
     seen.add(folder.id);
-    const prompt = folder.aiSystemPrompt?.trim();
-    if (prompt) return { prompt, source: "folder", folderId: folder.id, folderName: folder.name };
+    if (folder.aiPromptMode !== "inherit") {
+      const template = folder.aiPromptTemplateId ? settings.aiPromptTemplates?.find(item => item.id === folder!.aiPromptTemplateId) : undefined;
+      if (folder.aiPromptTemplateId && !template) return {prompt: "", source: "folder", folderId: folder.id, error: "提示词模板已不存在，请重新选择"};
+      const prompt = [template?.prompt.trim(), folder.aiSystemPrompt?.trim()].filter(Boolean).join("\n\n");
+      if (prompt) {
+        if(template)templateIds.add(template.id);
+        source ||= folder;
+        if (folder.aiPromptMode === "append") additions.unshift(prompt);
+        else { base = {prompt, source: "folder", folderId: folder.id, folderName: folder.name}; break; }
+      }
+    }
     folder = folder.parentId ? byId.get(folder.parentId) : undefined;
   }
-  return defaultProfile(settings, accountId);
+  base ||= defaultProfile(settings, accountId);
+  if (base.error) return base;
+  const prompt = [base.prompt, ...additions].filter(Boolean).join("\n\n");
+  const profile: AiReplyProfile = source ? {prompt, source: "folder", folderId: source.id, folderName: source.name,templateIds:[...templateIds]} : {...base, prompt};
+  return prompt.length > MAX_EFFECTIVE_PROMPT_CHARS ? {...profile, prompt: "", error: "合并后的提示词超过 24000 字符，请精简；已停止生成，避免截断要求"} : profile;
 }
 
 /** Membership is primary-only and independent of the sidebar's current view or clones. */
@@ -41,7 +69,7 @@ export function resolveAiReplyProfile(settings: PromptSettings, accountId?: stri
     const folder = primary.find(item => scopeKey(settings, item) === scope);
     if (!folder) continue;
     const profile = resolveFolderAiProfile(settings, folder.id, id);
-    if (profile.source === "folder") return { ...profile, primaryFolderIds };
+    if (profile.source === "folder"||profile.error) return { ...profile, primaryFolderIds };
   }
   return { ...defaultProfile(settings, id), primaryFolderIds };
 }

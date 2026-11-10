@@ -16,7 +16,7 @@ export async function downloadSafeMediaMessage(message, maxBytes) {
     throw new Error("invalid media direct path");
   }
   const remote = path ? `https://${host}${path}` : media.url;
-  const { buffer } = await downloadRemoteMedia(remote, maxBytes + 16_384);
+  const { buffer } = await downloadRemoteMedia(remote, maxBytes + 16_384, { Origin: "https://web.whatsapp.com" });
   // The SDK only decrypts bounded in-memory ciphertext. It never fetches
   // attacker-controlled URLs (including a newly reuploaded URL) itself.
   return downloadMediaMessage({
@@ -35,7 +35,7 @@ export function createMediaDownloader(deps) {
   let mediaDownloadInFlight = 0;
   const MEDIA_DOWNLOAD_MAX = 3;
   const MEDIA_DOWNLOAD_QUEUE_MAX = 64;
-  /** @type {Array<{ run: () => Promise<any>, resolve: (v: any) => void }>} */
+  /** @type {Array<{ run: () => Promise<any>, resolve: (v: any) => void, reject: (error: unknown) => void }>} */
   const waitQueue = [];
 
   function pumpQueue() {
@@ -48,8 +48,7 @@ export function createMediaDownloader(deps) {
       mediaDownloadInFlight++;
       void job
         .run()
-        .then((v) => job.resolve(v))
-        .catch(() => job.resolve(""))
+        .then(job.resolve, job.reject)
         .finally(() => {
           mediaDownloadInFlight = Math.max(0, mediaDownloadInFlight - 1);
           pumpQueue();
@@ -66,11 +65,11 @@ export function createMediaDownloader(deps) {
       return Promise.reject(Object.assign(new Error("媒体下载繁忙，请稍后重试"), { status: 503 }));
     }
     const force = Boolean(opts.force);
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       // 手动重试优先，但仍然经过同一个并发队列，避免同时发起大量
       // 下载把连接/内存打满。队列中的任务不能静默丢弃，否则图片会
       // 永久停留在“重新尝试”状态。
-      const job = { run: work, resolve };
+      const job = { run: work, resolve, reject };
       if (force) waitQueue.unshift(job);
       else waitQueue.push(job);
       pumpQueue();
@@ -115,8 +114,19 @@ export function createMediaDownloader(deps) {
                 : "application/octet-stream");
         return `data:${mime};base64,${buf.toString("base64")}`;
       } catch (e) {
-        deps.logger?.debug?.({ err: String(e) }, "media download failed");
-        return "";
+        const causeCode = e?.code || e?.cause?.code || "";
+        const expired = [404, 410].includes(e?.status);
+        const oversized = e?.status === 413;
+        const invalid = e?.status === 400;
+        const decrypt = /DECRYPT|BAD_DECRYPT|BAD_PADDING/.test(causeCode);
+        const code = oversized ? "MEDIA_TOO_LARGE" : expired ? "MEDIA_EXPIRED" : invalid ? "MEDIA_ADDRESS_REJECTED"
+          : decrypt ? "MEDIA_DECRYPT_FAILED" : "MEDIA_DOWNLOAD_FAILED";
+        const status = oversized ? 413 : expired ? 410 : invalid ? 400 : 502;
+        const message = oversized ? "附件超过下载大小限制" : expired ? "附件下载地址已失效，刷新后仍不可用，请在手机确认附件能否打开"
+          : invalid ? "附件下载地址未通过安全校验" : decrypt ? "附件解密失败，请尝试重新加载原始消息"
+          : e?.status ? `附件服务器下载失败（HTTP ${e.status}）` : "附件下载失败，请检查网络后重试";
+        deps.logger?.warn?.({ code, status, causeCode, upstreamStatus: e?.status }, "media download failed");
+        throw Object.assign(new Error(message), { status, code, retryable: !oversized && !expired && !invalid && !decrypt && e?.status !== 403 });
       }
     }, { force });
   }

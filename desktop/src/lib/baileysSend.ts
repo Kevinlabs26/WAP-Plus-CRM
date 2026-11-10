@@ -4,6 +4,7 @@ import type {
 } from "@shared/baileysProtocol";
 import type { WhatsAppProduct } from "@/types/crm";
 import { baileysStatus, request } from "./baileysCore";
+import { dataUrlToBlob } from "./mediaBlob";
 
 export type QuotePayload = BaileysQuotePayload;
 
@@ -99,7 +100,7 @@ export const baileysSendImage = (
     }),
   }, opts?.accountId);
 
-/** 发送已转换为 WebP 的静态贴纸。 */
+/** 发送 WebP 贴纸；原有动画帧会保留。 */
 export const baileysSendSticker = (
   phoneE164: string,
   stickerDataUrl: string,
@@ -163,12 +164,27 @@ export const baileysSendVoice = (
   }, opts?.accountId);
 
 /** Older bridges can silently treat an unknown video payload as plain text. */
-export const baileysSendVideo = async (phoneE164: string, videoDataUrl: string, caption = "", accountId?: string | null, canSend?: () => boolean) => {
+export const baileysSendVideo = async (phoneE164: string, videoDataUrl: string | Blob, caption = "", accountId?: string | null, canSend?: () => boolean, onUploadProgress?: (loaded: number, total: number) => void) => {
   let status;
   try { status = await baileysStatus(accountId); }
   catch (error) { throw Object.assign(error instanceof Error ? error : new Error(String(error)), { deliveryUncertain: false }); }
   if (status.connection !== "connected") throw Object.assign(new Error("WhatsApp 尚未连接"), { code: "baileys_not_connected", deliveryUncertain: false });
   if (status.capabilities?.nativeVideo !== true) throw Object.assign(new Error("当前桥接不支持原生视频，请更新桥接或改用文件发送"), { code: "native_video_unsupported", deliveryUncertain: false });
+  if (videoDataUrl instanceof Blob || videoDataUrl.startsWith("blob:") || videoDataUrl.startsWith("data:video/mp4;") && videoDataUrl.length > 24 * 1024 * 1024) {
+    if (!status.capabilities?.nativeVideoStream) throw Object.assign(new Error("请重启对应账号连接，以加载大视频上传支持"), {deliveryUncertain:false});
+    const video = videoDataUrl instanceof Blob ? videoDataUrl : videoDataUrl.startsWith("data:")
+      ? dataUrlToBlob(videoDataUrl, "video/mp4", 100 * 1024 * 1024)
+      : await fetch(videoDataUrl).then(response => response.blob());
+    if (!video.size || video.size > 100 * 1024 * 1024) throw Object.assign(new Error("视频为空或超过 100 MB"), {deliveryUncertain:false});
+    const header = new TextEncoder().encode(JSON.stringify({phoneE164, caption, size:video.size}));
+    const length = new Uint8Array(4);
+    new DataView(length.buffer).setUint32(0, header.length);
+    if (canSend && !canSend()) throw Object.assign(new Error("发送任务已暂停或取消"), {deliveryUncertain:false});
+    return request<BaileysSendResponse>("/send/video", {
+      method:"POST", signal:AbortSignal.timeout(900_000),
+      headers:{"Content-Type":"application/octet-stream"}, body:new Blob([length, header, video]),
+    }, accountId, onUploadProgress);
+  }
   if (canSend && !canSend()) throw Object.assign(new Error("发送任务已暂停、取消或超出发送时间"), { code: "automation_cancelled", deliveryUncertain: false });
   return request<BaileysSendResponse>("/send", { method: "POST", signal: AbortSignal.timeout(120_000),
     body: JSON.stringify({phoneE164,videoDataUrl,text:caption,mediaType:"video"}) }, accountId);

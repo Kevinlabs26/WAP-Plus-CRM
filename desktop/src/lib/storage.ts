@@ -594,7 +594,7 @@ async function clearAppStateNow(): Promise<void> {
   }
   await idbClear();
   // 应用数据清空应包含下载媒体和未发送附件草稿，避免重置后磁盘仍留旧文件。
-  await clearMediaCache();
+  await clearMediaCache(true);
   await idbDelPrefix("composer-media:");
   lastSavedWeight = 0;
   lastSavedMsgCount = 0;

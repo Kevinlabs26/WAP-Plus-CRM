@@ -14,8 +14,8 @@ export default defineConfig({
   },
   clearScreen: false,
   server: {
-    // 避开本机其他 Tauri/Vite 项目常用的 1420（如 SearchDoc）
-    port: 3000,
+    // The usual local dev ports are occupied on this workstation.
+    port: 43871,
     strictPort: true,
     host: host || false,
     hmr: host

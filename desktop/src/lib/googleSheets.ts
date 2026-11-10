@@ -74,7 +74,7 @@ export async function saveSheetConfig(config: SheetConfig) {
   try { await configWrite; } finally { configWrite = null; }
   await refreshSheets(true);
 }
-interface SheetResponse { sheets?: { properties: { sheetId: number; title: string } }[]; valueRanges?: { values?: string[][] }[] }
+interface SheetResponse { properties?: { title?: string }; sheets?: { properties: { sheetId: number; title: string } }[]; valueRanges?: { values?: string[][] }[] }
 interface GridCell { formattedValue?: string; hyperlink?: string; userEnteredValue?: { formulaValue?: string }; textFormatRuns?: { format?: { link?: { uri?: string } } }[] }
 interface GridResponse { sheets?: { data?: { rowData?: { values?: GridCell[] }[] }[] }[] }
 export function readSheet(spreadsheet: string, ranges: string[] = []) {
@@ -96,6 +96,12 @@ async function readSheetGrid(spreadsheet: string, ranges: string[]) {
 }
 export function updateSheetCell(spreadsheet: string, tab: string, column: number, row: number, value: string) {
   return invoke<void>("google_sheets_update_cell", { spreadsheetId: spreadsheet, tab, column, row, value });
+}
+export function updateSheetCells(spreadsheet: string, tab: string, row: number, updates: [number, string][]) {
+  return invoke<void>("google_sheets_update_cells", { spreadsheetId: spreadsheet, tab, row, updates });
+}
+export function appendSheetRow(spreadsheet: string, tab: string, values: string[]) {
+  return invoke<void>("google_sheets_append_row", { spreadsheetId: spreadsheet, tab, values });
 }
 export async function readGoogleDoc(urlValue: string) {
   const url = new URL(urlValue);

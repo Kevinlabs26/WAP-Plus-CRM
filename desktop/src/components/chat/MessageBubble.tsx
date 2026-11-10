@@ -432,7 +432,11 @@ export const MessageBubble = memo(function MessageBubble({
       title={localizedLastError || undefined}
     >
       {uncertain ? t("messageBubble.deliveryUncertain") : st === "pending"
-        ? t("messageBubble.sending")
+        ? m.mediaUpload
+          ? m.mediaUpload.stage === "waiting"
+            ? t("messageBubble.videoWaiting")
+            : t("messageBubble.videoUploading", {percent:m.mediaUpload.percent})
+          : t("messageBubble.sending")
         : st === "queued"
           ? m.lastError
             ? t("messageBubble.queuedWithReason", {
@@ -803,6 +807,8 @@ export const MessageBubble = memo(function MessageBubble({
                 text={visibleBody}
                 outbound={m.direction === "out"}
                 mentionLabels={mentionLabels}
+                accountId={m.accountId || m.deviceId || undefined}
+                chatId={m.chatId}
               />
             ) : null}
             {inviteLink ? (

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { translate } from "../src/i18n/core.ts";
 
 const mocks = {
+  "@/lib/googleDrive": "export const uploadContactAvatar=async()=>{};",
   react: "export const useState=v=>globalThis.avatarHooks.state(v);export const useRef=v=>globalThis.avatarHooks.ref(v);export const useEffect=(fn,deps)=>globalThis.avatarHooks.effect(fn,deps);",
   "react-dom": "export const createPortal=node=>node;",
   "react/jsx-runtime": "export const jsx=(type,props,key)=>({type,props,key});export const jsxs=jsx;export const Fragment='fragment';",

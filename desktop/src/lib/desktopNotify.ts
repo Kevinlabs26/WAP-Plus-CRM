@@ -12,6 +12,8 @@ type PluginNotification = typeof import("@tauri-apps/plugin-notification");
 type PluginOptions = import("@tauri-apps/plugin-notification").Options;
 
 const OPEN_ACTION_TYPE = "wap-open-chat";
+const DOWNLOAD_ACTION_TYPE = "wap-open-downloads";
+const CLOUD_ACTION_TYPE = "wap-cloud-upload";
 
 let pluginApi: PluginNotification | null = null;
 let pluginChecked = false;
@@ -50,6 +52,14 @@ function ensureActionType(plugin: PluginNotification): Promise<boolean> {
           id: OPEN_ACTION_TYPE,
           actions: [{ id: "open", title: "打开会话" }],
         },
+        {
+          id: DOWNLOAD_ACTION_TYPE,
+          actions: [{ id: "open", title: "打开下载文件夹" }],
+        },
+        {
+          id: CLOUD_ACTION_TYPE,
+          actions: [{ id: "open", title: "查看上传" }],
+        },
       ])
       .then(() => true)
       .catch(() => false);
@@ -60,28 +70,27 @@ function ensureActionType(plugin: PluginNotification): Promise<boolean> {
 /** 点击动作 → 打开对应聊天：按通知 group（= 调用方 tag）路由 */
 const pendingOpenByKey = new Map<string, () => void>();
 let actionListenerReady = false;
-let debugActionListenerReady = false;
+let windowsActionListener:Promise<void>|null = null;
+
+function ensureWindowsActionListener():Promise<void>{
+  return windowsActionListener ||= import("@tauri-apps/api/event").then(async({listen})=>{
+    await listen<string>("wapplus://notification-click",event=>{
+      const cb=pendingOpenByKey.get(event.payload);if(!cb)return;
+      pendingOpenByKey.delete(event.payload);try{cb();}catch{/* ignore */}
+    });
+  }).catch(error=>{windowsActionListener=null;throw error;});
+}
+export function registerDesktopNotifyAction(tag:string,onClick:(()=>void)|null){
+  if(!onClick){pendingOpenByKey.delete(tag);return;}
+  pendingOpenByKey.set(tag,onClick);ensureActionListener();
+  if(typeof window!=="undefined"&&"__TAURI_INTERNALS__" in window)void ensureWindowsActionListener().catch(()=>{});
+}
 
 async function sendWindowsBranded(opts: DesktopNotifyOpts): Promise<boolean> {
   try {
-    const [{ invoke }, { listen }] = await Promise.all([
-      import("@tauri-apps/api/core"),
-      import("@tauri-apps/api/event"),
-    ]);
-    if (!debugActionListenerReady) {
-      await listen<string>("wapplus://notification-click", (event) => {
-        const cb = pendingOpenByKey.get(event.payload);
-        if (!cb) return;
-        pendingOpenByKey.delete(event.payload);
-        try {
-          cb();
-        } catch {
-          /* ignore */
-        }
-      });
-      debugActionListenerReady = true;
-    }
-    if (opts.onClick && opts.tag) pendingOpenByKey.set(opts.tag, opts.onClick);
+    const {invoke}=await import("@tauri-apps/api/core");
+    await ensureWindowsActionListener();
+    if (opts.action !== "downloads" && opts.onClick && opts.tag) pendingOpenByKey.set(opts.tag, opts.onClick);
     const avatarBytes = notificationImageBytes(opts.avatarUrl);
     return await invoke<boolean>("show_windows_branded_notification", {
       title: opts.title || "WAP Plus CRM",
@@ -89,6 +98,8 @@ async function sendWindowsBranded(opts: DesktopNotifyOpts): Promise<boolean> {
       tag: opts.tag,
       avatarBytes,
       unreadCount: opts.unreadCount,
+      openDownloadFolder: opts.action === "downloads",
+      actionLabel: opts.actionLabel,
     });
   } catch {
     return false;
@@ -170,6 +181,9 @@ export type DesktopNotifyOpts = {
   /** Contact name for the initials fallback; omit in hidden-identity mode. */
   avatarName?: string;
   unreadCount?: number;
+  /** 下载通知在 Windows 原生侧打开文件夹，不拉起聊天窗口。 */
+  action?: "downloads" | "cloud-upload";
+  actionLabel?: string;
 };
 
 async function sendNative(opts: DesktopNotifyOpts): Promise<boolean> {
@@ -197,7 +211,7 @@ async function sendNative(opts: DesktopNotifyOpts): Promise<boolean> {
     };
     // group 用作 Windows/macOS 的线程分组；同时是我们路由点击回会话的键
     if (opts.tag) payload.group = opts.tag;
-    if (opts.onClick) payload.actionTypeId = OPEN_ACTION_TYPE;
+    if (opts.onClick) payload.actionTypeId = opts.action === "downloads" ? DOWNLOAD_ACTION_TYPE : opts.action === "cloud-upload" ? CLOUD_ACTION_TYPE : OPEN_ACTION_TYPE;
 
     plugin.sendNotification(payload);
     return true;

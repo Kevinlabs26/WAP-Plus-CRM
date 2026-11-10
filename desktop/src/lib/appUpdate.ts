@@ -7,10 +7,13 @@ type UpdateDownloadEvent =
 
 export type AppUpdate = {
   version: string;
+  currentVersion?: string;
+  body?: string | null;
   download: (
     onEvent?: (event: UpdateDownloadEvent) => void
   ) => Promise<void>;
   install: (options: { restartAfterInstall: boolean }) => Promise<void>;
+  close?: () => Promise<void>;
 } | null;
 
 export const PENDING_UPDATE_STORAGE_KEY = "wap-plus.pending-update";
@@ -38,7 +41,7 @@ export async function checkForAppUpdate(): Promise<AppUpdate> {
   }
 }
 
-export async function installAppUpdate(
+export async function downloadAppUpdate(
   update: NonNullable<AppUpdate>,
   onProgress?: (downloaded: number, total?: number) => void
 ) {
@@ -56,7 +59,9 @@ export async function installAppUpdate(
       onProgress?.(total ?? downloaded, total);
     }
   });
+}
 
+export async function installDownloadedAppUpdate(update: NonNullable<AppUpdate>) {
   // The updater restarts the app, so the completion dialog is shown by the
   // first launch of the new version rather than by the closing old process.
   rememberPendingUpdate(update.version);
@@ -71,4 +76,12 @@ export async function installAppUpdate(
     await bridgeInvoke("baileys_cancel_update").catch(() => undefined);
     throw error;
   }
+}
+
+export async function installAppUpdate(
+  update: NonNullable<AppUpdate>,
+  onProgress?: (downloaded: number, total?: number) => void
+) {
+  await downloadAppUpdate(update, onProgress);
+  await installDownloadedAppUpdate(update);
 }

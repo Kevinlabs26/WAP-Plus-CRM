@@ -51,6 +51,7 @@ import {
 } from "./ChatContextMenu";
 import { ChatSidebarRow } from "./ChatSidebarRow";
 import { ContactSidebarList } from "./ContactSidebarList";
+import { ContactManagementPanel } from "./ContactManagementPanel";
 import { FolderHeaderRow } from "./FolderHeaderRow";
 import { FolderAiPromptDialog } from "./FolderAiPromptDialog";
 import { ScheduledPlanDialog } from "@/components/chat/ScheduledPlanDialog";
@@ -268,17 +269,22 @@ export function PhoneSidebar() {
   const [syncing, setSyncing] = useState(false);
   const [createGroupOpen, setCreateGroupOpen] = useState(false);
   const [batchSaveOpen, setBatchSaveOpen] = useState(false);
-  const [listTab, setListTab] = useState<"chats" | "contacts">("chats");
+  const [batchSaveAccountId, setBatchSaveAccountId] = useState<string | null>(null);
+  const listTab = useAppStore(s => s.sidebarTab);
+  const setListTab = useCallback((tab: "chats" | "contacts" | "manage") => useAppStore.setState({sidebarTab: tab}), []);
   const [visitedListTabs, setVisitedListTabs] = useState(
-    () => new Set<"chats" | "contacts">(["chats"])
+    () => new Set<"chats" | "contacts" | "manage">([listTab])
   );
-  const selectListTab = useCallback((tab: "chats" | "contacts") => {
+  const selectListTab = useCallback((tab: "chats" | "contacts" | "manage") => {
     setVisitedListTabs((current) => {
       if (current.has(tab)) return current;
       return new Set(current).add(tab);
     });
     setListTab(tab);
   }, []);
+  useEffect(() => {
+    setVisitedListTabs(current => current.has(listTab) ? current : new Set(current).add(listTab));
+  }, [listTab]);
 
   const openFolderMultiWindow = useCallback((folderId: string) => {
     try {
@@ -318,6 +324,7 @@ export function PhoneSidebar() {
     } catch {
       /* ignore */
     }
+    window.dispatchEvent(new CustomEvent("wap:group-chat-filter-change", { detail: mode }));
   }, []);
   const [chatSort, setChatSort] = useState<ChatSortMode>(() => {
     try {
@@ -661,9 +668,11 @@ export function PhoneSidebar() {
           hydrateGroups: true,
           requestHistory: true,
         });
+        const historyWarning = result.historyRequest?.warning;
         for (
           let attempt = 0;
           attempt < 3 &&
+          !result.historyRequest?.deferred &&
           (result.contacts?.length ?? 0) === 0 &&
           (result.messages?.length ?? 0) === 0;
           attempt++
@@ -741,7 +750,9 @@ export function PhoneSidebar() {
         });
         if (nc === 0 && nm === 0) {
           pushToast(
-            `「${label}」同步仍为空。请确认设备页该号为「在线」，等待 10~20 秒让历史灌入后再点同步；或在手机 WhatsApp 打开几条聊天。控制台过滤 [wap-sync] 可看详情。`,
+            historyWarning || (result.historyRequest?.requested
+              ? `「${label}」连接在线，本次会话快照为空；历史请求已发送，正在等待 WhatsApp 返回。`
+              : `「${label}」连接在线，本次会话快照为空；历史消息尚未确认补齐。`),
             "info"
           );
         } else {
@@ -786,10 +797,10 @@ export function PhoneSidebar() {
           }
           const historyStarted = result.historyRequest?.requested === true;
           pushToast(
-            historyStarted
-              ? `「${label}」已开始补齐完整历史，消息会继续在后台进入 · 当前 ${nm} 条`
-              : `「${label}」同步完成 · ${nc} 联系人 / ${nm} 条消息（本号联系人 ${afterC} / 会话 ${afterH}）`,
-            historyStarted ? "info" : "success"
+            historyWarning || (historyStarted
+              ? `「${label}」已发送历史补拉请求，等待 WhatsApp 返回 · 当前快照 ${nm} 条，不代表历史已补齐`
+              : `「${label}」已刷新现有会话 · ${nc} 联系人 / ${nm} 条消息；历史是否补齐尚未确认`),
+            historyWarning || historyStarted ? "info" : "success"
           );
         }
         return;
@@ -875,6 +886,14 @@ export function PhoneSidebar() {
     [dismissLeadChats, moveChatToFolder, pushToast, t]
   );
 
+  const fileImportedGroup = useCallback(async(folderId:string,chatId:string)=>{
+    const store=useAppStore.getState();
+    if(!store.settings.chatFolders?.some(folder=>folder.id===folderId))throw Error(t("folder.toastNotFound"));
+    store.moveChatToFolder(chatId,folderId);
+    if(!useAppStore.getState().settings.chatFolders?.find(folder=>folder.id===folderId)?.chatIds.includes(chatId))throw Error(t("folderGroups.joinedSyncFailed"));
+    await flushPersist(()=>useAppStore.getState());
+  },[t]);
+
   const addJoinedGroupToFolder = useCallback(
     async (folderId: string, groupJid: string, group: GroupDetails, accountId: string) => {
       const store = useAppStore.getState();
@@ -916,9 +935,9 @@ export function PhoneSidebar() {
       const chatId = useAppStore.getState().ensureChatForContact(contactId, accountId);
       if (!chatId) throw new Error(t("folderGroups.joinedSyncFailed"));
       useAppStore.getState().patchChat(chatId, { isGroup: true });
-      useAppStore.getState().moveChatToFolder(chatId, folderId);
+      await fileImportedGroup(folderId,chatId);
     },
-    [t]
+    [t,fileImportedGroup]
   );
 
   const {
@@ -1363,10 +1382,22 @@ export function PhoneSidebar() {
 
       <section className="flex min-h-0 flex-1 flex-col overflow-hidden p-2.5">
         <SidebarListHeader
+          folderCount={useAppStore.getState().settings.chatFolders?.length || 0}
+          onClearAllFolders={async () => {
+            const folders = useAppStore.getState().settings.chatFolders || [];
+            if (!folders.length) return;
+            const ok = await requestConfirm({
+              title: t("folder.clearAll"),
+              description: t("folder.clearAllConfirm", { count: folders.length }),
+              confirmLabel: t("folder.clearAll"),
+              tone: "danger",
+            });
+            if (ok) updateSettings({ chatFolders: [], chatFolderClones: [] });
+          }}
           listTab={listTab}
           onTabChange={selectListTab}
           chatsCount={filteredChats.length + hiddenGroupCount}
-          contactsCount={filteredContacts.length}
+          contactsCount={listTab === "manage" ? filteredContacts.filter(contact => !contact.isGroup && !contact.channelAddress?.endsWith("@g.us")).length : filteredContacts.length}
           filteredCount={filteredChats.length}
           groupFilter={groupFilter}
           onGroupFilterChange={changeGroupFilter}
@@ -1378,7 +1409,7 @@ export function PhoneSidebar() {
           onFilterChange={setFilter}
           isBaileys={isBaileys}
           onCreateGroup={() => setCreateGroupOpen(true)}
-          onBatchSaveContacts={() => setBatchSaveOpen(true)}
+          onBatchSaveContacts={() => { setBatchSaveAccountId(syncAccountId); setBatchSaveOpen(true); }}
           leadCount={leadCount}
           leadActive={chatListFilter === "leads"}
           leadEnabled={leadInbox.enabled}
@@ -1424,6 +1455,10 @@ export function PhoneSidebar() {
         {leadSettingsOpen && (
           <LeadInboxSettingsPopover onClose={() => setLeadSettingsOpen(false)} />
         )}
+        {visitedListTabs.has("manage") && <div className={listTab === "manage" ? "flex min-h-0 flex-1 flex-col" : "hidden"} hidden={listTab !== "manage"} aria-hidden={listTab !== "manage"}>
+          <ContactManagementPanel contacts={filteredContacts} accounts={waAccounts} accountId={syncAccountId || ""}
+            connectedAccountIds={connectedAccountIds} isBaileys={isBaileys} onPaste={accountId => {setBatchSaveAccountId(accountId); setBatchSaveOpen(true);}} />
+        </div>}
         {visitedListTabs.has("contacts") && (
           <div
             className="min-h-0 flex-1"
@@ -1531,7 +1566,13 @@ export function PhoneSidebar() {
                   return (
                     <FolderHeaderRow
                       name={it.name}
+                      icon={folder.icon}
+                      color={folder.color}
                       folderId={folder.id}
+                      onAppearanceChange={(icon, color) => {
+                        const current = useAppStore.getState();
+                        current.updateSettings({ chatFolders: current.settings.chatFolders.map(item => item.id === folder.id ? { ...item, ...(icon === undefined ? { icon: undefined } : { icon }), color } : item) });
+                      }}
                       autoReplyMode={folder.autoReplyMode}
                       onAiPrompt={() => setAiPromptFolderId(folder.id)}
                       onSchedule={() => setScheduleTarget({ folderId: folder.id })}
@@ -1590,6 +1631,43 @@ export function PhoneSidebar() {
                           folderId: folder.id,
                           name: folder.name,
                         });
+                      }}
+                      onClearTree={() => {
+                        void (async () => {
+                          const settings = useAppStore.getState().settings;
+                          const folders = settings.chatFolders || [];
+                          if (!folders.some(item => item.id === folder.id)) return;
+                          const affected = new Set([folder.id]);
+                          let changed = true;
+                          while (changed) {
+                            changed = false;
+                            for (const item of folders) {
+                              if (item.parentId && affected.has(item.parentId) && !affected.has(item.id)) {
+                                affected.add(item.id);
+                                changed = true;
+                              }
+                            }
+                          }
+                          const chatIds = new Set(folders.filter(item => affected.has(item.id)).flatMap(item => item.chatIds));
+                          for (const clone of settings.chatFolderClones || []) if (affected.has(clone.folderId)) chatIds.add(clone.sourceChatId);
+                          const childCount = affected.size - 1;
+                          const ok = await requestConfirm({
+                            title: t("folder.clearTree"),
+                            description: t("folder.clearTreeConfirm", { name: folder.name, folders: childCount, chats: chatIds.size }),
+                            confirmLabel: t("folder.clearTree"),
+                            tone: "danger",
+                          });
+                          if (!ok) return;
+                          const latest = useAppStore.getState().settings;
+                          if (latest.chatFolders !== settings.chatFolders || latest.chatFolderClones !== settings.chatFolderClones) {
+                            pushToast(t("folder.clearTreeChanged"), "info");
+                            return;
+                          }
+                          updateSettings({
+                            chatFolders: folders.filter(item => item.id === folder.id || !affected.has(item.id)).map(item => item.id === folder.id ? { ...item, chatIds: [] } : item),
+                            chatFolderClones: (settings.chatFolderClones || []).filter(clone => !affected.has(clone.folderId)),
+                          });
+                        })();
                       }}
                       onDelete={() => {
                         setFolderDialog({
@@ -1692,7 +1770,7 @@ export function PhoneSidebar() {
             onJoined={(groupJid, group, accountId) =>
               addJoinedGroupToFolder(folder.id, groupJid, group, accountId)
             }
-            onAlreadyJoined={(chatId) => moveChatToFolder(chatId, folder.id)}
+            onAlreadyJoined={(chatId) => fileImportedGroup(folder.id,chatId)}
           />
         );
       })()}
@@ -1926,7 +2004,7 @@ export function PhoneSidebar() {
         open={batchSaveOpen}
         onClose={() => setBatchSaveOpen(false)}
         accounts={waAccounts}
-        accountId={syncAccountId}
+        accountId={batchSaveAccountId || syncAccountId}
         connectedAccountIds={connectedAccountIds}
         cloudAvailable={isBaileys}
       />

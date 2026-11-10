@@ -4,8 +4,10 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
+  useId,
 } from "react";
 import {
   Virtuoso,
@@ -21,6 +23,7 @@ import { ArrowDown } from "lucide-react";
 import { useI18n } from "@/i18n";
 import { MessageBubble } from "./MessageBubble";
 import { shouldAutoLoadMessageMedia } from "./messageMediaUtils";
+import { retainMessageViewport } from "@/store/messageMemory";
 import {
   resolveMessageFirstItemIndex,
   type MessageVirtualAnchor,
@@ -117,6 +120,9 @@ const MessageListInner = forwardRef<MessageListHandle, Props>(
     });
     const [atBottom, setAtBottom] = useState(true);
     const chatKey = chatId ?? null;
+    const memoryViewId = useId();
+    const atBottomRef = useRef(true);
+    const visibleMessageIdsRef = useRef<string[]>([]);
 
     if (historyRef.current.chatId !== chatKey) {
       historyRef.current = {
@@ -128,20 +134,23 @@ const MessageListInner = forwardRef<MessageListHandle, Props>(
       };
     }
 
-    const firstItemIndex = resolveMessageFirstItemIndex(
-      anchorRef.current,
-      chatKey,
-      messages
+    const firstItemIndex = useMemo(
+      () => resolveMessageFirstItemIndex(anchorRef.current, chatKey, messages),
+      [chatKey, messages]
     );
 
     useEffect(() => {
       autoMediaRef.current.clear();
+      visibleMessageIdsRef.current = [];
+      atBottomRef.current = true;
+      retainMessageViewport(memoryViewId, chatKey, [], true);
       setAtBottom(true);
       syncLog("message-view", "virtual list ready", {
         chatId,
         msgCount: messages.length,
       });
-    }, [chatId]);
+      return () => retainMessageViewport(memoryViewId, null, [], true);
+    }, [chatId, chatKey, memoryViewId]);
 
     const loadOlder = useCallback(() => {
       const history = historyRef.current;
@@ -154,12 +163,8 @@ const MessageListInner = forwardRef<MessageListHandle, Props>(
       ) {
         return;
       }
-      const oldest = messages.reduce<Message | undefined>((oldest, message) =>
-        !oldest || message.sentAt < oldest.sentAt || (message.sentAt === oldest.sentAt && message.id < oldest.id)
-          ? message : oldest, undefined);
-      const cursor = history.cursor || (oldest
-        ? { beforeSentAt: oldest.sentAt, beforeId: oldest.id }
-        : null);
+      // Memory can be sparse after eviction; only disk page cursors prove a range was read.
+      const cursor = history.cursor;
       const cursorKey = cursor
         ? `${cursor.beforeSentAt}\u0000${cursor.beforeId}`
         : "start";
@@ -194,14 +199,21 @@ const MessageListInner = forwardRef<MessageListHandle, Props>(
 
     const handleAtBottom = useCallback(
       (next: boolean) => {
+        atBottomRef.current = next;
+        retainMessageViewport(memoryViewId, chatKey, visibleMessageIdsRef.current, next);
         setAtBottom(next);
         onAtBottomChange?.(next);
       },
-      [onAtBottomChange]
+      [chatKey, memoryViewId, onAtBottomChange]
     );
 
     const handleItemsRendered = useCallback(
       (items: ListItem<Message>[]) => {
+        const renderedMessages = items.map(item => item.data).filter((message): message is Message => Boolean(message));
+        visibleMessageIdsRef.current = renderedMessages.map(message => message.id);
+        retainMessageViewport(memoryViewId, chatKey, visibleMessageIdsRef.current, atBottomRef.current);
+        const firstRenderedItem = items.find(item => item.data);
+        if (firstRenderedItem?.data) anchorRef.current = { chatId: chatKey, messageId: firstRenderedItem.data.id, virtualIndex: firstRenderedItem.index };
         for (const item of items) {
           const message = item.data;
           if (
@@ -215,7 +227,7 @@ const MessageListInner = forwardRef<MessageListHandle, Props>(
           onReloadMedia(message, true);
         }
       },
-      [onReloadMedia]
+      [chatKey, memoryViewId, onReloadMedia]
     );
 
     const renderMessage = useCallback(
@@ -266,20 +278,6 @@ const MessageListInner = forwardRef<MessageListHandle, Props>(
         translatingId,
       ]
     );
-
-    useEffect(() => {
-      if (!focusMessageId) return;
-      const index = messages.findIndex((message) => message.id === focusMessageId);
-      if (index < 0) return;
-      const frame = requestAnimationFrame(() => {
-        virtuosoRef.current?.scrollToIndex({
-          index,
-          align: "center",
-          behavior: "auto",
-        });
-      });
-      return () => cancelAnimationFrame(frame);
-    }, [focusMessageId, messages]);
 
     useImperativeHandle(
       ref,

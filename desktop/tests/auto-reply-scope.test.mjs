@@ -43,6 +43,24 @@ test('large quick reply libraries and custom categories survive reload and backu
  assert.equal(normalizeLoadedSettings({quickReplies:[...replies,{...replies[0],id:'extra'}]}).quickReplies.length,1000);
 });
 
+test('quick reply translations survive normalization and backup restore',()=>{
+ const settings=normalizeLoadedSettings({quickReplies:[{id:'bilingual',title:'Hello',body:'Bonjour',translation:'你好',category:'other'}]});
+ const restored=parseBackupJson({version:2,contacts:[{id:'a',name:'A',phone:'12025550100'}],settingsSafe:buildSettingsSafe(settings)});
+ assert.equal(normalizeLoadedSettings(restored.settingsSafe).quickReplies[0].translation,'你好');
+});
+
+test('quick reply category parents survive reload and invalid hierarchy links are pruned',()=>{
+ const settings=normalizeLoadedSettings({quickReplyCustomCategories:[
+  {id:'book',label:'Workbook'}, {id:'tab',label:'Accueil',parentId:'book'},
+  {id:'cycle-a',label:'A',parentId:'cycle-b'}, {id:'cycle-b',label:'B',parentId:'cycle-a'},
+  {id:'orphan',label:'Orphan',parentId:'missing'},
+ ]});
+ assert.equal(settings.quickReplyCustomCategories.find(item=>item.id==='tab').parentId,'book');
+ assert.equal(settings.quickReplyCustomCategories.find(item=>item.id==='cycle-a').parentId,undefined);
+ assert.equal(settings.quickReplyCustomCategories.find(item=>item.id==='cycle-b').parentId,'cycle-a');
+ assert.equal(settings.quickReplyCustomCategories.find(item=>item.id==='orphan').parentId,undefined);
+});
+
 test('folder prompts survive normalization and backup restore without enabling automatic sending', () => {
  const settings=normalizeLoadedSettings({aiReplyMode:'semi', chatFolders:[
   {...folder('profile',undefined),aiSystemPrompt:'  FOLDER ROLE  '},

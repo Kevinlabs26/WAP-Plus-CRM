@@ -5,7 +5,9 @@ import { fileURLToPath } from "node:url";
 import { translate } from "../src/i18n/core.ts";
 
 const mocks = {
-  react: "export const useState=v=>globalThis.dragHooks.state(v); export const useRef=v=>globalThis.dragHooks.ref(v); export const useEffect=(f,d)=>globalThis.dragHooks.effect(f,d); export const useMemo=f=>f(); export const memo=f=>f;",
+  "@/lib/googleDrive": "export const openAvatarCloudMenu=()=>{};",
+  "emoji-picker-react": "export default ()=>null;export const Theme={LIGHT:'light',DARK:'dark'},EmojiStyle={NATIVE:'native'};",
+  react: "export const useState=v=>globalThis.dragHooks.state(v); export const useRef=v=>globalThis.dragHooks.ref(v); export const useEffect=(f,d)=>globalThis.dragHooks.effect(f,d); export const useLayoutEffect=()=>{}; export const useMemo=f=>f(); export const memo=f=>f;",
   "react/jsx-runtime": "export const jsx=(type,props,key)=>({type,props,key}); export const jsxs=jsx;",
   "react-dom": "export const createPortal=children=>children;",
   "@/store/appStore": "export const useAppStore=Object.assign(f=>f(globalThis.dragStore),{getState:()=>globalThis.dragStore});",

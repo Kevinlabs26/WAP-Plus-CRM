@@ -25,26 +25,68 @@ const mocks = {
  '@/features/multiWindow/storage': `export const FOLDER_STORAGE_KEY='folder',STORAGE_KEY='open';export const scopedStorageKey=v=>v;
  export const readStoredChatIds=()=>globalThis.windowFlowStored.open;export const readStoredFolderIds=()=>globalThis.windowFlowStored.folders;
  export const readSortMode=()=>globalThis.windowFlowStored.sort;export const readLayoutMode=()=>"auto";export const readIgnoreGroups=()=>false;export const readCompactMode=()=>false;
- export const readStoredCollapsedWindowIds=()=>[];export const readStoredPinnedWindowIds=()=>[];export const readRecentQueueIds=()=>[];export const readStoredActiveMembers=()=>({});export const readStoredManualMembers=()=>({});`,
+ export const readStoredCollapsedWindowIds=()=>[];export const readStoredPinnedWindowIds=()=>[];export const readRecentQueueIds=()=>[];export const readStoredActiveMembers=()=>globalThis.windowFlowStored.active||({});export const readStoredManualMembers=()=>({});`,
 };
 const built = await build({ entryPoints:[fileURLToPath(new URL('../src/components/views/MultiWindowWorkspace.tsx',import.meta.url))],bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},plugins:[{name:'ui-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}] });
 const {MultiWindowWorkspace}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
 const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
 const textOf=t=>Array.isArray(t)?t.map(textOf).join(''):typeof t==='string'?t:t?.props?textOf(t.props.children):'';
-function fixture(count=4,{folder=false,multi=false}={}){
+function fixture(count=4,{folder=false,multi=false,folderRequestId}={}){
  const chats=Array.from({length:count},(_,i)=>({id:`chat-${i}`,contactId:`contact-${i}`,accountId:`account-${i}`,updatedAt:`2026-10-29T10:00:${String(i).padStart(2,'0')}Z`,replyPendingSince:`2026-10-29T10:00:${String(i).padStart(2,'0')}Z`,lastMessageDirection:'in',unread:1}));
  const contacts=chats.map((c,i)=>({id:c.contactId,name:`Customer ${i}`,phone:`+1202555${String(100+i).padStart(4,'0')}`}));
  if(multi)contacts[2].phone=contacts[0].phone;
  globalThis.windowFlowStored={open:['chat-0','chat-1'],folders:folder?['f']:[],sort:'priority'};
- globalThis.windowFlowState={chats,contacts,messages:[],draftReplyByChatId:{},settings:{waAccounts:[],chatFolders:folder?[{id:'f',name:'Test folder',chatIds:chats.map(c=>c.id)}]:[],chatFolderClones:[]},
+ globalThis.windowFlowState={chats,contacts,messages:[],draftReplyByChatId:{},settings:{waAccounts:[],chatFolders:folder||folderRequestId?[{id:'f',name:'Test folder',chatIds:chats.map(c=>c.id)}]:[],chatFolderClones:[]},
  pushToast(){},markReplyHandled(id){const st=globalThis.windowFlowState;st.chats=st.chats.map(c=>c.id===id?{...c,replyHandledAt:'2026-10-29T11:00:00Z'}:c);},patchChat(id,patch){const st=globalThis.windowFlowState;st.chats=st.chats.map(c=>c.id===id?{...c,...patch}:c);}};
  const cells=[],effects=[];let cursor=0,dirty=false;
  const hooks={state(v){const i=cursor++;if(!cells[i])cells[i]={value:typeof v==='function'?v():v};return[cells[i].value,update=>{const value=typeof update==='function'?update(cells[i].value):update;if(!Object.is(value,cells[i].value)){cells[i].value=value;dirty=true;}}];},ref(v){return cells[cursor++]??={current:v};},memo(f,deps){const i=cursor++,old=cells[i];if(!old||!deps.every((d,j)=>Object.is(d,old.deps[j])))cells[i]={deps,value:f()};return cells[i].value;},effect(f,deps){const i=cursor++,old=cells[i];if(!old||!deps.every((d,j)=>Object.is(d,old.deps[j]))){cells[i]={deps,cleanup:old?.cleanup};effects.push(()=>{cells[i].cleanup?.();cells[i].cleanup=f();});}}};
  globalThis.windowFlowHooks=hooks;
- let tree;
- const render=()=>{for(let attempts=0;attempts<20;attempts++){dirty=false;cursor=0;tree=MultiWindowWorkspace({onBack(){}});while(effects.length)effects.shift()();if(!dirty)return tree;}throw new Error('Unstable render');};
- return{render,cards:()=>nodes(tree).filter(n=>n.type==='card'),ids:()=>nodes(tree).filter(n=>n.type==='card').map(n=>n.props.chat.id),button:key=>nodes(tree).find(n=>n.type==='button'&&textOf(n).includes(key)),sort:value=>nodes(tree).find(n=>n.type==='select'&&n.props['aria-label']==='multi.sortMode').props.onChange({target:{value}}),patch:(id,patch)=>globalThis.windowFlowState.patchChat(id,patch),get state(){return globalThis.windowFlowState;},close(){cells.forEach(c=>c?.cleanup?.());}};
+ let tree;const props={onBack(){},folderRequestId,folderRequestNonce:0};const frames=[];
+ const render=()=>{for(let attempts=0;attempts<20;attempts++){dirty=false;cursor=0;tree=MultiWindowWorkspace(props);frames.push(nodes(tree).filter(n=>n.type==='card').map(n=>n.props.chat.id));while(effects.length)effects.shift()();if(!dirty)return tree;}throw new Error('Unstable render');};
+ return{render,frames,requestFolder(id){props.folderRequestId=id;props.folderRequestNonce++;},cards:()=>nodes(tree).filter(n=>n.type==='card'),ids:()=>nodes(tree).filter(n=>n.type==='card').map(n=>n.props.chat.id),button:key=>nodes(tree).find(n=>n.type==='button'&&textOf(n).includes(key)),sort:value=>nodes(tree).find(n=>n.type==='select'&&n.props['aria-label']==='multi.sortMode').props.onChange({target:{value}}),patch:(id,patch)=>globalThis.windowFlowState.patchChat(id,patch),get state(){return globalThis.windowFlowState;},close(){cells.forEach(c=>c?.cleanup?.());}};
 }
+
+test('opening a folder loads its chats even when the workspace had no folder selected',()=>{
+ const ui=fixture(4,{folderRequestId:'f'});try{ui.render();assert.deepEqual(ui.ids(),['chat-3','chat-2','chat-1','chat-0']);}finally{ui.close();}
+});
+
+for(const empty of [false,true])test(`folder menu replaces a restored different folder with exactly its own members (empty=${empty})`,()=>{
+ const ui=fixture(4,{folderRequestId:'f'});try{
+  ui.state.settings.chatFolders=[{id:'old',name:'Old',chatIds:['chat-0','chat-1']},{id:'f',name:'Selected',chatIds:empty?[]:['chat-2','chat-3']}];
+  globalThis.windowFlowStored.folders=['old'];
+  ui.render();assert.deepEqual(ui.ids(),empty?[]:['chat-3','chat-2']);
+  assert.ok(ui.frames.every(ids=>ids.every(id=>['chat-2','chat-3'].includes(id))),'old folder members must never appear while opening the selected folder');
+ }finally{ui.close();}
+});
+
+test('each explicit folder menu request replaces the current folder, including repeat opens',()=>{
+ const ui=fixture(4,{folderRequestId:'f'});try{
+  ui.state.settings.chatFolders=[{id:'f',name:'First',chatIds:['chat-0']},{id:'second',name:'Second',chatIds:['chat-2']}];
+  ui.render();assert.deepEqual(ui.ids(),['chat-0']);
+  ui.requestFolder('second');ui.render();assert.deepEqual(ui.ids(),['chat-2']);
+  ui.requestFolder('f');ui.render();assert.deepEqual(ui.ids(),['chat-0']);
+  ui.state.settings.chatFolders=ui.state.settings.chatFolders.map(folder=>folder.id==='f'?{...folder,chatIds:['chat-3']}:folder);
+  ui.requestFolder('f');ui.render();assert.deepEqual(ui.ids(),['chat-3']);
+ }finally{ui.close();}
+});
+
+test('opening a child folder includes its clones and excludes parent and sibling members',()=>{
+ const ui=fixture(4,{folderRequestId:'f'});try{
+  ui.state.settings.chatFolders=[{id:'parent',name:'Parent',chatIds:['chat-0']},{id:'f',parentId:'parent',name:'Child',chatIds:['chat-2']},{id:'sibling',parentId:'parent',name:'Sibling',chatIds:['chat-1']}];
+  ui.state.settings.chatFolderClones=[{folderId:'f',sourceChatId:'chat-3'}];
+  ui.render();assert.deepEqual(ui.ids(),['chat-3','chat-2']);
+ }finally{ui.close();}
+});
+
+test('restored account selection cannot render another person or a same-person account outside the folder',()=>{
+ const ui=fixture(4,{folder:true,multi:true});try{
+  ui.state.settings.chatFolders=[{id:'f',name:'Folder',chatIds:['chat-0','chat-1']}];
+  globalThis.windowFlowStored.active={'chat-0':'chat-2','chat-1':'chat-3'};
+  ui.render();assert.deepEqual(ui.ids(),['chat-0','chat-1']);
+  assert.ok(ui.frames.every(ids=>ids.every(id=>['chat-0','chat-1'].includes(id))));
+  assert.deepEqual(ui.cards()[0].props.accountOptions.map(option=>option.id),['chat-0']);
+ }finally{ui.close();}
+});
 
 test('actual workspace holds windows through a successful send, another reply and a live inbound',()=>{
  const ui=fixture();try{ui.render();const ids=ui.ids();ui.patch('chat-0',{lastMessageDirection:'out',replyPendingSince:'',updatedAt:'2026-10-29T10:10:00Z'});ui.render();assert.deepEqual(ui.ids(),ids);

@@ -16,6 +16,7 @@ import type { AppSettings } from "./appStore";
 import type { BroadcastCampaign } from "@/types/broadcast";
 import { readMediaCache, waitForMediaCacheWrites } from "@/lib/mediaCache";
 import { loadFullHistory } from "@/lib/storage";
+import { inlineBlobUrl, VIDEO_DATA_URL_MAX_CHARS, BACKUP_MEDIA_MAX_CHARS } from "@/lib/mediaBlob";
 
 type ExportState = {
   phones: PhoneDevice[];
@@ -45,12 +46,14 @@ export async function createBackupBundle(state: ExportState, includeMedia = fals
     await waitForMediaCacheWrites();
     for (let index = 0; index < messages.length; index++) {
       const message = messages[index]!;
-      const mediaUrl = message.mediaUrl?.startsWith("data:")
+      let mediaUrl = message.mediaUrl?.startsWith("data:")
         ? message.mediaUrl : await readMediaCache(message.id, true);
+      const itemLimit = message.mediaType === "video" ? VIDEO_DATA_URL_MAX_CHARS : 24 * 1024 * 1024;
+      if (mediaUrl?.startsWith("blob:")) mediaUrl = await inlineBlobUrl(mediaUrl, itemLimit);
       if (!mediaUrl?.startsWith("data:")) continue;
-      if (mediaUrl.length > 24 * 1024 * 1024) throw new Error("单个附件超过 24 MB，无法导出");
+      if (mediaUrl.length > itemLimit) throw new Error(message.mediaType === "video" ? "单个视频超过 100 MB，无法导出" : "单个附件超过 24 MB，无法导出");
       mediaChars += mediaUrl.length;
-      if (mediaChars > 128 * 1024 * 1024) throw new Error("附件总量超过 128 MB，请分批备份");
+      if (mediaChars > BACKUP_MEDIA_MAX_CHARS) throw new Error("附件编码后的总量超过 192 MB，请减少附件后备份，或导出不含附件的备份");
       messages[index] = { ...message, mediaUrl, mediaPending: false };
       attached++;
     }

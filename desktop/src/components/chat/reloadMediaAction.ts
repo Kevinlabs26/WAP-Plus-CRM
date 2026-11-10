@@ -170,8 +170,9 @@ export async function reloadMedia({
       // The bridge can temporarily lose the in-memory message after restart.
       // A 404 is recoverable by syncing once and retrying the media request.
       if (!quiet && !shouldRetryMediaAfterSync(error)) throw error;
+      if ((error as { retryable?: boolean })?.retryable === false) throw error;
     }
-    if (!res?.mediaUrl) {
+    if (!res?.mediaUrl && missingBridgeMessage) {
       const lastSync = mediaResyncAt.get(chatAccountId) || 0;
       if (Date.now() - lastSync > 30_000) {
         mediaResyncAt.set(chatAccountId, Date.now());
@@ -213,6 +214,7 @@ export async function reloadMedia({
           if (res?.mediaUrl) break;
         } catch (error) {
           lastDownloadError = error;
+          if ((error as { retryable?: boolean })?.retryable === false) break;
         }
       }
     }

@@ -79,3 +79,46 @@ test('all provider paths and manual/selected/automatic replies use one folder pr
     assert.ok(system.includes('no-invention rules'), 'folder prompts retain the existing safety rules');
   }
 });
+
+test('folder additions compose dynamically with templates and parents without leaking another account',()=>{
+ const s=base();s.aiPromptTemplates=[{id:'tpl',name:'Library',prompt:'LIBRARY RULES'}];
+ s.chatFolders[1]={...s.chatFolders[1],aiPromptMode:'append',aiPromptTemplateId:'tpl',aiSystemPrompt:'LOCAL EXTRA'};
+ assert.equal(resolveAiReplyProfile(s,'a','chat').prompt,'PARENT ROLE\n\nLIBRARY RULES\n\nLOCAL EXTRA');
+ s.chatFolders[0].aiPromptMode='append';
+ assert.equal(resolveAiReplyProfile(s,'a','chat').prompt,'ACCOUNT A\n\nPARENT ROLE\n\nLIBRARY RULES\n\nLOCAL EXTRA');
+ const key=getSuggestionContextKey(contact,history,s,'a',{auto:true});s.aiPromptTemplates[0].prompt='UPDATED LIBRARY';
+ assert.notEqual(getSuggestionContextKey(contact,history,s,'a',{auto:true}),key);
+ s.chatFolders[1].aiPromptMode='inherit';assert.equal(resolveAiReplyProfile(s,'a','chat').prompt,'ACCOUNT A\n\nPARENT ROLE');
+ s.chatFolders[1].aiPromptMode='replace';assert.equal(resolveAiReplyProfile(s,'a','chat').prompt,'UPDATED LIBRARY\n\nLOCAL EXTRA');
+});
+
+test('missing templates and oversized composed instructions stop generation instead of silently dropping requirements',async()=>{
+ const s={...base(),aiProvider:'custom',customAiKey:'test',customAiBaseUrl:'https://example.invalid',customAiModel:'test'};
+ s.chatFolders[1]={...s.chatFolders[1],aiPromptMode:'append',aiPromptTemplateId:'missing'};
+ assert.ok(resolveAiReplyProfile(s,'a','chat').error);assert.equal((await generateSuggestions(contact,history,s,{auto:true,accountId:'a'})).suggestions.length,0);
+ s.chatFolders=Array.from({length:5},(_,i)=>({...folder(String(i),'x'.repeat(6000),i===4?['chat']:[]),aiPromptMode:'append',parentId:i?String(i-1):undefined}));
+ const profile=resolveAiReplyProfile(s,'a','chat');assert.ok(profile.error);assert.equal(profile.prompt,'');
+});
+
+test('compact context reduces sent history while keeping all configured instructions and a single proactive task',async t=>{
+ const sent=[];t.mock.method(globalThis,'fetch',async(_url,opts)=>{sent.push(JSON.parse(opts.body));return Response.json({choices:[{message:{content:'[{"text":"Bonjour !"}]'}}]});});
+ const s={...base(),aiProvider:'custom',customAiKey:'test',customAiBaseUrl:'https://example.invalid',customAiModel:'test'};
+ s.chatFolders[1]={...s.chatFolders[1],aiPromptMode:'append',aiSystemPrompt:'IMPORTANT LOCAL RULE'};
+ const messages=Array.from({length:50},(_,i)=>({...history[0],id:String(i),body:'History '+i+' '+ 'a'.repeat(150),sentAt:new Date(1700000000000+i).toISOString()}));
+ for(const aiContextMode of ['full','compact'])await generateSuggestions(contact,messages,{...s,aiContextMode},{auto:true,accountId:'a',outreach:'Ask about availability'});
+ assert.ok(sent[1].messages[1].content.length<sent[0].messages[1].content.length);
+ assert.ok(sent[1].messages[0].content.includes('PARENT ROLE')&&sent[1].messages[0].content.includes('IMPORTANT LOCAL RULE'));
+ assert.match(sent[1].messages[1].content,/no new incoming message/);assert.equal(sent[1].max_tokens,512);
+});
+
+test('program checks reject forbidden or oversized model output for every provider without extra AI calls',async t=>{
+ let calls=0,output='FORBIDDEN';t.mock.method(globalThis,'fetch',async()=>{calls++;const text=JSON.stringify([{text:output}]);return Response.json({choices:[{message:{content:text}}],candidates:[{content:{parts:[{text}]}}],message:{content:text}});});
+ for(const aiProvider of ['custom','gemini','ollama']){
+  const s={...base(),aiProvider,aiModel:'fixture',customAiKey:'fixture',customAiBaseUrl:'https://example.invalid',customAiModel:'fixture',geminiKey:'fixture',ollamaUrl:'http://localhost:11434'};
+  s.chatFolders[0].aiReplyForbiddenTerms=['forbidden'];s.chatFolders[1].aiReplyMaxChars=20;
+  output='FORBIDDEN';let result=await generateSuggestions(contact,history,s,{auto:true,accountId:'a'});assert.equal(result.suggestions.length,0);assert.match(result.error,/禁用/);
+  output='x'.repeat(21);result=await generateSuggestions(contact,history,s,{auto:true,accountId:'a'});assert.equal(result.suggestions.length,0);assert.match(result.error,/字符上限/);
+  output='Bonjour !';result=await generateSuggestions(contact,history,s,{auto:true,accountId:'a'});assert.equal(result.suggestions[0].text,output);
+ }
+ assert.equal(calls,9,'each generation uses one call, with no model-based review or repair request');
+});

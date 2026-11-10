@@ -21,15 +21,30 @@ export type QuickReplyCategoryFilter = QuickReplyCategory | "all";
 export type QuickReplyCategoryOption = {
   id: string;
   label: string;
+  parentId?: string;
+};
+
+export type QuickReplySheetLink = {
+  spreadsheetId: string;
+  tab: string;
+  row: number;
+  originalColumn: number;
+  translationColumn: number;
+  titleSnapshot?: string;
+  originalSnapshot: string;
+  translationSnapshot: string;
+  syncPending?: boolean;
+  syncError?: string;
 };
 
 export function getQuickReplyCategories(
   custom: QuickReplyCategoryOption[] = [],
   removed: string[] = [],
-  labels: Record<string, string> = {}
+  labels: Record<string, string> = {},
+  order: string[] = []
 ): QuickReplyCategoryOption[] {
   const seen = new Set<string>(QUICK_REPLY_CATEGORIES.map((item) => item.id));
-  return [
+  const categories = [
     ...QUICK_REPLY_CATEGORIES.filter(item => item.id === "other" || !removed.includes(item.id)).map(item => ({ ...item, label: labels[item.id] || item.label })),
     ...custom.filter((item) => {
       const id = String(item?.id || "").trim();
@@ -39,6 +54,33 @@ export function getQuickReplyCategories(
       return true;
     }),
   ];
+  const positions = new Map(order.map((id, index) => [id, index]));
+  return categories.sort((a, b) => (positions.get(a.id) ?? order.length) - (positions.get(b.id) ?? order.length));
+}
+
+export function quickReplyCategoryDescendants(id: string, categories: QuickReplyCategoryOption[]) {
+  const ids = new Set([id]);
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const category of categories) if (category.parentId && ids.has(category.parentId) && !ids.has(category.id)) {
+      ids.add(category.id); changed = true;
+    }
+  }
+  return ids;
+}
+
+export function flattenQuickReplyCategories(categories: QuickReplyCategoryOption[]) {
+  const rows: { category: QuickReplyCategoryOption; depth: number; hasChildren: boolean }[] = [];
+  const visit = (parentId: string | undefined, depth: number, ancestors: Set<string>) => {
+    for (const category of categories.filter(item => item.parentId === parentId)) {
+      if (ancestors.has(category.id)) continue;
+      const children = categories.some(item => item.parentId === category.id);
+      rows.push({ category, depth, hasChildren: children });
+      visit(category.id, depth + 1, new Set(ancestors).add(category.id));
+    }
+  };
+  visit(undefined, 0, new Set());
+  return rows;
 }
 
 export function normalizeQuickReplyCategory(
@@ -67,6 +109,7 @@ export function filterQuickReplies<
   T extends {
     title: string;
     body: string;
+    translation?: string;
     category: string;
     media?: { fileName?: string };
   },
@@ -75,9 +118,17 @@ export function filterQuickReplies<
   const keywords = normalize(query).trim().split(/\s+/u).filter(Boolean);
   return items.filter(item => {
     if (category !== "all" && item.category !== category) return false;
-    const text = normalize(`${item.title}\n${item.body}\n${item.media?.fileName || ""}`);
+    const text = normalize(`${item.title}\n${item.body}\n${item.translation || ""}\n${item.media?.fileName || ""}`);
     return keywords.every(keyword => text.includes(keyword));
   });
+}
+
+export function quickReplyPreviewText(title: string, value: string) {
+  const content = value.trim();
+  const heading = title.trim();
+  const firstLine = content.split(/\r?\n/, 1)[0]?.trim() || "";
+  if (!heading || firstLine !== heading && !(heading.length === 40 && firstLine.startsWith(heading))) return content;
+  return content.slice(heading.length).trim();
 }
 
 export function normalizeQuickReplyIds(value: unknown, replies: { id: string }[], limit: number): string[] {

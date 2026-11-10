@@ -60,13 +60,14 @@ function harness() {
     settings: { aiProvider: "custom", customAiModel: "one", waAccounts: [], aiAutoReplyManualChatIds: [], quickReplies: [], sendChannel: "android" },
     baileysUi: { labelsByAccountId: {} }, pushToast() {},
   };
+  const runtime={byChat:{}};
   const requests = []; const timers = new Map(); let timerId = 0; let contextReads = 0;
   const delays = [];
   globalThis.window = { setTimeout(fn, delay) { delays.push(delay); timers.set(++timerId, fn); return timerId; }, clearTimeout(id) { timers.delete(id); } };
   const store = selector => selector(state); store.setState = patch => Object.assign(state, patch); store.getState=()=>state;
   globalThis.panelHooks = hooks;
   globalThis.panelBindings = {
-    useAppStore: store, hasRealAiKey: () => true,
+    useAppStore: store, hasRealAiKey: () => true, useAutoReplyRuntime:selector=>selector(runtime),
     resolveWaSendAccountId, formatAccountDisplay, resolveMyLang, QuickReplyBrowser: "quick-browser", AiSuggestionCard: "suggestion-card", AiSuggestionReadingControl: "reading-control",
     resolveAutoReplyScope, resolveAiReplyProfile, createSuggestionCache, isManualSuggestionContext,
     getSuggestionContextKey: (...args) => { contextReads++; return getSuggestionContextKey(...args); },
@@ -74,7 +75,7 @@ function harness() {
     useI18n: () => ({ t: key => key }), getQuickReplyCategories: () => [], filterQuickReplies: () => [],
     filterMessagesForAccount: messages => messages, cn: () => "", isWaAccountConnected: () => false,
   };
-  return { state, requests, delays, get contextReads() { return contextReads; },
+  return { state, requests, delays, runtime, get contextReads() { return contextReads; },
     async mount() {
       const { CrmAiPanel } = await import(`data:text/javascript;base64,${Buffer.from(built.outputFiles[0].text).toString("base64")}#${Math.random()}`);
       this.render = () => {
@@ -101,6 +102,23 @@ function harness() {
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const reply = text => ({ source: "custom", suggestions: [{ id: text, text }] });
 
+test('automatic mode starts compact, does no duplicate generation and expands when human attention is needed',async()=>{
+ const h=harness();h.state.settings.aiReplyMode='auto';await h.mount();h.fireTimers();assert.equal(h.requests.length,0);
+ const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
+ const expanded=()=>nodes(h.render()).find(node=>node.props['aria-controls']==='crm-reply-suggestion').props['aria-expanded'];
+ assert.equal(expanded(),false);assert.ok(!nodes(h.render()).some(node=>node.props.title==='autoReplyScope.chatHint'));
+ h.runtime.byChat.a={phase:'human',inboundId:'a-in',accountId:'a',reason:'Needs attention'};assert.equal(expanded(),true);h.fireTimers();assert.equal(h.requests.length,0);
+ h.refresh();assert.equal(h.requests.length,1);assert.equal(h.requests[0].args[3].count,1);
+ h.requests[0].resolve(reply('Manual recovery'));await settle();assert.ok(nodes(h.render()).some(node=>node.type==='suggestion-card'));h.fireTimers();assert.equal(h.requests.length,1);h.unmount();
+});
+
+test('edited original is inserted into the current composer only and stale editor callbacks cannot change another conversation',async()=>{
+ const h=harness(),inserted=[];h.state.applyAiSuggestion=(...args)=>inserted.push(args);await h.mount();h.fireTimers();h.requests[0].resolve(reply('Original'));await settle();
+ const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
+ const card=nodes(h.render()).find(node=>node.type==='suggestion-card');card.props.onInsert('replace','Edited original');assert.deepEqual(inserted,[['Edited original','replace']]);
+ h.state.selectedChatId='b';card.props.onInsert('replace','Do not insert');assert.equal(inserted.length,1);h.unmount();
+});
+
 test('streaming additional suggestions keeps the first card mounted even when the provider regenerates candidate IDs',async()=>{
   const h=harness();await h.mount();h.fireTimers();
   const nodes=tree=>Array.isArray(tree)?tree.flatMap(nodes):tree?.props?[tree,...nodes(tree.props.children)]:[];
@@ -109,7 +127,7 @@ test('streaming additional suggestions keeps the first card mounted even when th
   const first=nodes(h.render()).find(n=>n.type==='suggestion-card');assert.ok(first.key);
   const next={source:'custom',suggestions:[{id:'chunk-2',text:'Bonjour !'},{id:'chunk-3',text:'Bonsoir !'}]};
   progress(next);const cards=nodes(h.render()).filter(n=>n.type==='suggestion-card');
-  assert.equal(cards[0].key,first.key,'translation state survives a new streaming candidate');assert.notEqual(cards[0].key,cards[1].key);
+  assert.equal(cards[0].key,first.key,'translation state survives a new streaming candidate');assert.equal(cards.length,1,'only the first candidate is shown');
   h.requests[0].resolve(next);await settle();h.unmount();
 });
 
@@ -132,10 +150,10 @@ test("a single reading control updates all suggestions, remembers the target and
   const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
   const control=()=>nodes(h.render()).filter(n=>n.type==='reading-control');
   const cards=()=>nodes(h.render()).filter(n=>n.type==='suggestion-card');
-  assert.equal(control().length,1);assert.equal(control()[0].props.targetLanguage,'zh');assert.deepEqual(cards().map(n=>n.props.language),['','','']);
-  control()[0].props.onChange('zh');assert.deepEqual(cards().map(n=>n.props.language),['zh','zh','zh']);
-  control()[0].props.onChange('');assert.equal(control()[0].props.targetLanguage,'zh');assert.deepEqual(cards().map(n=>n.props.language),['','','']);
-  control()[0].props.onChange('de');assert.equal(control()[0].props.targetLanguage,'de');assert.deepEqual(cards().map(n=>n.props.language),['de','de','de']);
+  assert.equal(control().length,1);assert.equal(control()[0].props.targetLanguage,'zh');assert.deepEqual(cards().map(n=>n.props.language),['']);
+  control()[0].props.onChange('zh');assert.deepEqual(cards().map(n=>n.props.language),['zh']);
+  control()[0].props.onChange('');assert.equal(control()[0].props.targetLanguage,'zh');assert.deepEqual(cards().map(n=>n.props.language),['']);
+  control()[0].props.onChange('de');assert.equal(control()[0].props.targetLanguage,'de');assert.deepEqual(cards().map(n=>n.props.language),['de']);
   h.state.aiSuggestions=[{id:'new',text:'Nouvelle réponse.'}];assert.equal(cards()[0].props.language,'de');
   assert.deepEqual(h.state.settings.myLang,'zh','reading controls do not change translation or sending settings');h.unmount();
 });
@@ -382,15 +400,4 @@ test("manual drafting prevents an unstarted automatic request, while explicit re
     id: "new-turn", chatId: "a", accountId: "a", direction: "in", body: "New question", sentAt: "2026-01-01T01:00:00Z",
   }] }; h.render(); h.fireTimers(); assert.equal(h.requests.length, 2);
   h.requests[1].resolve(reply("new turn")); await settle(); h.unmount();
-});
-
-test("conversation reply mode saves explicit overrides and can return to folder inheritance",async()=>{
- const h=harness();h.state.settings.aiReplyMode="semi";h.state.settings.chatFolders=[{id:"f",name:"F",chatIds:["a"],autoReplyMode:"auto"}];
- h.state.updateSettings=patch=>Object.assign(h.state.settings,patch);await h.mount();
- const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
- const selector=()=>nodes(h.render()).find(node=>node.type==="select"&&node.props.title==="autoReplyScope.chatHint");
- assert.equal(selector().props.value,"inherit");selector().props.onChange({target:{value:"manual"}});assert.equal(h.state.settings.aiAutoReplyModeByChatId.a,"manual");
- assert.equal(selector().props.value,"manual");selector().props.onChange({target:{value:"auto"}});assert.equal(resolveAutoReplyScope(h.state.settings,"a").source,"chat");
- selector().props.onChange({target:{value:"inherit"}});assert.equal(h.state.settings.aiAutoReplyModeByChatId.a,undefined);assert.equal(resolveAutoReplyScope(h.state.settings,"a").source,"folder");
- h.unmount();
 });

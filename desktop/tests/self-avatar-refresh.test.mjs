@@ -12,7 +12,7 @@ const mocks = {
     export const baileysSync=async()=>({contacts:[],messages:[]});
     export const baileysLabels=async()=>({labels:[]});
     export const baileysFetchAvatar=opts=>globalThis.selfAvatarFetch(opts);`,
-  "@/store/persist": "export const persist=()=>{}; export const flushPersist=async()=>{};",
+  "@/store/persist": "export const prunePersistedMessageMemory=()=>{};export const persist=()=>{}; export const flushPersist=async()=>{};",
   "@/lib/mediaCache": "export const waitForMediaCacheWrites=async()=>{};",
   "@/lib/composerActivity": "export const isComposerTypingBusy=()=>false;",
   "@/lib/groupJoinNotify": "export const notifyGroupJoinRequests=()=>{};",

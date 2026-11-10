@@ -33,4 +33,16 @@ assert.equal(
   MESSAGE_VIRTUAL_INDEX_BASE
 );
 
+const history = Array.from({ length: 100 }, (_, i) => ({ id: `row-${i}` }));
+const viewport = { chatId: "history", messageId: "row-40", virtualIndex: MESSAGE_VIRTUAL_INDEX_BASE + 40 };
+assert.equal(resolveMessageFirstItemIndex(viewport, "history", history), MESSAGE_VIRTUAL_INDEX_BASE);
+assert.equal(resolveMessageFirstItemIndex(viewport, "history", history.map(row => ({ ...row, reactions: [] }))), MESSAGE_VIRTUAL_INDEX_BASE);
+const prepended = [...Array.from({ length: 80 }, (_, i) => ({ id: `old-${i}` })), ...history];
+assert.equal(resolveMessageFirstItemIndex(viewport, "history", prepended), MESSAGE_VIRTUAL_INDEX_BASE - 80);
+viewport.messageId = "row-10";
+viewport.virtualIndex = MESSAGE_VIRTUAL_INDEX_BASE + 10;
+assert.equal(resolveMessageFirstItemIndex(viewport, "history", prepended), MESSAGE_VIRTUAL_INDEX_BASE - 80);
+assert.equal(resolveMessageFirstItemIndex(viewport, "history", [...prepended, { id: "live" }]), MESSAGE_VIRTUAL_INDEX_BASE - 80);
+assert.equal(resolveMessageFirstItemIndex(viewport, "history", prepended.slice(20)), MESSAGE_VIRTUAL_INDEX_BASE - 60);
+
 console.log("message virtual index: ok");

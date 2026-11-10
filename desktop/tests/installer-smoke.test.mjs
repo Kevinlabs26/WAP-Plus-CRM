@@ -13,6 +13,7 @@ test("installer smoke rejects stale packages and running sessions and starts a f
     const script = join(temporary, "check.ps1");
     const source = String.raw`
 $ErrorActionPreference = 'Stop'
+Import-Module Microsoft.PowerShell.Utility
 $scriptPath = $args[0]
 function Resolve-Path { param($Path) $Path }
 function Get-Content { param($Path,$LiteralPath,[switch]$Raw,$Tail) if ($LiteralPath) { return }; '{"productName":"WAP Plus CRM","version":"0.1.33","identifier":"com.wapplus.crm"}' }
@@ -36,7 +37,7 @@ foreach ($case in @('missing','running','data','ffmpeg-missing','ffmpeg-hash','l
   if ($case -eq 'running' -and ($caught -notlike '*clean Windows session*' -or $global:launches)) { throw 'Running CRM was not protected' }
   if ($case -eq 'data' -and ($caught -notlike '*clean Windows user profile*' -or $global:launches)) { throw 'Existing CRM data was not protected' }
   if ($case -like 'ffmpeg-*' -and ($caught -notlike '*FFmpeg does not match*' -or $global:launches -ne 1)) { throw "Invalid FFmpeg was accepted: $case" }
-  if ($case -in @('license','notice') -and ($caught -notlike '*FFmpeg notice is missing*' -or $global:launches -ne 1)) { throw "Missing resource was accepted: $case" }
+  if ($case -in @('license','notice') -and ($caught -notlike '*FFmpeg notice is missing*' -or $global:launches -ne 1)) { throw "Missing resource was accepted: $case; launches=$global:launches; error=$caught" }
   if ($case -eq 'startup' -and $caught -notlike '*did not initialize its database*') { throw 'Uninitialized application was accepted' }
   if ($case -eq 'success' -and ($caught -or $global:launches -ne 2)) { throw "Fresh process check failed: $caught" }
   if ($case -eq 'delayed' -and ($caught -or $global:sleeps -ne 4)) { throw "Readiness polling failed: $caught" }

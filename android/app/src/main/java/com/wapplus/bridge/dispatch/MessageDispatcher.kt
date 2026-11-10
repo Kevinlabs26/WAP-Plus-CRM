@@ -234,7 +234,7 @@ class MessageDispatcher(
                     reply(ack(id))
                 }
                 "ping" -> reply(ack(id))
-                "ack" -> Log.d(TAG, "ack ${payload}")
+                "ack" -> Log.d(TAG, "ack received")
                 else -> reply(error(id, "unsupported_message_type", "不支持的消息类型：$type"))
             }
         } catch (e: Exception) {

@@ -44,13 +44,13 @@ test("the full desktop notifier passes PNG bytes to Windows under a blocked-fetc
       b.onResolve({ filter: /^@tauri-apps\/(api\/(core|event)|plugin-notification)$/ }, args => ({ path: args.path, namespace: "mock" }));
       b.onLoad({ filter: /.*/, namespace: "mock" }, args => ({ contents:
         args.path.endsWith("/core") ? `export const invoke = async (command, options) => { globalThis.nativeCalls.push({command, options}); return true; };`
-        : args.path.endsWith("/event") ? `export const listen = async () => () => {};`
-        : `export const isPermissionGranted = async () => true; export const sendNotification = () => { throw Error('Unexpected fallback'); };`,
+        : args.path.endsWith("/event") ? `export const listen = async (_name,fn) => { globalThis.notificationClick=fn;return () => {}; };`
+        : `export const isPermissionGranted = async () => true; export const onAction = async () => () => {}; export const sendNotification = () => { throw Error('Unexpected fallback'); };`,
       }));
     } }],
   });
-  const { showDesktopNotify } = await import("data:text/javascript;base64," + Buffer.from(bundle.outputFiles[0].text).toString("base64"));
-  const originals = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch, nativeCalls: globalThis.nativeCalls };
+  const { showDesktopNotify, registerDesktopNotifyAction } = await import("data:text/javascript;base64," + Buffer.from(bundle.outputFiles[0].text).toString("base64"));
+  const originals = { window: globalThis.window, document: globalThis.document, fetch: globalThis.fetch, nativeCalls: globalThis.nativeCalls, notificationClick:globalThis.notificationClick };
   globalThis.window = { __TAURI_INTERNALS__: {} };
   globalThis.document = { createElement: () => ({ getContext: () => ({ fillRect() {}, fillText() {} }),
     toDataURL: () => "data:image/png;base64,iVBORw0KGgo=" }) };
@@ -63,6 +63,21 @@ test("the full desktop notifier passes PNG bytes to Windows under a blocked-fetc
     assert.equal(globalThis.nativeCalls[0].options.tag, "chat-a");
     assert.equal(await showDesktopNotify({ title: "新消息" }), true);
     assert.equal(globalThis.nativeCalls[1].options.avatarBytes, undefined);
+    assert.equal(await showDesktopNotify({title:'Download complete',tag:'saved-media:test',action:'downloads',onClick(){}}),true);
+    assert.equal(globalThis.nativeCalls[2].options.openDownloadFolder,true);
+    assert.equal(globalThis.nativeCalls[0].options.openDownloadFolder,false);
+    let viewed=0;
+    assert.equal(await showDesktopNotify({title:'Cloud upload complete',tag:'cloud-upload',action:'cloud-upload',actionLabel:'查看上传',onClick(){viewed++;}}),true);
+    assert.equal(globalThis.nativeCalls[3].options.actionLabel,'查看上传');assert.equal(globalThis.nativeCalls[3].options.openDownloadFolder,false);
+    globalThis.notificationClick({payload:'cloud-upload'});assert.equal(viewed,1);
+    const opened=[];
+    registerDesktopNotifyAction('cloud-upload:restored-a',()=>opened.push('a'));
+    registerDesktopNotifyAction('cloud-upload:restored-b',()=>opened.push('b'));
+    globalThis.notificationClick({payload:'cloud-upload:restored-a'});
+    assert.deepEqual(opened,['a']);
+    registerDesktopNotifyAction('cloud-upload:restored-b',null);
+    globalThis.notificationClick({payload:'cloud-upload:restored-b'});
+    assert.deepEqual(opened,['a']);
   } finally {
     for (const [key, value] of Object.entries(originals)) {
       if (value === undefined) delete globalThis[key]; else globalThis[key] = value;

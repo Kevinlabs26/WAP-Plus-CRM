@@ -1,6 +1,23 @@
 // 音频默认使用 bridge 的 14 MB 上限，其它媒体沿用发送端的文件上限。
 const MAX_AUDIO_BYTES = 14_000_000;
 const audioTooLarge = () => new Error("语音文件超过 14 MB 上限");
+export const VIDEO_DATA_URL_MAX_CHARS = 4 * Math.ceil(100 * 1024 * 1024 / 3) + 64;
+export const BACKUP_MEDIA_MAX_CHARS = 192 * 1024 * 1024;
+
+/** Inline only on explicit export/save; normal video playback and upload stay binary. */
+export async function inlineBlobUrl(url: string, maxChars: number): Promise<string> {
+  if (!url.startsWith("blob:")) return url;
+  const response = await fetch(url, {signal:AbortSignal.timeout(30_000)});
+  if (!response.ok) throw new Error("无法读取本地视频");
+  const blob = await response.blob();
+  if (Math.ceil(blob.size / 3) * 4 + 64 > maxChars) throw new Error("视频超过收藏或附件备份上限，请单独保存视频；聊天原视频仍保留");
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = reader.onabort = () => reject(new Error("读取视频失败"));
+    reader.readAsDataURL(blob);
+  });
+}
 
 /** Read media URLs without relying on WebView2 fetching a data: URL. */
 export function dataUrlToBlob(

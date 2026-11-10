@@ -1,6 +1,8 @@
 /** Only the local desktop UI and development UI may use this API. */
 const ALLOWED_ORIGINS = new Set([
   "http://localhost:3000", "http://127.0.0.1:3000",
+  "http://localhost:3001", "http://127.0.0.1:3001",
+  "http://localhost:43871", "http://127.0.0.1:43871",
   "tauri://localhost", "http://tauri.localhost", "https://tauri.localhost",
 ]);
 const CORS_HEADERS = {

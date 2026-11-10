@@ -23,7 +23,7 @@ const {AiSuggestionCard,AiSuggestionReadingControl}=await import('data:text/java
 const nodes=tree=>Array.isArray(tree)?tree.flatMap(nodes):tree?.props?[tree,...nodes(tree.props.children)]:[];
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 function fixture() {
-  const slots=[],effects=[],requests=[],inserted=[],timers=new Map();let cursor=0,tree,timerId=0;
+  const slots=[],effects=[],requests=[],inserted=[],payloads=[],timers=new Map();let cursor=0,tree,timerId=0;
   const oldWindow=globalThis.window;
   globalThis.window={setTimeout(fn,delay){assert.equal(delay,120);timers.set(++timerId,fn);return timerId;},clearTimeout(id){timers.delete(id);}};
   globalThis.readingHooks={
@@ -33,12 +33,12 @@ function fixture() {
       slots[i]={deps,cleanup:old?.cleanup};effects.push(()=>{slots[i].cleanup?.();slots[i].cleanup=fn();});},
   };
   globalThis.readingService=(...args)=>new Promise((resolve,reject)=>requests.push({args,resolve,reject}));
-  const props={text:'Bonjour, je vous enverrai les informations demain matin.',contextKey:'chat-a:account-a',settings:{aiProvider:'custom',customAiKey:'test',customAiBaseUrl:'https://example.invalid/v1',customAiModel:'model-a',translateService:'ai'},language:'',onInsert:mode=>inserted.push(mode)};
-  const ui={props,requests,inserted,
+  const props={text:'Bonjour, je vous enverrai les informations demain matin.',contextKey:'chat-a:account-a',settings:{aiProvider:'custom',customAiKey:'test',customAiBaseUrl:'https://example.invalid/v1',customAiModel:'model-a',translateService:'ai'},language:'',onInsert:(mode,text)=>{inserted.push(mode);payloads.push(text);}};
+  const ui={props,requests,inserted,payloads,
     render(runTimers=true){for(let pass=0;pass<2;pass++){cursor=0;tree=AiSuggestionCard(props);effects.splice(0).forEach(fn=>fn());if(runTimers)ui.flushTimers();}return tree;},
     flushTimers(){const pending=[...timers.values()];timers.clear();pending.forEach(fn=>fn());},
     language(value,runTimers=true){props.language=value;ui.render(runTimers);},
-    displayed(){return nodes(tree).find(n=>n.type==='p').props.children;},
+    displayed(){const editor=nodes(tree).find(n=>n.type==='textarea');return editor?editor.props.value:nodes(tree).find(n=>n.type==='p').props.children;},
     buttons(){return nodes(tree).filter(n=>n.type==='button');},
     unmount(){slots.forEach(slot=>slot?.cleanup?.());globalThis.window=oldWindow;},
   };ui.render();return ui;
@@ -55,6 +55,17 @@ test('one shared control toggles original/translation in one click and remembers
   buttons[1].props.onClick();assert.equal(props.language,'zh');
   for(const language of TRANSLATE_LANGS){render().find(n=>n.type==='select').props.onChange({target:{value:language.code}});assert.equal(props.language,language.code);}
   const count=changed.length;render().find(n=>n.type==='select').props.onChange({target:{value:'unsupported'}});assert.equal(changed.length,count);
+});
+
+test('editing changes the inserted original, translates only on demand and cannot carry edits into a new context',async()=>{
+ const f=fixture();nodes(f.render()).find(node=>node.type==='textarea').props.onChange({target:{value:'Texte corrigé.'}});f.render();
+ f.buttons()[0].props.onClick();assert.equal(f.payloads.at(-1),'Texte corrigé.');assert.equal(f.requests.length,0);
+ f.language('zh');assert.equal(f.requests[0].args[0],'Texte corrigé.');f.requests[0].resolve({text:'修订后的译文',targetLang:'zh'});await settle();f.render();
+ f.buttons()[0].props.onClick();assert.equal(f.payloads.at(-1),'Texte corrigé.');
+ f.buttons().find(node=>node.props.children==='crmPanel.editOriginal').props.onClick();f.render();
+ nodes(f.render()).find(node=>node.type==='textarea').props.onChange({target:{value:'Autre texte.'}});f.render();assert.equal(f.requests.length,1,'editing never translates each keystroke');
+ f.buttons().find(node=>node.props.children==='crmPanel.viewTranslation').props.onClick();f.render();assert.equal(f.requests[1].args[0],'Autre texte.');
+ f.props.contextKey='another-chat';f.language('');assert.equal(f.displayed(),f.props.text);f.unmount();f.requests[1].resolve({text:'旧译文',targetLang:'zh'});await settle();
 });
 
 test('cards follow the shared reading language without changing the original or insert/append payload',async()=>{

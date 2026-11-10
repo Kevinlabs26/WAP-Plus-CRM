@@ -18,6 +18,7 @@ import type {
 import { deferDuringRestore, isDataRestoreActive } from "./restoreGuard";
 import { diffMessageRows as diffRows } from "./messagePersistDelta";
 import { assertChatDraftCapacity } from "@/lib/chatDrafts";
+import { trimMessageMemory } from "./messageMemory";
 
 /** SQLite 增量保存，IDB 保存完整快照。UI 交互用防抖；退出前可 flushPersist。 */
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -79,6 +80,20 @@ const noDirty = (): PersistDirtyFlags => ({
 
 let persistedRefs: PersistRefs | null = null;
 let pendingDirty = noDirty();
+let lastMemoryTrimAt = 0;
+
+/** Call only after a successful database checkpoint; eviction must never become a SQL deletion. */
+export function prunePersistedMessageMemory(get: () => AppState, set: (patch: Pick<AppState, "messages">) => void) {
+  const state = get();
+  if (isDataRestoreActive() || getStorageEngine() !== "sqlite" || state.messages.length <= 24_000 ||
+      persistedRefs?.messages !== state.messages || pendingDirty.messages ||
+      isComposerTypingBusy() || Date.now() - lastMemoryTrimAt < 60_000) return;
+  lastMemoryTrimAt = Date.now();
+  const messages = trimMessageMemory(state.messages, state.selectedChatId);
+  if (messages.length === state.messages.length) return;
+  set({messages});
+  persistedRefs = { ...persistedRefs, messages };
+}
 
 const captureRefs = (state: AppState): PersistRefs => ({
   phones: state.phones,

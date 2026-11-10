@@ -122,6 +122,10 @@ export interface ChatPreview {
   replyPendingSince?: string;
   /** 完整历史中是否有成功的我方消息；按主动联系设置决定是否排除。 */
   hasOutgoingHistory?: boolean;
+  /** 最早真实往来；独立于内存消息窗口，避免老联系人被重新识别为新来信。 */
+  firstConversationMessage?: { at: string; direction: "in" | "out" };
+  /** 最近成功发送时间；保留在会话摘要中，冷历史不驻留内存时仍可选择联系账号。 */
+  lastSuccessfulOutgoing?: {at:string;accountId?:string};
   /** 完整消息库中是否有此账号的真实往来；预览文案不作为证明。 */
   hasMessageHistory?: boolean;
   unread: number;
@@ -204,12 +208,18 @@ export interface Message {
   direction: "in" | "out";
   body: string;
   sentAt: string;
+  /** 本地显示顺序；不改变协议发送时间。 */
+  displayOrderAt?: string;
+  /** 兼容旧版排序保护，收到协议时间后不再改写 sentAt。 */
+  localOrderAfter?: string;
   /** 归属 WhatsApp 账号槽（多号隔离；缺省时从 chat.accountId 推断） */
   accountId?: string;
   /** 同步/发送时绑定的本机号码，保留历史归属证据。 */
   accountPhoneE164?: string;
   /** 出站投递；缺省 = 已发送（兼容旧数据） */
   deliveryStatus?: MessageDeliveryStatus;
+  /** 仅用于当前发送；上传完成后等待 WhatsApp 回执。 */
+  mediaUpload?: { percent: number; stage: "uploading" | "waiting" };
   lastError?: string;
   /** 请求已开始但未确认是否送达；重发需要人工核对。 */
   deliveryUncertain?: boolean;

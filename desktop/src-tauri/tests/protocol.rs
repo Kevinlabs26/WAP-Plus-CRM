@@ -23,7 +23,9 @@ fn makes_android_envelope() {
 
     assert!(envelope["id"].as_str().is_some_and(|id| !id.is_empty()));
     assert_eq!(envelope["type"], "wa.open_and_send");
-    assert!(envelope["ts"].as_i64().is_some_and(|timestamp| timestamp > 0));
+    assert!(envelope["ts"]
+        .as_i64()
+        .is_some_and(|timestamp| timestamp > 0));
     assert_eq!(envelope["deviceId"], "bridge-1");
     assert_eq!(envelope["payload"]["text"], "hello");
 }

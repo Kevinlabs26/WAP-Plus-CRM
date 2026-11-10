@@ -52,13 +52,21 @@ export async function idbGet<T>(key: string, strict = false): Promise<T | undefi
   }
 }
 
-export async function idbSet(key: string, value: unknown): Promise<void> {
+export async function idbSet(key: string, value: unknown, related: {key: string; value?: unknown; remove?: boolean}[] = []): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
-    tx.objectStore(STORE).put(value, key);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error || new Error("本地保存事务已取消"));
+    try {
+      const store = tx.objectStore(STORE);
+      store.put(value, key);
+      for (const item of related) {
+        if (item.remove) store.delete(item.key);
+        else store.put(item.value, item.key);
+      }
+    } catch (error) { tx.abort(); reject(error); }
   });
 }
 

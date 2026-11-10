@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Coffee, Star, Settings, Search } from "lucide-react";
+import { ChevronDown, Coffee, Star, Settings, Search, LockKeyhole } from "lucide-react";
 import { useAppStore, type NavId } from "@/store/appStore";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/primitives";
@@ -13,13 +13,15 @@ import { MessageInbox } from "./MessageInbox";
 import { computeAllAccountsHealth } from "@/lib/accountHealth";
 import { syncLog } from "@/lib/syncDebug";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { listPrivateChats, scopeTodayBoard } from "@/lib/todayBoard";
+import { isAwaitingReply } from "@/lib/replyStatus";
 
 /** 日常沟通入口常驻，辅助页面收进「更多」。 */
 const NAV: { id: NavId; labelKey: TranslationKey }[] = [
   { id: "today", labelKey: "nav.today" },
   { id: "chats", labelKey: "nav.chats" },
-  { id: "crm", labelKey: "nav.crm" },
   { id: "broadcast", labelKey: "nav.broadcast" },
+  { id: "ai-outreach", labelKey: "nav.aiOutreach" },
 ];
 const MORE_NAV: { id: NavId; labelKey: TranslationKey }[] = [
   { id: "starred", labelKey: "nav.starred" },
@@ -28,11 +30,25 @@ const MORE_NAV: { id: NavId; labelKey: TranslationKey }[] = [
   { id: "phones", labelKey: "nav.phones" },
 ];
 
-export function TopBar({ showDonation = false }: { showDonation?: boolean } = {}) {
+export function TopBar({
+  showDonation = false,
+  appLockSupported = false,
+  appLockConfigured = false,
+  onLock,
+  onManageLock,
+}: {
+  showDonation?: boolean;
+  appLockSupported?: boolean;
+  appLockConfigured?: boolean;
+  onLock?: () => void;
+  onManageLock?: () => void;
+} = {}) {
   const [donateOpen, setDonateOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [lockMenuOpen, setLockMenuOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const lockMenuRef = useRef<HTMLDivElement>(null);
   const starOpening = useRef(false);
   const { t } = useI18n();
   const activeNav = useAppStore((s) => s.activeNav);
@@ -43,7 +59,10 @@ export function TopBar({ showDonation = false }: { showDonation?: boolean } = {}
   const setCommandOpen = useAppStore((s) => s.setCommandOpen);
   const sendChannel = useAppStore((s) => s.settings.sendChannel);
   const followUps = useAppStore((s) => s.followUps);
-  const stats = useAppStore((s) => s.stats);
+  const chats = useAppStore((s) => s.chats);
+  const contacts = useAppStore((s) => s.contacts);
+  const todayIncludeGroups = useAppStore((s) => s.settings.todayIncludeGroups);
+  const accountViewMode = useAppStore((s) => s.settings.accountViewMode);
   const waAccounts = useAppStore((s) => s.settings.waAccounts || []);
   const pausedIds = useAppStore((s) => s.settings.sendPausedAccountIds || []);
   const ratePerHour = useAppStore((s) => s.settings.ratePerHour);
@@ -76,6 +95,22 @@ export function TopBar({ showDonation = false }: { showDonation?: boolean } = {}
     };
   }, [moreOpen]);
 
+  useEffect(() => {
+    if (!lockMenuOpen) return;
+    const onPointer = (event: PointerEvent) => {
+      if (!lockMenuRef.current?.contains(event.target as Node)) setLockMenuOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setLockMenuOpen(false);
+    };
+    window.addEventListener("pointerdown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [lockMenuOpen]);
+
   const navigate = (id: NavId) => {
     navTraceRef.current = { from: activeNav, to: id, startedAt: performance.now() };
     syncLog("ui.nav", "click", { from: activeNav, to: id }, "debug");
@@ -99,26 +134,29 @@ export function TopBar({ showDonation = false }: { showDonation?: boolean } = {}
   }, [activeNav]);
 
   const todayBadge = useMemo(() => {
+    const scoped = scopeTodayBoard({ contacts, chats, messages: [], followUps }, accountViewMode?.type === "account" ? accountViewMode.accountId : undefined);
     const today = (() => {
       const n = new Date();
       return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
     })();
     let overdue = 0;
-    for (const f of followUps) {
+    let dueToday = 0;
+    for (const f of scoped.followUps) {
       if (f.done) continue;
       const d = (f.dueAt || "").slice(0, 10);
       if (d && d < today) overdue += 1;
+      else if (d === today) dueToday += 1;
     }
     if (overdue > 0) {
       return { n: Math.min(9, overdue), tone: "bad" as const };
     }
-    const fu = stats.followUpsToday || 0;
-    const awaiting = stats.awaitingReplyChats || 0;
-    if (fu > 0 || awaiting > 0) {
-      return { n: Math.min(9, Math.max(fu, awaiting, 1)), tone: "warn" as const };
+    const badgeChats = todayIncludeGroups ? scoped.chats : listPrivateChats(scoped.chats, contacts);
+    const awaiting = badgeChats.filter((chat) => isAwaitingReply(chat)).length;
+    if (dueToday > 0 || awaiting > 0) {
+      return { n: Math.min(9, Math.max(dueToday, awaiting, 1)), tone: "warn" as const };
     }
     return null;
-  }, [followUps, stats.followUpsToday, stats.awaitingReplyChats]);
+  }, [followUps, chats, contacts, todayIncludeGroups, accountViewMode]);
 
   const monitorBadge = useMemo(() => {
     if (!waAccounts.length) return null as null | { n: number; tone: "bad" | "warn" };
@@ -146,7 +184,6 @@ export function TopBar({ showDonation = false }: { showDonation?: boolean } = {}
     return null;
   }, [
     waAccounts,
-    stats,
     pausedIds,
     ratePerHour,
     ratePerMinute,
@@ -286,6 +323,35 @@ export function TopBar({ showDonation = false }: { showDonation?: boolean } = {}
           <Coffee className="h-4 w-4 text-brand" />
           <span className="hidden text-[12px] xl:inline">{t("donate.title")}</span>
         </button>}
+        {appLockSupported && <div ref={lockMenuRef} className="relative flex items-center">
+          <Button
+            variant="ghost"
+            className="!min-h-8 w-8 !px-0"
+            title={t("appLock.lockNow")}
+            aria-label={t("appLock.lockNow")}
+            onClick={() => { setLockMenuOpen(false); onLock?.(); }}
+          >
+            <LockKeyhole className="h-4 w-4" />
+          </Button>
+          <button
+            type="button"
+            className="ui-btn-ghost -ml-1 !min-h-7 w-4 !px-0 text-zinc-500"
+            aria-label={t("appLock.options")}
+            aria-expanded={lockMenuOpen}
+            onClick={() => setLockMenuOpen((open) => !open)}
+          >
+            <ChevronDown className="h-3 w-3" />
+          </button>
+          {lockMenuOpen && <div className="absolute right-0 top-full z-50 mt-2 min-w-40 rounded-lg border border-[var(--app-border)] bg-[var(--app-surface)] p-1 text-[var(--app-text)] shadow-xl">
+            <button
+              type="button"
+              onClick={() => { setLockMenuOpen(false); onManageLock?.(); }}
+              className="w-full rounded px-3 py-2 text-left text-xs text-[var(--app-text)] hover:bg-[var(--app-surface-2)]"
+            >
+              {appLockConfigured ? t("appLock.changePassword") : t("appLock.setPassword")}
+            </button>
+          </div>}
+        </div>}
         <Button
           variant="ghost"
           className="!min-h-8 w-8 !px-0"

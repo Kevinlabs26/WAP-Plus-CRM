@@ -85,6 +85,11 @@ export function mergeImportedContactChatDuplicates(
           isGroup: chat.isGroup || bridge.isGroup,
           hasOutgoingHistory:
             chat.hasOutgoingHistory || bridge.hasOutgoingHistory,
+          firstConversationMessage: !chat.firstConversationMessage || bridge.firstConversationMessage &&
+            (Date.parse(bridge.firstConversationMessage.at) < Date.parse(chat.firstConversationMessage.at) ||
+             Date.parse(bridge.firstConversationMessage.at) === Date.parse(chat.firstConversationMessage.at) && bridge.firstConversationMessage.direction === "out")
+            ? bridge.firstConversationMessage : chat.firstConversationMessage,
+          lastSuccessfulOutgoing:(Date.parse(bridge.lastSuccessfulOutgoing?.at||"")||0)>(Date.parse(chat.lastSuccessfulOutgoing?.at||"")||0)?bridge.lastSuccessfulOutgoing:chat.lastSuccessfulOutgoing,
           hasMessageHistory: chat.hasMessageHistory === true || bridge.hasMessageHistory === true
             ? true : chat.hasMessageHistory ?? bridge.hasMessageHistory,
         };

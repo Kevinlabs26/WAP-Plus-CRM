@@ -32,6 +32,13 @@ test('each recipient finishes all ordered steps before the next, with a durable 
  assert.deepEqual(h.plans[0].items[0].messageIds,['out-1','out-2','out-3']);
 });
 
+test('pausing during an in-flight send records its result and stops the next recipient until resumed',async()=>{
+ let h;h=harness([plan('pause-test')],{send:async(p,i)=>{h.calls.push([p.id,i.id]);h.plans[0]={...h.plans[0],status:'paused',error:'planQueue.userPaused'};return {ok:true};}});
+ await h.runner.tick();assert.equal(h.plans[0].status,'paused');assert.equal(h.plans[0].items[0].status,'sent');
+ h.advance(60000);await h.runner.tick();assert.equal(h.calls.length,1);assert.equal(h.plans[0].items[1].status,'pending');
+ h.plans[0]={...h.plans[0],status:'running'};await h.runner.tick();assert.equal(h.calls.length,2);assert.equal(h.calls[1][1],'2');
+});
+
 test('an unknown middle step pauses without replaying already completed steps after restart',async()=>{
  let attempts=0;const h=harness([plan('sequence',[item('1')],{steps:[{text:'second'},{text:'last'}]})],{
  send:async()=>++attempts===1?{ok:true}:{ok:false,uncertain:true,message:'lost response'}
@@ -231,7 +238,7 @@ test('restart restores a fresh minimum cooldown for uncertain in-flight sends',(
  assert.equal(recovered[0].status,'paused');assert.ok(Date.parse(recovered[0].cooldownUntil)>=before+30000);
 });
 
-test('group and folder targets deduplicate by original account and recipient and respect child scopes',()=>{
+test('group and folder targets deduplicate by recipient across accounts and respect child scopes',()=>{
  const state={settings:{waAccounts:[{id:'a'},{id:'b'}],activeAccountId:'b',liveBaileysAccountId:'b',chatFolders:[
  {id:'root',chatIds:['chat1','clone'],scope:{type:'account',accountId:'a'}},
  {id:'child',parentId:'root',chatIds:['chat2'],scope:{type:'account',accountId:'a'}},
@@ -240,7 +247,7 @@ test('group and folder targets deduplicate by original account and recipient and
  chats:[{id:'chat1',contactId:'c1',accountId:'a'},{id:'clone',contactId:'c1',accountId:'a'},{id:'chat2',contactId:'c2',accountId:'a'},{id:'chat3',contactId:'c3',accountId:'b'}]};
  assert.deepEqual(scheduledFolderChatIds(state.settings,'root',false),['chat1','clone']);
  assert.deepEqual(scheduledFolderChatIds(state.settings,'root',true),['chat1','clone','chat2']);
- const targets=scheduledPlanTargets(state);assert.equal(targets.length,3);assert.equal(targets[0].recipient,'12345@g.us');assert.equal(targets[0].accountId,'a');
+ const targets=scheduledPlanTargets(state);assert.equal(targets.length,2);assert.equal(targets[0].recipient,'12345@g.us');assert.equal(targets[0].accountId,'a');
  state.chats[0].accountId='b';assert.equal(scheduledPlanTargets(state,['chat1']).length,0,'mismatched owners are rejected');
 });
 

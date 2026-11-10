@@ -19,6 +19,20 @@ const BI_BITFIELDS: u32 = 3;
 const LCS_SRGB: u32 = 0x7352_4742;
 const LCS_GM_IMAGES: u32 = 4;
 
+pub fn write_text(hwnd: HWND, text: &str) -> Result<(), String> {
+    if text.len() > 8192 || text.contains('\0') { return Err("复制文本无效或过长".into()); }
+    let bytes: Vec<u8> = text.encode_utf16().chain(std::iter::once(0)).flat_map(u16::to_le_bytes).collect();
+    let mut opened = false;
+    for _ in 0..10 {
+        if unsafe { OpenClipboard(hwnd) } != 0 { opened = true; break; }
+        sleep(Duration::from_millis(20));
+    }
+    if !opened { return Err("Windows 剪贴板正被占用，请点击复制链接重试".into()); }
+    let result = unsafe { if EmptyClipboard() != 0 && set_clipboard_data(13, &bytes) { Ok(()) } else { Err("无法复制链接，请手动复制".into()) } };
+    unsafe { CloseClipboard() };
+    result
+}
+
 pub fn write_png(hwnd: HWND, png_base64: &str) -> Result<(), String> {
     if png_base64.len() > MAX_PNG_BYTES * 4 / 3 + 8 {
         return Err("图片超过 24 MB，无法复制".into());

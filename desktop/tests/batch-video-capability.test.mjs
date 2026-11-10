@@ -11,9 +11,40 @@ const out=await build({stdin:{contents:`export {baileysSendVideo} from './src/li
 const {baileysSendVideo,resetBaileysRuntimeCache,BAILEYS_BRIDGE_PROTOCOL_VERSION}=await import('data:text/javascript;base64,'+Buffer.from(out.outputFiles[0].text+'\n//# sourceURL=batch-video-capability-test.js').toString('base64'));
 let originals,status,calls,onStatus,losePost;
 const send=canSend=>baileysSendVideo('12345@g.us','data:video/mp4;base64,AAAAAGZ0eXA=','caption','owner',canSend);
+test('raw Blob video uses the bounded binary stream instead of JSON/Base64',async()=>{
+ const video=new Blob(['raw-video'],{type:'video/mp4'});
+ await baileysSendVideo('12345@g.us',video,'caption','owner');
+ assert.deepEqual(calls.map(c=>c.path),['/status','/send/video']);
+ assert.equal(calls[1].options.headers['Content-Type'],'application/octet-stream');
+ const body=calls[1].options.body;
+ assert.ok(body instanceof Blob);const bytes=new Uint8Array(await body.arrayBuffer());
+ const length=new DataView(bytes.buffer).getUint32(0);
+ assert.deepEqual(JSON.parse(new TextDecoder().decode(bytes.slice(4,4+length))),{phoneE164:'12345@g.us',caption:'caption',size:video.size});
+ assert.equal(new TextDecoder().decode(bytes.slice(4+length)),'raw-video');
+});
+test('an older bridge rejects a raw upload before transmission',async()=>{
+ status.capabilities.nativeVideoStream=false;
+ await assert.rejects(baileysSendVideo('12345@g.us',new Blob(['raw']),'','owner'),/重启/);
+ assert.deepEqual(calls.map(c=>c.path),['/status']);
+});
+test('a large video restored from a backup retries as binary instead of exceeding the JSON request limit',async()=>{
+ const data='data:video/mp4;base64,'+'A'.repeat(36*1024*1024);
+ await baileysSendVideo('12345@g.us',data,'caption','owner');
+ assert.deepEqual(calls.map(c=>c.path),['/status','/send/video']);
+ assert.ok(calls[1].options.body instanceof Blob);
+});
+test('cached Blob video URLs retry through the same raw stream route',async()=>{
+ const url=URL.createObjectURL(new Blob(['cached-video'],{type:'video/mp4'}));
+ try {
+  const fetchRequest=globalThis.fetch;
+  globalThis.fetch=(input,options)=>String(input).startsWith('blob:')?originals.fetch(input,options):fetchRequest(input,options);
+  await baileysSendVideo('12345@g.us',url,'caption','owner');
+  assert.deepEqual(calls.map(c=>c.path),['/status','/send/video']);
+ } finally {URL.revokeObjectURL(url);}
+});
 beforeEach(()=>{
  originals={fetch:globalThis.fetch,window:globalThis.window};calls=[];onStatus=undefined;losePost=false;resetBaileysRuntimeCache();
- status={protocolVersion:BAILEYS_BRIDGE_PROTOCOL_VERSION,connection:'connected',capabilities:{nativeVideo:true},user:{id:'12025550123@s.whatsapp.net'}};
+ status={protocolVersion:BAILEYS_BRIDGE_PROTOCOL_VERSION,connection:'connected',capabilities:{nativeVideo:true,nativeVideoStream:true},user:{id:'12025550123@s.whatsapp.net'}};
  globalThis.window={setTimeout:fn=>{queueMicrotask(fn);return 0;}};
  globalThis.videoRuntime=async()=>({baseUrl:'http://127.0.0.1:1234',token:'fixture',accountId:'owner'});
  globalThis.fetch=async(url,options)=>{

@@ -50,6 +50,13 @@ export const Input = React.forwardRef<
   );
 });
 
+export function Switch(props: Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "className" | "role">) {
+  return <span className="relative inline-flex shrink-0">
+    <input {...props} type="checkbox" role="switch" className="peer sr-only" />
+    <span aria-hidden="true" className="h-6 w-11 cursor-pointer rounded-full bg-zinc-600 transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow-sm after:transition-transform peer-checked:bg-brand peer-checked:after:translate-x-5 peer-focus-visible:ring-2 peer-focus-visible:ring-brand peer-focus-visible:ring-offset-2 peer-disabled:cursor-not-allowed peer-disabled:opacity-50" />
+  </span>;
+}
+
 export const Textarea = React.forwardRef<
   HTMLTextAreaElement,
   React.TextareaHTMLAttributes<HTMLTextAreaElement>

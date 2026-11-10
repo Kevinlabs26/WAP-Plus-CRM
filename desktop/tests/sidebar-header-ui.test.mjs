@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const mocks = {
   react: "export const useState = value => globalThis.sidebarHooks.state(value); export const useRef = value => globalThis.sidebarHooks.ref(value); export const useEffect = (fn, deps) => globalThis.sidebarHooks.effect(fn, deps);",
   "react/jsx-runtime": "export const jsx=(type,props,key)=>({type,props,key}); export const jsxs=jsx; export const Fragment='fragment';",
-  "lucide-react": "export const ArrowUpDown=()=>null, Bookmark=ArrowUpDown, Check=ArrowUpDown, ChevronDown=ArrowUpDown, MessageCircle=ArrowUpDown, MoreHorizontal=ArrowUpDown, RefreshCw=ArrowUpDown, Search=ArrowUpDown, UserPlus=ArrowUpDown, Users=ArrowUpDown, UsersRound=ArrowUpDown, CheckCheck=ArrowUpDown, Settings2=ArrowUpDown, UserRoundPlus=ArrowUpDown;",
+  "lucide-react": "export const ArrowUpDown=()=>null, Trash2=ArrowUpDown, Bookmark=ArrowUpDown, Check=ArrowUpDown, ChevronDown=ArrowUpDown, MessageCircle=ArrowUpDown, MoreHorizontal=ArrowUpDown, RefreshCw=ArrowUpDown, Search=ArrowUpDown, UserPlus=ArrowUpDown, Users=ArrowUpDown, UsersRound=ArrowUpDown, CheckCheck=ArrowUpDown, Settings2=ArrowUpDown, UserRoundPlus=ArrowUpDown;",
   "@/i18n": "export const useI18n=()=>({t:key=>key,locale:'en'});",
   "@/lib/syncDebug": "export const isSyncDebugEnabled=()=>false; export const syncLog=()=>{};",
   "@/components/ui/primitives": "export const SectionLabel='header';",
@@ -105,6 +105,16 @@ test("header tabs stay text-only and show only the current list's exact count",(
     tree=ui.render();assert.ok(tree.some(n=>n.type==="span"&&n.props.children==="20,263"));
     assert.ok(!tree.some(n=>n.type==="span"&&n.props.children==="4,412"));
   }finally{ui.close();}
+});
+
+test('contact management is a direct tab next to contacts and uses the contact count',()=>{
+ const ui=fixture({listTab:'manage'});try{
+  ui.props.onTabChange=tab=>ui.calls.push(tab);
+  const tree=ui.render();const tabs=tree.filter(node=>node.type==='button'&&['sidebar.chats','sidebar.contacts','contactManage.tab'].includes(node.props.children));
+  assert.deepEqual(tabs.map(node=>node.props.children),['sidebar.chats','sidebar.contacts','contactManage.tab']);
+  assert.equal(tabs[2].props['aria-pressed'],true);tabs[2].props.onClick();assert.deepEqual(ui.calls,['manage']);
+  assert.ok(tree.some(node=>node.type==='span'&&node.props.children==='20,263'));
+ }finally{ui.close();}
 });
 
 test("saved items and leads move into more without losing callbacks, active state or exact lead counts",()=>{

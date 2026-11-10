@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   isHumanName,
   isLidJid,
@@ -5,6 +6,26 @@ import {
   phoneFromJid,
   prettyName,
 } from "./jidUtils.mjs";
+
+/** Periodic contact snapshots are upserts: publish changed rows, not every saved avatar again. */
+export function createContactDeltaPublisher(publish) {
+  let previous = new Map();
+  return (rows) => {
+    const next = new Map();
+    const changed = [];
+    for (const row of rows) {
+      const id = row.channelAddress || row.jid || row.id;
+      if (!id) { changed.push(row); continue; }
+      const hash = createHash("sha256").update(JSON.stringify(row)).digest("hex");
+      next.set(id, hash);
+      if (previous.get(id) !== hash) changed.push(row);
+    }
+    if (changed.length) publish(changed);
+    // A failed durable push must remain retryable on the next snapshot.
+    previous = next;
+    return changed.length;
+  };
+}
 
 /**
  * 联系人 upsert / LID 映射 / 号码补全。

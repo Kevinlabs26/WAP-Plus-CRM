@@ -59,12 +59,10 @@ export function SavedMessageMenuActions({ message, onClose }: Props) {
         className={ITEM_CLASS}
         disabled={isSaved}
         onClick={() => {
-          const saved = saveMessageToSelf(message.id);
           onClose();
-          pushToast(
-            saved ? t("savedMenu.saved") : t("savedMenu.alreadySaved"),
-            "success"
-          );
+          void saveMessageToSelf(message.id).then(saved => pushToast(
+            saved ? t("savedMenu.saved") : t("savedMenu.alreadySaved"), "success"
+          )).catch(error => pushToast(error instanceof Error ? error.message : "收藏保存失败", "error"));
         }}
       >
         <Bookmark className="h-3.5 w-3.5 text-brand" />

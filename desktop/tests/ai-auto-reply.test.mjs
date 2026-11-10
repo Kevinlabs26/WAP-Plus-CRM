@@ -14,7 +14,6 @@ import {
   isWithinAutoReplyHours,
   latestMessagesPerChat,
   normalizeAutoReplyPolicy,
-  parseAutoReplyReplay,
   resolveAutoReplyPolicy,
 } from "../src/lib/aiSafety.ts";
 
@@ -255,28 +254,6 @@ test('ordinary social words do not trigger financial or pricing rules, while exp
  for(const text of ['Please return my order','I need a refund','Call my lawyer','Je dois consulter un avocat','What is the price?','验证码是 123456'])assert.ok(getAutoReplyBlockReason(text),text);
 });
 
-test("chat replay parses roles and uses the same automatic decision", () => {
-  const now = Date.parse("2026-01-01T00:10:00.000Z");
-  const safe = parseAutoReplyReplay(
-    "对方：你好\nAI：你好，我是 AI 助手\n对方：最近怎么样？",
-    now
-  );
-  assert.deepEqual(
-    safe.map((message) => [message.direction, message.systemKind || ""]),
-    [
-      ["in", ""],
-      ["out", "ai_auto_reply"],
-      ["in", ""],
-    ]
-  );
-  assert.equal(evaluateAutoReplyDecision(safe, safe[2], now).allow, true);
-
-  const risky = parseAutoReplyReplay("对方：你好\n对方：你们多少钱？", now);
-  const decision = evaluateAutoReplyDecision(risky, risky[1], now);
-  assert.equal(decision.allow, false);
-  assert.equal(decision.kind, "risk");
-});
-
 test("generateSuggestions mock mode returns 3 suggestions in Chinese for zh cue", async () => {
   const result = await generateSuggestions(
     { name: "张先生", phone: "+8613800000000", tags: [], stage: "new" },
@@ -343,14 +320,15 @@ for (const provider of ["custom", "gemini", "ollama"]) {
       { id: "out", direction: "out", body: "Salut, ça marche !", sentAt: "2026-01-01T00:00:00Z" },
       { id: "in", direction: "in", body: "Je t'ai envoyé le document.", sentAt: "2026-01-01T00:01:00Z" },
     ];
-    for (const mode of ["manual", "account", "auto", "account-auto"]) {
+    for (const mode of ["manual", "account", "auto", "account-auto", "single"]) {
       const auto = mode === "auto" || mode === "account-auto";
+      const single=mode==="single";
       const accountProfile = mode === "account" || mode === "account-auto";
-      replyCount = auto ? 1 : 3;
+      replyCount = auto||single ? 1 : 3;
       const result = await generateSuggestions(contact, recent, accountProfile ? {
         ...settings, aiSystemPrompt: "GLOBAL PROFILE",
         aiSystemPromptByAccountId: { personal: "Réponds en français avec un ton formel." },
-      } : settings, { auto });
+      } : settings, { auto,count:single?1:undefined });
       assert.equal(result.fallback, false);
       assert.equal(result.source, provider);
       assert.equal(result.suggestions.length, replyCount);
@@ -369,7 +347,8 @@ for (const provider of ["custom", "gemini", "ollama"]) {
       assert.ok(user.includes(`Me: ${JSON.stringify("Salut, ça marche !")}`));
       assert.ok(user.includes(`Customer: ${JSON.stringify("Je t'ai envoyé le document.")}`));
       if (auto) assert.match(system, /DIRECTLY to the other person as an AI assistant/);
-      else assert.match(system, /not three paraphrases/);
+      else if(!single)assert.match(system, /not three paraphrases/);
+      if(single){assert.doesNotMatch(system,/DIRECTLY to the other person/);assert.equal(provider==='gemini'?request.generationConfig.maxOutputTokens:provider==='ollama'?request.options.num_predict:request.max_tokens,512);}
       if (accountProfile) {
         assert.match(system, /overrides the general defaults/);
         assert.ok(system.includes("Réponds en français avec un ton formel."));

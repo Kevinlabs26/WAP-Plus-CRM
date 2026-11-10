@@ -218,12 +218,14 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
     setBusy(true); setError("");
     try {
       const input={ title: title.trim() || t(startNow ? "planQueue.bulkTitle" : "planQueue.create"), text:sequence[0].text, media:sequence[0].media,steps:sequence.length>1?sequence.slice(1):undefined,nativeMedia,audioMode, dueAt: startNow ? new Date().toISOString() : new Date(dueAt).toISOString(), gapSec, timeZone, items: chosen,endAt:endAt?new Date(endAt).toISOString():undefined,quietHours:quiet?{start:quietStart,end:quietEnd}:undefined };
-      try { await saveScheduledPlan(input,startNow,duplicateIds); }
+      let savedId: string;
+      try { savedId = await saveScheduledPlan(input,startNow,duplicateIds); }
       catch(error){
         if(!(error instanceof DuplicateScheduledPlanError))throw error;
         setDuplicateIds(ids=>[...new Set([...ids,...error.planIds])]);setError(error.message);return;
       }
       pushToast(t(startNow ? "planQueue.bulkQueued" : "planQueue.saved"), "success"); onClose();
+      if (startNow && typeof window !== "undefined") window.dispatchEvent(new CustomEvent("wap:open-batch-progress", { detail: { planId: savedId } }));
     } catch (e) { setError(e instanceof Error ? e.message : t("planQueue.failed")); }
     finally { setBusy(false); }
   }

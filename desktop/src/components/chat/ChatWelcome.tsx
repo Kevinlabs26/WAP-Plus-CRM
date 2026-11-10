@@ -11,7 +11,7 @@ import { useI18n } from "@/i18n";
 export function ChatWelcome() {
   const { t } = useI18n();
   const setCommandOpen = useAppStore((s) => s.setCommandOpen);
-  const setActiveNav = useAppStore((s) => s.setActiveNav);
+  const openContacts = useAppStore((s) => s.openContacts);
   const setBaileysLoginOpen = useAppStore((s) => s.setBaileysLoginOpen);
   const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
   const connection = useAppStore((s) => s.baileysUi.connection);
@@ -51,7 +51,7 @@ export function ChatWelcome() {
           className="mt-6 min-h-10 gap-2 px-5"
           onClick={() => {
             if (!connected && isBaileys) setBaileysLoginOpen(true);
-            else if (waitingForPhone) setActiveNav("crm");
+            else if (waitingForPhone) openContacts("manage");
             else if (!connected || !hasChats) setSettingsOpen(true, "connection");
             else setCommandOpen(true);
           }}
@@ -59,7 +59,7 @@ export function ChatWelcome() {
           {!connected ? <Smartphone className="h-4 w-4" /> : hasChats ? <Search className="h-4 w-4" /> : waitingForPhone ? <Users className="h-4 w-4" /> : <RefreshCw className="h-4 w-4" />}
           {t(!connected ? "welcome.connectWhatsApp" : hasChats ? "welcome.search" : waitingForPhone ? "welcome.crm" : "welcome.manageConnection")}
         </Button>
-        {!waitingForPhone && <button type="button" onClick={() => setActiveNav("crm")}
+        {!waitingForPhone && <button type="button" onClick={() => openContacts("manage")}
           className="mt-4 inline-flex min-h-9 items-center gap-2 rounded-md px-3 text-[13px] text-zinc-400 hover:bg-zinc-900 hover:text-zinc-100">
           <Users className="h-4 w-4" />
           {t("welcome.crm")}

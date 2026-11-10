@@ -4,6 +4,8 @@ import {
   Suspense,
   useEffect,
   useDeferredValue,
+  useLayoutEffect,
+  useRef,
   useState,
   type ComponentType,
 } from "react";
@@ -12,9 +14,12 @@ import { TopBar } from "@/components/layout/TopBar";
 import { StatsBar } from "@/components/layout/StatsBar";
 import { ConfirmHost } from "@/components/ui/ConfirmHost";
 import { ToastHost } from "@/components/ui/ToastHost";
+import { CloudUploadStatus } from "@/components/chat/CloudUploadStatus";
 import { UpdateWatcher } from "@/components/bridge/UpdateWatcher";
 import { UpdateCompleteModal } from "@/components/UpdateCompleteModal";
+import { AppLockOverlay, type AppLockMode } from "@/components/AppLockOverlay";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
+import { Button } from "@/components/ui/primitives";
 import { BootSplash } from "@/components/BootSplash";
 import { useI18n } from "@/i18n";
 import { ChatWelcome } from "@/components/chat/ChatWelcome";
@@ -25,6 +30,8 @@ import { useAppStore } from "@/store/appStore";
 import { flushPersist, primePersistBaseline } from "@/store/persist";
 import { setBaileysAccountIdResolver, setBaileysSessionResolver } from "@/lib/baileys";
 import { reconcileAccountLogin } from "@/lib/accountIdentity";
+import { getAppLockStatus, type AppLockStatus } from "@/lib/appLock";
+import { isTauri } from "@/lib/bridge";
 import {
   getRecentMainThreadWork,
   installSyncDebugGlobals,
@@ -77,11 +84,6 @@ const PhonesView = lazy(() =>
     default: m.PhonesView,
   }))
 );
-const CrmView = lazy(() =>
-  import("@/components/views/CrmView").then((m) => ({
-    default: m.CrmView,
-  }))
-);
 const SettingsModal = lazy(() =>
   import("@/components/settings/SettingsModal").then((m) => ({
     default: m.SettingsModal,
@@ -117,6 +119,7 @@ const CampaignRunner = lazy(() =>
     default: m.CampaignRunner,
   }))
 );
+const AiOutreachTasks = lazy(() => import("@/components/settings/AiOutreachTasks").then(m=>({default:m.AiOutreachTasks})));
 const BroadcastView = lazy(() =>
   import("@/components/views/BroadcastView").then((m) => ({
     default: m.BroadcastView,
@@ -146,8 +149,8 @@ const GroupAutoReadWatcher = lazy(() =>
 type MainNavPageId =
   | "today"
   | "phones"
-  | "crm"
   | "broadcast"
+  | "ai-outreach"
   | "starred"
   | "stats"
   | "monitor";
@@ -158,8 +161,8 @@ const MAIN_NAV_PAGES: Record<
 > = {
   today: { Page: TodayView, label: "工作台" },
   phones: { Page: PhonesView, label: "设备" },
-  crm: { Page: CrmView, label: "客户库" },
   broadcast: { Page: BroadcastView, label: "群发" },
+  "ai-outreach": { Page: AiOutreachTasks, label: "主动联系" },
   starred: { Page: StarredView, label: "星标" },
   stats: { Page: StatsView, label: "统计" },
   monitor: { Page: AccountMonitorView, label: "监测" },
@@ -587,6 +590,11 @@ export default function App() {
   const [interactive, setInteractive] = useState(false);
   const [splashExiting, setSplashExiting] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
+  const [appLockReady, setAppLockReady] = useState(() => !isTauri());
+  const [appLockStatus, setAppLockStatus] = useState<AppLockStatus | null>(null);
+  const [appLockMode, setAppLockMode] = useState<AppLockMode | null>(null);
+  const [appLocked, setAppLocked] = useState(false);
+  const [appLockError, setAppLockError] = useState("");
   /** 启动期数据加载失败：阻断进入空库界面，避免「看似正常实则全空」的静默数据丢失 */
   const [bootFatal, setBootFatal] = useState<string | null>(null);
 
@@ -597,6 +605,23 @@ export default function App() {
 
   useWindowInteractionClass();
   useBootGraceClass(interactive);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let active = true;
+    void getAppLockStatus().then((status) => {
+      if (!active) return;
+      setAppLockStatus(status);
+      setAppLocked(status.configured);
+      setAppLockMode(status.configured ? "unlock" : null);
+      setAppLockReady(true);
+    }).catch((error) => {
+      if (!active) return;
+      setAppLockError(error instanceof Error ? error.message : String(error));
+      setAppLockReady(true);
+    });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     const flushBeforePageExit = () => {
@@ -813,25 +838,64 @@ export default function App() {
   }, [hydrate, setUiReady]);
 
   const showShell = shellMounted;
+  const appLockBlocked =
+    (isTauri() && !appLockReady) ||
+    Boolean(appLockError) ||
+    appLocked ||
+    appLockMode !== null;
+  const shellRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (shellRef.current) shellRef.current.inert = appLockBlocked;
+  }, [appLockBlocked]);
+  const openLock = () => {
+    if (appLockStatus?.configured) {
+      setAppLocked(true);
+      setAppLockMode("unlock");
+    } else {
+      setAppLockMode("setup");
+    }
+  };
+  const manageLock = () => setAppLockMode(appLockStatus?.configured ? "change" : "setup");
+  const retryLockStatus = () => {
+    setAppLockError("");
+    setAppLockReady(false);
+    void getAppLockStatus().then((status) => {
+      setAppLockStatus(status);
+      setAppLocked(status.configured);
+      setAppLockMode(status.configured ? "unlock" : null);
+      setAppLockReady(true);
+    }).catch((error) => {
+      setAppLockError(error instanceof Error ? error.message : String(error));
+      setAppLockReady(true);
+    });
+  };
 
   return (
     <ErrorBoundary label="应用主界面">
       {showShell && (
         <div
+          ref={shellRef}
           className={
             "relative flex h-screen min-h-0 flex-col overflow-hidden bg-zinc-950 text-zinc-100 " +
-            (showSplash ? "pointer-events-none select-none" : "")
+            (showSplash || appLockBlocked ? "pointer-events-none select-none" : "")
           }
-          aria-hidden={showSplash || undefined}
+          aria-hidden={showSplash || appLockBlocked || undefined}
         >
-          <TopBar showDonation={showDonation} />
-          {activeNav !== "today" && <StatsBar />}
+          <TopBar
+            showDonation={showDonation}
+            appLockSupported={Boolean(appLockStatus?.supported)}
+            appLockConfigured={Boolean(appLockStatus?.configured)}
+            onLock={openLock}
+            onManageLock={manageLock}
+          />
+          {activeNav !== "today" && activeNav !== "ai-outreach" && <StatsBar />}
           <div className="flex min-h-0 flex-1 overflow-hidden">
             <NavBody interactive={interactive} />
           </div>
           <VoicePlaybackHost />
           <ConfirmHost />
           <ToastHost />
+          <CloudUploadStatus />
           <DeferredModals interactive={interactive} />
           <Suspense fallback={null}>
             <AiAutoReplier />
@@ -860,6 +924,35 @@ export default function App() {
             {t("app.retryStartup")}
           </button>
         </div>
+      )}
+
+      {isTauri() && !appLockReady && (
+        <div className="fixed inset-0 z-[310] grid place-items-center bg-zinc-950 text-sm text-zinc-400" role="status">
+          {t("appLock.checking")}
+        </div>
+      )}
+      {appLockError && (
+        <div className="fixed inset-0 z-[310] flex flex-col items-center justify-center gap-4 bg-zinc-950 p-6 text-center" role="alertdialog" aria-modal="true">
+          <div className="text-lg font-semibold text-zinc-100">{t("appLock.checkFailed")}</div>
+          <p className="max-w-md text-sm text-zinc-400">{appLockError}</p>
+          <Button variant="secondary" onClick={retryLockStatus}>{t("appLock.retry")}</Button>
+        </div>
+      )}
+      {appLockReady && !appLockError && appLockStatus?.supported && appLockMode && (
+        <AppLockOverlay
+          mode={appLockMode}
+          onCancel={() => setAppLockMode(null)}
+          onCreated={() => {
+            setAppLockStatus((current) => current ? { ...current, configured: true } : current);
+            setAppLocked(true);
+            setAppLockMode("unlock");
+          }}
+          onUnlocked={() => {
+            setAppLocked(false);
+            setAppLockMode(null);
+          }}
+          onChanged={() => setAppLockMode(null)}
+        />
       )}
 
       {showSplash && (

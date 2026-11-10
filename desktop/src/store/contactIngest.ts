@@ -146,6 +146,7 @@ export function ensureIngestContact(
           const kc = chats[keepChatIdx];
           chats[keepChatIdx] = {
             ...kc,
+            lastSuccessfulOutgoing:(Date.parse(dropChat.lastSuccessfulOutgoing?.at||"")||0)>(Date.parse(kc.lastSuccessfulOutgoing?.at||"")||0)?dropChat.lastSuccessfulOutgoing:kc.lastSuccessfulOutgoing,
             hasMessageHistory: kc.hasMessageHistory === true || dropChat.hasMessageHistory === true
               ? true : kc.hasMessageHistory ?? dropChat.hasMessageHistory,
             lastMessage:

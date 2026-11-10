@@ -13,6 +13,7 @@ export function createUiSlice({ set, get }: SliceContext): Pick<
   | "setSelectedContact"
   | "setSelectedChat"
   | "markReplyHandled"
+  | "clearPendingChats"
   | "setDraftReply"
   | "setChatDraft"
   | "applyAiSuggestion"
@@ -29,6 +30,7 @@ export function createUiSlice({ set, get }: SliceContext): Pick<
   | "setCrmPanelTab"
   | "setChatListFilter"
   | "goToChats"
+  | "openContacts"
   | "pushToast"
   | "dismissToast"
   | "requestConfirm"
@@ -39,6 +41,14 @@ export function createUiSlice({ set, get }: SliceContext): Pick<
     markReplyHandled: (chatId) => {
       const replyHandledAt = new Date().toISOString();
       set((state) => ({ chats: state.chats.map((chat) => chat.id === chatId ? { ...chat, replyHandledAt } : chat) }));
+      scheduleStatsRecompute(get);
+      persist(get);
+    },
+    clearPendingChats: (chatIds) => {
+      if (!chatIds.length) return;
+      const ids = new Set(chatIds);
+      const replyHandledAt = new Date().toISOString();
+      set((state) => ({ chats: state.chats.map((chat) => ids.has(chat.id) ? { ...chat, unread: 0, replyHandledAt } : chat) }));
       scheduleStatsRecompute(get);
       persist(get);
     },
@@ -211,9 +221,10 @@ export function createUiSlice({ set, get }: SliceContext): Pick<
     },
     goToChats: (filter = "all") => {
       const state = get();
-      if (state.activeNav === "chats" && state.chatListFilter === filter) return;
-      set({ activeNav: "chats", chatListFilter: filter });
+      if (state.activeNav === "chats" && state.chatListFilter === filter && state.sidebarTab === "chats") return;
+      set({ activeNav: "chats", chatListFilter: filter, sidebarTab: "chats" });
     },
+    openContacts: (tab = "contacts") => set({ activeNav: "chats", sidebarTab: tab }),
     pushToast: (message, tone = "info", options) => {
       const id = `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const item = { id, message, tone, ...options };

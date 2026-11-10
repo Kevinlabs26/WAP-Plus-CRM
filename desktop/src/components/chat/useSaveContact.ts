@@ -3,6 +3,7 @@ import type { AppState } from "@/store/appStore";
 import type { ChatPreview, Contact } from "@/types/crm";
 import { displayContactLabel, resolveSendTarget } from "@/lib/utils";
 import { savePhoneContact } from "@/lib/bridge";
+import { baileysSaveContacts } from "@/lib/baileys";
 
 type UseSaveContactOptions = {
   activeContact: Contact | null | undefined;
@@ -65,8 +66,12 @@ export function useSaveContact(opts: UseSaveContactOptions) {
         accountId: opts.activeContact.accountId || opts.chatAccountId,
       });
       if (opts.isBaileys) {
+        const target = opts.activeContact.accountId || opts.chatAccountId;
+        if (!target) throw new Error("请选择要保存联系人的 WhatsApp 账号");
+        const result = await baileysSaveContacts(target, [{name, phoneE164: phone}]);
+        if (result.failed || result.saved !== 1) throw new Error("WhatsApp 账号未确认保存成功，请重试");
         opts.pushToast(
-          "已保存到 CRM；Baileys 账号无法写入手机通讯录",
+          "已保存联系人资料和该 WhatsApp 账号的云端通讯录",
           "success"
         );
         return;
@@ -94,7 +99,7 @@ export function useSaveContact(opts: UseSaveContactOptions) {
       );
     } catch (error) {
       opts.pushToast(
-        `已保存到 CRM；手机通讯录写入失败：${error instanceof Error ? error.message : String(error)}`,
+        `联系人资料已保留；${opts.isBaileys ? "WhatsApp" : "手机"}通讯录保存失败：${error instanceof Error ? error.message : String(error)}`,
         "error"
       );
     } finally {

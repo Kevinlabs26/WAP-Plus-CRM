@@ -4,6 +4,7 @@ import {
   collapseAllAccountFolderChats,
   type FolderDisplayChat,
 } from "./folderChatDisplay";
+import { phoneIdentity } from "../../features/multiWindow/identity.ts";
 
 export type SidebarVirtItem =
   | { kind: "hint"; id: string; text: string }
@@ -248,6 +249,19 @@ export function buildSidebarItems({
         allAccountFolderChats.set(folder.id, folderChats);
       }
     }
+    const folderedAllAccountChats = new Set(claimedAllAccountChats);
+    const folderMemberIds = new Set(primarySet);
+    for (const clone of chatFolderClones) {
+      if (!folderById.has(clone.folderId)) continue;
+      folderMemberIds.add(clone.sourceChatId);
+      const item = allAccountDisplayByChatId.get(clone.sourceChatId);
+      if (item) folderedAllAccountChats.add(item);
+    }
+    const folderMemberIdentities = new Set(
+      filteredChats
+        .filter((chat) => folderMemberIds.has(chat.id))
+        .map((chat) => phoneIdentity(chat, contactById.get(chat.contactId)))
+    );
     const displayChats = (folder: ChatFolder, chats: ChatPreview[]) => {
       if (isAllAccountsView) {
         return prioritizeFolderDisplayChats(
@@ -370,10 +384,15 @@ export function buildSidebarItems({
     }
     const ungroupedDisplayChats = isAllAccountsView
       ? allAccountDisplayChats.filter(
-          (item) => !claimedAllAccountChats.has(item)
+          (item) => !folderedAllAccountChats.has(item) &&
+            !item.memberChatIds.some((chatId) => {
+              const chat = chatById.get(chatId);
+              return chat && folderMemberIdentities.has(phoneIdentity(chat, contactById.get(chat.contactId)));
+            })
         )
       : filteredChats
-          .filter((chat) => !primarySet.has(chat.id))
+          .filter((chat) => !folderMemberIds.has(chat.id) &&
+            !folderMemberIdentities.has(phoneIdentity(chat, contactById.get(chat.contactId))))
           .map((chat) => ({
             chat,
             accountCount: 1,

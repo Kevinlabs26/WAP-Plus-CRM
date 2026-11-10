@@ -3,6 +3,7 @@ import {
   Bot,
   Bell,
   Clock3,
+  CloudUpload,
   Database,
   Info,
   MessageSquareText,
@@ -31,6 +32,7 @@ import { SettingsSpeechPanel } from "./SettingsSpeechPanel";
 import { SettingsNotificationsPanel } from "./SettingsNotificationsPanel";
 import { SettingsScheduledMessagesPanel } from "./SettingsScheduledMessagesPanel";
 import { SettingsUpdatePanel } from "./SettingsUpdatePanel";
+import { SettingsCloudImagesPanel } from "./SettingsCloudImagesPanel";
 import { memo, useEffect, useRef, useState, type ComponentType } from "react";
 
 const CATEGORIES = [
@@ -45,6 +47,7 @@ const CATEGORIES = [
   { id: "scheduled", labelKey: "settings.scheduled", descriptionKey: "settings.scheduledDesc", icon: Clock3 },
   { id: "quick-replies", labelKey: "settings.quickReplies", descriptionKey: "settings.quickRepliesDesc", icon: Zap },
   { id: "google-sheets", labelKey: "settings.googleSheets", descriptionKey: "settings.googleSheetsDesc", icon: TableProperties },
+  { id: "cloud-images", labelKey: "cloud.title", descriptionKey: "cloud.description", icon: CloudUpload },
   { id: "data", labelKey: "settings.data", descriptionKey: "settings.dataDesc", icon: Database },
   { id: "appearance", labelKey: "settings.appearance", descriptionKey: "settings.appearanceDesc", icon: Palette },
   { id: "updates", labelKey: "settings.updates", descriptionKey: "settings.updatesDesc", icon: Info },
@@ -74,6 +77,7 @@ const PANEL_COMPONENTS: Record<CategoryId, ComponentType> = {
   appearance: SettingsAppearancePanel,
   data: SettingsDataPanel,
   "google-sheets": SettingsGoogleSheets,
+  "cloud-images": SettingsCloudImagesPanel,
   updates: SettingsUpdatePanel,
 };
 
@@ -122,6 +126,7 @@ export function SettingsModal() {
     if (contentRef.current) contentRef.current.scrollTop = 0;
   }, [category]);
   useEffect(() => { if (closePrompt) keepEditingRef.current?.focus(); }, [closePrompt]);
+  useEffect(() => { setVisited(current => current.has(category) ? current : new Set(current).add(category)); }, [category]);
   const requestClose = () => {
     if (closeGuard?.dirty || closeGuard?.busy) setClosePrompt(true);
     else setOpen(false);
@@ -221,7 +226,7 @@ export function SettingsModal() {
             {secretSaveStatus === "saving" && <p role="status" className="mb-3 text-xs text-zinc-500">{t("settings.secretSaving")}</p>}
             {AUTO_SAVE_CATEGORIES.includes(category) && <p className="mb-4 rounded-lg border border-zinc-800 px-3 py-2 text-xs leading-5 text-zinc-500">{t("settings.autoSaveHint")}</p>}
             {CATEGORIES.map((item) =>
-              visited.has(item.id) ? (
+              visited.has(item.id) || category === item.id ? (
                 <KeepAlivePanel
                   key={item.id}
                   active={category === item.id}

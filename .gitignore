@@ -109,6 +109,9 @@ desktop/_w_mm.py
 tools/_fix_phonesidebar_mojibake.py
 
 # Local audit evidence may contain workstation paths or UI/customer data.
+desktop/diagnostics/
+desktop/src-tauri/client_secret.local.json
+**/client_secret*.json
 # Keep the report and reproducible audit tools, not raw captures and inventories.
 docs/security/*.json
 docs/security/*.txt

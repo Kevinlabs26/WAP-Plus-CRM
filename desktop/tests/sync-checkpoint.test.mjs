@@ -6,7 +6,7 @@ const mocks = {
   react: "export const useRef = current => ({current}); export const useEffect = fn => { globalThis.syncCleanup = fn(); };",
   "@/store/appStore": "export const useAppStore = selector => selector(globalThis.syncState); useAppStore.getState = () => globalThis.syncState; useAppStore.setState = patch => Object.assign(globalThis.syncState, typeof patch === 'function' ? patch(globalThis.syncState) : patch);",
   "@/lib/baileys": "export const baileysSessionEpoch = () => globalThis.syncEpoch || 0; export const baileysEvents = async () => globalThis.syncResponses.shift() || {cursor: 11, events: []}; export const baileysStatus = async () => ({connection:'starting'}); export const baileysSync = async () => ({contacts:[],messages:[]}); export const baileysLabels = async () => ({labels:[]}); export const baileysFetchAvatar = async () => null;",
-  "@/store/persist": "export const persist = () => {}; export const flushPersist = () => new Promise(resolve => {globalThis.syncSaveResolve = resolve;});",
+  "@/store/persist": "export const prunePersistedMessageMemory=()=>{};export const persist = () => {}; export const flushPersist = () => new Promise(resolve => {globalThis.syncSaveResolve = resolve;});",
   "@/lib/mediaCache": "export const waitForMediaCacheWrites = async () => {};",
   "@/lib/composerActivity": "export const isComposerTypingBusy = () => false;",
   "@/lib/groupJoinNotify": "export const notifyGroupJoinRequests = () => {};",

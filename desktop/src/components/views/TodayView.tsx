@@ -23,6 +23,7 @@ import { resolveSalesStageLabel } from "@/lib/contactWorkflow";
 import {
   bucketFollowUpsForToday,
   listAttentionAccounts,
+  listPrivateChats,
   listRecentFailedOutbound,
   listUnreadChats,
   localDayKey,
@@ -48,7 +49,10 @@ export function TodayView() {
   const { t } = useI18n();
   const [workspaceMode, setWorkspaceMode] = useState<"queue" | "multi">("queue");
   const [multiFolderRequest, setMultiFolderRequest] = useState<string | null>(null);
+  const [multiFolderRequestNonce, setMultiFolderRequestNonce] = useState(0);
   const [activeQueue, setActiveQueue] = useState<WorkQueue>("all");
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedFollowUpIds, setSelectedFollowUpIds] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<WorkViewMode>(() => {
     try {
       return localStorage.getItem(WORK_VIEW_MODE_KEY) === "grid" ? "grid" : "list";
@@ -61,6 +65,8 @@ export function TodayView() {
   const allContacts = useAppStore((s) => s.contacts);
   const allMessages = useAppStore((s) => s.messages);
   const accountView = useAppStore((s) => s.settings.accountViewMode);
+  const todayIncludeGroups = useAppStore((s) => s.settings.todayIncludeGroups);
+  const updateSettings = useAppStore((s) => s.updateSettings);
   const scopeId = accountView?.type === "account" ? accountView.accountId : undefined;
   const { contacts, chats, messages, followUps } = useMemo(
     () => scopeTodayBoard({ contacts: allContacts, chats: allChats, messages: allMessages, followUps: allFollowUps }, scopeId),
@@ -73,6 +79,8 @@ export function TodayView() {
   const rateMinIntervalSec = useAppStore((s) => s.settings.rateMinIntervalSec);
   const salesStageLabels = useAppStore((s) => s.settings.salesStageLabels);
   const toggleFollowUp = useAppStore((s) => s.toggleFollowUp);
+  const completeFollowUps = useAppStore((s) => s.completeFollowUps);
+  const requestConfirm = useAppStore((s) => s.requestConfirm);
   const openContactWorkspace = useAppStore((s) => s.openContactWorkspace);
   const goToChats = useAppStore((s) => s.goToChats);
   const setActiveNav = useAppStore((s) => s.setActiveNav);
@@ -91,6 +99,7 @@ export function TodayView() {
         /* localStorage is optional */
       }
       setMultiFolderRequest(folderId);
+      setMultiFolderRequestNonce((current) => current + 1);
       setWorkspaceMode("multi");
     };
     const onFolderEvent = (event: Event) => {
@@ -111,6 +120,10 @@ export function TodayView() {
 
   const [today, setToday] = useState(localDayKey);
   const [visibleCount, setVisibleCount] = useState(30);
+  useEffect(() => {
+    setSelectionMode(false);
+    setSelectedFollowUpIds([]);
+  }, [activeQueue, scopeId]);
   useEffect(() => {
     const timer = window.setInterval(() => setToday(localDayKey()), 30_000);
     return () => window.clearInterval(timer);
@@ -141,15 +154,19 @@ export function TodayView() {
     () => bucketFollowUpsForToday(followUps, today),
     [followUps, today]
   );
-  const unread = useMemo(() => listUnreadChats(chats, Infinity), [chats]);
-  const awaiting = useMemo(() => chats.filter((chat) => isAwaitingReply(chat))
-    .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)), [chats]);
+  const overdueIds = useMemo(() => new Set(fu.overdue.map((item) => item.id)), [fu.overdue]);
+  const selectedOverdueIds = selectedFollowUpIds.filter((id) => overdueIds.has(id));
+  const workbenchChats = useMemo(() => todayIncludeGroups ? chats : listPrivateChats(chats, contacts), [todayIncludeGroups, chats, contacts]);
+  const unread = useMemo(() => listUnreadChats(workbenchChats, Infinity), [workbenchChats]);
+  const awaiting = useMemo(() => workbenchChats.filter((chat) => isAwaitingReply(chat))
+    .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt)), [workbenchChats]);
   const inboxTasks = useMemo(() => {
     const ids = new Set(awaiting.map((chat) => chat.id));
     return [...awaiting, ...unread.filter((chat) => !ids.has(chat.id))];
   }, [awaiting, unread]);
   const replyChats = activeQueue === "unread" ? unread : activeQueue === "all" ? inboxTasks : awaiting;
   const markReplyHandled = useAppStore((s) => s.markReplyHandled);
+  const clearPendingChats = useAppStore((s) => s.clearPendingChats);
   const failed = useMemo(
     () => listRecentFailedOutbound(messages, contacts, { limit: Infinity }),
     [messages, contacts]
@@ -195,12 +212,12 @@ export function TodayView() {
     () =>
       summarizeToday({
         followUps,
-        chats,
+        chats: workbenchChats,
         failedCount: failed.length,
         attentionAccountCount: attention.length,
         today,
       }),
-    [followUps, chats, failed.length, attention.length, today]
+    [followUps, workbenchChats, failed.length, attention.length, today]
   );
 
   const openFu = (f: FollowUp, opts?: { withDraft?: boolean }) => {
@@ -246,6 +263,9 @@ export function TodayView() {
         }}
         onOpen={() => openFu(f)}
         onFollowDraft={() => openFu(f, { withDraft: true })}
+        selectionMode={selectionMode && tone === "overdue"}
+        selected={selectedFollowUpIds.includes(f.id)}
+        onSelect={() => setSelectedFollowUpIds((ids) => ids.includes(f.id) ? ids.filter((id) => id !== f.id) : [...ids, f.id])}
       />
     );
   };
@@ -322,6 +342,7 @@ export function TodayView() {
         key={scopeId || "all"}
         accountScopeId={scopeId}
         folderRequestId={multiFolderRequest}
+        folderRequestNonce={multiFolderRequestNonce}
         onOpenDevices={() => setActiveNav("phones")}
         onBack={() => {
           setMultiFolderRequest(null);
@@ -345,6 +366,10 @@ export function TodayView() {
             {t("today.multiWindow")}
           </Button>
           <Button variant="ghost" size="xs" className="h-7 shrink-0" onClick={() => setActiveNav("stats")}>{t("today.viewStats")}</Button>
+          <label title={t("today.includeGroupsHint")} className="flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-zinc-800 px-2 text-2xs text-zinc-400">
+            <input type="checkbox" checked={todayIncludeGroups} onChange={(event) => updateSettings({ todayIncludeGroups: event.target.checked })} className="accent-emerald-500" />
+            {t("today.includeGroups")}
+          </label>
           <div className="flex rounded-md border border-zinc-800 bg-zinc-900/50 p-0.5" aria-label={t("today.displayMode")}>
             <button
               type="button"
@@ -443,12 +468,26 @@ export function TodayView() {
 
           {(activeQueue === "all" || activeQueue === "overdue") && fu.overdue.length > 0 ? (
             <section className="flex flex-col gap-2">
-              <SectionLabel>
+              <SectionLabel action={<button type="button" className="text-xs text-brand hover:underline" onClick={() => { setSelectionMode((mode) => !mode); setSelectedFollowUpIds([]); }}>{t(selectionMode ? "today.cancelSelection" : "today.selectOverdue")}</button>}>
                 <span className="inline-flex items-center gap-1.5 text-rose-300/90">
                   <AlertTriangle className="h-3.5 w-3.5" />
                   {t("today.overdue")} · {fu.overdue.length}
                 </span>
               </SectionLabel>
+              {selectionMode && <div className="flex flex-wrap items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-xs">
+                <button type="button" className="text-brand hover:underline" onClick={() => setSelectedFollowUpIds(selectedOverdueIds.length === fu.overdue.length ? [] : fu.overdue.map((item) => item.id))}>{selectedOverdueIds.length === fu.overdue.length ? t("today.deselectAll") : t("today.selectAllCount", { count: fu.overdue.length })}</button>
+                <span className="text-zinc-400">{t("today.selectedCount", { count: selectedOverdueIds.length })}</span>
+                {selectedOverdueIds.length > 0 && <Button size="xs" onClick={async () => {
+                  const ids = selectedOverdueIds;
+                  const count = ids.length;
+                  const confirmed = await requestConfirm({ title: t("today.completeSelectedTitle"), description: t("today.completeSelectedDescription", { count }), confirmLabel: t("today.completeSelected"), tone: "default" });
+                  if (!confirmed) return;
+                  const completed = completeFollowUps(ids);
+                  setSelectedFollowUpIds([]);
+                  setSelectionMode(false);
+                  pushToast(t("today.completedCount", { count: completed }), "success");
+                }}>{t("today.completeSelected")}</Button>}
+              </div>}
               <div className={viewMode === "grid" ? "grid gap-2 md:grid-cols-2 xl:grid-cols-3" : "space-y-2"}>
                 {fu.overdue.slice(0, visibleCount).map((f) => renderFu(f, "overdue"))}
               </div>
@@ -471,7 +510,19 @@ export function TodayView() {
 
           {(activeQueue === "all" || activeQueue === "unread" || activeQueue === "awaiting") && replyChats.length > 0 ? (
             <section className="flex flex-col gap-2">
-              <SectionLabel>
+              <SectionLabel action={replyChats.length > 0 ? (
+                <button type="button" className="text-xs text-brand hover:underline" onClick={async () => {
+                  const count = replyChats.length;
+                  const snapshot = new Map(replyChats.map((chat) => [chat.id, chat.updatedAt]));
+                  const confirmed = await requestConfirm({ title: t("today.clearPendingTitle", { count }), description: t("today.clearPendingDescription"), confirmLabel: t("today.clearPending"), tone: "default" });
+                  if (confirmed) {
+                    const currentChats = useAppStore.getState().chats;
+                    clearPendingChats(replyChats
+                      .filter((chat) => currentChats.find((current) => current.id === chat.id)?.updatedAt === snapshot.get(chat.id))
+                      .map((chat) => chat.id));
+                  }
+                }}>{t("today.clearPending")}</button>
+              ) : null}>
                 <span className="inline-flex items-center gap-1.5">
                   <Clock className="h-3.5 w-3.5" />
                   {t(activeQueue === "unread" ? "sidebar.unreadChats" : activeQueue === "all" ? "today.pendingChats" : "today.awaitingReply")} · {replyChats.length}
@@ -512,6 +563,7 @@ export function TodayView() {
                       )}
                     >
                       <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => {
+                        markReplyHandled(c.id);
                         setSelectedChat(c.id);
                         goToChats("all");
                       }}>

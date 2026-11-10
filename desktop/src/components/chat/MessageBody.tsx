@@ -1,6 +1,8 @@
 import { memo, useMemo, type ReactNode } from "react";
 import { cn, splitTextWithLinks, splitWhatsAppFormatting } from "@/lib/utils";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
+import { useAppStore } from "@/store/appStore";
+import { isWhatsAppCallLink, tryOpenBoundCallLink } from "@/lib/cloneCalls";
 
 /** 高亮正文里的 @token（与发送时写入的 @显示名 对齐） */
 function splitMentions(text: string, mentionLabels?: string[]) {
@@ -34,11 +36,15 @@ export const MessageBody = memo(function MessageBody({
   text,
   outbound,
   mentionLabels,
+  accountId,
+  chatId,
 }: {
   text: string;
   outbound?: boolean;
   /** 用于高亮的 @显示名（不含 jid） */
   mentionLabels?: string[];
+  accountId?: string;
+  chatId?: string;
 }) {
   const mentionKey = (mentionLabels || []).join("\0");
   const nodes = useMemo(() => {
@@ -107,9 +113,17 @@ export const MessageBody = memo(function MessageBody({
               onClick={(e) => {
                 e.stopPropagation();
                 e.preventDefault();
-                void openExternal(isPhone ? waHref : p.href).catch(() => {
-                  window.open(isPhone ? waHref : p.href, "_blank", "noopener,noreferrer");
-                });
+                const href = isPhone ? waHref : p.href;
+                void (async () => {
+                  if (isWhatsAppCallLink(href)) {
+                    const state = useAppStore.getState();
+                    const owner = accountId || state.chats.find((chat) => chat.id === chatId)?.accountId;
+                    if (await tryOpenBoundCallLink(href, owner, state.settings.waAccounts || [])) return;
+                  }
+                  await openExternal(href).catch(() => {
+                    window.open(href, "_blank", "noopener,noreferrer");
+                  });
+                })();
               }}
             >
               {p.value}

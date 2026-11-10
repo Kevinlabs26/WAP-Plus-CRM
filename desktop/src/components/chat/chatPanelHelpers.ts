@@ -36,6 +36,14 @@ export function messagePlainText(m: Message) {
 }
 
 export async function imageToStickerDataUrl(file: File): Promise<string> {
+  if (file.type === "image/webp") {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (isAnimatedWebp(bytes)) {
+      if (bytes.length > 2_000_000) throw new Error("动态贴纸超过 2 MB，暂不支持发送");
+      return webpDataUrl(bytes);
+    }
+  }
+
   const image = await createImageBitmap(file);
   try {
     if (!image.width || !image.height) throw new Error("无法读取贴纸图片");
@@ -65,6 +73,38 @@ export async function imageToStickerDataUrl(file: File): Promise<string> {
   } finally {
     image.close();
   }
+}
+
+function isAnimatedWebp(bytes: Uint8Array) {
+  if (
+    bytes.length < 20 ||
+    String.fromCharCode(...bytes.subarray(0, 4)) !== "RIFF" ||
+    String.fromCharCode(...bytes.subarray(8, 12)) !== "WEBP"
+  ) return false;
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const riffEnd = 8 + view.getUint32(4, true);
+  if (riffEnd > bytes.length || riffEnd < 20) return false;
+  let hasAnimation = false;
+  let hasFrame = false;
+  for (let offset = 12; offset + 8 <= riffEnd;) {
+    const kind = String.fromCharCode(...bytes.subarray(offset, offset + 4));
+    const size = view.getUint32(offset + 4, true);
+    const end = offset + 8 + size;
+    if (end > riffEnd) return false;
+    if (kind === "ANIM") hasAnimation = true;
+    if (kind === "ANMF") hasFrame = true;
+    offset = end + (size & 1);
+  }
+  return hasAnimation && hasFrame;
+}
+
+function webpDataUrl(bytes: Uint8Array) {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return `data:image/webp;base64,${btoa(binary)}`;
 }
 
 export function useEventCallback<T extends (...args: any[]) => any>(callback: T): T {

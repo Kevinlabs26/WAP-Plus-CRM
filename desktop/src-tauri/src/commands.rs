@@ -4,8 +4,9 @@ use crate::bridge::{make_envelope, BridgeConnectionInfo, BridgeState};
 use crate::db::{self, AppSnapshot, DbState};
 use crate::protocol::{response_error, response_ok};
 use serde::{Deserialize, Serialize};
-use std::ffi::c_void;
-use std::io::Write;
+#[cfg(windows)]
+pub(crate) use crate::dpapi::{protect_secrets, unprotect_secrets};
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
@@ -31,7 +32,9 @@ fn register_notification_identity(app: &AppHandle) -> Result<(), String> {
 
     let icon = notification_app_icon(app)?;
     let key = CURRENT_USER
-        .create(format!(r"SOFTWARE\Classes\AppUserModelId\{NOTIFICATION_APP_ID}"))
+        .create(format!(
+            r"SOFTWARE\Classes\AppUserModelId\{NOTIFICATION_APP_ID}"
+        ))
         .map_err(|e| e.to_string())?;
     key.set_string("DisplayName", "WAP Plus CRM")
         .map_err(|e| e.to_string())?;
@@ -59,7 +62,10 @@ fn notification_avatar(app: &AppHandle, bytes: &[u8]) -> Result<Option<PathBuf>,
     bytes.hash(&mut hasher);
     let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(format!("notification-avatar-{:x}.{extension}", hasher.finish()));
+    let path = dir.join(format!(
+        "notification-avatar-{:x}.{extension}",
+        hasher.finish()
+    ));
     if !path.exists() {
         std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
     }
@@ -75,6 +81,8 @@ pub fn show_windows_branded_notification(
     tag: Option<String>,
     avatar_bytes: Option<Vec<u8>>,
     unread_count: Option<u32>,
+    open_download_folder: Option<bool>,
+    action_label: Option<String>,
 ) -> Result<bool, String> {
     #[cfg(windows)]
     {
@@ -87,21 +95,24 @@ pub fn show_windows_branded_notification(
             .transpose()?
             .flatten();
         let click_app = app.clone();
-        let mut toast = Toast::new(NOTIFICATION_APP_ID)
-            .title(&title)
-            .text1(&body);
+        let mut toast = Toast::new(NOTIFICATION_APP_ID).title(&title).text1(&body);
         if let Some(count) = unread_count.filter(|count| *count > 0) {
             toast = toast.text2(&format!("{count} 条未读消息"));
         }
         if let Some(avatar) = avatar.as_deref() {
             toast = toast.icon(avatar, IconCrop::Circular, "会话头像");
         }
+        let downloads = open_download_folder.unwrap_or(false);
         toast
-            .add_button("打开会话", "open")
+            .add_button(action_label.as_deref().filter(|label| !label.trim().is_empty() && label.chars().count() <= 40).unwrap_or(if downloads { "打开下载文件夹" } else { "打开会话" }), "open")
             .on_activated(move |_| {
-                crate::show_main_window(&click_app);
-                if let Some(tag) = tag.as_ref() {
-                    let _ = click_app.emit("wapplus://notification-click", tag);
+                if downloads {
+                    let _ = open_chat_media_folder(click_app.clone());
+                } else {
+                    crate::show_main_window(&click_app);
+                    if let Some(tag) = tag.as_ref() {
+                        let _ = click_app.emit("wapplus://notification-click", tag);
+                    }
                 }
                 Ok(())
             })
@@ -112,7 +123,7 @@ pub fn show_windows_branded_notification(
 
     #[cfg(not(windows))]
     {
-        let _ = (app, title, body, tag, avatar_bytes, unread_count);
+        let _ = (app, title, body, tag, avatar_bytes, unread_count, open_download_folder, action_label);
         Ok(false)
     }
 }
@@ -141,42 +152,6 @@ pub struct SecureSecrets {
     pub bridge_token: String,
 }
 
-#[cfg(windows)]
-#[repr(C)]
-struct DataBlob {
-    cb_data: u32,
-    pb_data: *mut u8,
-}
-
-#[cfg(windows)]
-#[link(name = "crypt32")]
-extern "system" {
-    fn CryptProtectData(
-        data_in: *const DataBlob,
-        description: *const u16,
-        entropy: *const DataBlob,
-        reserved: *mut c_void,
-        prompt: *mut c_void,
-        flags: u32,
-        data_out: *mut DataBlob,
-    ) -> i32;
-    fn CryptUnprotectData(
-        data_in: *const DataBlob,
-        description: *mut *mut u16,
-        entropy: *const DataBlob,
-        reserved: *mut c_void,
-        prompt: *mut c_void,
-        flags: u32,
-        data_out: *mut DataBlob,
-    ) -> i32;
-}
-
-#[cfg(windows)]
-#[link(name = "kernel32")]
-extern "system" {
-    fn LocalFree(memory: *mut c_void) -> *mut c_void;
-}
-
 fn secure_secrets_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -184,11 +159,7 @@ fn secure_secrets_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 #[tauri::command(async)]
-pub fn typing_diagnostic_write(
-    app: AppHandle,
-    line: String,
-    reset: bool,
-) -> Result<(), String> {
+pub fn typing_diagnostic_write(app: AppHandle, line: String, reset: bool) -> Result<(), String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join("typing-diagnostics.log");
@@ -204,35 +175,14 @@ pub fn typing_diagnostic_write(
     writeln!(file, "{clean}").map_err(|e| e.to_string())
 }
 
-#[cfg(windows)]
-pub(crate) fn protect_secrets(value: &[u8]) -> Result<Vec<u8>, String> {
-    let input = DataBlob { cb_data: value.len() as u32, pb_data: value.as_ptr() as *mut u8 };
-    let mut output = DataBlob { cb_data: 0, pb_data: std::ptr::null_mut() };
-    let ok = unsafe { CryptProtectData(&input, std::ptr::null(), std::ptr::null(), std::ptr::null_mut(), std::ptr::null_mut(), 0, &mut output) };
-    if ok == 0 { return Err("Windows DPAPI 加密失败".into()); }
-    let bytes = unsafe { std::slice::from_raw_parts(output.pb_data, output.cb_data as usize).to_vec() };
-    unsafe { LocalFree(output.pb_data as *mut c_void); }
-    Ok(bytes)
-}
-
-#[cfg(windows)]
-pub(crate) fn unprotect_secrets(value: &[u8]) -> Result<Vec<u8>, String> {
-    let input = DataBlob { cb_data: value.len() as u32, pb_data: value.as_ptr() as *mut u8 };
-    let mut output = DataBlob { cb_data: 0, pb_data: std::ptr::null_mut() };
-    let ok = unsafe { CryptUnprotectData(&input, std::ptr::null_mut(), std::ptr::null(), std::ptr::null_mut(), std::ptr::null_mut(), 0, &mut output) };
-    if ok == 0 { return Err("Windows DPAPI 解密失败".into()); }
-    let bytes = unsafe { std::slice::from_raw_parts(output.pb_data, output.cb_data as usize).to_vec() };
-    unsafe { LocalFree(output.pb_data as *mut c_void); }
-    Ok(bytes)
-}
-
 #[tauri::command]
 pub fn secure_save_secrets(app: AppHandle, secrets: SecureSecrets) -> Result<(), String> {
     #[cfg(windows)]
     {
         let raw = serde_json::to_vec(&secrets).map_err(|e| e.to_string())?;
         let encrypted = protect_secrets(&raw)?;
-        crate::atomic_file::write_atomic(&secure_secrets_path(&app)?, &encrypted).map_err(|e| e.to_string())
+        crate::atomic_file::write_atomic(&secure_secrets_path(&app)?, &encrypted)
+            .map_err(|e| e.to_string())
     }
     #[cfg(not(windows))]
     {
@@ -252,7 +202,9 @@ pub fn secure_load_secrets(app: AppHandle) -> Result<Option<SecureSecrets>, Stri
             Err(error) => return Err(error.to_string()),
         };
         let raw = unprotect_secrets(&encrypted)?;
-        serde_json::from_slice(&raw).map(Some).map_err(|e| e.to_string())
+        serde_json::from_slice(&raw)
+            .map(Some)
+            .map_err(|e| e.to_string())
     }
     #[cfg(not(windows))]
     {
@@ -275,6 +227,231 @@ pub struct DroppedFile {
     pub bytes: Vec<u8>,
 }
 
+const MAX_CHAT_MEDIA_SAVE_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChatMediaSaveProgress {
+    request_id: String,
+    written: usize,
+    total: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedChatMedia {
+    file_name: String,
+    path: String,
+}
+
+fn safe_chat_media_filename(input: &str) -> String {
+    let leaf = input.replace('\\', "/");
+    let leaf = leaf.rsplit('/').next().unwrap_or_default();
+    let safe: String = leaf
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let safe = safe.trim().trim_matches('.');
+    if safe.is_empty() {
+        "media.bin".into()
+    } else {
+        let mut name: String = safe.chars().take(120).collect();
+        let stem = name
+            .split('.')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_uppercase();
+        if matches!(
+            stem.as_str(),
+            "CON"
+                | "PRN"
+                | "AUX"
+                | "NUL"
+                | "COM1"
+                | "COM2"
+                | "COM3"
+                | "COM4"
+                | "COM5"
+                | "COM6"
+                | "COM7"
+                | "COM8"
+                | "COM9"
+                | "LPT1"
+                | "LPT2"
+                | "LPT3"
+                | "LPT4"
+                | "LPT5"
+                | "LPT6"
+                | "LPT7"
+                | "LPT8"
+                | "LPT9"
+        ) {
+            name.insert(0, '_');
+        }
+        name
+    }
+}
+
+fn chat_media_candidate(folder: &std::path::Path, name: &str, suffix: usize) -> PathBuf {
+    if suffix == 0 {
+        return folder.join(name);
+    }
+    let split = name
+        .rfind('.')
+        .filter(|index| *index > 0)
+        .unwrap_or(name.len());
+    folder.join(format!("{} ({suffix}){}", &name[..split], &name[split..]))
+}
+
+#[tauri::command]
+pub async fn save_chat_media(
+    app: AppHandle,
+    data_url: String,
+    filename: String,
+    request_id: String,
+) -> Result<SavedChatMedia, String> {
+    use base64::Engine;
+
+    let (header, encoded) = data_url
+        .split_once(',')
+        .ok_or_else(|| "媒体数据格式无效".to_string())?;
+    let max_encoded = 4 * MAX_CHAT_MEDIA_SAVE_BYTES.div_ceil(3);
+    if !header.starts_with("data:")
+        || !header.to_ascii_lowercase().contains(";base64")
+        || encoded.is_empty()
+        || encoded.len() > max_encoded
+    {
+        return Err("媒体数据格式无效或超过 16 MB".into());
+    }
+    let encoded = encoded.to_string();
+    let filename = safe_chat_media_filename(&filename);
+    let request_id: String = request_id
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .take(80)
+        .collect();
+    if request_id.is_empty() {
+        return Err("下载请求编号无效".into());
+    }
+    let folder = app
+        .path()
+        .download_dir()
+        .map_err(|error| format!("无法定位系统下载文件夹：{error}"))?
+        .join("WAP Plus CRM");
+    let worker_app = app.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|error| format!("媒体解码失败：{error}"))?;
+        if bytes.is_empty() || bytes.len() > MAX_CHAT_MEDIA_SAVE_BYTES {
+            return Err("媒体为空或超过 16 MB".into());
+        }
+        std::fs::create_dir_all(&folder).map_err(|error| format!("无法创建下载文件夹：{error}"))?;
+        let temporary = folder.join(format!(".media-{request_id}.part"));
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| format!("无法开始保存媒体：{error}"))?;
+        let total = bytes.len();
+        let mut written = 0;
+        let mut last_reported = 0;
+        for chunk in bytes.chunks(256 * 1024) {
+            if let Err(error) = file.write_all(chunk) {
+                drop(file);
+                let _ = std::fs::remove_file(&temporary);
+                return Err(format!("写入媒体失败：{error}"));
+            }
+            written += chunk.len();
+            if written - last_reported >= 1024 * 1024 || written == total {
+                let _ = worker_app.emit(
+                    "chat-media-save-progress",
+                    ChatMediaSaveProgress {
+                        request_id: request_id.clone(),
+                        written,
+                        total,
+                    },
+                );
+                last_reported = written;
+            }
+        }
+        if let Err(error) = file.sync_all() {
+            drop(file);
+            let _ = std::fs::remove_file(&temporary);
+            return Err(format!("媒体保存未完成：{error}"));
+        }
+        drop(file);
+
+        let mut suffix = 0;
+        let path = loop {
+            let candidate = chat_media_candidate(&folder, &filename, suffix);
+            match std::fs::hard_link(&temporary, &candidate) {
+                Ok(()) => break candidate,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => suffix += 1,
+                Err(error) => {
+                    let _ = std::fs::remove_file(&temporary);
+                    return Err(format!("无法完成媒体保存：{error}"));
+                }
+            }
+        };
+        let _ = std::fs::remove_file(&temporary);
+        Ok(SavedChatMedia {
+            file_name: path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("media.bin")
+                .to_string(),
+            path: path.to_string_lossy().into_owned(),
+        })
+    })
+    .await
+    .map_err(|error| format!("媒体保存任务失败：{error}"))?
+}
+
+#[tauri::command]
+pub fn open_chat_media_folder(app: AppHandle) -> Result<(), String> {
+    let folder = app
+        .path()
+        .download_dir()
+        .map_err(|error| format!("无法定位系统下载文件夹：{error}"))?
+        .join("WAP Plus CRM");
+    std::fs::create_dir_all(&folder).map_err(|error| format!("无法打开下载文件夹：{error}"))?;
+    #[cfg(windows)]
+    let result = Command::new("explorer.exe").arg(&folder).spawn();
+    #[cfg(target_os = "macos")]
+    let result = Command::new("open").arg(&folder).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = Command::new("xdg-open").arg(&folder).spawn();
+    result
+        .map(|_| ())
+        .map_err(|error| format!("无法打开下载文件夹：{error}"))
+}
+
+#[tauri::command]
+pub fn read_dropped_video(path: String) -> Result<tauri::ipc::Response, String> {
+    let path = PathBuf::from(path);
+    if !path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("mp4")) {
+        return Err("请选择 MP4 视频".into());
+    }
+    let file = std::fs::File::open(path).map_err(|e| format!("无法读取视频：{e}"))?;
+    let metadata = file.metadata().map_err(|e| e.to_string())?;
+    let limit = 100 * 1024 * 1024;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > limit {
+        return Err("视频为空或超过 100 MB".into());
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(limit + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > limit { return Err("视频超过 100 MB".into()); }
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 #[tauri::command]
 pub fn read_dropped_file(path: String) -> Result<DroppedFile, String> {
     let file_path = PathBuf::from(&path);
@@ -282,8 +459,9 @@ pub fn read_dropped_file(path: String) -> Result<DroppedFile, String> {
     if !metadata.is_file() {
         return Err("拖入的项目不是文件".into());
     }
-    if metadata.len() > 14 * 1024 * 1024 {
-        return Err("文件请小于 14MB".into());
+    let mp4 = file_path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("mp4"));
+    if metadata.len() > (if mp4 { 24 } else { 14 }) * 1024 * 1024 {
+        return Err(if mp4 { "视频超过 24 MB，请先压缩" } else { "文件请小于 14MB" }.into());
     }
     let bytes = std::fs::read(&file_path).map_err(|e| format!("无法读取拖入文件：{e}"))?;
     let mime = match file_path
@@ -321,13 +499,27 @@ pub fn read_dropped_file(path: String) -> Result<DroppedFile, String> {
 }
 
 #[tauri::command]
+pub fn clipboard_write_text(app: AppHandle, text: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let window = app.get_webview_window("main").ok_or("主窗口不可用")?;
+        let hwnd = window.hwnd().map_err(|e| e.to_string())?;
+        crate::clipboard::write_text(hwnd.0, &text)
+    }
+    #[cfg(not(windows))]
+    { let _ = (app, text); Err("请使用系统复制按钮".into()) }
+}
+
+#[tauri::command]
 pub fn clipboard_write_image(app: AppHandle, png_base64: String) -> Result<(), String> {
     #[cfg(windows)]
     {
         let window = app
             .get_webview_window("main")
             .ok_or_else(|| "主窗口不可用".to_string())?;
-        let hwnd = window.hwnd().map_err(|e| format!("获取窗口句柄失败：{e}"))?;
+        let hwnd = window
+            .hwnd()
+            .map_err(|e| format!("获取窗口句柄失败：{e}"))?;
         crate::clipboard::write_png(hwnd.0, &png_base64)
     }
     #[cfg(not(windows))]
@@ -379,9 +571,7 @@ pub fn list_adb_devices() -> Result<Vec<AdbDevice>, String> {
     let output = adb_command()
         .args(["devices"])
         .output()
-        .map_err(|e| {
-            format!("无法执行 adb：{e}。请安装 Android platform-tools 并加入 PATH。")
-        })?;
+        .map_err(|e| format!("无法执行 adb：{e}。请安装 Android platform-tools 并加入 PATH。"))?;
 
     if !output.status.success() {
         return Err(String::from_utf8_lossy(&output.stderr).into_owned());
@@ -676,11 +866,7 @@ pub fn hide_overlay(
     state: State<'_, BridgeState>,
     device_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let envelope = make_envelope(
-        "overlay.hide",
-        device_id.as_deref(),
-        serde_json::json!({}),
-    );
+    let envelope = make_envelope("overlay.hide", device_id.as_deref(), serde_json::json!({}));
     let ack = state.send_json_wait_ack(&envelope, Duration::from_secs(5))?;
     if !response_ok(&ack) {
         return Err(response_error(&ack));
@@ -704,7 +890,11 @@ pub fn type_and_send(
         did,
         serde_json::json!({ "phoneE164": phone, "text": text }),
     );
-    tracing::debug!(phone_length = phone.len(), text_length = text.len(), "type_and_send open_and_send");
+    tracing::debug!(
+        phone_length = phone.len(),
+        text_length = text.len(),
+        "type_and_send open_and_send"
+    );
 
     match state.send_json_wait_ack(&envelope, Duration::from_secs(7)) {
         Ok(ack) if response_ok(&ack) => {
@@ -780,10 +970,7 @@ pub fn db_clear(state: State<'_, DbState>) -> Result<(), String> {
 }
 
 #[tauri::command(async)]
-pub fn db_clear_chat_messages(
-    state: State<'_, DbState>,
-    chat_id: String,
-) -> Result<(), String> {
+pub fn db_clear_chat_messages(state: State<'_, DbState>, chat_id: String) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     db::clear_chat_messages(&conn, &chat_id)
 }
@@ -825,17 +1012,159 @@ pub fn db_info(state: State<'_, DbState>) -> Result<serde_json::Value, String> {
     db::db_info(&conn)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppStorageUsage {
+    total_bytes: u64,
+    database_bytes: u64,
+    whatsapp_accounts_bytes: u64,
+    backups_bytes: u64,
+    other_app_data_bytes: u64,
+    local_profile_bytes: u64,
+    scan_incomplete: bool,
+}
+
+fn directory_size(root: &std::path::Path) -> (u64, bool) {
+    let mut total = 0u64;
+    let mut incomplete = false;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                incomplete = true;
+                continue;
+            }
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    incomplete = true;
+                    continue;
+                }
+            };
+            let kind = match entry.file_type() {
+                Ok(kind) => kind,
+                Err(_) => {
+                    incomplete = true;
+                    continue;
+                }
+            };
+            if kind.is_symlink() {
+                continue;
+            }
+            if kind.is_dir() {
+                pending.push(entry.path());
+            } else if kind.is_file() {
+                match entry.metadata() {
+                    Ok(metadata) => total = total.saturating_add(metadata.len()),
+                    Err(_) => incomplete = true,
+                }
+            }
+        }
+    }
+    (total, incomplete)
+}
+
+fn scan_app_storage(data_dir: &std::path::Path, local_dir: &std::path::Path) -> AppStorageUsage {
+    let mut usage = AppStorageUsage {
+        total_bytes: 0,
+        database_bytes: 0,
+        whatsapp_accounts_bytes: 0,
+        backups_bytes: 0,
+        other_app_data_bytes: 0,
+        local_profile_bytes: 0,
+        scan_incomplete: false,
+    };
+    let entries = std::fs::read_dir(data_dir);
+    match entries {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(_) => {
+                        usage.scan_incomplete = true;
+                        continue;
+                    }
+                };
+                let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                let kind = match entry.file_type() {
+                    Ok(kind) => kind,
+                    Err(_) => {
+                        usage.scan_incomplete = true;
+                        continue;
+                    }
+                };
+                if kind.is_symlink() {
+                    continue;
+                }
+                let (bytes, incomplete) = if kind.is_file() {
+                    (
+                        entry
+                            .metadata()
+                            .map(|metadata| metadata.len())
+                            .unwrap_or_else(|_| {
+                                usage.scan_incomplete = true;
+                                0
+                            }),
+                        false,
+                    )
+                } else if kind.is_dir() {
+                    directory_size(&entry.path())
+                } else {
+                    continue;
+                };
+                usage.scan_incomplete |= incomplete;
+                if name == "baileys-auth" {
+                    usage.whatsapp_accounts_bytes =
+                        usage.whatsapp_accounts_bytes.saturating_add(bytes);
+                } else if name == "crm-backups" {
+                    usage.backups_bytes = usage.backups_bytes.saturating_add(bytes);
+                } else if name == "wap-plus.db" || name.starts_with("wap-plus.db-") {
+                    usage.database_bytes = usage.database_bytes.saturating_add(bytes);
+                } else {
+                    usage.other_app_data_bytes = usage.other_app_data_bytes.saturating_add(bytes);
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => usage.scan_incomplete = true,
+    }
+    let (local_bytes, local_incomplete) = directory_size(local_dir);
+    usage.local_profile_bytes = local_bytes;
+    usage.scan_incomplete |= local_incomplete;
+    usage.total_bytes = usage
+        .database_bytes
+        .saturating_add(usage.whatsapp_accounts_bytes)
+        .saturating_add(usage.backups_bytes)
+        .saturating_add(usage.other_app_data_bytes)
+        .saturating_add(usage.local_profile_bytes);
+    usage
+}
+
+#[tauri::command]
+pub async fn app_storage_usage(app: AppHandle) -> Result<AppStorageUsage, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let local_dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || scan_app_storage(&data_dir, &local_dir))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command(async)]
-pub fn db_load_full_history(
-    state: State<'_, DbState>,
-) -> Result<serde_json::Value, String> {
+pub fn db_load_full_history(state: State<'_, DbState>) -> Result<serde_json::Value, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     db::load_full_history(&conn)
 }
 
 /// 只检查指定会话的完整来信历史，不传输消息正文。
 #[tauri::command(async)]
-pub fn db_chats_with_inbound(state: State<'_, DbState>, chat_ids: Vec<String>) -> Result<Vec<String>, String> {
+pub fn db_chats_with_inbound(
+    state: State<'_, DbState>,
+    chat_ids: Vec<String>,
+) -> Result<Vec<String>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     db::chats_with_inbound(&conn, &chat_ids)
 }
@@ -887,10 +1216,7 @@ pub fn db_search_messages(
 }
 
 #[tauri::command(async)]
-pub fn db_get_message(
-    state: State<'_, DbState>,
-    id: String,
-) -> Result<serde_json::Value, String> {
+pub fn db_get_message(state: State<'_, DbState>, id: String) -> Result<serde_json::Value, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let item = db::get_message_by_id(&conn, &id)?;
     Ok(serde_json::json!({

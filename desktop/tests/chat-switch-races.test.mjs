@@ -22,6 +22,7 @@ const mocks = {
   '@/lib/baileys': `export const baileysPresence = async () => {};
     export const baileysMessageEdit = async () => ({});
     export const baileysSendDocument = (...args) => globalThis.sendMedia('file', args);
+    export const baileysSendVideo = (...args) => globalThis.sendMedia('video', args);
     export const baileysSendImage = (...args) => globalThis.sendMedia('image', args);
     export const baileysSendSticker = (...args) => globalThis.sendMedia('sticker', args);
     export const baileysSendVoice = (...args) => globalThis.sendMedia('audio', args);

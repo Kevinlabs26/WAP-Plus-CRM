@@ -90,6 +90,7 @@ function VideoTile({
           poster={thumb || undefined}
           className="block h-64 w-full bg-black object-contain"
         />
+        {m.deliveryStatus === "pending" && m.mediaUpload && <div role="progressbar" aria-label={i18n("messageBubble.videoUploading", {percent:m.mediaUpload.percent})} aria-valuemin={0} aria-valuemax={100} aria-valuenow={m.mediaUpload.percent} className="h-1 bg-zinc-700"><div className="h-full bg-brand transition-[width]" style={{width:`${m.mediaUpload.percent}%`}} /></div>}
       </div>
     );
   }
@@ -112,7 +113,7 @@ function VideoTile({
         />
       ) : (
         <div
-          className="video-placeholder-box flex h-60 w-full items-center justify-center bg-zinc-900/40"
+          className="video-placeholder-box flex h-64 w-full items-center justify-center bg-zinc-900/40"
         >
           <div className="flex flex-col items-center gap-1.5 text-zinc-400">
             <Play className="h-7 w-7 fill-current opacity-60" />
@@ -212,7 +213,7 @@ export const MessageMedia = memo(function MessageMedia({
     const box =
       t === "sticker"
         ? "h-40 w-40 max-w-full"
-        : "w-full max-w-[min(72vw,22rem)]";
+        : "h-64 w-full max-w-[min(72vw,22rem)]";
     return (
       <button
         type="button"
@@ -233,7 +234,7 @@ export const MessageMedia = memo(function MessageMedia({
           className={cn(
             t === "sticker"
               ? "h-full w-full object-contain p-1"
-              : "block h-auto max-h-[32rem] w-full object-cover"
+              : "block h-full w-full object-contain"
           )}
           loading="lazy"
           decoding="async"
@@ -390,9 +391,7 @@ export const MessageMedia = memo(function MessageMedia({
     const box =
       t === "sticker"
         ? "h-40 w-40 max-w-full"
-        : flush
-          ? "h-64 w-full max-w-[min(72vw,22rem)]"
-          : "h-64 w-full max-w-[min(72vw,20rem)]";
+        : "h-64 w-full max-w-[min(72vw,22rem)]";
     return (
       <div
         className={cn(

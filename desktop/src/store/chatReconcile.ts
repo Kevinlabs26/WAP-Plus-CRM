@@ -1,6 +1,6 @@
 import type { ChatPreview, Contact, Message } from "@/types/crm";
-import { isConversationOutgoing } from "@/lib/leadInbox";
-import { isConversationMessage } from "@/lib/chatActivity";
+import { earliestConversationMessage, isConversationOutgoing } from "@/lib/leadInbox";
+import { isConversationMessage, latestSuccessfulOutgoing } from "@/lib/chatActivity";
 import { isInternalContactName } from "./contactIngestHelpers";
 
 /**
@@ -57,12 +57,16 @@ export function backfillChatPreviewFromMessages(
   const lastDirection = new Map<string, Message["direction"]>();
   const chatsWithOutgoing = new Set<string>();
   const chatsWithHistory = new Set<string>();
+  const successfulAt=new Map<string,NonNullable<ChatPreview["lastSuccessfulOutgoing"]>>();
+  const firstByChat = new Map(chats.map(chat => [chat.id, chat.firstConversationMessage]));
   const ownerByChat = new Map(chats.map((chat) => [chat.id, chat.accountId || chat.phoneId]));
   const pendingByChat = new Map<string, { at: string; incoming: boolean }>();
   for (const m of messages) {
     const owner = m.accountId || m.deviceId;
     const chatOwner = ownerByChat.get(m.chatId);
     if (owner && chatOwner && owner !== chatOwner) continue;
+    firstByChat.set(m.chatId, earliestConversationMessage(firstByChat.get(m.chatId), m));
+    const successful=latestSuccessfulOutgoing(successfulAt.get(m.chatId),m);if(successful)successfulAt.set(m.chatId,successful);
     if (isConversationMessage(m)) chatsWithHistory.add(m.chatId);
     if (isConversationOutgoing(m)) chatsWithOutgoing.add(m.chatId);
     if (m.mediaType === "system" || m.systemKind) continue;
@@ -83,11 +87,15 @@ export function backfillChatPreviewFromMessages(
   const next = chats.map((ch) => {
     const needOutgoing = chatsWithOutgoing.has(ch.id) && !ch.hasOutgoingHistory;
     const needHistory = chatsWithHistory.has(ch.id) && !ch.hasMessageHistory;
+    const firstConversationMessage = firstByChat.get(ch.id);
+    const needFirst = firstConversationMessage !== ch.firstConversationMessage;
+    const lastSuccessfulOutgoing=successfulAt.get(ch.id);
+    const needSuccessful=lastSuccessfulOutgoing&&(Date.parse(lastSuccessfulOutgoing.at)>(Date.parse(ch.lastSuccessfulOutgoing?.at||"")||0));
     const at = lastAt.get(ch.id);
     if (!at) {
-      if (!needOutgoing) return ch;
+      if (!needOutgoing&&!needSuccessful&&!needFirst) return ch;
       changed = true;
-      return { ...ch, hasOutgoingHistory: true };
+      return { ...ch, firstConversationMessage, hasOutgoingHistory: needOutgoing?true:ch.hasOutgoingHistory,lastSuccessfulOutgoing:needSuccessful?lastSuccessfulOutgoing:ch.lastSuccessfulOutgoing };
     }
     const body = lastBody.get(ch.id);
     const direction = lastDirection.get(ch.id);
@@ -99,7 +107,7 @@ export function backfillChatPreviewFromMessages(
     const needDirection = direction && ch.lastMessageDirection !== direction;
     const pending = pendingByChat.get(ch.id);
     const needPending = ch.replyPendingSince === undefined && pending;
-    if (!needTime && !needBody && !needDirection && !needOutgoing && !needPending && !needHistory) return ch;
+    if (!needTime && !needBody && !needDirection && !needOutgoing && !needPending && !needHistory && !needSuccessful && !needFirst) return ch;
     changed = true;
     return {
       ...ch,
@@ -107,7 +115,9 @@ export function backfillChatPreviewFromMessages(
       lastMessage: needBody ? body! : ch.lastMessage,
       lastMessageDirection: needDirection ? direction : ch.lastMessageDirection,
       hasOutgoingHistory: needOutgoing ? true : ch.hasOutgoingHistory,
+      firstConversationMessage,
       hasMessageHistory: needHistory ? true : ch.hasMessageHistory,
+      lastSuccessfulOutgoing:needSuccessful?lastSuccessfulOutgoing:ch.lastSuccessfulOutgoing,
       replyPendingSince: needPending ? (pending.incoming ? pending.at : "") : ch.replyPendingSince,
     };
   });

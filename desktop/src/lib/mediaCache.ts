@@ -11,13 +11,14 @@ import {
   idbEntriesPrefix,
   mediaCacheKey,
 } from "./idb.ts";
+import { VIDEO_DATA_URL_MAX_CHARS } from "./mediaBlob.ts";
 
 const DATA_URL_RE = /^data:/i;
 const MEDIA_PREFIX = "media:";
 const MEDIA_INDEX_KEY = "media-cache-index-v1";
 /** data URL 字符数约等于实际落盘字节量；总缓存控制在约 1 GB。 */
 export const MEDIA_CACHE_MAX_CHARS = 1024 * 1024 * 1024;
-/** 单项上限约 24 MB，避免一个超大视频挤掉全部聊天图片。 */
+/** 普通附件单项上限；视频另限 100 MB，仍共用总缓存预算。 */
 export const MEDIA_CACHE_MAX_ITEM_CHARS = 24 * 1024 * 1024;
 
 export type MediaCacheIndex = Record<
@@ -32,6 +33,12 @@ export type MediaCacheStats = {
 };
 
 let mediaMutation = Promise.resolve();
+const blobUrls = new Map<string, string>();
+function releaseBlobUrl(id: string) {
+  const url = blobUrls.get(id);
+  if (url) URL.revokeObjectURL(url);
+  blobUrls.delete(id);
+}
 
 /** 等待已排队的媒体缓存写入完成，再提交消息游标/快照。 */
 export function waitForMediaCacheWrites(): Promise<void> {
@@ -58,6 +65,7 @@ export function selectMediaCacheEvictions(
   for (const [id, entry] of Object.entries(index).sort(
     (a, b) => a[1].cachedAt - b[1].cachedAt
   )) {
+    if (id.startsWith("saved-")) continue;
     evictions.push(id);
     total -= Math.max(0, entry.chars || 0);
     if (total <= maxChars) break;
@@ -70,13 +78,13 @@ async function loadMediaIndex(): Promise<MediaCacheIndex> {
   if (saved) return saved;
 
   // 兼容旧版本：首次维护时为现有媒体补一份轻量索引。
-  const existing = await idbEntriesPrefix<string>(MEDIA_PREFIX);
+  const existing = await idbEntriesPrefix<string | Blob>(MEDIA_PREFIX);
   const now = Date.now();
   const index: MediaCacheIndex = {};
   for (const [key, value] of existing) {
-    if (typeof value !== "string") continue;
+    if (typeof value !== "string" && !(value instanceof Blob)) continue;
     index[key.slice(MEDIA_PREFIX.length)] = {
-      chars: value.length,
+      chars: typeof value === "string" ? value.length : value.size,
       cachedAt: now,
     };
   }
@@ -122,28 +130,53 @@ export async function cacheMediaUrl(
   strict = false
 ): Promise<void> {
   if (!messageId || !isDataUrl(url)) return;
-  if (url.length > MEDIA_CACHE_MAX_ITEM_CHARS) return;
+  if (url.length > (url.startsWith("data:video/") ? VIDEO_DATA_URL_MAX_CHARS : MEDIA_CACHE_MAX_ITEM_CHARS)) {
+    if (strict) throw new Error("附件超过本地保存上限");
+    return;
+  }
   try {
     await runMediaMutation(async () => {
       const index = await loadMediaIndex();
       if (strict) {
-        const total = Object.values(index).reduce((sum, entry) => sum + Math.max(0, entry.chars || 0), 0);
+        const total = Object.entries(index).reduce((sum, [id, entry]) => sum +
+          (!messageId.startsWith("saved-") || id.startsWith("saved-") ? Math.max(0, entry.chars || 0) : 0), 0);
         if (total - (index[messageId]?.chars || 0) + url.length > MEDIA_CACHE_MAX_CHARS) {
-          throw new Error("附件缓存空间不足，恢复已停止，请先导出并清理缓存");
+          throw new Error("附件缓存空间不足，已停止保存，请先导出并清理不用的附件");
         }
       }
-      await idbSet(mediaCacheKey(messageId), url);
       index[messageId] = { chars: url.length, cachedAt: Date.now() };
-      for (const id of selectMediaCacheEvictions(index)) {
-        await idbDel(mediaCacheKey(id));
-        delete index[id];
-      }
-      await idbSet(MEDIA_INDEX_KEY, index);
+      const evicted = selectMediaCacheEvictions(index);
+      for (const id of evicted) delete index[id];
+      await idbSet(MEDIA_INDEX_KEY, index, [
+        {key: mediaCacheKey(messageId), value: url},
+        ...evicted.map(id => ({key: mediaCacheKey(id), remove: true})),
+      ]);
+      releaseBlobUrl(messageId);
+      evicted.forEach(releaseBlobUrl);
     });
   } catch (error) {
     if (strict) throw error;
     /* 缓存失败不阻塞发送 */
   }
+}
+
+/** Raw video cache shares the existing total budget without a Base64 copy. */
+export async function cacheMediaBlob(messageId: string, blob: Blob): Promise<string> {
+  if (!messageId || !blob.size || blob.size > 100 * 1024 * 1024) throw new Error("视频为空或超过 100 MB");
+  await runMediaMutation(async () => {
+    const index = await loadMediaIndex();
+    const savedBytes = Object.entries(index).reduce((sum, [id, entry]) => sum + (id.startsWith("saved-") && id !== messageId ? entry.chars : 0), 0);
+    if (savedBytes + blob.size > MEDIA_CACHE_MAX_CHARS) throw new Error("本地附件缓存空间不足，请先清理不用的附件");
+    index[messageId] = {chars:blob.size, cachedAt:Date.now()};
+    const evicted = selectMediaCacheEvictions(index);
+    for (const id of evicted) delete index[id];
+    await idbSet(MEDIA_INDEX_KEY, index, [{key:mediaCacheKey(messageId), value:blob}, ...evicted.map(id => ({key:mediaCacheKey(id), remove:true}))]);
+    releaseBlobUrl(messageId);
+    evicted.forEach(releaseBlobUrl);
+  });
+  const url = URL.createObjectURL(blob);
+  blobUrls.set(messageId, url);
+  return url;
 }
 
 /** 从 IDB 回填：有则返回缓存的 data URL */
@@ -153,7 +186,12 @@ export async function readMediaCache(
 ): Promise<string | undefined> {
   if (!messageId) return undefined;
   try {
-    return (await idbGet<string>(mediaCacheKey(messageId), strict)) || undefined;
+    if (blobUrls.has(messageId)) return blobUrls.get(messageId);
+    const value = await idbGet<string | Blob>(mediaCacheKey(messageId), strict);
+    if (!(value instanceof Blob)) return value || undefined;
+    const url = URL.createObjectURL(value);
+    blobUrls.set(messageId, url);
+    return url;
   } catch (error) {
     if (strict) throw error;
     return undefined;
@@ -162,6 +200,7 @@ export async function readMediaCache(
 
 /** 清理缓存（删消息时调用） */
 export async function dropMediaCache(messageId: string): Promise<void> {
+  releaseBlobUrl(messageId);
   try {
     await runMediaMutation(async () => {
       await idbDel(mediaCacheKey(messageId));
@@ -176,12 +215,25 @@ export async function dropMediaCache(messageId: string): Promise<void> {
   }
 }
 
-export async function clearMediaCache(): Promise<number> {
+export async function clearMediaCache(includeSaved = false): Promise<number> {
   try {
     let removed = 0;
     await runMediaMutation(async () => {
-      removed = await idbDelPrefix(MEDIA_PREFIX);
-      await idbDel(MEDIA_INDEX_KEY);
+      if (includeSaved) {
+        removed = await idbDelPrefix(MEDIA_PREFIX);
+        await idbDel(MEDIA_INDEX_KEY);
+        for (const id of blobUrls.keys()) releaseBlobUrl(id);
+        return;
+      }
+      const index = await loadMediaIndex();
+      for (const id of Object.keys(index)) {
+        if (id.startsWith("saved-")) continue;
+        await idbDel(mediaCacheKey(id));
+        releaseBlobUrl(id);
+        delete index[id];
+        removed++;
+      }
+      await idbSet(MEDIA_INDEX_KEY, index);
     });
     return removed;
   } catch {

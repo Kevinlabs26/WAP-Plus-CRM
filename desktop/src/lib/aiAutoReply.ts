@@ -127,6 +127,7 @@ export async function autoReplyInbound(m: Message): Promise<void> {
       const wait = (lastReplyAt.get(m.chatId) || 0) +
         Math.max(5000, Number(settings.aiAutoReplyIntervalMs) || 30000) - Date.now();
       if (resolveAutoReplyScope(settings, m.chatId).mode === "auto" && wait > 0) {
+        setAutoReplyRuntime(m.chatId,{phase:"waiting",inboundId:next.id,accountId:next.accountId,reason:"等待发送间隔",retryAt:Date.now()+wait});
         pendingByChat.set(m.chatId, next);
         cooldownTimers.set(m.chatId, setTimeout(() => autoReplyInbound(next), wait));
         break;
@@ -246,6 +247,7 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
         "自动回复：未发送",
         "WhatsApp 账号未连接，将限次重试并重新核对上下文"
       );
+      runtime("waiting", "WhatsApp 账号未连接");
       return "retry";
     }
   } else {
@@ -257,6 +259,7 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
         "自动回复：未发送",
         "手机桥接未连接，将限次重试并重新核对上下文"
       );
+      runtime("waiting", "手机桥接未连接");
       return "retry";
     }
   }
@@ -268,6 +271,7 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
       "自动回复：未发送",
       "未配置真实 AI Key；演示模板不会自动发送"
     );
+    runtime("human", "未配置 AI 服务");
     return;
   }
 
@@ -275,6 +279,7 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
   const beforeVoice = evaluateAutoReplyDecision(conversation, m, Date.now(), policy);
   if (!beforeVoice.allow && (beforeVoice.kind !== "risk" || !["audio", "ptt"].includes(m.mediaType || "") || !!m.transcript)) {
     logAutoSkipOnce(m.chatId, contact.id, `decision:${beforeVoice.kind}`, "自动回复：暂停", beforeVoice.reason);
+    runtime("human",beforeVoice.reason);
     return;
   }
   const lastOut = conversation.map(x => x.direction).lastIndexOf("out");
@@ -328,10 +333,11 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
         decision.reason
       );
     }
+    runtime("human",decision.reason);
     return;
   }
   const contextKey = getSuggestionContextKey(contact, conversation, settings, accountId, { auto: true });
-  if (isManualSuggestionContext(getSuggestionContextKey(contact, conversation, settings, accountId))) return;
+  if (isManualSuggestionContext(getSuggestionContextKey(contact, conversation, settings, accountId))) {runtime("human","当前消息需要人工处理");return;}
   runtime("generating");
   const generationStartedAt = Date.now();
   const result = await generateSuggestions(contact, conversation, settings, {

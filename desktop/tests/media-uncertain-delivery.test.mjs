@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 // only native startup, gate policy and browser I/O are controlled.
 const sourceRoot = fileURLToPath(new URL('../src', import.meta.url));
 const mocks = {
+  '@/lib/mediaCache': 'export const cacheMediaBlob = async (_id, blob) => URL.createObjectURL(blob);',
   '@/lib/bridge': `export const isTauri = () => globalThis.mediaNative;
     export const bridgeInvoke = (...args) => globalThis.mediaRuntime(...args);`,
   '@/lib/syncDebug': 'export const syncLog = () => {};',
@@ -17,7 +18,8 @@ const mocks = {
     ? {ok: false, gate: {error: 'send_paused', reason: 'sending paused'}} : {ok: true, result: await send()};`,
 };
 const built = await build({
-  stdin: { contents: `export { request, resetBaileysRuntimeCache } from './src/lib/baileysCore.ts';
+  stdin: { contents: `export { BAILEYS_BRIDGE_PROTOCOL_VERSION } from '@shared/baileysProtocol';
+    export { request, resetBaileysRuntimeCache } from './src/lib/baileysCore.ts';
     export { sendFileMessage } from './src/components/chat/sendFileMessage.ts';
     export { sendImageMessage } from './src/components/chat/sendImageMessage.ts';
     export { sendAudioMessage } from './src/components/chat/sendAudioMessage.ts';
@@ -31,15 +33,27 @@ const built = await build({
     b.onLoad({filter: /.*/, namespace: 'mock'}, args => ({contents: mocks[args.path]}));
   } }],
 });
-const { request, resetBaileysRuntimeCache, sendFileMessage, sendImageMessage, sendAudioMessage, sendGifMessage, finishVoiceRecording, sendProductMessage } =
+const { BAILEYS_BRIDGE_PROTOCOL_VERSION, request, resetBaileysRuntimeCache, sendFileMessage, sendImageMessage, sendAudioMessage, sendGifMessage, finishVoiceRecording, sendProductMessage } =
   await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].text).toString('base64'));
-const originalGlobals = {fetch: globalThis.fetch, FileReader: globalThis.FileReader, document: globalThis.document, window: globalThis.window};
+const originalGlobals = {fetch: globalThis.fetch, FileReader: globalThis.FileReader, XMLHttpRequest: globalThis.XMLHttpRequest, document: globalThis.document, window: globalThis.window};
 let fetchCalls;
 beforeEach(() => {
   resetBaileysRuntimeCache(); fetchCalls = [];
   globalThis.mediaNative = true; globalThis.mediaGatePaused = false; globalThis.mediaReadFailure = false;
   globalThis.mediaRuntime = async () => ({baseUrl: 'http://127.0.0.1:1234', token: 'fixture-only'});
   globalThis.fetch = async (...args) => {fetchCalls.push(args); return new Response(JSON.stringify({ok: true, id: 'wa-id'}));};
+  globalThis.XMLHttpRequest=class {
+    upload={};headers={};
+    open(method,url){this.method=method;this.url=url;}
+    setRequestHeader(key,value){this.headers[key]=value;}
+    abort(){this.onabort?.();}
+    send(body){
+      this.upload.onprogress?.({lengthComputable:true,loaded:body.size/2,total:body.size});this.upload.onload?.();
+      globalThis.fetch(this.url,{method:this.method,headers:this.headers,body}).then(async response=>{
+        this.status=response.status;this.responseText=await response.text();this.onload();
+      }).catch(()=>this.onerror());
+    }
+  };
   globalThis.FileReader = class { readAsDataURL(file) {
     queueMicrotask(() => { if (globalThis.mediaReadFailure) this.onerror();
       else {this.result = `data:${file.type};base64,ZmFrZQ==`; this.onload();} });
@@ -122,6 +136,46 @@ function mediaDeps() {
     chatId: 'chat', chatAccountId: 'wa-original', openAndroidMediaShare: assert.fail,
     toStickerDataUrl: async () => 'data:image/webp;base64,ZmFrZQ==' };
 }
+test('ordinary chat sends MP4 as native video, including extension-only files over the old size limit', async () => {
+  globalThis.fetch = async (...args) => {
+    fetchCalls.push(args);
+    return new Response(JSON.stringify(new URL(args[0]).pathname === '/status'
+      ? {protocolVersion: BAILEYS_BRIDGE_PROTOCOL_VERSION, connection:'connected', capabilities:{nativeVideo:true,nativeVideoStream:true}}
+      : {ok:true,id:'video-id'}));
+  };
+  for (const type of ['video/mp4', '']) {
+    const deps=mediaDeps(),file=new File([new Uint8Array(15*1024*1024)],'clip.MP4',{type});
+    assert.equal(await sendFileMessage(file,'caption',deps),true);
+    assert.equal(new URL(fetchCalls.at(-1)[0]).pathname,'/send/video');
+    const payload=fetchCalls.at(-1)[1].body;
+    assert.ok(payload instanceof Blob);
+    const bytes=new Uint8Array(await payload.slice(0,1000).arrayBuffer());
+    const length=new DataView(bytes.buffer).getUint32(0);
+    const header=JSON.parse(new TextDecoder().decode(bytes.slice(4,4+length)));
+    assert.equal(header.caption,'caption');assert.equal(header.size,file.size);
+    assert.equal(deps.patches[0][1].mediaType,'video');assert.equal(deps.updates.at(-1).waMessageId,'video-id');
+    assert.deepEqual(deps.patches.filter(p=>p[1].mediaUpload).map(p=>p[1].mediaUpload),[
+      {percent:0,stage:'uploading'},{percent:50,stage:'uploading'},{percent:100,stage:'waiting'}
+    ]);
+    assert.equal(deps.updates.at(-1).mediaUpload,undefined);
+  }
+});
+test('oversized chat video gives an error without reading, sending or clearing the draft', async () => {
+  const deps=mediaDeps();
+  assert.equal(await sendFileMessage({name:'large.mp4',type:'video/mp4',size:100*1024*1024+1},'caption',deps),false);
+  assert.equal(fetchCalls.length,0);assert.deepEqual(deps.toasts,[['runtime.videoTooLarge','error']]);assert.deepEqual(deps.drafts,[]);
+});
+test('native video failure is visible and retains the attachment for retry', async () => {
+  globalThis.fetch=async (...args)=>{
+    fetchCalls.push(args);
+    if(new URL(args[0]).pathname==='/status')return new Response(JSON.stringify({protocolVersion:BAILEYS_BRIDGE_PROTOCOL_VERSION,connection:'connected',capabilities:{nativeVideo:true,nativeVideoStream:true}}));
+    return new Response(JSON.stringify({error:'video upload rejected'}),{status:400});
+  };
+  const deps=mediaDeps();
+  assert.equal(await sendFileMessage(new File(['fixture'],'clip.mp4',{type:'video/mp4'}),'caption',deps),false);
+  assert.match(deps.toasts.at(-1)[0],/video upload rejected/);assert.equal(deps.updates.at(-1).deliveryStatus,'failed');
+  assert.deepEqual(deps.drafts,[]);assert.deepEqual(deps.busy,[true,false]);
+});
 async function sendMedia(kind, deps) {
   const type = {file: 'application/pdf', image: 'image/png', sticker: 'image/webp', audio: 'audio/mp3', gif: 'image/gif'}[kind];
   const file = new File(['fixture'], `fixture.${kind}`, {type});

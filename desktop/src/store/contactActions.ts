@@ -35,15 +35,21 @@ export function createContactActions({
   recomputeStats,
   persist,
 }: ContactDeps) {
+  const deleteContactsLocal = (ids: string[]) => {
+    const selected = new Set(ids);
+    if (!selected.size) return;
+    setState((state) => ({
+      contacts: state.contacts.filter((contact) => !selected.has(contact.id)),
+      followUps: state.followUps.filter((followUp) => !selected.has(followUp.contactId)),
+      activities: state.activities.filter((activity) => !selected.has(activity.contactId)),
+    }));
+    recomputeStats();
+    persist();
+  };
   return {
+    deleteContactsLocal,
     deleteContactLocal(id: string) {
-      setState((state) => ({
-        contacts: state.contacts.filter((contact) => contact.id !== id),
-        followUps: state.followUps.filter((followUp) => followUp.contactId !== id),
-        activities: state.activities.filter((activity) => activity.contactId !== id),
-      }));
-      recomputeStats();
-      persist();
+      deleteContactsLocal([id]);
     },
     updateContact(id: string, patch: Partial<Contact>) {
       if (patch.stage !== undefined) patch = { ...patch, stage: resolveStage(patch.stage) };

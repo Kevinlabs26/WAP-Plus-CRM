@@ -6,6 +6,7 @@ export const PERSIST_MEDIA_MAX_CHARS = 8_000;
 const DATA_URL_RE = /^data:/i;
 
 export function isHeavyDataUrl(url: string | undefined | null): boolean {
+  if (url?.startsWith("blob:")) return true;
   if (!url || !DATA_URL_RE.test(url)) return false;
   return url.length > PERSIST_MEDIA_MAX_CHARS;
 }
@@ -22,13 +23,14 @@ export function stripHeavyMediaForPersist(messages: Message[]): Message[] {
     const dropUrl = isHeavyDataUrl(m.mediaUrl);
     const dropThumb = isHeavyDataUrl(m.mediaThumbUrl);
     const dropSenderAvatar = DATA_URL_RE.test(m.senderAvatarUrl || "");
-    if (!dropUrl && !dropThumb && !dropSenderAvatar) {
+    if (!dropUrl && !dropThumb && !dropSenderAvatar && !m.mediaUpload) {
       out[i] = m;
       continue;
     }
     changed = true;
     out[i] = {
       ...m,
+      mediaUpload: undefined,
       mediaUrl: dropUrl ? undefined : m.mediaUrl,
       mediaThumbUrl: dropThumb ? undefined : m.mediaThumbUrl,
       senderAvatarUrl: dropSenderAvatar ? undefined : m.senderAvatarUrl,

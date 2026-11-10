@@ -251,8 +251,8 @@ export async function ensureGifMp4(gifDataUrl) {
 export async function safeVideoThumbnail(buffer) {
   const dir = await mkdtemp(join(tmpdir(), "wap-thumb-"));
   try {
-    const path = join(dir, "input.video");
-    await writeFile(path, buffer);
+    const path = typeof buffer === "string" ? buffer : join(dir, "input.video");
+    if (typeof buffer !== "string") await writeFile(path, buffer);
     return await runFfmpeg([
       "-protocol_whitelist", "file,pipe",
       "-format_whitelist", "mov,matroska,avi,asf,flv,mpeg,mpegts,ogg,gif",

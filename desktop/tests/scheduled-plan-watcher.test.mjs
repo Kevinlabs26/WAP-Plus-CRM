@@ -49,6 +49,16 @@ test('cancellation after waiting for the gate prevents transport, and uncertain 
  }finally{h.cleanup();}
 });
 
+test('new-contact plans retain the explicitly selected account during availability checks',()=>{
+ const h=setup();try{
+  h.state.contacts[0]={id:'contact',name:'New contact',phone:'+12025550123',accountId:'owner'};
+  const selected={...target,recipient:'+12025550123',accountId:'other'};
+  assert.equal(h.deps.availability(selected),'ready');
+  h.state.settings.waAccounts=h.state.settings.waAccounts.filter(account=>account.id!=='other');
+  assert.equal(h.deps.availability(selected),'missing','deleted accounts cannot be replaced with another sender');
+ }finally{h.cleanup();}
+});
+
 for(const kind of ['audio','video'])test(`native ${kind} uses the correct route and step-specific content`,async()=>{
  const h=setup();try{
  const p={gapSec:30,text:'intro',nativeMedia:true,steps:[{text:'',gapSec:50,media:{kind,mimeType:kind==='video'?'video/mp4':'audio/mpeg',fileName:'clip',dataUrl:`data:${kind==='video'?'video/mp4':'audio/mpeg'};base64,AA==`,size:1}}]};

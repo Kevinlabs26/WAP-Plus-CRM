@@ -1,6 +1,6 @@
 import { messageTimestampMs } from "./messageTimestamp.mjs";
 import { createDeletionJournal } from "./deletionJournal.mjs";
-import { rm } from "node:fs/promises";
+import { rm, stat, rename } from "node:fs/promises";
 import makeWASocket, {
   Browsers,
   DisconnectReason,
@@ -16,6 +16,7 @@ import {
 } from "./audioConvert.mjs";
 import { createMediaDownloader } from "./mediaDownload.mjs";
 import { createRawMediaStore } from "./rawMediaStore.mjs";
+import { createEventSpool } from "./eventSpool.mjs";
 import {
   createSelfJidChecker,
   isHumanName,
@@ -43,8 +44,8 @@ import {
   extractChatLastMessages,
 } from "./messageIngest.mjs";
 import { createAvatarService } from "./avatarService.mjs";
-import { createContactStore } from "./contactStore.mjs";
-import { BoundedMessageMap } from "./messageStore.mjs";
+import { createContactStore, createContactDeltaPublisher } from "./contactStore.mjs";
+import { BoundedMessageMap, detachMessageBuffers } from "./messageStore.mjs";
 import {
   BAILEYS_BRIDGE_PROTOCOL_VERSION,
   BAILEYS_LIBRARY_VERSION,
@@ -76,6 +77,17 @@ const logger = pino({
   level: process.env.WAP_BAILEYS_LOG || (syncDebugOn ? "info" : "silent"),
 });
 const events = [];
+const spoolKeyHex = process.env.WAP_SYNC_KEY_HEX || "";
+if (!/^[a-f0-9]{64}$/i.test(spoolKeyHex)) throw Error("同步缓存密钥不可用，请通过 WAP Plus CRM 桌面版启动");
+const syncDirectory = `${authDir}-sync-events`;
+try {
+  await stat(`${authDir}/sync-events`);
+  let exists=false;try { await stat(syncDirectory);exists=true; } catch(error) {if(error.code!=="ENOENT")throw error;}
+  if(exists)throw Error("发现两份同步缓存，已保留原文件；请先排查缓存目录冲突");
+  await rename(`${authDir}/sync-events`,syncDirectory);
+}catch(error){if(error.code!=="ENOENT")throw error;}
+const eventSpool = await createEventSpool(syncDirectory,Buffer.from(spoolKeyHex,"hex"),{onPause:pauseForStorage});
+delete process.env.WAP_SYNC_KEY_HEX;
 const deletionJournal = createDeletionJournal(authDir);
 
 /** 同步排障日志（stdout，tauri 会进 baileys-bridge-{account}.log） */
@@ -114,13 +126,18 @@ const messages = new BoundedMessageMap(20_000);
 const labels = new Map();
 const chatLabelIds = new Map();
 const products = new Map();
+const MAX_RAW_CACHE_BYTES_PER_INDEX = 512 * 1024 * 1024;
 /** message id → 原始 WA 消息（用于事后补下媒体） */
-const rawWaByMsgId = new Map();
-const rawMediaStore = createRawMediaStore(`${authDir}/media-index`);
+const rawWaByMsgId = new BoundedMessageMap(2000, 32 * 1024 * 1024);
+const rawMediaStore = createRawMediaStore(
+  `${authDir}/media-index`,
+  4000,
+  MAX_RAW_CACHE_BYTES_PER_INDEX
+);
 /** 最近一次 presence 调试（/status 可见，确认协议有没有推） */
 let lastPresenceDebug = null;
 let presenceEventCount = 0;
-let sequence = 0;
+let sequence = eventSpool.sequence;
 let eventsDroppedThrough = 0;
 let socket;
 /** Baileys may keep the account push name in auth creds instead of socket.user. */
@@ -165,9 +182,14 @@ function createMemoryCache(ttlMs, maxEntries = 5000) {
 const msgRetryCounterCache = createMemoryCache(10 * 60_000, 10_000);
 const groupMetadataCache = new Map();
 const groupMetadataTtlMs = 5 * 60_000;
-const rawWaStore = createRawMediaStore(`${authDir}/message-index`, 20_000);
+const rawWaStore = createRawMediaStore(
+  `${authDir}/message-index`,
+  20_000,
+  MAX_RAW_CACHE_BYTES_PER_INDEX
+);
 
 async function requestFullHistorySync() {
+  if (eventSpool.health.blocked) throw Error(eventSpool.health.warning);
   if (connection !== "connected" || !socket) {
     throw new Error("WhatsApp 尚未连接");
   }
@@ -199,6 +221,13 @@ async function requestFullHistorySync() {
 }
 
 function push(type, payload) {
+  if (Array.isArray(payload?.items) && payload.items.length > 120) {
+    for (let i = 0; i < payload.items.length; i += 80) {
+      push(type, { ...payload, items: payload.items.slice(i, i + 80),
+        syncBatchFinal: payload.syncBatchFinal !== false && i + 80 >= payload.items.length });
+    }
+    return;
+  }
   const body =
     payload && typeof payload === "object" ? { ...payload } : { value: payload };
   if (!body.accountId) body.accountId = accountId;
@@ -208,15 +237,18 @@ function push(type, payload) {
     try { deletionJournal.record({ type, ts: stamp, deviceId: accountId, accountId, payload: body }); }
     catch (error) { console.error("[sync] deletion journal failed", error); }
   }
-  events.push({
-    seq: ++sequence,
+  const event = {
+    seq: sequence + 1,
     protocolVersion: BAILEYS_BRIDGE_PROTOCOL_VERSION,
     type,
     ts: Date.now(),
     deviceId: accountId,
     accountId,
     payload: body,
-  });
+  };
+  eventSpool.record(event);
+  sequence = event.seq;
+  events.push(event);
   if (events.length > 2000) {
     const removed = events.splice(0, events.length - 2000);
     eventsDroppedThrough = removed[removed.length - 1]?.seq || eventsDroppedThrough;
@@ -249,15 +281,9 @@ const { mediaToDataUrl } = createMediaDownloader({
 
 function rememberRawWa(id, waMessage) {
   if (!id || !waMessage) return;
-  // 刷新插入顺序，近似 LRU（Map 保持插入序）
-  if (rawWaByMsgId.has(id)) rawWaByMsgId.delete(id);
+  waMessage = detachMessageBuffers(waMessage);
   rawWaByMsgId.set(id, waMessage);
   void rawWaStore.save(id, waMessage);
-  while (rawWaByMsgId.size > 2000) {
-    const oldest = rawWaByMsgId.keys().next().value;
-    if (oldest == null) break;
-    rawWaByMsgId.delete(oldest);
-  }
 }
 
 function rememberRawMedia(id, waMessage) {
@@ -276,7 +302,7 @@ async function getRawWaByKey(key) {
   const stored =
     (await rawWaStore.load(rawWaKey(key))) ||
     (await rawWaStore.load(key?.id));
-  if (stored) rememberRawWa(rawWaKey(key) || key?.id, stored);
+  if (stored) rawWaByMsgId.set(rawWaKey(key) || key?.id, stored);
   return stored;
 }
 
@@ -576,10 +602,19 @@ function snapshot() {
   };
 }
 
-async function endSocketQuietly() {
+function pauseForStorage() {
+  ++connectGeneration;
+  clearTimeout(reconnectTimer);
+  connection="error";
+  qrDataUrl="";
+  lastError=eventSpool.health.warning;
+  void endSocketQuietly(true);
+}
+
+async function endSocketQuietly(keepIdentity = false) {
   const current = socket;
   socket = undefined;
-  authMe = undefined;
+  if(!keepIdentity)authMe = undefined;
   if (!current) return;
   try {
     current.ev?.removeAllListeners?.();
@@ -634,13 +669,26 @@ function isIgnoredJid(jid) {
 /**
  * @param {{ clearAuth?: boolean }} [opts]
  */
+function scheduleReconnect() {
+  clearTimeout(reconnectTimer);
+  if (eventSpool.health.receivingPaused || connection === "logged_out") return;
+  reconnectAttempts += 1;
+  const delay = Math.min(45_000, Math.round(1500 * Math.pow(1.7, Math.min(reconnectAttempts, 8))));
+  // connect schedules the next attempt on failure; this timer owns no rejected promise.
+  reconnectTimer = setTimeout(() => { void connect({ clearAuth: false }).catch(() => {}); }, delay);
+}
+
 async function connect(opts = {}) {
+  if(eventSpool.health.receivingPaused)await eventSpool.recover();
   if (connectPromise) {
     if (!opts.clearAuth) return connectPromise;
     await connectPromise.catch(() => {});
   }
   const next = connectInternal(opts);
-  connectPromise = next.finally(() => {
+  connectPromise = next.catch((error) => {
+    scheduleReconnect();
+    throw error;
+  }).finally(() => {
     if (connectPromise === wrapped) connectPromise = null;
   });
   const wrapped = connectPromise;
@@ -678,7 +726,8 @@ async function connectInternal(opts = {}) {
       logger,
       // Desktop 子平台会被 WhatsApp 立即以 428 终止；Web 浏览器指纹可正常登录。
       browser: Browsers.ubuntu("Chrome"),
-      syncFullHistory: true,
+      // shortcut: request recent history only; revisit if WhatsApp accepts the Desktop fingerprint without 428.
+      syncFullHistory: false,
       shouldSyncHistoryMessage: () => true,
       // 后台 CRM 默认不占用在线态，避免抑制手机端推送。
       markOnlineOnConnect: false,
@@ -700,13 +749,14 @@ async function connectInternal(opts = {}) {
     });
 
     let contactsPushTimer;
+    const publishContacts = createContactDeltaPublisher(items => {
+      push("contacts.sync", { items, source: "contacts" });
+    });
     const scheduleContactsPush = () => {
       clearTimeout(contactsPushTimer);
       contactsPushTimer = setTimeout(() => {
         const data = snapshot();
-        if (data.contacts.length) {
-          push("contacts.sync", { items: data.contacts, source: "contacts" });
-        }
+        publishContacts(data.contacts);
       }, 400);
     };
 
@@ -1254,6 +1304,11 @@ async function connectInternal(opts = {}) {
           }
         }
       }
+      if (update.isNewLogin) {
+        connection = "starting";
+        qrDataUrl = "";
+        lastError = "";
+      }
       if (update.connection === "open") {
         connection = "connected";
         qrDataUrl = "";
@@ -1288,6 +1343,13 @@ async function connectInternal(opts = {}) {
           String(update.lastDisconnect?.error || "Connection Terminated");
         lastError = errMsg;
         lastDisconnectAt = Date.now();
+        if (statusCode === DisconnectReason.connectionReplaced) {
+          connection = "error";
+          qrDataUrl = "";
+          lastError = "此登录会话已被其他进程接管，已停止自动抢连。请退出重复运行的 CRM 后点击安全重连";
+          clearTimeout(reconnectTimer);
+          return;
+        }
         const loggedOut =
           statusCode === DisconnectReason.loggedOut || statusCode === 401;
         // badSession 才清；403 有时是临时限制，勿动辄清 auth
@@ -1309,29 +1371,7 @@ async function connectInternal(opts = {}) {
         if (myGen !== connectGeneration) return;
         clearTimeout(reconnectTimer);
 
-        // 指数退避：1.5s → 3s → … 封顶 45s，减轻 WhatsApp 侧踢线
-        reconnectAttempts = shouldClear ? 0 : reconnectAttempts + 1;
-        const delay = shouldClear
-          ? 800
-          : Math.min(
-              45_000,
-              Math.round(1500 * Math.pow(1.7, Math.min(reconnectAttempts, 8)))
-            );
-
-        reconnectTimer = setTimeout(() => {
-          void connect({ clearAuth: shouldClear }).catch((error) => {
-            connection = "error";
-            lastError = String(error);
-            push("baileys.error", { message: String(error) });
-            // 失败后再试一次（不清除 auth）
-            if (!shouldClear) {
-              clearTimeout(reconnectTimer);
-              reconnectTimer = setTimeout(() => {
-                void connect({ clearAuth: false }).catch(() => {});
-              }, 8000);
-            }
-          });
-        }, delay);
+        scheduleReconnect();
       }
     });
   } catch (error) {
@@ -1460,7 +1500,7 @@ function statusPayload() {
     protocolVersion: BAILEYS_BRIDGE_PROTOCOL_VERSION,
     baileysVersion: BAILEYS_LIBRARY_VERSION,
     connection,
-    capabilities: { nativeVideo: true },
+    capabilities: { nativeVideo: true, nativeVideoStream: true },
     qrDataUrl: connection === "qr" ? qrDataUrl : "",
     user,
     lastError,
@@ -1471,6 +1511,7 @@ function statusPayload() {
     presenceEventCount,
     lastPresenceDebug,
     eventCursor: sequence,
+    syncStorage: eventSpool.health,
   };
 }
 
@@ -1484,6 +1525,7 @@ function getHttpDeps() {
       return port;
     },
     get deletionEvents() { return deletionJournal.snapshot(); },
+    eventSpool,
     get events() {
       return events;
     },

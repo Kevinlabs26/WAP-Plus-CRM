@@ -16,6 +16,18 @@ export interface OpenAiCompatibleConfig {
   label: string;
 }
 
+export function chatCompletionOptions(provider:string,model:string,temperature:number,maxTokens?:number) {
+  const openai=provider==="openai";
+  const reasoning=/^(?:gpt-(?:[5-9]|\d{2,})(?:[.-]|$)|o\d+(?:-|$))/i.test(model);
+  // Luna supports none: keep the small chat budget available for the visible reply.
+  const fast=openai&&/^gpt-5\.6-luna(?:-|$)/i.test(model);
+  return {
+    ...(!openai||!reasoning||fast?{temperature}:{}),
+    ...(fast?{reasoning_effort:"none" as const}:{}),
+    ...(maxTokens===undefined?{}:openai?{max_completion_tokens:maxTokens}:{max_tokens:maxTokens}),
+  };
+}
+
 export function getOpenAiCompatibleConfig(
   settings: Partial<AppSettings>
 ): OpenAiCompatibleConfig | null {
@@ -75,6 +87,8 @@ export function getOpenAiCompatibleConfig(
 }
 
 export function hasAiCredentials(settings: AppSettings): boolean {
+  if(settings.aiProvider==="muse")return true; // The native adapter checks the browser session on every request.
+  if(settings.aiProvider==="vertex")return !!settings.vertexCredentialId&&!!settings.vertexProjectId&&!!settings.vertexLocation&&!!settings.aiModel?.trim();
   if (settings.aiProvider === "gemini") return !!settings.geminiKey?.trim();
   if (settings.aiProvider === "ollama") return !!settings.ollamaUrl?.trim();
   const config = getOpenAiCompatibleConfig(settings);

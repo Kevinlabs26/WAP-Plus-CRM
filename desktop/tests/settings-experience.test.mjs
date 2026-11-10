@@ -4,12 +4,12 @@ import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import zh from "../src/i18n/locales/zh-CN.ts";
 
-const panels = ["Connection", "Messaging", "Ai", "Translation", "AutoReply", "QuickReplies", "Data", "Blocklist", "Appearance", "Speech", "Notifications", "ScheduledMessages", "Update"];
+const panels = ["Connection", "Messaging", "Ai", "Translation", "AutoReply", "QuickReplies", "Data", "Blocklist", "Appearance", "Speech", "Notifications", "ScheduledMessages", "Update", "CloudImages"];
 const mocks = {
   "./SettingsGoogleSheets": "export const SettingsGoogleSheets=()=>null;",
   react: "export const memo=fn=>fn; export const useState=initial=>globalThis.settingsHookState?globalThis.settingsHookState(initial):[typeof initial==='function'?initial():initial,()=>{}]; export const useRef=value=>globalThis.settingsHookRef?globalThis.settingsHookRef(value):({current:null}); export const useEffect=fn=>globalThis.settingsEffects.push(fn);",
   "react/jsx-runtime": "export const jsx=(type,props,key)=>({type,props,key}); export const jsxs=jsx;",
-  "lucide-react": "export const AudioLines=()=>null, Bell=AudioLines, TableProperties=AudioLines, Bot=AudioLines, Clock3=AudioLines, Database=AudioLines, Info=AudioLines, MessageSquareText=AudioLines, Palette=AudioLines, Radio=AudioLines, ShieldBan=AudioLines, Workflow=AudioLines, X=AudioLines, Zap=AudioLines, Activity=AudioLines, AlertTriangle=AudioLines, CheckCircle2=AudioLines, Flame=AudioLines;",
+  "lucide-react": "export const AudioLines=()=>null, CloudUpload=AudioLines, Bell=AudioLines, TableProperties=AudioLines, Bot=AudioLines, Clock3=AudioLines, Database=AudioLines, Info=AudioLines, MessageSquareText=AudioLines, Palette=AudioLines, Radio=AudioLines, ShieldBan=AudioLines, Workflow=AudioLines, X=AudioLines, Zap=AudioLines, Activity=AudioLines, AlertTriangle=AudioLines, CheckCircle2=AudioLines, Flame=AudioLines;",
   "@/store/appStore": "export const useAppStore=selector=>selector(globalThis.settingsState);",
   "@/i18n": "export const useI18n=()=>({t:globalThis.settingsTranslate});",
   ...Object.fromEntries(panels.map(name => [`./Settings${name}Panel`, `export const Settings${name}Panel=()=>null;`])),
@@ -28,6 +28,18 @@ const nodes = tree => Array.isArray(tree) ? tree.flatMap(nodes) : tree?.props ? 
 const text = tree => Array.isArray(tree) ? tree.map(text).join("") : tree?.props ? text(tree.props.children) : typeof tree === "string" || typeof tree === "number" ? String(tree) : "";
 const translate = (key, params = {}) => String(zh[key] || key).replace(/\{(\w+)\}/g, (_, key) => params[key] ?? `{${key}}`);
 const health = { accountId: "wa-a", level: "green", score: 100, sentLastHour: 0, sentLastDay: 0, newChatsLastDay: 0, caps: { perHour: 100, perDaySoft: 800 } };
+
+test("a Windows upload notification can open the cloud panel while settings is already on another category",()=>{
+  const cells=[];let cursor=0;
+  globalThis.settingsHookState=initial=>{const i=cursor++;cells[i]??={value:typeof initial==='function'?initial():initial};return[cells[i].value,next=>{cells[i].value=typeof next==='function'?next(cells[i].value):next;}];};
+  globalThis.settingsTranslate=translate;globalThis.settingsEffects=[];
+  globalThis.settingsState={settingsOpen:true,settingsCategory:'connection'};
+  try{
+    SettingsModal();settingsState.settingsCategory='cloud-images';cursor=0;
+    const tree=SettingsModal();
+    assert.ok(nodes(tree).some(node=>node.props.active===true&&node.props.Panel?.name==='SettingsCloudImagesPanel'));
+  }finally{for(const key of ['settingsHookState','settingsTranslate','settingsEffects','settingsState'])delete globalThis[key];}
+});
 
 test("unsaved sheet settings guard close, keep editing, failed save and successful save", async () => {
   const cells=[],changes=[];let index=0;

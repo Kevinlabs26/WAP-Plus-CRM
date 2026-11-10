@@ -82,7 +82,7 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
       <p role="status" className="mt-2 text-xs text-zinc-500">{t(busy ? "sheets.saving" : dirty ? "sheets.unsaved" : "sheets.explicitSave")}</p>
     </header>
     <ol aria-label={t("sheets.setup")} className="grid grid-cols-3 gap-2">
-      {[{ label: t("sheets.accountStep"), complete: !!state.email }, { label: t("sheets.sourceStep"), complete: !!state.config || !!headers.length }, { label: t("sheets.fieldsStep"), complete: !!state.config }].map((step, index) => <li key={step.label} className="flex items-center gap-2 rounded-lg border border-zinc-800 px-3 py-2 text-xs text-zinc-500"><span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] ${step.complete ? "bg-brand/10 text-brand" : "bg-zinc-800 text-zinc-400"}`}>{step.complete ? <Check className="h-3 w-3" /> : index + 1}</span><span>{step.label}</span></li>)}
+      {[{ label: t("sheets.accountStep"), complete: !!state.email }, { label: t("sheets.sourceStep"), complete: !!state.config || !!headers.length }, { label: t("sheets.fieldsStep"), complete: !!state.config }].map((step, index) => <li key={step.label} className="flex items-center gap-2 px-1 py-2 text-xs text-zinc-500"><span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] ${step.complete ? "bg-brand/10 text-brand" : "bg-zinc-800 text-zinc-400"}`}>{step.complete ? <Check className="h-3 w-3" /> : index + 1}</span><span>{step.label}</span></li>)}
     </ol>
     <section className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
       <div className="flex items-center justify-between gap-3"><SectionLabel className="!mb-0">{t("sheets.accountStep")}</SectionLabel><span role="status" className={`rounded-full px-2 py-1 text-[10px] ${state.email ? "bg-brand/10 text-brand" : "bg-zinc-800 text-zinc-500"}`}>{state.email ? t("sheets.connected") : t("sheets.disconnected")}</span></div>
@@ -124,7 +124,7 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
             setActions(values => { const next = { ...values }; if (action) next[header] = action; else delete next[header]; return next; });
             if (field) update({ action });
           };
-          return <div key={index} className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-800 p-2">
+          return <div key={index} className="flex flex-wrap items-center gap-2 border-b border-zinc-800/70 py-2">
             <label className="flex min-w-32 items-center gap-2 text-sm leading-5"><input type="checkbox" checked={!!field} disabled={!field && fields.length >= MAX_SHEET_DISPLAY_COLUMNS} onChange={e => setFields(values => e.target.checked ? values.length >= MAX_SHEET_DISPLAY_COLUMNS ? values : [...values, { id: crypto.randomUUID(), label: header, column: { heading: header }, schedule: { kind: "interval", minutes: 15 }, action: actions[header] }] : values.filter(value => value.id !== field?.id))} />{letter(index)} · {header}</label>
             {field && <>
               <input aria-label={t("sheets.label")} className="ui-control px-3 py-2 text-sm leading-5 font-normal w-36" value={field.label} onChange={e => update({ label: e.target.value })} />

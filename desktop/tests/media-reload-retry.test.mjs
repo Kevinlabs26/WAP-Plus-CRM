@@ -35,6 +35,7 @@ test("media reload only resyncs for a missing bridge message", () => {
 });
 
 test("visible voice messages auto-load even from older persisted snapshots", () => {
+  assert.equal(shouldAutoLoadMessageMedia({mediaType:'audio',mediaError:'Download failed'}),false);
   assert.equal(
     shouldAutoLoadMessageMedia({ mediaType: "audio", mediaPending: true }),
     true
@@ -81,4 +82,30 @@ test('cancelled voice download releases its slot without syncing, retrying or sh
   while(!started)await new Promise(resolve=>setImmediate(resolve));controller.abort();await running;
   assert.equal(calls,1);assert.equal(inFlight.size,0);assert.deepEqual(toasts,[]);assert.equal(patches.some(p=>p.mediaError!==undefined),false);
  }finally{delete globalThis.cancelMediaDownload;}
+});
+
+test('attachment failures never resync conversations; permanent failures stop automatic retries',async()=>{
+ const mocks={
+  '@/lib/baileys':'export const baileysDownloadMedia=()=>globalThis.mediaRetryDownload();export const baileysSync=async()=>{globalThis.mediaRetrySyncs++;};export const baileysFetchMessageHistory=async()=>{};',
+  '@/lib/bridge':'export const bridgeInvoke=async()=>{};',
+  '@/lib/mediaCache':'export const bridgeMessageMediaCacheId=id=>id;export const cacheMediaUrl=async()=>{};export const readMediaCache=async()=>null;',
+  '@/i18n':'export const translateCurrent=k=>k;',
+ };
+ const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/chat/reloadMediaAction.ts',import.meta.url))],bundle:true,write:false,format:'esm',platform:'browser',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},plugins:[{name:'retry-download',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
+ const {reloadMedia}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
+ const oldWindow=globalThis.window;
+ try{
+  for(const retryable of [true,false]){
+   let calls=0;const delays=[],patches=[];
+   globalThis.window={setTimeout(fn,delay){delays.push(delay);queueMicrotask(fn);}};
+   globalThis.mediaRetrySyncs=0;
+   globalThis.mediaRetryDownload=async()=>{calls++;throw Object.assign(Error('Attachment failed'),{status:retryable?502:410,retryable});};
+   const message={id:'voice-'+retryable,mediaType:'audio'};
+   await reloadMedia({message,sourceMessage:message,isBaileys:true,chatConnected:true,chatAccountId:'qa',activeContactName:'Test',mediaResyncAt:new Map(),mediaInFlight:new Set(),setMediaBusyId(){},resolveMessageKey:()=>({id:'key',remoteJid:'123@s.whatsapp.net'}),updateMessageDelivery:(_id,p)=>patches.push(p),pushToast(){},quiet:true});
+   assert.equal(globalThis.mediaRetrySyncs,0);
+   assert.equal(calls,retryable?3:1);
+   assert.deepEqual(delays,retryable?[800,2400]:[]);
+   assert.equal(patches.at(-1).mediaError,'Attachment failed');
+  }
+ }finally{globalThis.window=oldWindow;delete globalThis.mediaRetryDownload;delete globalThis.mediaRetrySyncs;}
 });

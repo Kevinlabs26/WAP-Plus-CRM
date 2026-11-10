@@ -13,6 +13,8 @@ import {
 } from "@/lib/accountConnection";
 import { canSendAutoReply } from "@/lib/aiSafety";
 import { currentAutoReplyContext, hashAiReplyContext } from "@/lib/aiReplyContext";
+import { currentOutreachContext, isOutreachPaused } from "@/lib/aiOutreachContext";
+import { hydrateOutreachHistory } from "@/lib/aiOutreachHistory";
 import { translateCurrent } from "@/i18n";
 import { scheduledMessageExpired } from "@/lib/scheduledMessageExpiry";
 
@@ -89,22 +91,35 @@ export function SendQueueWatcher() {
         state.updateMessageDelivery(msg.id, { deliveryStatus: "failed", lastError: error, retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined });
         return;
       }
-      const aiContextKey = msg.systemKind === "ai_auto_reply" ? currentAutoReplyContext(state, msg) : null;
-      if (msg.systemKind === "ai_auto_reply") {
+      const proactive=msg.systemKind==="ai_proactive";
+      if(proactive){
+        if(isOutreachPaused(settings,msg.id))return;
+        try{await hydrateOutreachHistory(msg.chatId);}catch{
+          state.updateMessageDelivery(msg.id,{deliveryStatus:"queued",lastError:"聊天历史尚未读取，稍后重新检查",nextAttemptAt:new Date(Date.now()+30_000).toISOString()});return;
+        }
+        if(cancelled)return;
+        state=useAppStore.getState();const current=state.messages.find(item=>item.id===queued.id);
+        if(!current||!isRetryableOutgoing(current))return;
+        msg=current;settings=state.settings;
+        if(isOutreachPaused(settings,msg.id))return;
+      }
+      const aiContextKey = proactive ? currentOutreachContext(state,msg) : msg.systemKind === "ai_auto_reply" ? currentAutoReplyContext(state, msg) : null;
+      if (msg.systemKind === "ai_auto_reply"||proactive) {
         let verified = false;
-        if (aiContextKey && msg.aiReplyContextHash && canSendAutoReply(settings, state.messages, msg)) {
+        if (aiContextKey && msg.aiReplyContextHash && (proactive||canSendAutoReply(settings, state.messages, msg))) {
           try { verified = await hashAiReplyContext(aiContextKey) === msg.aiReplyContextHash; }
           catch { /* 无法校验时交给人工，不能每轮重试未知的自动回复。 */ }
         }
         if (cancelled) return;
         const latest = useAppStore.getState();
         const current = latest.messages.find((item) => item.id === queued.id);
+        if(proactive&&isOutreachPaused(latest.settings,queued.id))return;
         // 摘要校验会让出执行权；不能复活期间取消、删除或推迟的消息。
         if (!current || !isRetryableOutgoing(current) || current.body !== msg.body ||
             current.phoneE164 !== msg.phoneE164 || current.accountId !== msg.accountId || current.channelId !== msg.channelId ||
             current.aiReplyContextHash !== msg.aiReplyContextHash ||
             latest.settings.scheduledMessages?.some(task => task.messageId === current.id && task.status === "cancelled")) return;
-        if (!verified || currentAutoReplyContext(latest, current) !== aiContextKey) {
+        if (!verified || (proactive?currentOutreachContext(latest,current):currentAutoReplyContext(latest, current)) !== aiContextKey) {
           latest.updateMessageDelivery(current.id, {
             deliveryStatus: "failed", retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined,
             lastError: "自动回复无法验证当前配置和上下文，请重新生成或手动撰写回复",
@@ -173,7 +188,7 @@ export function SendQueueWatcher() {
           },
           {
             channelId,
-            requiredMinGapSec: msg.systemKind === "scheduled_message" ? 20 : undefined,
+            requiredMinGapSec: msg.systemKind === "scheduled_message"||proactive ? 20 : undefined,
             canSend: () => {
               const latest = useAppStore.getState();
               const message = latest.messages.find((item) => item.id === msg.id);
@@ -184,6 +199,7 @@ export function SendQueueWatcher() {
               }
               return !!message && message.deliveryStatus === "pending" &&
                 (!task || (task.status === "queued" && !scheduledMessageExpired(task))) &&
+                (!proactive||currentOutreachContext(latest,message)===aiContextKey) &&
                 (msg.systemKind !== "ai_auto_reply" || (currentAutoReplyContext(latest, message) === aiContextKey &&
                   canSendAutoReply(latest.settings, latest.messages, message)));
             },
@@ -219,6 +235,15 @@ export function SendQueueWatcher() {
           return;
         }
 
+        if(proactive&&result.error==="automation_cancelled") {
+          const latest=useAppStore.getState(),current=latest.messages.find(item=>item.id===msg.id);
+          const run=latest.settings.aiOutreachRuns.find(item=>item.messageId===msg.id);
+          // The final gate rejected before transport; a pause can safely retain this exact message.
+          if(current?.deliveryStatus==="pending"&&run?.status==="queued"&&isOutreachPaused(latest.settings,msg.id)) {
+            latest.updateMessageDelivery(msg.id,{deliveryStatus:"queued",retryCount:Math.max(0,attempt-1),lastError:undefined,nextAttemptAt:new Date(Date.now()+5000).toISOString()});
+            return;
+          }
+        }
         const rateLimited = result.error === "rate_limited";
         const transient = isTransientError(result);
         // 冷却/限速本身就是可恢复状态，不消耗普通瞬时错误的重试额度。

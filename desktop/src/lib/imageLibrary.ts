@@ -6,6 +6,7 @@ export type LibraryImage = {
   id: string; title: string; category: string; mime: string; size: number;
   thumbnail: string; pinned: boolean; usedAt: number; createdAt: number;
   caption?: string;
+  sortOrder?:number;
 };
 export const IMAGE_LIMIT = 8 * 1024 * 1024;
 const BACKUP_LIMIT = 128 * 1024 * 1024;
@@ -19,6 +20,11 @@ export const listLibraryImages = () => command<LibraryImage[]>({ action: "list" 
 export const listLibraryCategories = () => command<string[]>({ action: "listCategories" });
 export const createLibraryCategory = (name: string) => command<void>({ action: "createCategory", name: name.trim() });
 export const deleteLibraryCategory = (name: string) => command<void>({ action: "deleteCategory", name: name.trim() });
+export const renameLibraryCategory = (name:string,newName:string)=>command<void>({action:"renameCategory",name,new_name:newName.trim()});
+export const orderLibraryCategories = (names:string[])=>command<void>({action:"orderCategories",names});
+export const moveLibraryImages = (ids:string[],category:string,beforeId?:string,after=false)=>command<void>({action:"move",ids,category:category.trim(),before_id:beforeId||null,after});
+export const scanLibraryImport = (paths:string[])=>command<{files:{path:string;category:string|null}[];skipped:number}>({action:"scan",paths});
+export async function replaceLibraryImage(id:string,file:File){return command<{id:string}>({action:"replace",id,...await prepareLibraryImage(file)});}
 export const readLibraryImage = (id: string) => command<string>({ action: "read", id });
 export async function editLibraryImage(image: Pick<LibraryImage, "id" | "title" | "category" | "pinned" | "usedAt" | "caption">) {
   if (image.caption !== undefined && (typeof image.caption !== "string" || image.caption.length > 2000)) throw new Error("图片说明最多 2000 字符");
@@ -69,7 +75,17 @@ export function filterLibraryImages(images: LibraryImage[], query: string, categ
   const normalize = (text: string) => text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase();
   const words = normalize(query).trim().split(/\s+/).filter(Boolean);
   return images.filter(item => (category === "*" || item.category === category) && (view !== "pinned" || item.pinned) && (view !== "recent" || item.usedAt > 0) && words.every(word => normalize(`${item.title} ${item.category} ${item.caption || ""}`).includes(word)))
-    .sort((a, b) => view === "recent" ? b.usedAt - a.usedAt : Number(b.pinned) - Number(a.pinned) || b.createdAt - a.createdAt);
+    .sort((a, b) => view === "recent" ? b.usedAt - a.usedAt : (a.sortOrder||0)-(b.sortOrder||0)||Number(b.pinned) - Number(a.pinned) || b.createdAt - a.createdAt);
+}
+
+export function libraryFolderCategory(relativePath:string){
+  const parts=relativePath.replace(/\\/g,"/").split("/");parts.pop();
+  if(!parts.length||parts.some(part=>!part||part==="."||part===".."))throw Error("Invalid image folder path");
+  const category=parts.join("/");if(category.length>60||category==="*")throw Error("Folder category exceeds 60 characters");return category;
+}
+export function moveLibraryCategory(names:string[],source:string,target:string,after:boolean){
+  if(source===target||!names.includes(source)||!names.includes(target))return names;
+  const result=names.filter(name=>name!==source);result.splice(result.indexOf(target)+Number(after),0,source);return result;
 }
 
 export async function exportImageLibrary(images: LibraryImage[], categories = [...new Set(images.map(image => image.category).filter(Boolean))]) {
@@ -100,13 +116,15 @@ export async function restoreImageLibrary(file: File, onProgress: (done: number,
   if (!Array.isArray(categories) || categories.length > 3000 || categories.some(name => typeof name !== "string" || !name.trim() || name.trim() === "*" || name.length > 60)) throw new Error("Invalid image library categories");
   for (const name of categories) await createLibraryCategory(name);
   let added = 0;
+  const ordered=new Map<string,string[]>();
   for (let index = 0; index < items.length; index++) {
     const item = items[index]!;
     const file = quickReplyMediaToFile({ dataUrl: item.data, fileName: item.title, mimeType: /^data:([^;,]+)/.exec(item.data)![1]!, kind: "image", token: "restore" });
     if (!file) throw new Error("Invalid image in library backup");
     const result = await addLibraryImage(file, item.category, item.title); added += Number(result.added);
-    if (result.added) await editLibraryImage({ ...item, id: result.id });
+    if (result.added) {await editLibraryImage({ ...item, id: result.id });const ids=ordered.get(item.category)||[];ids.push(result.id);ordered.set(item.category,ids);}
     onProgress(index + 1, items.length);
   }
+  for(const [category,ids] of ordered)await moveLibraryImages(ids,category);
   return added;
 }

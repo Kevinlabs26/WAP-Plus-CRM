@@ -111,6 +111,7 @@ type Props = {
   recentStickers: string[];
   onSendRecentSticker: (dataUrl: string) => void | Promise<void>;
   favoriteStickers: string[];
+  onImportStickerFiles: (files: File[]) => Promise<void>;
   onRemoveFavoriteSticker: (dataUrl: string) => void;
   onSendFile: (file: File, caption?: string) => boolean | Promise<boolean>;
   onOpenCatalog: () => void;
@@ -165,6 +166,7 @@ function ComposerInner({
   recentStickers,
   onSendRecentSticker,
   favoriteStickers,
+  onImportStickerFiles,
   onRemoveFavoriteSticker,
   onSendFile,
   onOpenCatalog,
@@ -247,7 +249,6 @@ function ComposerInner({
   const resizeTimerRef = useRef<number | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const stickerInputRef = useRef<HTMLInputElement | null>(null);
   const gifInputRef = useRef<HTMLInputElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const emojiPanelRef = useRef<HTMLDivElement | null>(null);
@@ -510,19 +511,27 @@ function ComposerInner({
           const dropContext = mediaStageContextRef.current.version;
           dragDepthRef.current = 0;
           setDragOver(false);
-          const files = await Promise.all(
-            event.payload.paths.slice(0, 5).map(async (path) => {
-              const dropped = await invoke<{
-                name: string;
-                mime: string;
-                bytes: number[];
-              }>("read_dropped_file", { path });
-              return new File([new Uint8Array(dropped.bytes)], dropped.name, {
-                type: dropped.mime,
-              });
-            })
-          );
-          if (dropContext === mediaStageContextRef.current.version && files.length) stageMediaRef.current(files);
+          try {
+            const files = await Promise.all(
+              event.payload.paths.slice(0, 5).map(async (path) => {
+                if (/\.mp4$/i.test(path)) {
+                  const bytes = await invoke<ArrayBuffer>("read_dropped_video", {path});
+                  return new File([bytes], path.split(/[\\/]/).pop() || "video.mp4", {type:"video/mp4"});
+                }
+                const dropped = await invoke<{
+                  name: string;
+                  mime: string;
+                  bytes: number[];
+                }>("read_dropped_file", { path });
+                return new File([new Uint8Array(dropped.bytes)], dropped.name, {
+                  type: dropped.mime,
+                });
+              })
+            );
+            if (dropContext === mediaStageContextRef.current.version && files.length) stageMediaRef.current(files);
+          } catch (error) {
+            useAppStore.getState().pushToast(error instanceof Error ? error.message : String(error), "error");
+          }
         });
       } catch {
         // 浏览器开发模式没有 Tauri API，依赖上面的 HTML5 监听即可。
@@ -861,7 +870,7 @@ function ComposerInner({
       <input
         ref={imageInputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,video/mp4,.mp4"
         multiple
         className="hidden"
         onChange={(e) => {
@@ -884,17 +893,6 @@ function ComposerInner({
           const files = Array.from(e.target.files || []);
           e.target.value = "";
           stageMedia(files, "file");
-        }}
-      />
-      <input
-        ref={stickerInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          e.target.value = "";
-          if (f) stageMedia([f], "sticker");
         }}
       />
       <input
@@ -1005,7 +1003,7 @@ function ComposerInner({
                     }}
                   >
                     <Image className="h-4 w-4 text-sky-400" />
-                    {t("composer.image")}
+                    {t("composer.imageVideo")}
                   </button>
                   <button
                     type="button"
@@ -1347,7 +1345,7 @@ function ComposerInner({
                       setTranslateOriginal(null);
                       emitComposing();
                     }}
-                    onPickStickerFile={() => stickerInputRef.current?.click()}
+                    onImportStickerFiles={onImportStickerFiles}
                     onPickGifFile={() => gifInputRef.current?.click()}
                     favoriteStickers={favoriteStickers}
                     recentStickers={recentStickers}

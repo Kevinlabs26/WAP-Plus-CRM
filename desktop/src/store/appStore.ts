@@ -34,7 +34,7 @@ export const useAppStore = create<AppState>((set, get) => {
     selectedContactId: null,
     selectedChatId: null,
     selectedThreadAccount: null,
-    crmFocusContactId: null,
+    sidebarTab: "chats",
     aiSuggestions: [],
     draftReply: "",
     draftReplyByChatId: {},

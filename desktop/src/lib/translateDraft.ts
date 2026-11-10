@@ -1,10 +1,12 @@
 import { readAiJson } from "./aiResponse.ts";
+import { trackAiRequest } from "./aiUsage.ts";
+import { vertexAiConfig } from "./vertexAi.ts";
 import { getTranslationSettings } from "./translationConfig.ts";
 import type { Contact } from "@/types/crm";
 import type { AppSettings } from "@/store/appStore";
 import { franc } from "franc-min";
 import { geminiGenerate } from "./gemini.ts";
-import { getOpenAiCompatibleConfig, hasAiCredentials } from "./aiProviders.ts";
+import { getOpenAiCompatibleConfig, hasAiCredentials, chatCompletionOptions } from "./aiProviders.ts";
 
 export type TranslateLangCode =
   | "en"
@@ -325,6 +327,7 @@ export interface TranslateResult {
     | "zhipu"
     | "openrouter"
     | "gemini"
+    | "vertex"
     | "ollama"
     | "google"
     | "custom";
@@ -402,7 +405,7 @@ export function getTranslationContextKey(text: string, to: string, settings: App
   return JSON.stringify([to, text, service, google ? "google" : settings.aiProvider,
     google ? "" : config?.model || settings.aiModel || "",
     google ? "" : config?.baseUrl || (settings.aiProvider === "ollama" ? settings.ollamaUrl : ""),
-    google || ready, opts?.googleFirst && service === "auto" ? "google-first" : ""]);
+    google || ready, opts?.googleFirst && service === "auto" ? "google-first" : "", !google&&settings.aiProvider==="vertex"?[settings.vertexProjectId,settings.vertexLocation,settings.vertexCredentialId]:null]);
 }
 
 function rememberTranslation(key: string, text: string, source: TranslateResult["source"]) {
@@ -453,18 +456,21 @@ async function chatComplete(opts: {
   user: string;
   signal?: AbortSignal;
 }): Promise<string> {
-  if (opts.provider === "gemini") {
+  if (opts.provider === "gemini"||opts.provider==="vertex") {
     return geminiGenerate({
       apiKey: opts.settings.geminiKey,
       model: opts.settings.aiModel.trim() || undefined,
       system: opts.system,
       user: opts.user,
-      temperature: 0.2,
+      temperature:0.2,
       signal: opts.signal,
+      feature:"translation",
+      vertex:vertexAiConfig(opts.settings),
     });
   }
   if (opts.provider === "ollama") {
     const base = opts.settings.ollamaUrl.replace(/\/$/, "");
+    return trackAiRequest({provider:"ollama",model:opts.settings.aiModel.trim()||"llama3.2",endpoint:base,feature:"translation"},async observe=>{
     const res = await fetch(`${base}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -479,13 +485,14 @@ async function chatComplete(opts: {
       signal: opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
     });
     if (!res.ok) throw new Error(`Ollama ${res.status}`);
-    const data = (await readAiJson(res)) as {
+    const data = (await readAiJson(res,observe)) as {
       message?: { content?: string };
       response?: string;
     };
     const content = data.message?.content ?? data.response;
     if (!content?.trim()) throw new Error("Ollama 空响应");
     return content;
+    });
   }
 
   const config = getOpenAiCompatibleConfig(opts.settings);
@@ -493,6 +500,7 @@ async function chatComplete(opts: {
     throw new Error("自定义提供商缺少 Base URL 或模型名");
   }
 
+  return trackAiRequest({provider:opts.provider,model:config.model,endpoint:config.baseUrl,feature:"translation"},async observe=>{
   const res = await fetch(`${config.baseUrl.replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
     headers: {
@@ -501,7 +509,7 @@ async function chatComplete(opts: {
     },
     body: JSON.stringify({
       model: config.model,
-      temperature: 0.2,
+      ...chatCompletionOptions(opts.provider,config.model,0.2),
       ...(opts.provider === "groq" && /^openai\/gpt-oss-(20b|120b)$/.test(config.model)
         ? { reasoning_effort: "low", include_reasoning: false } : {}),
       messages: [
@@ -514,19 +522,20 @@ async function chatComplete(opts: {
   if (!res.ok) {
     let detail = res.statusText;
     try {
-      const errBody = (await readAiJson(res)) as { error?: { message?: string } };
+      const errBody = (await readAiJson(res,observe)) as { error?: { message?: string } };
       detail = errBody.error?.message || detail;
     } catch {
       /* ignore */
     }
     throw new Error(`${opts.provider} ${res.status}: ${detail}`);
   }
-  const data = (await readAiJson(res)) as {
+  const data = (await readAiJson(res,observe)) as {
     choices?: { message?: { content?: string } }[];
   };
   const content = data.choices?.[0]?.message?.content;
   if (!content?.trim()) throw new Error(`${opts.provider} 空响应`);
   return content;
+  });
 }
 
 /**

@@ -8,7 +8,6 @@ const mocks={
  '@/components/crm/ContactEditor':'export const ContactEditor="contact-editor";',
  '@/components/crm/SalesStageManager':'export const SalesStageManager="stage-manager";',
  '@/components/settings/ContactImportModal':'export const ContactImportModal="import-modal";',
- './CrmBoardCard':'export const CrmBoardCard="board-card";',
  '@/lib/exportData':'export const contactsToCsv=()=>"";export const downloadText=()=>{};',
  react:'export const useState=i=>globalThis.compactHooks(i);export const useEffect=()=>{};export const useCallback=f=>f;export const useMemo=f=>f();export const useDeferredValue=v=>v;export const useRef=i=>globalThis.compactHooks(()=>({current:i}))[0];',
  'react/jsx-runtime':'export const Fragment="fragment";export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
@@ -20,7 +19,7 @@ const mocks={
  '@/store/appStore':'export const useAppStore=f=>f(globalThis.compactState||{pushToast(){}});',
  '@/lib/localSpeech':'export const SPEECH_MODEL_PRESETS=[];export const listLocalSpeechModels=async()=>[];export const downloadSpeechModel=async()=>{};export const removeLocalSpeechModel=async()=>{};',
 };
-const built=await build({stdin:{contents:`export {CrmView} from './src/components/views/CrmView.tsx';export {SavedMessageToolbar} from './src/components/chat/SavedMessageToolbar.tsx';export {BroadcastPickStep} from './src/components/views/BroadcastPickStep.tsx';export {MultiWindowLayoutControls} from './src/features/multiWindow/components/MultiWindowLayoutControls.tsx';export {SettingsLocalSpeechPanel} from './src/components/settings/SettingsLocalSpeechPanel.tsx';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',jsx:'automatic',alias:{'@':root+'src'},plugins:[{name:'boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
+const built=await build({stdin:{contents:`export {SavedMessageToolbar} from './src/components/chat/SavedMessageToolbar.tsx';export {BroadcastPickStep} from './src/components/views/BroadcastPickStep.tsx';export {MultiWindowLayoutControls} from './src/features/multiWindow/components/MultiWindowLayoutControls.tsx';export {SettingsLocalSpeechPanel} from './src/components/settings/SettingsLocalSpeechPanel.tsx';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',jsx:'automatic',alias:{'@':root+'src'},plugins:[{name:'boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
 const ui=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text+'\n//# sourceURL=compact-workflow-controls.js').toString('base64'));
 const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
 const text=t=>Array.isArray(t)?t.map(text).join(''):t?.props?text(t.props.children):typeof t==='string'||typeof t==='number'?String(t):'';
@@ -78,22 +77,4 @@ test('saved item types and tags retain callbacks, with batch operations on a sep
  h.button('saved.selectAll').props.onClick();h.button('saved.pin').props.onClick();h.button('saved.delete').props.onClick();
  assert.deepEqual(calls,['tag','Follow-up','all','pin','delete']);
  filter().props.onChange({target:{value:'image'}});h.render();assert.equal(h.nodes().find(n=>n.props['aria-label']==='saved.tag'),undefined);
-});
-
-test('CRM toolbar preserves all filters, view preferences, import, stage management and selection actions',()=>{
- const oldStorage=globalThis.localStorage;const storage=new Map();globalThis.localStorage={getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)};
- globalThis.compactState={contacts:[{id:'one',name:'Grace',phone:'+12025550101',stage:'new',tags:[],notes:'note'},{id:'two',name:'David',phone:'+12025550102',stage:'new',tags:[]}],chats:[],phones:[],followUps:[{contactId:'two',dueAt:'2020-01-01T00:00:00Z'}],settings:{},selectedContactId:null};
- try{
-  const h=harness(ui.CrmView,{}),filter=()=>h.nodes().find(n=>n.props['aria-label']==='crm.filters');
-  const menu=h.nodes().find(n=>n.type==='details');assert.ok(menu);assert.ok(nodes(menu).includes(h.button('crm.import')));assert.ok(nodes(menu).includes(h.button('crm.manageStages')));
-  assert.deepEqual(nodes(filter()).filter(n=>n.type==='option').map(n=>n.props.value),['all','active','due_followup','needs_name','has_note']);
-  filter().props.onChange({target:{value:'has_note'}});h.render();assert.equal(storage.get('wap.crmQuickFilter'),'has_note');
-  assert.equal(h.nodes().filter(n=>n.type==='list').reduce((sum,n)=>sum+n.props.data.length,0),1);
-  h.button('crm.import').props.onClick();h.render();assert.equal(h.nodes().find(n=>n.type==='import-modal').props.open,true);
-  h.button('crm.manageStages').props.onClick();h.render();assert.ok(h.nodes().some(n=>n.type==='stage-manager'));
-  h.button('crm.select').props.onClick();h.render();assert.ok(h.button('crm.exitSelect'));assert.ok(h.button('crm.selectAll'));
-  h.button('crm.exitSelect').props.onClick();h.render();assert.equal(h.button('crm.selectAll'),undefined);
-  h.nodes().find(n=>n.type==='select'&&n.props.value==='board').props.onChange({target:{value:'list'}});h.render();assert.equal(storage.get('wap.crmMode'),'list');assert.equal(filter().props.value,'has_note');
-  h.button('crm.newContact').props.onClick();h.render();assert.ok(h.nodes().some(n=>n.type==='add-contact'));
- }finally{globalThis.localStorage=oldStorage;delete globalThis.compactState;}
 });

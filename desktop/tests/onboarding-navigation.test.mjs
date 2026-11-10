@@ -4,7 +4,7 @@ import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import { translate } from "../src/i18n/core.ts";
 
-const icons = ["Search", "Users", "Smartphone", "RefreshCw", "ChevronDown", "Star", "Coffee", "Settings", "AlertTriangle", "CalendarCheck", "CheckCircle2", "Clock", "LayoutGrid", "List", "Radio", "Send"];
+const icons = ["Search", "Users", "Smartphone", "RefreshCw", "ChevronDown", "Star", "Coffee", "Settings", "LockKeyhole", "AlertTriangle", "CalendarCheck", "CheckCircle2", "Clock", "LayoutGrid", "List", "Radio", "Send"];
 const mocks = {
   "@/lib/bridge": "export const isTauri=()=>true;",
   react: "export const useMemo=fn=>fn(); export const useState=value=>globalThis.onboardingHooks.state(value); export const useRef=value=>globalThis.onboardingHooks.ref(value); export const useEffect=()=>{};",
@@ -53,7 +53,7 @@ function fixture({ settings = {}, ...overrides } = {}) {
     settings: { sendChannel: "baileys", liveBaileysAccountId: "wa-a", activeAccountId: "wa-a", accountViewMode: { type: "all" },
       waAccounts: [{ id: "wa-a", status: "connected", label: "A" }, { id: "wa-b", status: "disconnected", label: "B" }], ...settings },
     setSettingsOpen: (...args) => calls.push(["settings", ...args]), setBaileysLoginOpen: value => calls.push(["login", value]),
-    setActiveNav: value => calls.push(["nav", value]), setCommandOpen: value => calls.push(["search", value]),
+    setActiveNav: value => calls.push(["nav", value]), openContacts: tab => calls.push(["contacts", tab]), setCommandOpen: value => calls.push(["search", value]),
     goToChats: value => calls.push(["chats", value]), ...overrides,
   };
   return { calls, render(Component, props) { cursor = 0; return Component(props); },
@@ -68,7 +68,7 @@ test("offline selected accounts lead to login even when another account is conne
     const tree = ui.render(ChatWelcome);
     assert.ok(text(tree).includes("连接 WhatsApp，开始沟通"));
     primary(tree).props.onClick(); assert.deepEqual(ui.calls, [["login", true]]);
-    button(tree, "客户与跟进").props.onClick(); assert.deepEqual(ui.calls.at(-1), ["nav", "crm"]);
+    button(tree, "管理联系人").props.onClick(); assert.deepEqual(ui.calls.at(-1), ["contacts", "manage"]);
   } finally { ui.close(); }
 });
 
@@ -96,7 +96,7 @@ test("Android onboarding uses connection settings and waits for notifications in
     primary(ui.render(ChatWelcome)).props.onClick(); assert.deepEqual(ui.calls, [["settings", true, "connection"]]);
     onboardingState.bridge.connected = true;
     const tree = ui.render(ChatWelcome); assert.ok(text(tree).includes("等待新消息"));
-    primary(tree).props.onClick(); assert.deepEqual(ui.calls.at(-1), ["nav", "crm"]);
+    primary(tree).props.onClick(); assert.deepEqual(ui.calls.at(-1), ["contacts", "manage"]);
   } finally { ui.close(); }
 });
 
@@ -124,6 +124,7 @@ test("broadcast has a direct navigation entry and supporting pages remain availa
     assert.equal(globalThis.starUrl, "https://github.com/Kevinlabs26/WAP-Plus-CRM");
     delete globalThis.starUrl;
     button(tree, "群发").props.onClick(); assert.deepEqual(ui.calls, [["nav", "broadcast"]]);
+    button(tree, "主动联系").props.onClick(); assert.deepEqual(ui.calls.at(-1), ["nav", "ai-outreach"]);
     nodes(tree).find(node => node.props["aria-controls"] === "topbar-more-nav").props.onClick(); tree = ui.render(TopBar);
     for (const label of ["星标", "统计", "监测", "设备"]) assert.ok(button(tree, label), label);
     assert.equal(button(nodes(tree).find(node => node.props.id === "topbar-more-nav"), "点击 Star"), undefined);

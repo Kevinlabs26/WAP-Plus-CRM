@@ -53,4 +53,29 @@ assert.deepEqual(history.body.historyRequest, {
   requestId: "history-1",
 });
 
+const snapshot = { contacts: [{ id: "saved-contact" }], messages: [{ id: "saved-message" }] };
+const backlog = await requestSync("/sync?requestHistory=1", {
+  ...deps,
+  eventSpool: { health: { blocked: true, warning: "pending local checkpoint" } },
+  snapshot: () => snapshot,
+  requestFullHistorySync: () => { throw Error("must not request more history while blocked"); },
+});
+assert.equal(backlog.status, 200);
+assert.deepEqual(backlog.body.contacts, snapshot.contacts);
+assert.deepEqual(backlog.body.messages, snapshot.messages);
+assert.equal(backlog.body.historyRequest.requested, false);
+assert.equal(backlog.body.historyRequest.deferred, true);
+assert.match(backlog.body.historyRequest.warning, /pending local checkpoint/);
+
+const unavailable = await requestSync("/sync?requestHistory=1", {
+  ...deps, eventSpool: { health: { blocked: true, writeError: "disk unavailable", warning: "disk unavailable" } },
+});
+assert.equal(unavailable.status, 503);
+assert.equal(unavailable.body.error, "disk unavailable");
+const failedHistory = await requestSync("/sync?requestHistory=1", {
+  ...deps, requestFullHistorySync: () => { throw Error("history request failed"); },
+});
+assert.equal(failedHistory.status, 500);
+assert.equal(failedHistory.body.error, "history request failed");
+
 console.log("baileys sync policy: ok");

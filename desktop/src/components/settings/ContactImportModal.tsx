@@ -12,10 +12,12 @@ import {
   type ImportNameRule,
 } from "@/lib/contactImport";
 import { useI18n } from "@/i18n";
+import { contactInView } from "@/store/accountScope";
 
 type Props = {
   open: boolean;
   onClose: () => void;
+  accountId?: string;
 };
 
 type TabId = "paste" | "file" | "template";
@@ -51,9 +53,10 @@ function ResultSummary({ result }: { result: ContactImportResult | null }) {
 }
 
 /** 批量联系人工作台：整块粘贴、命名处理、表格校对后一次导入。 */
-export function ContactImportModal({ open, onClose }: Props) {
+export function ContactImportModal({ open, onClose, accountId }: Props) {
   const { t } = useI18n();
   const contacts = useAppStore((state) => state.contacts);
+  const liveAccountId = useAppStore(state => state.settings.liveBaileysAccountId || state.settings.activeAccountId);
   const importContacts = useAppStore((state) => state.importContacts);
   const pushToast = useAppStore((state) => state.pushToast);
   const phones = useAppStore((state) => state.phones);
@@ -78,11 +81,11 @@ export function ContactImportModal({ open, onClose }: Props) {
 
   const result = useMemo(
     () => text.trim()
-      ? parseContactsImport(text, contacts, {
+      ? parseContactsImport(text, accountId ? contacts.filter(contact => contactInView(contact, {type: "account", accountId}, liveAccountId, liveAccountId)) : contacts, {
           hasHeader: headerMode === "auto" ? undefined : headerMode === "yes",
         })
       : null,
-    [text, contacts, headerMode]
+    [text, contacts, headerMode, accountId, liveAccountId]
   );
   const previewRows = result?.created.slice(0, PREVIEW_LIMIT) || [];
   const nameRule = useMemo<ImportNameRule>(
@@ -136,7 +139,7 @@ export function ContactImportModal({ open, onClose }: Props) {
           source: input.source || t("contactImport.source"),
           owner: input.owner,
           nextFollowUpAt: input.nextFollowUpAt,
-          accountId: input.accountId,
+          accountId: accountId || input.accountId,
         };
       });
     if (syncToPhone && (!bridgeConnected || !targetPhoneId)) {
@@ -197,6 +200,7 @@ export function ContactImportModal({ open, onClose }: Props) {
             <p className="mt-0.5 text-[11px] text-zinc-500">
               {t("contactImport.description")}
             </p>
+            {accountId && <p className="mt-1 text-[11px] text-brand">{t("contactManage.target")} · {accountId}</p>}
           </div>
           <button
             type="button"

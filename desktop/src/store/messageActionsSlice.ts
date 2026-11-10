@@ -6,8 +6,9 @@ import { clearStoredChatMessages } from "@/lib/storage";
 import { persist, scheduleStatsRecompute } from "./persist";
 import { pruneChatFolderRefs } from "./chatFolderCleanup";
 import { isRetryableOutgoing } from "./outgoingRetry";
-import { mergeMessagesByTime } from "./messageOrdering";
-import { isConversationOutgoing } from "@/lib/leadInbox";
+import { mergeMessagesByTime, outgoingSentAt, messageOrderTime } from "./messageOrdering";
+import { earliestConversationMessage, isConversationOutgoing } from "@/lib/leadInbox";
+import { latestSuccessfulOutgoing } from "@/lib/chatActivity";
 
 export function createMessageActionsSlice({
   set,
@@ -48,7 +49,16 @@ export function createMessageActionsSlice({
         state.chats.find((chat) => chat.id === chatId)?.accountId ||
         state.contacts.find((contact) => contact.id === contactId)?.accountId;
       const id = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-      const sentAt = new Date().toISOString();
+      let latestAt = -Infinity;
+      for (const message of state.messages) {
+        const owner = message.accountId || message.deviceId;
+        if (message.chatId !== chatId || accountId && owner && owner !== accountId) continue;
+        const at = Date.parse(messageOrderTime(message));
+        if (Number.isFinite(at)) latestAt = Math.max(latestAt, at);
+      }
+      const localOrderAfter = Number.isFinite(latestAt) ? new Date(latestAt).toISOString() : undefined;
+      const sentAt = new Date(Date.now()).toISOString();
+      const displayOrderAt = outgoingSentAt(sentAt, localOrderAfter);
       const status = input.deliveryStatus ?? "pending";
       const msg: Message = {
         id,
@@ -56,6 +66,7 @@ export function createMessageActionsSlice({
         direction: "out",
         body: input.body,
         sentAt,
+        displayOrderAt,
         deliveryStatus: status,
         mediaType: input.mediaType,
         mediaUrl: input.mediaUrl,
@@ -82,10 +93,12 @@ export function createMessageActionsSlice({
                 ...c,
                 lastMessage: input.body,
                 lastMessageDirection: "out",
+                lastSuccessfulOutgoing:latestSuccessfulOutgoing(c.lastSuccessfulOutgoing,msg),
                 replyPendingSince: isConversationOutgoing(msg) ? ""
                   : c.replyPendingSince ?? (c.lastMessageDirection === "in" ? c.updatedAt : ""),
                 hasOutgoingHistory:
                   c.hasOutgoingHistory || isConversationOutgoing(msg),
+                firstConversationMessage: earliestConversationMessage(c.firstConversationMessage, msg),
                 hasMessageHistory: c.hasMessageHistory || isConversationOutgoing(msg),
                 updatedAt: sentAt,
                 unread: 0,
@@ -137,8 +150,9 @@ export function createMessageActionsSlice({
         set((state) => ({
           chats: state.chats.map((chat) =>
             chat.id === next.chatId
-              ? { ...chat, hasOutgoingHistory: true, hasMessageHistory: true,
-                  replyPendingSince: !chat.replyPendingSince || next.sentAt >= chat.replyPendingSince ? "" : chat.replyPendingSince }
+              ? { ...chat, hasOutgoingHistory: true, hasMessageHistory: true,lastSuccessfulOutgoing:latestSuccessfulOutgoing(chat.lastSuccessfulOutgoing,next),
+                  firstConversationMessage: earliestConversationMessage(chat.firstConversationMessage, next),
+                  replyPendingSince: !chat.replyPendingSince || messageOrderTime(next) >= chat.replyPendingSince ? "" : chat.replyPendingSince }
               : chat
           ),
         }));

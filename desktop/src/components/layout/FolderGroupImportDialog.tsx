@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Check, LoaderCircle, Search, Users } from "lucide-react";
 import { useAppStore } from "@/store/appStore";
 import type { ChatPreview, GroupDetails } from "@/types/crm";
@@ -16,7 +16,9 @@ type InviteRow = {
   info?: GroupDetails;
   error?: string;
   existingChatId?: string;
-  status?: "joining" | "joined" | "already" | "pending" | "failed";
+  existingAccountId?: string;
+  joinedJid?: string;
+  status?: "joining" | "joined" | "already" | "pending" | "failed" | "account-mismatch";
 };
 
 type Props = {
@@ -32,7 +34,7 @@ type Props = {
   onClose: () => void;
   onMoveGroups: (chatIds: string[]) => void;
   onJoined: (groupJid: string, info: GroupDetails, accountId: string) => void | Promise<void>;
-  onAlreadyJoined: (chatId: string) => void;
+  onAlreadyJoined: (chatId: string) => void | Promise<void>;
 };
 
 export function FolderGroupImportDialog({
@@ -58,6 +60,8 @@ export function FolderGroupImportDialog({
   const [rows, setRows] = useState<InviteRow[]>([]);
   const [previewing, setPreviewing] = useState(false);
   const [joining, setJoining] = useState(false);
+  const busy=useRef(false);
+  const links=extractWhatsAppInvites(text);
 
   const filteredGroups = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
@@ -66,53 +70,65 @@ export function FolderGroupImportDialog({
     );
   }, [groups, query]);
 
-  const previewInvites = async () => {
-    const links = extractWhatsAppInvites(text);
+  const readInvites = async ():Promise<InviteRow[]> => {
     if (!links.length) {
       setRows([{ link: "", error: t("folderGroups.noLinks") }]);
-      return;
+      return [];
     }
     setPreviewing(true);
-    setRows(links.map((link) => ({ link })));
-    for (const link of links) {
+    const next:InviteRow[]=links.map(link=>({link,joinedJid:rows.find(row=>row.link===link)?.joinedJid}));
+    setRows([...next]);
+    for (const [index,link] of links.entries()) {
       try {
         const result = await baileysGroupInviteInfo(link, accountId);
-        setRows((current) =>
-          current.map((row) =>
-            row.link === link
-              ? result.ok && result.invite
-                ? {
-                    ...row,
-                    info: result.invite as GroupDetails,
-                    existingChatId:
-                      existingGroupChatIds[`${accountId}|${result.invite.jid}`],
-                  }
-                : { ...row, error: result.error || t("folderGroups.previewFailed") }
-              : row
-          )
-        );
+        if (result.ok && result.invite) {
+          const jid = result.invite.jid;
+          const exact = existingGroupChatIds[`${accountId}|${jid}`];
+          const other = exact ? undefined : Object.entries(existingGroupChatIds)
+            .find(([key]) => key.slice(key.lastIndexOf("|") + 1) === jid);
+          const existingAccountId = exact
+            ? accountId
+            : other?.[0].slice(0, other[0].lastIndexOf("|"));
+          const existingChatId = exact || other?.[1];
+          const accountMismatch = Boolean(fixedAccountId && existingChatId && existingAccountId !== fixedAccountId);
+          next[index] = {
+            ...next[index]!,
+            info: result.invite as GroupDetails,
+            existingAccountId,
+            existingChatId,
+            status: accountMismatch ? "account-mismatch" : undefined,
+            error: accountMismatch
+              ? t("folderGroups.groupInOtherAccount", { account: accountLabelOf(existingAccountId) })
+              : undefined,
+          };
+        } else {
+          next[index] = { ...next[index]!, error: result.error || t("folderGroups.previewFailed") };
+        }
       } catch (error) {
-        setRows((current) =>
-          current.map((row) =>
-            row.link === link
-              ? {
-                  ...row,
-                  error: error instanceof Error ? error.message : String(error),
-                }
-              : row
-          )
-        );
+        next[index]={...next[index]!,error:error instanceof Error?error.message:String(error)};
       }
+      setRows([...next]);
     }
     setPreviewing(false);
+    return next;
+  };
+
+  const previewInvites = async () => {
+    if(busy.current)return;
+    busy.current=true;
+    try{await readInvites();}finally{busy.current=false;setPreviewing(false);}
   };
 
   const joinInvites = async () => {
-    const eligible = rows.filter(
-      (row) => row.info && !["joined", "already", "pending"].includes(row.status || "")
+    if(busy.current||!connectedAccountIds.includes(accountId))return;
+    busy.current=true;
+    setJoining(true);
+    try{
+    const available=rows.length?rows:await readInvites();
+    const eligible = available.filter(
+      (row) => row.info && !["joined", "already", "pending", "account-mismatch"].includes(row.status || "")
     );
     if (!eligible.length) return;
-    setJoining(true);
     let successful = 0;
     let alreadyFiled = 0;
     let pending = 0;
@@ -125,7 +141,7 @@ export function FolderGroupImportDialog({
       );
       try {
         if (row.existingChatId) {
-          onAlreadyJoined(row.existingChatId);
+          await onAlreadyJoined(row.existingChatId);
           alreadyFiled += 1;
           setRows((current) =>
             current.map((item) =>
@@ -136,7 +152,9 @@ export function FolderGroupImportDialog({
           );
           continue;
         }
-        const result = await baileysGroupAcceptInvite(row.link, accountId);
+        const result = row.joinedJid
+          ?{ok:true,groupJid:row.joinedJid,group:row.info}
+          :await baileysGroupAcceptInvite(row.link, accountId);
         if (result.ok && !result.groupJid && row.info?.joinApprovalMode) {
           pending += 1;
           setRows((current) =>
@@ -151,6 +169,7 @@ export function FolderGroupImportDialog({
         if (!result.ok || !result.groupJid) {
           throw new Error(result.error || t("folderGroups.joinFailed"));
         }
+        setRows(current=>current.map(item=>item.link===row.link?{...item,joinedJid:result.groupJid,info:result.group||row.info}:item));
         await onJoined(result.groupJid, result.group || row.info!, accountId);
         successful += 1;
         setRows((current) =>
@@ -173,7 +192,6 @@ export function FolderGroupImportDialog({
         );
       }
     }
-    setJoining(false);
     if (successful || alreadyFiled || pending || failed) {
       useAppStore.getState().pushToast(
         t("folderGroups.joinSummary", {
@@ -185,11 +203,12 @@ export function FolderGroupImportDialog({
         failed || pending ? "info" : "success"
       );
     }
+    }finally{busy.current=false;setJoining(false);setPreviewing(false);}
   };
 
   const filedCount = rows.filter((row) => ["joined", "already"].includes(row.status || "")).length;
   const readyCount = rows.filter(
-    (row) => row.info && !["joined", "already", "pending"].includes(row.status || "")
+    (row) => row.info && !["joined", "already", "pending", "account-mismatch"].includes(row.status || "")
   ).length;
   const canRetryOnlyFailures =
     rows.some((row) => row.info && row.status === "failed") &&
@@ -212,7 +231,7 @@ export function FolderGroupImportDialog({
           if (event.key === "Escape" && !joining && !previewing) onClose();
         }}
       >
-        <div className="border-b border-zinc-800 px-5 py-4">
+        <div className="shrink-0 border-b border-zinc-800 px-5 py-4">
           <h3 className="text-[15px] font-semibold text-zinc-100">
             {mode === "links"
               ? t("folderGroups.inviteTitle", { name: folderName })
@@ -291,7 +310,7 @@ export function FolderGroupImportDialog({
                           {row.status === "already" ? t("folderGroups.alreadyFiled") : null}
                           {row.status === "pending" ? t("folderGroups.pendingApproval") : null}
                           {row.existingChatId && !row.status
-                            ? t("folderGroups.alreadyInAccount")
+                            ? t("folderGroups.alreadyInAccount", { account: accountLabelOf(row.existingAccountId) })
                             : null}
                           {row.error || (!row.info && !row.status ? t("folderGroups.previewing") : null)}
                         </span>
@@ -382,7 +401,7 @@ export function FolderGroupImportDialog({
           )}
         </div>
 
-        <div className="flex items-center justify-between gap-3 border-t border-zinc-800 bg-zinc-950/40 px-5 py-3">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-zinc-800 bg-zinc-950/40 px-5 py-3">
           {mode === "links" ? (
             <span className="text-[11px] text-zinc-500">
               {filedCount > 0
@@ -414,12 +433,12 @@ export function FolderGroupImportDialog({
                 type="button"
                 className="rounded-lg bg-brand px-3.5 py-1.5 text-[12px] font-medium text-[var(--brand-foreground)] hover:brightness-110 disabled:opacity-40"
                 onClick={() => void joinInvites()}
-                disabled={!readyCount || joining || previewing}
+                disabled={!(rows.length?readyCount:links.length) || !accountConnected || joining || previewing}
               >
                 {joining ? <LoaderCircle className="mr-1 inline h-3.5 w-3.5 animate-spin" /> : null}
                 {canRetryOnlyFailures
                   ? t("folderGroups.retryFailed", { count: readyCount })
-                  : t("folderGroups.joinAndMove", { count: readyCount })}
+                  : t("folderGroups.joinAndMove", { count: rows.length?readyCount:links.length })}
               </button>
             ) : (
               <button

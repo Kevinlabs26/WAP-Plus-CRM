@@ -44,6 +44,22 @@ function groupStore(contacts=[],chats=[],messages=[]) {
 const groupContact=(id,owner,jid='12345@g.us')=>({id,name:'Same group name',accountId:owner,boundPhoneId:owner,channelAddress:jid,isGroup:true,phone:'',tags:[],stage:'new'});
 const groupChat=(contact,extra={})=>({id:`bridge-chat-${contact.id}`,contactId:contact.id,contactName:contact.name,accountId:contact.accountId,phoneId:contact.accountId,isGroup:true,unread:0,lastMessage:'',...extra});
 
+test('incoming leads check hidden accounts before applying the current sidebar view', () => {
+  const contact = {id:'known-a', name:'Returning contact', phone:'+12025550100', accountId:'a'};
+  const other = {...contact, id:'known-b', accountId:'b'};
+  const old = {id:'old', contactId:contact.id, contactName:contact.name, accountId:'a', phoneId:'a', unread:0,
+    firstConversationMessage:{at:'2026-08-01T10:00:00.000Z',direction:'out'}, hasOutgoingHistory:true};
+  const recent = {id:'recent', contactId:other.id, contactName:other.name, accountId:'b', phoneId:'b', unread:1, updatedAt:'2026-11-09T10:00:00.000Z',lastMessage:'Hello again'};
+  const state = {contacts:[contact,other],chats:[old,recent],chatListFilter:'leads',baileysUi:{},messagesByChatId:{recent:[{id:'in',chatId:recent.id,accountId:'b',direction:'in',body:'Hello again',sentAt:recent.updatedAt}]},
+    settings:{...defaultSettings,accountViewMode:{type:'account',accountId:'b'},activeAccountId:'b',liveBaileysAccountId:'b',waAccounts:[{id:'a'},{id:'b'}]},setChatListFilter(){}};
+  globalThis.folderSidebarState = state;
+  try {
+    const sidebar = useSidebarData({listTab:'chats',query:'',showArchived:false,chatSort:'recent',ungroupedCollapsed:false,groupFilter:'all',collapsedLeadDateIds:new Set()});
+    assert.equal(sidebar.leadCount,0);
+    assert.equal(sidebar.filteredChats.length,0);
+  } finally { delete globalThis.folderSidebarState; }
+});
+
 test('invited group uses the incoming-sync chat ID so the filed thread receives messages',async()=>{
   const originalWindow=globalThis.window;globalThis.window={setTimeout};
   try{

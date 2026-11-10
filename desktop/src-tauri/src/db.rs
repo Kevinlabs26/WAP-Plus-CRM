@@ -4,7 +4,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
@@ -111,7 +111,7 @@ fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 pub fn open_db(app: &AppHandle) -> Result<Connection, String> {
     let path = db_path(app)?;
-    let conn = Connection::open(&path).map_err(|e| format!("open db {}: {e}", path.display()))?;
+    let conn = crate::db_encryption::open(&path)?;
     // WAL + 合理缓存，降低 bridge/UI 并发写时的卡顿与 SQLITE_BUSY
     conn.execute_batch(
         r#"
@@ -120,7 +120,7 @@ pub fn open_db(app: &AppHandle) -> Result<Connection, String> {
         PRAGMA busy_timeout = 20000;
         PRAGMA synchronous = NORMAL;
         PRAGMA temp_store = MEMORY;
-        PRAGMA cache_size = -64000;
+        PRAGMA cache_size = -16000;
         "#,
     )
     .map_err(|e| e.to_string())?;
@@ -128,6 +128,25 @@ pub fn open_db(app: &AppHandle) -> Result<Connection, String> {
     tracing::info!(path = %path.display(), "sqlite ready");
     Ok(conn)
 }
+
+pub fn open_db_readonly(app: &AppHandle) -> Result<Connection, String> {
+    let path = db_path(app)?;
+    crate::db_encryption::open_readonly(&path)
+}
+
+// Cover the small history facts so startup need not repeatedly parse every message body.
+const HISTORY_FACTS_INDEX_SQL: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_messages_history_facts ON messages(
+    chat_id, sent_at,
+    json_extract(json, '$.direction'),
+    COALESCE(json_extract(json, '$.mediaType'), ''),
+    COALESCE(json_extract(json, '$.systemKind'), ''),
+    COALESCE(json_extract(json, '$.deliveryStatus'), 'sent'),
+    COALESCE(json_extract(json, '$.deliveryUncertain'), 0),
+    COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.deviceId'), ''), ''),
+    COALESCE(json_extract(json, '$.nextAttemptAt'), ''), id
+);
+"#;
 
 fn migrate(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
@@ -229,7 +248,10 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             "#,
         )
         .map_err(|e| e.to_string())?;
-        tracing::info!(from = schema_version, "sqlite migrate → v3 (sent_at backfill once)");
+        tracing::info!(
+            from = schema_version,
+            "sqlite migrate → v3 (sent_at backfill once)"
+        );
     }
 
     // v4: FTS5 全文检索（若编译的 SQLite 无 FTS5 则跳过，搜索走旧 LIKE）
@@ -310,6 +332,7 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         );
     }
 
+    conn.execute_batch(HISTORY_FACTS_INDEX_SQL).map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '5')",
         [],
@@ -350,10 +373,10 @@ fn upsert_json_table(
 ) -> Result<(usize, usize, usize), String> {
     let keep = format!("_keep_{table}");
     if deleted_ids.is_none() {
-    tx.execute_batch(&format!(
+        tx.execute_batch(&format!(
         "CREATE TEMP TABLE IF NOT EXISTS {keep}(id TEXT PRIMARY KEY NOT NULL); DELETE FROM {keep};"
     ))
-    .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?;
     }
 
     let insert_keep = format!("INSERT OR IGNORE INTO {keep}(id) VALUES (?1)");
@@ -367,8 +390,8 @@ fn upsert_json_table(
     let mut skipped = 0usize;
     for (id, json) in rows {
         if deleted_ids.is_none() {
-        tx.execute(&insert_keep, params![id])
-            .map_err(|e| e.to_string())?;
+            tx.execute(&insert_keep, params![id])
+                .map_err(|e| e.to_string())?;
         }
         let n = tx
             .execute(&upsert, params![id, json])
@@ -386,9 +409,15 @@ fn upsert_json_table(
                 return Err("增量删除 id 为空或与更新记录冲突".into());
             }
             if table == "contacts" {
-                tx.execute("DELETE FROM activities WHERE json_extract(json, '$.contactId') = ?1", params![id]).map_err(|e| e.to_string())?;
+                tx.execute(
+                    "DELETE FROM activities WHERE json_extract(json, '$.contactId') = ?1",
+                    params![id],
+                )
+                .map_err(|e| e.to_string())?;
             }
-            deleted += tx.execute(&format!("DELETE FROM {table} WHERE id = ?1"), params![id]).map_err(|e| e.to_string())?;
+            deleted += tx
+                .execute(&format!("DELETE FROM {table} WHERE id = ?1"), params![id])
+                .map_err(|e| e.to_string())?;
         }
         return Ok((written, skipped, deleted));
     }
@@ -450,13 +479,18 @@ fn upsert_message_fts(
 }
 
 fn id_of(v: &Value) -> Option<String> {
-    v.get("id")
-        .and_then(|x| x.as_str())
-        .map(|s| s.to_string())
+    v.get("id").and_then(|x| x.as_str()).map(|s| s.to_string())
 }
 
 fn ack_rank(status: &str) -> u8 {
-    match status { "sent" => 1, "server" => 2, "delivered" => 3, "read" => 4, "played" => 5, _ => 0 }
+    match status {
+        "sent" => 1,
+        "server" => 2,
+        "delivered" => 3,
+        "read" => 4,
+        "played" => 5,
+        _ => 0,
+    }
 }
 
 pub(crate) fn read_json_text(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<String> {
@@ -466,7 +500,11 @@ pub(crate) fn read_json_text(row: &rusqlite::Row<'_>, index: usize) -> rusqlite:
             match std::str::from_utf8(bytes) {
                 Ok(text) => Ok(text.to_owned()),
                 Err(error) => {
-                    tracing::warn!(index, offset = error.valid_up_to(), "invalid UTF-8 in stored JSON; replacing unreadable characters");
+                    tracing::warn!(
+                        index,
+                        offset = error.valid_up_to(),
+                        "invalid UTF-8 in stored JSON; replacing unreadable characters"
+                    );
                     Ok(String::from_utf8_lossy(bytes).into_owned())
                 }
             }
@@ -477,24 +515,51 @@ pub(crate) fn read_json_text(row: &rusqlite::Row<'_>, index: usize) -> rusqlite:
 
 const ACK_MESSAGE_ROWS_SQL: &str = "SELECT id, json FROM messages WHERE (id = ?1 OR json_extract(json, '$.waMessageId') = ?1 OR json_extract(json, '$.waKey.id') = ?1) AND COALESCE(json_extract(json, '$.accountId'), json_extract(json, '$.deviceId'), '') = ?2";
 
-pub fn update_message_acks(conn: &Connection, items: &[Value], account_id: &str) -> Result<(), String> {
-    if account_id.is_empty() { return Err("回执缺少账号".into()); }
+pub fn update_message_acks(
+    conn: &Connection,
+    items: &[Value],
+    account_id: &str,
+) -> Result<(), String> {
+    if account_id.is_empty() {
+        return Err("回执缺少账号".into());
+    }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     for item in items {
         let key = item.get("id").and_then(Value::as_str).unwrap_or("");
         let ack = item.get("ack").and_then(Value::as_str).unwrap_or("");
-        if key.is_empty() || ack_rank(ack) == 0 { continue; }
+        if key.is_empty() || ack_rank(ack) == 0 {
+            continue;
+        }
         let rows: Vec<(String, String)> = {
-            let mut stmt = tx.prepare(ACK_MESSAGE_ROWS_SQL).map_err(|e| e.to_string())?;
-            let rows = stmt.query_map(params![key, account_id], |r| Ok((r.get(0)?, read_json_text(r, 1)?))).map_err(|e| e.to_string())?;
+            let mut stmt = tx
+                .prepare(ACK_MESSAGE_ROWS_SQL)
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![key, account_id], |r| {
+                    Ok((r.get(0)?, read_json_text(r, 1)?))
+                })
+                .map_err(|e| e.to_string())?;
             rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
         };
         for (id, json) in rows {
             let mut message: Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
-            if message.get("direction").and_then(Value::as_str) != Some("out") || ack_rank(message.get("deliveryStatus").and_then(Value::as_str).unwrap_or("")) >= ack_rank(ack) { continue; }
+            if message.get("direction").and_then(Value::as_str) != Some("out")
+                || ack_rank(
+                    message
+                        .get("deliveryStatus")
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
+                ) >= ack_rank(ack)
+            {
+                continue;
+            }
             message["deliveryStatus"] = Value::String(ack.to_string());
             let updated = serde_json::to_string(&message).map_err(|e| e.to_string())?;
-            tx.execute("UPDATE messages SET json = ?1, content_hash = ?2 WHERE id = ?3", params![updated, content_hash(&updated), id]).map_err(|e| e.to_string())?;
+            tx.execute(
+                "UPDATE messages SET json = ?1, content_hash = ?2 WHERE id = ?3",
+                params![updated, content_hash(&updated), id],
+            )
+            .map_err(|e| e.to_string())?;
         }
     }
     tx.commit().map_err(|e| e.to_string())
@@ -502,8 +567,15 @@ pub fn update_message_acks(conn: &Connection, items: &[Value], account_id: &str)
 
 pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String> {
     // dirty=None → 全量（兼容旧前端 / force 保存）。在事务前拒绝超限，保留原数据。
-    let dirty = snap.dirty.clone().unwrap_or_else(PersistDirtyFlags::all_true);
-    let row_deltas = if snap.replace_messages { None } else { snap.row_deltas.as_ref() };
+    let dirty = snap
+        .dirty
+        .clone()
+        .unwrap_or_else(PersistDirtyFlags::all_true);
+    let row_deltas = if snap.replace_messages {
+        None
+    } else {
+        snap.row_deltas.as_ref()
+    };
     let drafts_json = if dirty.drafts {
         Some(serialize_chat_drafts(&snap.draft_reply_by_chat_id)?)
     } else {
@@ -515,12 +587,22 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
     let mut total_deleted = 0usize;
 
     for remap in &snap.chat_message_remaps {
-        let target = snap.chats.iter().find(|chat| chat["id"].as_str() == Some(&remap.to_chat_id))
+        let target = snap
+            .chats
+            .iter()
+            .find(|chat| chat["id"].as_str() == Some(&remap.to_chat_id))
             .ok_or("历史迁移缺少目标会话")?;
-        let owner = target["accountId"].as_str().filter(|s| !s.is_empty())
-            .or_else(|| target["phoneId"].as_str()).unwrap_or("");
-        if remap.from_chat_id.is_empty() || remap.account_id.is_empty() || remap.from_chat_id == remap.to_chat_id
-            || target["contactId"].as_str() != Some(&remap.contact_id) || owner != remap.account_id {
+        let owner = target["accountId"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .or_else(|| target["phoneId"].as_str())
+            .unwrap_or("");
+        if remap.from_chat_id.is_empty()
+            || remap.account_id.is_empty()
+            || remap.from_chat_id == remap.to_chat_id
+            || target["contactId"].as_str() != Some(&remap.contact_id)
+            || owner != remap.account_id
+        {
             return Err("历史迁移会话归属不匹配".into());
         }
         let wrong_owner: i64 = tx.query_row(
@@ -531,7 +613,9 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
             "SELECT COUNT(*) FROM chats WHERE id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.phoneId'), ''), '') NOT IN ('', ?2)",
             params![remap.from_chat_id, remap.account_id], |row| row.get(0),
         ).map_err(|e| e.to_string())?;
-        if wrong_owner > 0 || wrong_chat_owner > 0 { return Err("已阻止跨账号迁移聊天历史".into()); }
+        if wrong_owner > 0 || wrong_chat_owner > 0 {
+            return Err("已阻止跨账号迁移聊天历史".into());
+        }
         tx.execute(
             "UPDATE messages SET chat_id = ?2, json = json_set(json, '$.chatId', ?2, '$.contactId', ?3), content_hash = NULL WHERE chat_id = ?1",
             params![remap.from_chat_id, remap.to_chat_id, remap.contact_id],
@@ -540,66 +624,89 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
 
     // phones / contacts / chats / follow_ups：仅写变更 + 删缺失
     if dirty.phones {
-    let mut phone_rows = Vec::with_capacity(snap.phones.len());
-    for p in &snap.phones {
-        let id = id_of(p).ok_or("phone missing id")?;
-        let j = serde_json::to_string(p).map_err(|e| e.to_string())?;
-        phone_rows.push((id, j));
-    }
-    let (w, s, d) = upsert_json_table(&tx, "phones", &phone_rows, None)?;
-    total_written += w;
-    total_skipped += s;
-    total_deleted += d;
+        let mut phone_rows = Vec::with_capacity(snap.phones.len());
+        for p in &snap.phones {
+            let id = id_of(p).ok_or("phone missing id")?;
+            let j = serde_json::to_string(p).map_err(|e| e.to_string())?;
+            phone_rows.push((id, j));
+        }
+        let (w, s, d) = upsert_json_table(&tx, "phones", &phone_rows, None)?;
+        total_written += w;
+        total_skipped += s;
+        total_deleted += d;
     }
 
     if dirty.contacts {
-    let mut contact_rows = Vec::with_capacity(snap.contacts.len());
-    for c in &snap.contacts {
-        let id = id_of(c).ok_or("contact missing id")?;
-        let j = serde_json::to_string(c).map_err(|e| e.to_string())?;
-        contact_rows.push((id, j));
-    }
-    let (w, s, d) = upsert_json_table(&tx, "contacts", &contact_rows, row_deltas.and_then(|delta| delta.contacts.as_deref()))?;
-    total_written += w;
-    total_skipped += s;
-    total_deleted += d;
+        let mut contact_rows = Vec::with_capacity(snap.contacts.len());
+        for c in &snap.contacts {
+            let id = id_of(c).ok_or("contact missing id")?;
+            let j = serde_json::to_string(c).map_err(|e| e.to_string())?;
+            contact_rows.push((id, j));
+        }
+        let (w, s, d) = upsert_json_table(
+            &tx,
+            "contacts",
+            &contact_rows,
+            row_deltas.and_then(|delta| delta.contacts.as_deref()),
+        )?;
+        total_written += w;
+        total_skipped += s;
+        total_deleted += d;
     }
 
     if dirty.chats {
-    let mut chat_rows = Vec::with_capacity(snap.chats.len());
-    for c in &snap.chats {
-        let id = id_of(c).ok_or("chat missing id")?;
-        let j = serde_json::to_string(c).map_err(|e| e.to_string())?;
-        chat_rows.push((id, j));
-    }
-    let (w, s, d) = upsert_json_table(&tx, "chats", &chat_rows, row_deltas.and_then(|delta| delta.chats.as_deref()))?;
-    total_written += w;
-    total_skipped += s;
-    total_deleted += d;
+        let mut chat_rows = Vec::with_capacity(snap.chats.len());
+        for c in &snap.chats {
+            let id = id_of(c).ok_or("chat missing id")?;
+            let j = serde_json::to_string(c).map_err(|e| e.to_string())?;
+            chat_rows.push((id, j));
+        }
+        let (w, s, d) = upsert_json_table(
+            &tx,
+            "chats",
+            &chat_rows,
+            row_deltas.and_then(|delta| delta.chats.as_deref()),
+        )?;
+        total_written += w;
+        total_skipped += s;
+        total_deleted += d;
     }
 
     // messages：内存可能只有「最近 N 条」，绝不能 DELETE 快照外 id。
     // 用 content_hash 在 SQL 侧判断未变，禁止全表 SELECT json。
     if dirty.messages {
-    for m in &snap.messages {
-        let id = id_of(m).ok_or("message missing id")?;
-        let chat_id = m
-            .get("chatId")
-            .and_then(|x| x.as_str())
-            .unwrap_or("");
-        let sent_at = m.get("sentAt").and_then(|x| x.as_str()).unwrap_or("");
-        let mut message = m.clone();
-        if !snap.replace_messages && m.get("direction").and_then(Value::as_str) == Some("out") {
-            let existing: Option<String> = tx.query_row("SELECT json_extract(json, '$.deliveryStatus') FROM messages WHERE id = ?1", params![id], |r| r.get(0)).optional().map_err(|e| e.to_string())?.flatten();
-            if let Some(ack) = existing {
-                if ack_rank(&ack) > ack_rank(m.get("deliveryStatus").and_then(Value::as_str).unwrap_or("")) { message["deliveryStatus"] = Value::String(ack); }
+        for m in &snap.messages {
+            let id = id_of(m).ok_or("message missing id")?;
+            let chat_id = m.get("chatId").and_then(|x| x.as_str()).unwrap_or("");
+            let sent_at = m.get("sentAt").and_then(|x| x.as_str()).unwrap_or("");
+            let mut message = m.clone();
+            if !snap.replace_messages && m.get("direction").and_then(Value::as_str) == Some("out") {
+                let existing: Option<String> = tx
+                    .query_row(
+                        "SELECT json_extract(json, '$.deliveryStatus') FROM messages WHERE id = ?1",
+                        params![id],
+                        |r| r.get(0),
+                    )
+                    .optional()
+                    .map_err(|e| e.to_string())?
+                    .flatten();
+                if let Some(ack) = existing {
+                    if ack_rank(&ack)
+                        > ack_rank(
+                            m.get("deliveryStatus")
+                                .and_then(Value::as_str)
+                                .unwrap_or(""),
+                        )
+                    {
+                        message["deliveryStatus"] = Value::String(ack);
+                    }
+                }
             }
-        }
-        let j = serde_json::to_string(&message).map_err(|e| e.to_string())?;
-        let hash = content_hash(&j);
-        let n = tx
-            .execute(
-                r#"
+            let j = serde_json::to_string(&message).map_err(|e| e.to_string())?;
+            let hash = content_hash(&j);
+            let n = tx
+                .execute(
+                    r#"
                 INSERT INTO messages(id, chat_id, sent_at, json, content_hash)
                 VALUES (?1, ?2, ?3, ?4, ?5)
                 ON CONFLICT(id) DO UPDATE SET
@@ -612,76 +719,73 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
                    OR messages.chat_id IS NOT excluded.chat_id
                    OR messages.sent_at IS NOT excluded.sent_at
                 "#,
-                params![id, chat_id, sent_at, j, hash],
-            )
-            .map_err(|e| e.to_string())?;
-        if n > 0 {
-            total_written += 1;
-            let body = m.get("body").and_then(|x| x.as_str()).unwrap_or("");
-            let caption = m
-                .get("mediaCaption")
-                .and_then(|x| x.as_str())
-                .unwrap_or("");
-            let filename = m
-                .get("mediaFileName")
-                .and_then(|x| x.as_str())
-                .unwrap_or("");
-            upsert_message_fts(&tx, &id, body, caption, filename);
-        } else {
-            total_skipped += 1;
+                    params![id, chat_id, sent_at, j, hash],
+                )
+                .map_err(|e| e.to_string())?;
+            if n > 0 {
+                total_written += 1;
+                let body = m.get("body").and_then(|x| x.as_str()).unwrap_or("");
+                let caption = m.get("mediaCaption").and_then(|x| x.as_str()).unwrap_or("");
+                let filename = m
+                    .get("mediaFileName")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("");
+                upsert_message_fts(&tx, &id, body, caption, filename);
+            } else {
+                total_skipped += 1;
+            }
         }
-    }
-    for id in &snap.deleted_message_ids {
-        total_deleted += tx
-            .execute("DELETE FROM messages WHERE id = ?1", params![id])
-            .map_err(|e| e.to_string())?;
-        if fts_available(&tx) {
-            let _ = tx.execute("DELETE FROM messages_fts WHERE id = ?1", params![id]);
+        for id in &snap.deleted_message_ids {
+            total_deleted += tx
+                .execute("DELETE FROM messages WHERE id = ?1", params![id])
+                .map_err(|e| e.to_string())?;
+            if fts_available(&tx) {
+                let _ = tx.execute("DELETE FROM messages_fts WHERE id = ?1", params![id]);
+            }
         }
-    }
-    if snap.replace_messages {
-        tx.execute_batch(
+        if snap.replace_messages {
+            tx.execute_batch(
             "CREATE TEMP TABLE IF NOT EXISTS _keep_messages(id TEXT PRIMARY KEY NOT NULL); DELETE FROM _keep_messages;",
         )
         .map_err(|e| e.to_string())?;
-        for message in &snap.messages {
-            if let Some(id) = id_of(message) {
-                tx.execute(
-                    "INSERT OR IGNORE INTO _keep_messages(id) VALUES (?1)",
-                    params![id],
+            for message in &snap.messages {
+                if let Some(id) = id_of(message) {
+                    tx.execute(
+                        "INSERT OR IGNORE INTO _keep_messages(id) VALUES (?1)",
+                        params![id],
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+            }
+            total_deleted += tx
+                .execute(
+                    "DELETE FROM messages WHERE id NOT IN (SELECT id FROM _keep_messages)",
+                    [],
                 )
                 .map_err(|e| e.to_string())?;
+            if fts_available(&tx) {
+                let _ = tx.execute(
+                    "DELETE FROM messages_fts WHERE id NOT IN (SELECT id FROM messages)",
+                    [],
+                );
             }
         }
-        total_deleted += tx
-            .execute(
-                "DELETE FROM messages WHERE id NOT IN (SELECT id FROM _keep_messages)",
-                [],
-            )
-            .map_err(|e| e.to_string())?;
-        if fts_available(&tx) {
-            let _ = tx.execute(
-                "DELETE FROM messages_fts WHERE id NOT IN (SELECT id FROM messages)",
-                [],
-            );
-        }
-    }
-    // 已删除的会话：清掉其磁盘消息（chats 表已按快照同步）
-    // 仅当 chats 也在本轮写入时做，避免 dirty.messages-only 误删
-    if dirty.chats && row_deltas.and_then(|delta| delta.chats.as_ref()).is_none() {
-        total_deleted += tx
+        // 已删除的会话：清掉其磁盘消息（chats 表已按快照同步）
+        // 仅当 chats 也在本轮写入时做，避免 dirty.messages-only 误删
+        if dirty.chats && row_deltas.and_then(|delta| delta.chats.as_ref()).is_none() {
+            total_deleted += tx
             .execute(
                 "DELETE FROM messages WHERE chat_id IS NOT NULL AND chat_id != '' AND chat_id NOT IN (SELECT id FROM chats)",
                 [],
             )
             .map_err(|e| e.to_string())?;
-        if fts_available(&tx) {
-            let _ = tx.execute(
-                "DELETE FROM messages_fts WHERE id NOT IN (SELECT id FROM messages)",
-                [],
-            );
+            if fts_available(&tx) {
+                let _ = tx.execute(
+                    "DELETE FROM messages_fts WHERE id NOT IN (SELECT id FROM messages)",
+                    [],
+                );
+            }
         }
-    }
     } // end dirty.messages
 
     if dirty.chats {
@@ -690,46 +794,45 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
                 if fts_available(&tx) {
                     tx.execute("DELETE FROM messages_fts WHERE id IN (SELECT id FROM messages WHERE chat_id = ?1)", params![id]).map_err(|e| e.to_string())?;
                 }
-                total_deleted += tx.execute("DELETE FROM messages WHERE chat_id = ?1", params![id]).map_err(|e| e.to_string())?;
+                total_deleted += tx
+                    .execute("DELETE FROM messages WHERE chat_id = ?1", params![id])
+                    .map_err(|e| e.to_string())?;
             }
         }
     }
 
     if dirty.follow_ups {
-    let mut fu_rows = Vec::with_capacity(snap.follow_ups.len());
-    for f in &snap.follow_ups {
-        let id = id_of(f).ok_or("follow_up missing id")?;
-        let j = serde_json::to_string(f).map_err(|e| e.to_string())?;
-        fu_rows.push((id, j));
-    }
-    let (w, s, d) = upsert_json_table(&tx, "follow_ups", &fu_rows, None)?;
-    total_written += w;
-    total_skipped += s;
-    total_deleted += d;
+        let mut fu_rows = Vec::with_capacity(snap.follow_ups.len());
+        for f in &snap.follow_ups {
+            let id = id_of(f).ok_or("follow_up missing id")?;
+            let j = serde_json::to_string(f).map_err(|e| e.to_string())?;
+            fu_rows.push((id, j));
+        }
+        let (w, s, d) = upsert_json_table(&tx, "follow_ups", &fu_rows, None)?;
+        total_written += w;
+        total_skipped += s;
+        total_deleted += d;
     }
 
     // activities：与 contacts 相同，SQL 侧跳过未变 json
     if dirty.activities {
-    tx.execute_batch(
+        tx.execute_batch(
         "CREATE TEMP TABLE IF NOT EXISTS _keep_activities(id TEXT PRIMARY KEY NOT NULL); DELETE FROM _keep_activities;",
     )
     .map_err(|e| e.to_string())?;
-    for a in &snap.activities {
-        let id = id_of(a).ok_or("activity missing id")?;
-        let contact_id = a
-            .get("contactId")
-            .and_then(|x| x.as_str())
-            .unwrap_or("");
-        let at_ts = a.get("at").and_then(|x| x.as_str()).unwrap_or("");
-        let j = serde_json::to_string(a).map_err(|e| e.to_string())?;
-        tx.execute(
-            "INSERT OR IGNORE INTO _keep_activities(id) VALUES (?1)",
-            params![id],
-        )
-        .map_err(|e| e.to_string())?;
-        let n = tx
-            .execute(
-                r#"
+        for a in &snap.activities {
+            let id = id_of(a).ok_or("activity missing id")?;
+            let contact_id = a.get("contactId").and_then(|x| x.as_str()).unwrap_or("");
+            let at_ts = a.get("at").and_then(|x| x.as_str()).unwrap_or("");
+            let j = serde_json::to_string(a).map_err(|e| e.to_string())?;
+            tx.execute(
+                "INSERT OR IGNORE INTO _keep_activities(id) VALUES (?1)",
+                params![id],
+            )
+            .map_err(|e| e.to_string())?;
+            let n = tx
+                .execute(
+                    r#"
                 INSERT INTO activities(id, contact_id, at_ts, json)
                 VALUES (?1, ?2, ?3, ?4)
                 ON CONFLICT(id) DO UPDATE SET
@@ -738,74 +841,88 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
                   json = excluded.json
                 WHERE activities.json IS NOT excluded.json
                 "#,
-                params![id, contact_id, at_ts, j],
-            )
-            .map_err(|e| e.to_string())?;
-        if n > 0 {
-            total_written += 1;
-        } else {
-            total_skipped += 1;
+                    params![id, contact_id, at_ts, j],
+                )
+                .map_err(|e| e.to_string())?;
+            if n > 0 {
+                total_written += 1;
+            } else {
+                total_skipped += 1;
+            }
         }
-    }
-    // 活动只在完整恢复时替换，启动仅加载最近 2000 条。
-    if snap.replace_messages {
-    total_deleted += tx
-        .execute(
-            "DELETE FROM activities WHERE id NOT IN (SELECT id FROM _keep_activities)",
-            [],
-        )
-        .map_err(|e| e.to_string())?;
-    }
+        // 活动只在完整恢复时替换，启动仅加载最近 2000 条。
+        if snap.replace_messages {
+            total_deleted += tx
+                .execute(
+                    "DELETE FROM activities WHERE id NOT IN (SELECT id FROM _keep_activities)",
+                    [],
+                )
+                .map_err(|e| e.to_string())?;
+        }
     } // end dirty.activities
 
     // settings / broadcastCampaigns
     if dirty.settings || dirty.broadcast_campaigns {
-    // settings：仅当战役自身标记为脏时才用顶层 broadcast_campaigns 覆盖
-    // __broadcastCampaigns。否则（如只改一个设置项的防抖保存）保留前端
-    // 嵌入在 settings 里的现有战役——delta 保存的顶层空数组不得清库。
-    let mut settings_value = snap.settings.clone();
-    if let Some(obj) = settings_value.as_object_mut() {
-        for key in ["openaiKey", "groqKey", "geminiKey", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "transcriptionApiKey", "bridgeToken"] {
-            obj.remove(key);
+        // settings：仅当战役自身标记为脏时才用顶层 broadcast_campaigns 覆盖
+        // __broadcastCampaigns。否则（如只改一个设置项的防抖保存）保留前端
+        // 嵌入在 settings 里的现有战役——delta 保存的顶层空数组不得清库。
+        let mut settings_value = snap.settings.clone();
+        if let Some(obj) = settings_value.as_object_mut() {
+            for key in [
+                "openaiKey",
+                "groqKey",
+                "geminiKey",
+                "deepseekKey",
+                "qwenKey",
+                "zhipuKey",
+                "openrouterKey",
+                "customAiKey",
+                "transcriptionApiKey",
+                "bridgeToken",
+            ] {
+                obj.remove(key);
+            }
+            if dirty.broadcast_campaigns {
+                obj.insert(
+                    "__broadcastCampaigns".into(),
+                    Value::Array(snap.broadcast_campaigns.clone()),
+                );
+            }
         }
-        if dirty.broadcast_campaigns {
-            obj.insert(
-                "__broadcastCampaigns".into(),
-                Value::Array(snap.broadcast_campaigns.clone()),
-            );
+        let settings_json = serde_json::to_string(&settings_value).map_err(|e| e.to_string())?;
+        let prev_settings: Option<String> = tx
+            .query_row("SELECT value FROM settings WHERE key = 'app'", [], |r| {
+                r.get(0)
+            })
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if prev_settings.as_deref() != Some(settings_json.as_str()) {
+            tx.execute(
+                "INSERT OR REPLACE INTO settings(key, value) VALUES ('app', ?1)",
+                params![settings_json],
+            )
+            .map_err(|e| e.to_string())?;
+            total_written += 1;
+        } else {
+            total_skipped += 1;
         }
-    }
-    let settings_json = serde_json::to_string(&settings_value).map_err(|e| e.to_string())?;
-    let prev_settings: Option<String> = tx
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'app'",
-            [],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
-    if prev_settings.as_deref() != Some(settings_json.as_str()) {
-        tx.execute(
-            "INSERT OR REPLACE INTO settings(key, value) VALUES ('app', ?1)",
-            params![settings_json],
-        )
-        .map_err(|e| e.to_string())?;
-        total_written += 1;
-    } else {
-        total_skipped += 1;
-    }
     } // end dirty.settings
 
     if let Some(drafts_json) = drafts_json {
         let previous: Option<String> = tx
-            .query_row("SELECT value FROM settings WHERE key = 'chat_drafts'", [], |r| r.get(0))
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'chat_drafts'",
+                [],
+                |r| r.get(0),
+            )
             .optional()
             .map_err(|e| e.to_string())?;
         if previous.as_deref() != Some(drafts_json.as_str()) {
             tx.execute(
                 "INSERT OR REPLACE INTO settings(key, value) VALUES ('chat_drafts', ?1)",
                 params![drafts_json],
-            ).map_err(|e| e.to_string())?;
+            )
+            .map_err(|e| e.to_string())?;
             total_written += 1;
         } else {
             total_skipped += 1;
@@ -845,7 +962,9 @@ fn serialize_chat_drafts(drafts: &serde_json::Map<String, Value>) -> Result<Stri
         if text.encode_utf16().take(CHAT_DRAFT_MAX_UTF16 + 1).count() > CHAT_DRAFT_MAX_UTF16 {
             return Err("chat draft exceeds 65536 characters".into());
         }
-        raw_bytes = raw_bytes.saturating_add(chat_id.len()).saturating_add(text.len());
+        raw_bytes = raw_bytes
+            .saturating_add(chat_id.len())
+            .saturating_add(text.len());
         if raw_bytes > CHAT_DRAFTS_MAX_BYTES {
             return Err("chat drafts exceed 2 MiB".into());
         }
@@ -932,8 +1051,10 @@ pub fn count_messages_for_chat(conn: &Connection, chat_id: &str) -> Result<i64, 
 
 /// Only return IDs, without loading message bodies or media across IPC.
 pub fn chats_with_inbound(conn: &Connection, chat_ids: &[String]) -> Result<Vec<String>, String> {
-    if chat_ids.len() > 50_000 || chat_ids.iter().any(|id| id.is_empty() || id.len() > 1000)
-        || chat_ids.iter().map(String::len).sum::<usize>() > 8 * 1024 * 1024 {
+    if chat_ids.len() > 50_000
+        || chat_ids.iter().any(|id| id.is_empty() || id.len() > 1000)
+        || chat_ids.iter().map(String::len).sum::<usize>() > 8 * 1024 * 1024
+    {
         return Err("Invalid history query size".into());
     }
     let mut stmt = conn.prepare(r#"
@@ -951,7 +1072,11 @@ pub fn chats_with_inbound(conn: &Connection, chat_ids: &[String]) -> Result<Vec<
     let mut replied = Vec::new();
     let mut seen = HashSet::new();
     for id in chat_ids {
-        if seen.insert(id) && stmt.query_row(params![id], |row| row.get::<_, bool>(0)).map_err(|e| e.to_string())? {
+        if seen.insert(id)
+            && stmt
+                .query_row(params![id], |row| row.get::<_, bool>(0))
+                .map_err(|e| e.to_string())?
+        {
             replied.push(id.clone());
         }
     }
@@ -959,11 +1084,7 @@ pub fn chats_with_inbound(conn: &Connection, chat_ids: &[String]) -> Result<Vec<
 }
 
 /// 全局消息搜索（磁盘冷历史 + 已落盘近期）。pattern 为小写子串。
-pub fn search_messages(
-    conn: &Connection,
-    query: &str,
-    limit: i64,
-) -> Result<Vec<Value>, String> {
+pub fn search_messages(conn: &Connection, query: &str, limit: i64) -> Result<Vec<Value>, String> {
     let q_raw = query.trim();
     if q_raw.is_empty() || q_raw.chars().count() < 2 {
         return Ok(vec![]);
@@ -1064,9 +1185,7 @@ pub fn get_message_by_id(conn: &Connection, id: &str) -> Result<Option<Value>, S
         .optional()
         .map_err(|e| e.to_string())?;
     match row {
-        Some(j) => Ok(Some(
-            serde_json::from_str(&j).map_err(|e| e.to_string())?,
-        )),
+        Some(j) => Ok(Some(serde_json::from_str(&j).map_err(|e| e.to_string())?)),
         None => Ok(None),
     }
 }
@@ -1095,37 +1214,70 @@ fn load_chats_with_history(conn: &Connection) -> Result<Vec<Value>, String> {
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT m.chat_id,
-                   MAX(CASE WHEN json_extract(m.json, '$.direction') = 'out' THEN 1 ELSE 0 END)
-            FROM messages m JOIN chats c ON c.id = m.chat_id
-            WHERE COALESCE(m.chat_id, '') != ''
-              AND json_extract(m.json, '$.direction') IN ('in', 'out')
-              AND COALESCE(json_extract(m.json, '$.mediaType'), '') != 'system'
-              AND COALESCE(json_extract(m.json, '$.systemKind'), '') = ''
-              AND (json_extract(m.json, '$.direction') = 'in'
-                   OR COALESCE(json_extract(m.json, '$.deliveryStatus'), 'sent')
-                      NOT IN ('pending', 'queued', 'failed'))
-              AND (COALESCE(NULLIF(json_extract(m.json, '$.accountId'), ''),
-                            NULLIF(json_extract(m.json, '$.deviceId'), ''), '') = ''
-                   OR COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''),
-                               NULLIF(json_extract(c.json, '$.phoneId'), ''), '') = ''
-                   OR COALESCE(NULLIF(json_extract(m.json, '$.accountId'), ''),
-                               NULLIF(json_extract(m.json, '$.deviceId'), ''), '') =
-                      COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''),
-                               NULLIF(json_extract(c.json, '$.phoneId'), ''), ''))
-            GROUP BY m.chat_id
+            WITH evidence AS (
+              SELECT m.chat_id, m.sent_at,
+                     json_extract(m.json, '$.direction') AS direction,
+                     COALESCE(json_extract(m.json, '$.systemKind'), '') AS kind,
+                     COALESCE(json_extract(m.json, '$.deliveryStatus'), 'sent') AS delivery,
+                     COALESCE(json_extract(m.json, '$.deliveryUncertain'), 0) AS uncertain,
+                     COALESCE(NULLIF(json_extract(m.json, '$.accountId'), ''),
+                              NULLIF(json_extract(m.json, '$.deviceId'), ''), '') AS sender,
+                     COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''),
+                              NULLIF(json_extract(c.json, '$.phoneId'), ''), '') AS owner
+              FROM messages m INDEXED BY idx_messages_history_facts JOIN chats c ON c.id = m.chat_id
+              WHERE COALESCE(m.chat_id, '') != ''
+                AND COALESCE(json_extract(m.json, '$.mediaType'), '') != 'system'
+            )
+            SELECT chat_id,
+                   MAX(CASE WHEN kind = '' AND direction = 'out'
+                             AND (sender = '' OR owner = '' OR sender = owner) THEN 1 ELSE 0 END),
+                   MAX(CASE WHEN kind = ''
+                             AND (sender = '' OR owner = '' OR sender = owner) THEN 1 ELSE 0 END),
+                   MAX(CASE WHEN direction = 'out' AND uncertain = 0
+                             AND delivery IN ('sent', 'server', 'delivered', 'read', 'played')
+                            THEN strftime('%Y-%m-%dT%H:%M:%fZ', sent_at) || '|' ||
+                                 CASE WHEN sender != '' THEN sender ELSE owner END END),
+                   MIN(CASE WHEN (sender = '' OR owner = '' OR sender = owner)
+                             AND (kind = '' OR direction = 'out')
+                             AND (direction = 'in' OR (uncertain = 0 AND delivery != 'local'))
+                            THEN strftime('%Y-%m-%dT%H:%M:%fZ', sent_at) ||
+                                 CASE WHEN direction = 'out' THEN '|0' ELSE '|1' END END)
+            FROM evidence
+            WHERE direction IN ('in', 'out')
+              AND (direction = 'in' OR delivery NOT IN ('pending', 'queued', 'failed'))
+            GROUP BY chat_id
             "#,
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)))
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, bool>(1)?,
+                row.get::<_, bool>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })
         .map_err(|e| e.to_string())?;
     let mut outgoing_chat_ids = HashSet::new();
     let mut active_chat_ids = HashSet::new();
+    let mut last_successful = HashMap::new();
+    let mut first_conversation = HashMap::new();
     for row in rows {
-        let (id, outgoing) = row.map_err(|e| e.to_string())?;
-        if outgoing { outgoing_chat_ids.insert(id.clone()); }
-        active_chat_ids.insert(id);
+        let (id, outgoing, active, latest, first) = row.map_err(|e| e.to_string())?;
+        if outgoing {
+            outgoing_chat_ids.insert(id.clone());
+        }
+        if active {
+            active_chat_ids.insert(id.clone());
+        }
+        if let Some((at, account)) = latest.as_deref().and_then(|value| value.split_once('|')) {
+            last_successful.insert(id.clone(), serde_json::json!({"at": at, "accountId": account}));
+        }
+        if let Some((at, direction)) = first.as_deref().and_then(|value| value.split_once('|')) {
+            first_conversation.insert(id, serde_json::json!({"at": at, "direction": if direction == "0" { "out" } else { "in" }}));
+        }
     }
     for chat in &mut chats {
         let Some(object) = chat.as_object_mut() else {
@@ -1138,9 +1290,32 @@ fn load_chats_with_history(conn: &Connection) -> Result<Vec<Value>, String> {
         if has_outgoing {
             object.insert("hasOutgoingHistory".into(), Value::Bool(true));
         }
-        let has_history = object.get("id").and_then(Value::as_str)
+        let has_history = object
+            .get("id")
+            .and_then(Value::as_str)
             .is_some_and(|id| active_chat_ids.contains(id));
         object.insert("hasMessageHistory".into(), Value::Bool(has_history));
+        if let Some(first) = object.get("id").and_then(Value::as_str)
+            .and_then(|id| first_conversation.get(id)) {
+            let previous = object.get("firstConversationMessage");
+            let old_at = previous.and_then(|value| value["at"].as_str())
+                .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok());
+            let new_at = first["at"].as_str()
+                .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok());
+            if old_at.is_none() || new_at < old_at || new_at == old_at && first["direction"] == "out" {
+                object.insert("firstConversationMessage".into(), first.clone());
+            }
+        }
+        let latest = object
+            .get("id")
+            .and_then(Value::as_str)
+            .and_then(|id| last_successful.get(id))
+            .cloned();
+        if let Some(latest) = latest {
+            object.insert("lastSuccessfulOutgoing".into(), latest);
+        } else {
+            object.remove("lastSuccessfulOutgoing");
+        }
     }
     Ok(chats)
 }
@@ -1161,16 +1336,19 @@ fn load_messages_boot(conn: &Connection) -> Result<Vec<Value>, String> {
             r#"
             SELECT json FROM messages
             WHERE id IN (
-                SELECT id FROM messages
-                ORDER BY COALESCE(sent_at, '') DESC, id DESC LIMIT ?1
-            ) OR (
-                json_extract(json, '$.direction') = 'out'
+                SELECT id FROM (
+                    SELECT id FROM messages
+                    ORDER BY sent_at DESC, id DESC LIMIT ?1
+                )
+                UNION
+                SELECT id FROM messages INDEXED BY idx_messages_history_facts
+                WHERE json_extract(json, '$.direction') = 'out'
                 AND (
-                    json_extract(json, '$.deliveryStatus') IN ('queued', 'pending')
-                    OR (json_extract(json, '$.deliveryStatus') = 'failed'
+                    COALESCE(json_extract(json, '$.deliveryStatus'), 'sent') IN ('queued', 'pending')
+                    OR (COALESCE(json_extract(json, '$.deliveryStatus'), 'sent') = 'failed'
                         AND COALESCE(json_extract(json, '$.nextAttemptAt'), '') != '')
                 )
-            ) OR id IN (
+                UNION
                 SELECT json_extract(task.value, '$.messageId')
                 FROM settings, json_each(settings.value, '$.scheduledMessages') AS task
                 WHERE settings.key = 'app' AND json_extract(task.value, '$.status') = 'queued'
@@ -1198,9 +1376,7 @@ fn load_messages_boot(conn: &Connection) -> Result<Vec<Value>, String> {
 
 fn load_activities_boot(conn: &Connection) -> Result<Vec<Value>, String> {
     let mut stmt = conn
-        .prepare(
-            "SELECT json FROM activities ORDER BY COALESCE(at_ts, '') DESC, id DESC LIMIT ?1",
-        )
+        .prepare("SELECT json FROM activities ORDER BY COALESCE(at_ts, '') DESC, id DESC LIMIT ?1")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![BOOT_ACTIVITIES_CAP], |row| {
@@ -1222,11 +1398,9 @@ pub fn load_snapshot(conn: &Connection) -> Result<Option<AppSnapshot>, String> {
     if count == 0 {
         // empty db
         let settings_row: Option<String> = conn
-            .query_row(
-                "SELECT value FROM settings WHERE key = 'app'",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT value FROM settings WHERE key = 'app'", [], |r| {
+                r.get(0)
+            })
             .optional()
             .map_err(|e| e.to_string())?;
         if settings_row.is_none() {
@@ -1235,11 +1409,9 @@ pub fn load_snapshot(conn: &Connection) -> Result<Option<AppSnapshot>, String> {
     }
 
     let settings_str: String = conn
-        .query_row(
-            "SELECT value FROM settings WHERE key = 'app'",
-            [],
-            |r| r.get(0),
-        )
+        .query_row("SELECT value FROM settings WHERE key = 'app'", [], |r| {
+            r.get(0)
+        })
         .optional()
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| "{}".into());
@@ -1248,7 +1420,11 @@ pub fn load_snapshot(conn: &Connection) -> Result<Option<AppSnapshot>, String> {
         serde_json::from_str(&settings_str).unwrap_or(Value::Object(Default::default()));
 
     let drafts_str: Option<String> = conn
-        .query_row("SELECT value FROM settings WHERE key = 'chat_drafts'", [], |r| r.get(0))
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'chat_drafts'",
+            [],
+            |r| r.get(0),
+        )
         .optional()
         .map_err(|e| e.to_string())?;
     let draft_reply_by_chat_id = match drafts_str {
@@ -1341,7 +1517,11 @@ pub fn clear_chat_messages(conn: &Connection, chat_id: &str) -> Result<(), Strin
     tx.commit().map_err(|e| e.to_string())
 }
 
-pub fn clear_remote_messages(conn: &Connection, remote_jid: &str, account_id: Option<&str>) -> Result<(), String> {
+pub fn clear_remote_messages(
+    conn: &Connection,
+    remote_jid: &str,
+    account_id: Option<&str>,
+) -> Result<(), String> {
     clear_remote_messages_before(conn, remote_jid, account_id, None)
 }
 
@@ -1446,7 +1626,8 @@ pub fn delete_messages_by_keys(
 pub fn clear_all(conn: &Connection) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     if fts_available(&tx) {
-        tx.execute("DELETE FROM messages_fts", []).map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM messages_fts", [])
+            .map_err(|e| e.to_string())?;
     }
     tx.execute_batch(
         "DELETE FROM phones; DELETE FROM contacts; DELETE FROM chats; DELETE FROM messages; DELETE FROM follow_ups; DELETE FROM activities; DELETE FROM settings; DELETE FROM meta WHERE key = 'last_saved_at';",
@@ -1461,13 +1642,24 @@ mod tests {
     #[test]
     fn patched_sqlite_migrates_a_real_3460_file_without_losing_history() {
         use std::io::Read;
-        assert!(rusqlite::version_number() >= 3_053_002, "bundled SQLite is older than the security baseline");
+        assert!(
+            rusqlite::version_number() >= 3_053_002,
+            "bundled SQLite is older than the security baseline"
+        );
         let mut bytes = Vec::new();
-        bzip2::read::BzDecoder::new(include_bytes!("../../tests/fixtures/sqlite-3.46.0.bz2").as_slice())
-            .take(1024 * 1024).read_to_end(&mut bytes).unwrap();
+        bzip2::read::BzDecoder::new(
+            include_bytes!("../../tests/fixtures/sqlite-3.46.0.bz2").as_slice(),
+        )
+        .take(1024 * 1024)
+        .read_to_end(&mut bytes)
+        .unwrap();
         assert_eq!(&bytes[..16], b"SQLite format 3\0");
-        assert_eq!(u32::from_be_bytes(bytes[96..100].try_into().unwrap()), 3_046_000);
-        let root = std::env::temp_dir().join(format!("wap-sqlite-upgrade-{}", uuid::Uuid::new_v4()));
+        assert_eq!(
+            u32::from_be_bytes(bytes[96..100].try_into().unwrap()),
+            3_046_000
+        );
+        let root =
+            std::env::temp_dir().join(format!("wap-sqlite-upgrade-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("legacy.db");
         std::fs::write(&path, bytes).unwrap();
@@ -1487,7 +1679,11 @@ mod tests {
             assert_eq!(snapshot.contacts[0]["notes"], "after upgrade");
             assert_eq!(snapshot.messages[0]["id"], "legacy-message");
             assert_eq!(search_messages(&conn, "你好", 20).unwrap().len(), 1);
-            assert_eq!(conn.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0)).unwrap(), "ok");
+            assert_eq!(
+                conn.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+                    .unwrap(),
+                "ok"
+            );
         }
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1496,7 +1692,18 @@ mod tests {
     fn inbound_lookup_excludes_outgoing_system_events_and_foreign_accounts() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        let ids = ["empty", "outgoing", "text", "voice", "image", "system", "system_kind", "wrong_account", "legacy", "quote'); DROP TABLE messages;--"];
+        let ids = [
+            "empty",
+            "outgoing",
+            "text",
+            "voice",
+            "image",
+            "system",
+            "system_kind",
+            "wrong_account",
+            "legacy",
+            "quote'); DROP TABLE messages;--",
+        ];
         let messages = vec![
             serde_json::json!({"id":"out", "chatId":"outgoing", "accountId":"a", "direction":"out", "deliveryStatus":"read", "quoted":{"fromMe":false}}),
             serde_json::json!({"id":"text", "chatId":"text", "accountId":"a", "direction":"in", "body":"reply"}),
@@ -1508,9 +1715,27 @@ mod tests {
             serde_json::json!({"id":"legacy", "chatId":"legacy", "direction":"in"}),
             serde_json::json!({"id":"quote", "chatId":ids[9], "direction":"in"}),
         ];
-        save_snapshot(&conn, &AppSnapshot { chats: ids.iter().map(|id| serde_json::json!({"id":id, "phoneId":"a"})).collect(), messages, ..Default::default() }).unwrap();
-        let requested: Vec<String> = ids.iter().map(|id| id.to_string()).chain(std::iter::once("text".into())).collect();
-        assert_eq!(chats_with_inbound(&conn, &requested).unwrap(), ["text", "voice", "image", "legacy", ids[9]]);
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: ids
+                    .iter()
+                    .map(|id| serde_json::json!({"id":id, "phoneId":"a"}))
+                    .collect(),
+                messages,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let requested: Vec<String> = ids
+            .iter()
+            .map(|id| id.to_string())
+            .chain(std::iter::once("text".into()))
+            .collect();
+        assert_eq!(
+            chats_with_inbound(&conn, &requested).unwrap(),
+            ["text", "voice", "image", "legacy", ids[9]]
+        );
         assert!(chats_with_inbound(&conn, &["missing".into()]).is_err());
         assert!(chats_with_inbound(&conn, &["x".repeat(1001)]).is_err());
         assert!(chats_with_inbound(&conn, &vec!["empty".into(); 50_001]).is_err());
@@ -1521,11 +1746,27 @@ mod tests {
     fn inbound_lookup_checks_replies_older_than_the_boot_message_window() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        let mut messages = vec![serde_json::json!({"id":"old-reply", "chatId":"cold", "direction":"in", "accountId":"a", "sentAt":"2000-01-01T00:00:00Z"})];
+        let mut messages = vec![
+            serde_json::json!({"id":"old-reply", "chatId":"cold", "direction":"in", "accountId":"a", "sentAt":"2000-01-01T00:00:00Z"}),
+        ];
         messages.extend((0..2002).map(|i| serde_json::json!({"id":format!("out-{i}"), "chatId":"cold", "direction":"out", "accountId":"a", "deliveryStatus":"sent", "sentAt":"2026-11-02T00:00:00Z"})));
-        save_snapshot(&conn, &AppSnapshot { chats: vec![serde_json::json!({"id":"cold", "accountId":"a"})], messages, ..Default::default() }).unwrap();
-        assert!(load_messages_boot(&conn).unwrap().iter().all(|message| message["id"] != "old-reply"));
-        assert_eq!(chats_with_inbound(&conn, &["cold".into()]).unwrap(), ["cold"]);
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: vec![serde_json::json!({"id":"cold", "accountId":"a"})],
+                messages,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(load_messages_boot(&conn)
+            .unwrap()
+            .iter()
+            .all(|message| message["id"] != "old-reply"));
+        assert_eq!(
+            chats_with_inbound(&conn, &["cold".into()]).unwrap(),
+            ["cold"]
+        );
     }
 
     #[test]
@@ -1538,16 +1779,37 @@ mod tests {
         bytes.extend_from_slice(" après\",\"sentAt\":\"2026-10-31T00:00:00Z\"}".as_bytes());
         conn.execute("INSERT INTO messages(id, chat_id, sent_at, json) VALUES ('legacy', 'chat', '2026-10-31T00:00:00Z', CAST(?1 AS TEXT))", params![bytes]).unwrap();
         let clean = serde_json::json!({"id":"clean","chatId":"chat","body":"normal 😀"});
-        conn.execute("INSERT INTO messages(id, chat_id, json) VALUES ('clean', 'chat', ?1)", params![clean.to_string()]).unwrap();
+        conn.execute(
+            "INSERT INTO messages(id, chat_id, json) VALUES ('clean', 'chat', ?1)",
+            params![clean.to_string()],
+        )
+        .unwrap();
         let full = load_full_history(&conn).unwrap();
         let messages = full["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 2);
-        assert_eq!(messages.iter().find(|m| m["id"] == "legacy").unwrap()["body"], "中文 😀 avant � après");
+        assert_eq!(
+            messages.iter().find(|m| m["id"] == "legacy").unwrap()["body"],
+            "中文 😀 avant � après"
+        );
         assert!(messages.contains(&clean));
-        assert_eq!(get_message_by_id(&conn, "legacy").unwrap().unwrap()["body"], "中文 😀 avant � après");
-        assert_eq!(load_messages_page(&conn, "chat", None, None, 50).unwrap().len(), 2);
+        assert_eq!(
+            get_message_by_id(&conn, "legacy").unwrap().unwrap()["body"],
+            "中文 😀 avant � après"
+        );
+        assert_eq!(
+            load_messages_page(&conn, "chat", None, None, 50)
+                .unwrap()
+                .len(),
+            2
+        );
         assert_eq!(load_messages_boot(&conn).unwrap().len(), 2);
-        let original: Vec<u8> = conn.query_row("SELECT CAST(json AS BLOB) FROM messages WHERE id = 'legacy'", [], |r| r.get(0)).unwrap();
+        let original: Vec<u8> = conn
+            .query_row(
+                "SELECT CAST(json AS BLOB) FROM messages WHERE id = 'legacy'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(original, bytes);
     }
 
@@ -1555,9 +1817,17 @@ mod tests {
     fn backup_still_rejects_broken_json_and_wrong_sql_types() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute("INSERT INTO activities(id, json) VALUES ('broken', '{broken')", []).unwrap();
+        conn.execute(
+            "INSERT INTO activities(id, json) VALUES ('broken', '{broken')",
+            [],
+        )
+        .unwrap();
         assert!(load_full_history(&conn).is_err());
-        conn.execute("UPDATE activities SET json = ?1 WHERE id = 'broken'", params![vec![0xffu8]]).unwrap();
+        conn.execute(
+            "UPDATE activities SET json = ?1 WHERE id = 'broken'",
+            params![vec![0xffu8]],
+        )
+        .unwrap();
         assert!(load_full_history(&conn).is_err());
     }
 
@@ -1565,9 +1835,21 @@ mod tests {
     fn chat_activity_requires_real_messages_from_the_chat_account() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        for id in ["real", "preview", "system", "wrong-owner", "pending", "failed", "cold"] {
+        for id in [
+            "real",
+            "preview",
+            "system",
+            "wrong-owner",
+            "pending",
+            "failed",
+            "cold",
+        ] {
             let chat = serde_json::json!({"id": id, "accountId": "wa-a", "lastMessage": "stale preview", "hasMessageHistory": true});
-            conn.execute("INSERT INTO chats(id, json) VALUES (?1, ?2)", params![id, chat.to_string()]).unwrap();
+            conn.execute(
+                "INSERT INTO chats(id, json) VALUES (?1, ?2)",
+                params![id, chat.to_string()],
+            )
+            .unwrap();
         }
         for (id, direction, owner, media, delivery) in [
             ("real", "in", "wa-a", "", ""),
@@ -1578,56 +1860,109 @@ mod tests {
             ("cold", "out", "wa-a", "", "sent"),
         ] {
             let msg = serde_json::json!({"id": id, "chatId": id, "direction": direction, "deviceId": owner, "mediaType": media, "deliveryStatus": delivery});
-            conn.execute("INSERT INTO messages(id, chat_id, json) VALUES (?1, ?1, ?2)", params![id, msg.to_string()]).unwrap();
+            conn.execute(
+                "INSERT INTO messages(id, chat_id, json) VALUES (?1, ?1, ?2)",
+                params![id, msg.to_string()],
+            )
+            .unwrap();
         }
         let chats = load_chats_with_history(&conn).unwrap();
         for chat in chats {
             let id = chat["id"].as_str().unwrap();
-            assert_eq!(chat["hasMessageHistory"], id == "real" || id == "cold", "{id}");
+            assert_eq!(
+                chat["hasMessageHistory"],
+                id == "real" || id == "cold",
+                "{id}"
+            );
         }
     }
     use serde_json::json;
 
     #[test]
     fn chat_drafts_survive_reopen_settings_delta_and_individual_clear() {
-        let path = std::env::temp_dir().join(format!("bridgecrm-drafts-{}.db", uuid::Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("bridgecrm-drafts-{}.db", uuid::Uuid::new_v4()));
         let conn = Connection::open(&path).unwrap();
         migrate(&conn).unwrap();
         let drafts = json!({
             "chat-account-a-peer": "报价 €120\n请确认。",
             "chat-account-b-peer": "Bonjour, votre commande est prête."
-        }).as_object().unwrap().clone();
-        save_snapshot(&conn, &AppSnapshot {
-            settings: json!({"theme":"dark"}),
-            draft_reply_by_chat_id: drafts.clone(),
-            ..Default::default()
-        }).unwrap();
-        assert_eq!(load_snapshot(&conn).unwrap().unwrap().draft_reply_by_chat_id, drafts);
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                settings: json!({"theme":"dark"}),
+                draft_reply_by_chat_id: drafts.clone(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            load_snapshot(&conn)
+                .unwrap()
+                .unwrap()
+                .draft_reply_by_chat_id,
+            drafts
+        );
 
-        save_snapshot(&conn, &AppSnapshot {
-            settings: json!({"theme":"light"}),
-            dirty: Some(PersistDirtyFlags { settings: true, ..Default::default() }),
-            ..Default::default()
-        }).unwrap();
-        assert_eq!(load_snapshot(&conn).unwrap().unwrap().draft_reply_by_chat_id, drafts);
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                settings: json!({"theme":"light"}),
+                dirty: Some(PersistDirtyFlags {
+                    settings: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            load_snapshot(&conn)
+                .unwrap()
+                .unwrap()
+                .draft_reply_by_chat_id,
+            drafts
+        );
         drop(conn);
 
         let conn = Connection::open(&path).unwrap();
         migrate(&conn).unwrap();
-        let mut remaining = load_snapshot(&conn).unwrap().unwrap().draft_reply_by_chat_id;
+        let mut remaining = load_snapshot(&conn)
+            .unwrap()
+            .unwrap()
+            .draft_reply_by_chat_id;
         assert_eq!(remaining, drafts);
         remaining.remove("chat-account-a-peer");
-        save_snapshot(&conn, &AppSnapshot {
-            draft_reply_by_chat_id: remaining.clone(),
-            dirty: Some(PersistDirtyFlags { drafts: true, ..Default::default() }),
-            ..Default::default()
-        }).unwrap();
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                draft_reply_by_chat_id: remaining.clone(),
+                dirty: Some(PersistDirtyFlags {
+                    drafts: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let loaded = load_snapshot(&conn).unwrap().unwrap();
         assert_eq!(loaded.draft_reply_by_chat_id, remaining);
         assert_eq!(loaded.settings["theme"], "light");
         clear_all(&conn).unwrap();
         assert!(load_snapshot(&conn).unwrap().is_none());
-        assert_eq!(conn.query_row("SELECT COUNT(*) FROM settings WHERE key = 'chat_drafts'", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM settings WHERE key = 'chat_drafts'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
         drop(conn);
         std::fs::remove_file(path).unwrap();
     }
@@ -1637,29 +1972,54 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let original = json!({"chat":"keep me"}).as_object().unwrap().clone();
-        save_snapshot(&conn, &AppSnapshot {
-            settings: json!({"theme":"dark"}),
-            draft_reply_by_chat_id: original.clone(),
-            ..Default::default()
-        }).unwrap();
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                settings: json!({"theme":"dark"}),
+                draft_reply_by_chat_id: original.clone(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
 
-        let too_many = (0..=CHAT_DRAFTS_MAX_ENTRIES).map(|i| (format!("chat-{i}"), json!("x"))).collect();
-        let too_large = (0..33).map(|i| (format!("chat-{i}"), json!("x".repeat(CHAT_DRAFT_MAX_UTF16)))).collect();
+        let too_many = (0..=CHAT_DRAFTS_MAX_ENTRIES)
+            .map(|i| (format!("chat-{i}"), json!("x")))
+            .collect();
+        let too_large = (0..33)
+            .map(|i| (format!("chat-{i}"), json!("x".repeat(CHAT_DRAFT_MAX_UTF16))))
+            .collect();
         // Escaped JSON size is bounded too, even when raw UTF-8 is below 2 MiB.
-        let escaped_too_large = (0..6).map(|i| (format!("chat-{i}"), json!("\0".repeat(CHAT_DRAFT_MAX_UTF16)))).collect();
+        let escaped_too_large = (0..6)
+            .map(|i| {
+                (
+                    format!("chat-{i}"),
+                    json!("\0".repeat(CHAT_DRAFT_MAX_UTF16)),
+                )
+            })
+            .collect();
         for drafts in [
             json!({"chat": 42}).as_object().unwrap().clone(),
-            json!({"chat": "x".repeat(CHAT_DRAFT_MAX_UTF16 + 1)}).as_object().unwrap().clone(),
-            json!({"chat": "😀".repeat(CHAT_DRAFT_MAX_UTF16 / 2 + 1)}).as_object().unwrap().clone(),
+            json!({"chat": "x".repeat(CHAT_DRAFT_MAX_UTF16 + 1)})
+                .as_object()
+                .unwrap()
+                .clone(),
+            json!({"chat": "😀".repeat(CHAT_DRAFT_MAX_UTF16 / 2 + 1)})
+                .as_object()
+                .unwrap()
+                .clone(),
             too_many,
             too_large,
             escaped_too_large,
         ] {
-            assert!(save_snapshot(&conn, &AppSnapshot {
-                settings: json!({"theme":"changed"}),
-                draft_reply_by_chat_id: drafts,
-                ..Default::default()
-            }).is_err());
+            assert!(save_snapshot(
+                &conn,
+                &AppSnapshot {
+                    settings: json!({"theme":"changed"}),
+                    draft_reply_by_chat_id: drafts,
+                    ..Default::default()
+                }
+            )
+            .is_err());
             let loaded = load_snapshot(&conn).unwrap().unwrap();
             assert_eq!(loaded.draft_reply_by_chat_id, original);
             assert_eq!(loaded.settings["theme"], "dark");
@@ -1667,21 +2027,41 @@ mod tests {
         let allowed = json!({
             "chat-a": "x".repeat(CHAT_DRAFT_MAX_UTF16),
             "chat-b": "😀".repeat(CHAT_DRAFT_MAX_UTF16 / 2)
-        }).as_object().unwrap().clone();
-        save_snapshot(&conn, &AppSnapshot {
-            draft_reply_by_chat_id: allowed.clone(),
-            dirty: Some(PersistDirtyFlags { drafts: true, ..Default::default() }),
-            ..Default::default()
-        }).unwrap();
-        assert_eq!(load_snapshot(&conn).unwrap().unwrap().draft_reply_by_chat_id, allowed);
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                draft_reply_by_chat_id: allowed.clone(),
+                dirty: Some(PersistDirtyFlags {
+                    drafts: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            load_snapshot(&conn)
+                .unwrap()
+                .unwrap()
+                .draft_reply_by_chat_id,
+            allowed
+        );
 
         // A later SQL failure rolls back settings and drafts together.
         conn.execute_batch("CREATE TRIGGER reject_drafts BEFORE INSERT ON settings WHEN NEW.key = 'chat_drafts' BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
-        assert!(save_snapshot(&conn, &AppSnapshot {
-            settings: json!({"theme":"changed"}),
-            draft_reply_by_chat_id: original,
-            ..Default::default()
-        }).is_err());
+        assert!(save_snapshot(
+            &conn,
+            &AppSnapshot {
+                settings: json!({"theme":"changed"}),
+                draft_reply_by_chat_id: original,
+                ..Default::default()
+            }
+        )
+        .is_err());
         let loaded = load_snapshot(&conn).unwrap().unwrap();
         assert_eq!(loaded.settings["theme"], "dark");
         assert_eq!(loaded.draft_reply_by_chat_id, allowed);
@@ -1689,7 +2069,8 @@ mod tests {
         for invalid in [json!([]), json!(null), json!("text")] {
             assert!(serde_json::from_value::<AppSnapshot>(json!({
                 "phones":[], "contacts":[], "chats":[], "messages":[], "draftReplyByChatId":invalid
-            })).is_err());
+            }))
+            .is_err());
         }
     }
 
@@ -1699,20 +2080,41 @@ mod tests {
         migrate(&conn).unwrap();
         let old: AppSnapshot = serde_json::from_value(json!({
             "phones":[], "contacts":[], "chats":[], "messages":[], "settings":{"theme":"dark"}
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(old.draft_reply_by_chat_id.is_empty());
-        assert!(!serde_json::from_value::<PersistDirtyFlags>(json!({"settings":true})).unwrap().drafts);
+        assert!(
+            !serde_json::from_value::<PersistDirtyFlags>(json!({"settings":true}))
+                .unwrap()
+                .drafts
+        );
         save_snapshot(&conn, &old).unwrap();
-        assert!(load_snapshot(&conn).unwrap().unwrap().draft_reply_by_chat_id.is_empty());
-        conn.execute("DELETE FROM settings WHERE key = 'chat_drafts'", []).unwrap();
-        assert!(load_snapshot(&conn).unwrap().unwrap().draft_reply_by_chat_id.is_empty());
+        assert!(load_snapshot(&conn)
+            .unwrap()
+            .unwrap()
+            .draft_reply_by_chat_id
+            .is_empty());
+        conn.execute("DELETE FROM settings WHERE key = 'chat_drafts'", [])
+            .unwrap();
+        assert!(load_snapshot(&conn)
+            .unwrap()
+            .unwrap()
+            .draft_reply_by_chat_id
+            .is_empty());
 
         clear_all(&conn).unwrap();
-        save_snapshot(&conn, &AppSnapshot {
-            draft_reply_by_chat_id: json!({"chat":"orphan"}).as_object().unwrap().clone(),
-            dirty: Some(PersistDirtyFlags { drafts: true, ..Default::default() }),
-            ..Default::default()
-        }).unwrap();
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                draft_reply_by_chat_id: json!({"chat":"orphan"}).as_object().unwrap().clone(),
+                dirty: Some(PersistDirtyFlags {
+                    drafts: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(load_snapshot(&conn).unwrap().is_none());
     }
 
@@ -1733,12 +2135,7 @@ mod tests {
         })
     }
 
-    fn account_message(
-        id: &str,
-        protocol_id: &str,
-        account_id: &str,
-        remote_jid: &str,
-    ) -> Value {
+    fn account_message(id: &str, protocol_id: &str, account_id: &str, remote_jid: &str) -> Value {
         json!({
             "id": id,
             "chatId": format!("chat-{account_id}"),
@@ -1772,21 +2169,36 @@ mod tests {
                 "direction":"out", "sentAt":"2020-01-01", "deliveryStatus":status,
                 "nextAttemptAt":retry}));
         }
-        save_snapshot(&conn, &AppSnapshot {
-            messages,
-            dirty: Some(message_dirty()),
-            ..Default::default()
-        }).unwrap();
-        conn.execute("INSERT INTO settings(key, value) VALUES ('app', ?1)", params![
-            json!({"scheduledMessages":[{"status":"queued", "messageId":"old-task-result"}]}).to_string()
-        ]).unwrap();
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                messages,
+                dirty: Some(message_dirty()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES ('app', ?1)",
+            params![
+                json!({"scheduledMessages":[{"status":"queued", "messageId":"old-task-result"}]})
+                    .to_string()
+            ],
+        )
+        .unwrap();
         let loaded = load_messages_boot(&conn).unwrap();
         assert_eq!(loaded.len(), 2004);
         for id in ["old-queued", "old-pending", "old-retry", "old-task-result"] {
-            assert!(loaded.iter().any(|message| message["id"] == id), "missing {id}");
+            assert!(
+                loaded.iter().any(|message| message["id"] == id),
+                "missing {id}"
+            );
         }
         for id in ["old-hard-failure", "old-history", "recent-0000"] {
-            assert!(!loaded.iter().any(|message| message["id"] == id), "unexpected {id}");
+            assert!(
+                !loaded.iter().any(|message| message["id"] == id),
+                "unexpected {id}"
+            );
         }
     }
 
@@ -1812,7 +2224,8 @@ mod tests {
         };
         save_snapshot(&conn, &delta).unwrap();
         assert_eq!(
-            conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get::<_, i64>(0))
+            conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row
+                .get::<_, i64>(0))
                 .unwrap(),
             1
         );
@@ -1854,7 +2267,8 @@ mod tests {
 
         clear_remote_messages(&conn, "111@s.whatsapp.net", None).unwrap();
         assert_eq!(
-            conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get::<_, i64>(0))
+            conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row
+                .get::<_, i64>(0))
                 .unwrap(),
             1
         );
@@ -1876,7 +2290,8 @@ mod tests {
 
         delete_messages_by_keys(&conn, &["local-id".into()], None).unwrap();
         assert_eq!(
-            conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get::<_, i64>(0))
+            conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row
+                .get::<_, i64>(0))
                 .unwrap(),
             0
         );
@@ -1899,25 +2314,16 @@ mod tests {
         )
         .unwrap();
 
-        delete_messages_by_keys(
-            &conn,
-            &["shared-key".into()],
-            Some("account-a"),
-        )
-        .unwrap();
+        delete_messages_by_keys(&conn, &["shared-key".into()], Some("account-a")).unwrap();
         let remaining: String = conn
             .query_row("SELECT id FROM messages", [], |row| row.get(0))
             .unwrap();
         assert_eq!(remaining, "b-1");
 
-        clear_remote_messages(
-            &conn,
-            "111@s.whatsapp.net",
-            Some("account-b"),
-        )
-        .unwrap();
+        clear_remote_messages(&conn, "111@s.whatsapp.net", Some("account-b")).unwrap();
         assert_eq!(
-            conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get::<_, i64>(0))
+            conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row
+                .get::<_, i64>(0))
                 .unwrap(),
             0
         );
@@ -1972,64 +2378,231 @@ mod tests {
         assert_eq!(loaded.contacts[0]["name"], "Alice");
         assert_eq!(loaded.chats[0]["contactId"], "contact-1");
         assert_eq!(loaded.chats[0]["hasOutgoingHistory"], true);
+        assert_eq!(
+            loaded.chats[0]["lastSuccessfulOutgoing"]["at"],
+            "2026-09-21T10:00:00.000Z"
+        );
         assert_eq!(loaded.settings["chatFolders"][0]["id"], "folder-1");
-        assert_eq!(loaded.settings["chatFolders"][0]["chatIds"][0], "chat-contact-1");
+        assert_eq!(
+            loaded.settings["chatFolders"][0]["chatIds"][0],
+            "chat-contact-1"
+        );
     }
+    #[test]
+    fn cold_history_keeps_the_latest_successful_sender_and_ignores_pending_failed_unknown_and_local(
+    ) {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mut messages = vec![
+            serde_json::json!({"id":"old", "chatId":"cold", "accountId":"a", "direction":"out", "deliveryStatus":"sent", "sentAt":"2026-10-01T08:00:00Z"}),
+            serde_json::json!({"id":"latest", "chatId":"cold", "accountId":"b", "direction":"out", "systemKind":"ai_auto_reply", "deliveryStatus":"read", "sentAt":"2026-10-01T09:00:00Z"}),
+        ];
+        for (id, status, uncertain) in [
+            ("queued", "queued", false),
+            ("failed", "failed", false),
+            ("unknown", "sent", true),
+            ("local", "local", false),
+        ] {
+            messages.push(serde_json::json!({"id":id, "chatId":"cold", "accountId":"a", "direction":"out", "deliveryStatus":status, "deliveryUncertain":uncertain, "sentAt":"2026-11-01T12:00:00Z"}));
+        }
+        messages.extend((0..2002).map(|i| serde_json::json!({"id":format!("incoming-{i}"), "chatId":"cold", "accountId":"a", "direction":"in", "sentAt":"2026-11-02T00:00:00Z"})));
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: vec![serde_json::json!({"id":"cold", "accountId":"a"})],
+                messages,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let loaded = load_snapshot(&conn).unwrap().unwrap();
+        assert!(!loaded
+            .messages
+            .iter()
+            .any(|message| message["id"] == "latest"));
+        assert_eq!(
+            loaded.chats[0]["lastSuccessfulOutgoing"]["at"],
+            "2026-10-01T09:00:00.000Z"
+        );
+        assert_eq!(loaded.chats[0]["lastSuccessfulOutgoing"]["accountId"], "b");
+    }
+
+    #[test]
+    fn cold_history_keeps_first_contact_across_the_boot_message_window() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mut messages = vec![
+            json!({"id":"first-out", "chatId":"old", "accountId":"a", "direction":"out", "systemKind":"scheduled_plan", "deliveryStatus":"sent", "sentAt":"2026-08-01T10:00:00Z"}),
+            json!({"id":"first-in", "chatId":"new", "accountId":"a", "direction":"in", "sentAt":"2026-08-02T10:00:00Z"}),
+            json!({"id":"foreign", "chatId":"new", "accountId":"b", "direction":"out", "sentAt":"2026-07-01T10:00:00Z"}),
+            json!({"id":"system", "chatId":"new", "accountId":"a", "direction":"in", "systemKind":"group_participants", "sentAt":"2026-07-01T10:00:00Z"}),
+            json!({"id":"failed", "chatId":"new", "accountId":"a", "direction":"out", "deliveryStatus":"failed", "sentAt":"2026-07-01T10:00:00Z"}),
+            json!({"id":"uncertain", "chatId":"new", "accountId":"a", "direction":"out", "deliveryUncertain":true, "sentAt":"2026-07-01T10:00:00Z"}),
+        ];
+        messages.extend((0..2002).map(|i| json!({"id":format!("recent-{i}"), "chatId":"old", "accountId":"a", "direction":"in", "sentAt":"2026-11-09T10:00:00Z"})));
+        save_snapshot(&conn, &AppSnapshot {
+            chats: vec![json!({"id":"old", "accountId":"a"}), json!({"id":"new", "accountId":"a"})],
+            messages,
+            ..Default::default()
+        }).unwrap();
+        let loaded = load_snapshot(&conn).unwrap().unwrap();
+        assert!(!loaded.messages.iter().any(|message| message["id"] == "first-out" || message["id"] == "first-in"));
+        let old = loaded.chats.iter().find(|chat| chat["id"] == "old").unwrap();
+        let new = loaded.chats.iter().find(|chat| chat["id"] == "new").unwrap();
+        assert_eq!(old["firstConversationMessage"], json!({"at":"2026-08-01T10:00:00.000Z", "direction":"out"}));
+        assert_eq!(new["firstConversationMessage"], json!({"at":"2026-08-02T10:00:00.000Z", "direction":"in"}));
+    }
+
     #[test]
     fn clear_is_atomic_and_removes_search_index_and_save_timestamp() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        save_snapshot(&conn, &AppSnapshot {
-            phones: vec![json!({"id":"phone"})],
-            contacts: vec![json!({"id":"c"})],
-            chats: vec![json!({"id":"chat", "contactId":"c"})],
-            messages: vec![message("m", "chat", "peer")],
-            settings: json!({"theme":"dark"}),
-            ..Default::default()
-        }).unwrap();
-        assert_eq!(conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                phones: vec![json!({"id":"phone"})],
+                contacts: vec![json!({"id":"c"})],
+                chats: vec![json!({"id":"chat", "contactId":"c"})],
+                messages: vec![message("m", "chat", "peer")],
+                settings: json!({"theme":"dark"}),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
         conn.execute_batch("CREATE TRIGGER reject_clear BEFORE DELETE ON messages BEGIN SELECT RAISE(ABORT, 'test failure'); END;").unwrap();
         assert!(clear_all(&conn).is_err());
-        assert_eq!(conn.query_row("SELECT COUNT(*) FROM phones", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(conn.query_row("SELECT COUNT(*) FROM messages_fts", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM phones", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM messages_fts", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
         conn.execute_batch("DROP TRIGGER reject_clear;").unwrap();
         clear_all(&conn).unwrap();
-        for table in ["phones", "contacts", "chats", "messages", "messages_fts", "follow_ups", "activities", "settings"] {
-            assert_eq!(conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get::<_, i64>(0)).unwrap(), 0, "{table}");
+        for table in [
+            "phones",
+            "contacts",
+            "chats",
+            "messages",
+            "messages_fts",
+            "follow_ups",
+            "activities",
+            "settings",
+        ] {
+            assert_eq!(
+                conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0,
+                "{table}"
+            );
         }
-        assert_eq!(conn.query_row("SELECT COUNT(*) FROM meta WHERE key = 'last_saved_at'", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM meta WHERE key = 'last_saved_at'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
     }
 
     #[test]
     fn hot_activity_save_preserves_cold_rows_but_restore_replaces_them() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        let dirty = PersistDirtyFlags { activities: true, ..Default::default() };
-        let activities = (0..2005).map(|i| json!({"id":format!("a{i:04}"), "at":format!("2026-{i:04}")})).collect();
-        save_snapshot(&conn, &AppSnapshot { activities, dirty: Some(dirty.clone()), ..Default::default() }).unwrap();
+        let dirty = PersistDirtyFlags {
+            activities: true,
+            ..Default::default()
+        };
+        let activities = (0..2005)
+            .map(|i| json!({"id":format!("a{i:04}"), "at":format!("2026-{i:04}")}))
+            .collect();
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                activities,
+                dirty: Some(dirty.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let mut hot = load_activities_boot(&conn).unwrap();
         assert_eq!(hot.len(), 2000);
         hot.push(json!({"id":"new", "at":"2027"}));
-        save_snapshot(&conn, &AppSnapshot { activities: hot, dirty: Some(dirty.clone()), ..Default::default() }).unwrap();
-        assert_eq!(conn.query_row("SELECT COUNT(*) FROM activities", [], |r| r.get::<_, i64>(0)).unwrap(), 2006);
-        save_snapshot(&conn, &AppSnapshot { activities: vec![json!({"id":"restored"})], replace_messages: true, dirty: Some(dirty), ..Default::default() }).unwrap();
-        assert_eq!(conn.query_row("SELECT id FROM activities", [], |r| r.get::<_, String>(0)).unwrap(), "restored");
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                activities: hot,
+                dirty: Some(dirty.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM activities", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            2006
+        );
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                activities: vec![json!({"id":"restored"})],
+                replace_messages: true,
+                dirty: Some(dirty),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            conn.query_row("SELECT id FROM activities", [], |r| r.get::<_, String>(0))
+                .unwrap(),
+            "restored"
+        );
     }
 
     #[test]
     fn deleted_contacts_remove_their_cold_activities() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        save_snapshot(&conn, &AppSnapshot {
-            contacts: vec![json!({"id":"c"})],
-            activities: vec![json!({"id":"a", "contactId":"c"})],
-            ..Default::default()
-        }).unwrap();
-        save_snapshot(&conn, &AppSnapshot {
-            dirty: Some(PersistDirtyFlags { contacts: true, ..Default::default() }),
-            ..Default::default()
-        }).unwrap();
-        assert_eq!(conn.query_row("SELECT COUNT(*) FROM activities", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                contacts: vec![json!({"id":"c"})],
+                activities: vec![json!({"id":"a", "contactId":"c"})],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                dirty: Some(PersistDirtyFlags {
+                    contacts: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM activities", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
     }
 
     #[test]
@@ -2051,15 +2624,40 @@ mod tests {
     fn cold_acks_are_scoped_monotonic_and_survive_stale_saves() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        let dirty = PersistDirtyFlags { messages: true, ..Default::default() };
+        let dirty = PersistDirtyFlags {
+            messages: true,
+            ..Default::default()
+        };
         let a = json!({"id":"a", "waMessageId":"same", "accountId":"wa-a", "direction":"out", "deliveryStatus":"sent"});
         let b = json!({"id":"b", "waMessageId":"same", "accountId":"wa-b", "direction":"out", "deliveryStatus":"sent"});
-        save_snapshot(&conn, &AppSnapshot { messages: vec![a.clone(), b], dirty: Some(dirty.clone()), ..Default::default() }).unwrap();
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                messages: vec![a.clone(), b],
+                dirty: Some(dirty.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         update_message_acks(&conn, &[json!({"id":"same", "ack":"read"})], "wa-a").unwrap();
         update_message_acks(&conn, &[json!({"id":"same", "ack":"server"})], "wa-a").unwrap();
-        save_snapshot(&conn, &AppSnapshot { messages: vec![a], dirty: Some(dirty), ..Default::default() }).unwrap();
-        assert_eq!(get_message_by_id(&conn, "a").unwrap().unwrap()["deliveryStatus"], "read");
-        assert_eq!(get_message_by_id(&conn, "b").unwrap().unwrap()["deliveryStatus"], "sent");
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                messages: vec![a],
+                dirty: Some(dirty),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            get_message_by_id(&conn, "a").unwrap().unwrap()["deliveryStatus"],
+            "read"
+        );
+        assert_eq!(
+            get_message_by_id(&conn, "b").unwrap().unwrap()["deliveryStatus"],
+            "sent"
+        );
     }
 
     #[test]
@@ -2068,13 +2666,20 @@ mod tests {
         migrate(&conn).unwrap();
         let query = format!("EXPLAIN QUERY PLAN {ACK_MESSAGE_ROWS_SQL}");
         let mut stmt = conn.prepare(&query).unwrap();
-        let plan = stmt.query_map(params!["missing", "wa-a"], |row| row.get::<_, String>(3))
-            .unwrap().collect::<Result<Vec<_>, _>>().unwrap().join("\n");
+        let plan = stmt
+            .query_map(params!["missing", "wa-a"], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+            .join("\n");
         assert!(!plan.contains("SCAN messages"), "{plan}");
         assert!(plan.contains("idx_messages_wa_message_id"), "{plan}");
         assert!(plan.contains("idx_messages_wa_key_id"), "{plan}");
         // 升级已有 v5 库时也补索引；再次启动不会重建。
-        conn.execute_batch("DROP INDEX idx_messages_wa_message_id; DROP INDEX idx_messages_wa_key_id;").unwrap();
+        conn.execute_batch(
+            "DROP INDEX idx_messages_wa_message_id; DROP INDEX idx_messages_wa_key_id;",
+        )
+        .unwrap();
         migrate(&conn).unwrap();
         update_message_acks(&conn, &[json!({"id":"missing", "ack":"read"})], "wa-a").unwrap();
         let indexes: i64 = conn.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('idx_messages_wa_message_id', 'idx_messages_wa_key_id')", [], |row| row.get(0)).unwrap();
@@ -2085,54 +2690,121 @@ mod tests {
     fn row_deltas_touch_only_changed_rows_and_preserve_other_accounts_and_cold_history() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        save_snapshot(&conn, &AppSnapshot {
-            contacts: vec![json!({"id":"a"}), json!({"id":"b"}), json!({"id":"other"})],
-            chats: vec![json!({"id":"a"}), json!({"id":"b"}), json!({"id":"other"})],
-            messages: vec![json!({"id":"cold-a", "chatId":"a", "accountId":"one"}), json!({"id":"cold-b", "chatId":"b", "accountId":"one"}), json!({"id":"cold-other", "chatId":"other", "accountId":"two"})],
-            activities: vec![json!({"id":"act-b", "contactId":"b"}), json!({"id":"act-other", "contactId":"other"})],
-            ..Default::default()
-        }).unwrap();
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                contacts: vec![json!({"id":"a"}), json!({"id":"b"}), json!({"id":"other"})],
+                chats: vec![json!({"id":"a"}), json!({"id":"b"}), json!({"id":"other"})],
+                messages: vec![
+                    json!({"id":"cold-a", "chatId":"a", "accountId":"one"}),
+                    json!({"id":"cold-b", "chatId":"b", "accountId":"one"}),
+                    json!({"id":"cold-other", "chatId":"other", "accountId":"two"}),
+                ],
+                activities: vec![
+                    json!({"id":"act-b", "contactId":"b"}),
+                    json!({"id":"act-other", "contactId":"other"}),
+                ],
+                ..Default::default()
+            },
+        )
+        .unwrap();
         let before = conn.total_changes();
-        save_snapshot(&conn, &AppSnapshot {
-            contacts: vec![json!({"id":"a", "name":"changed"})],
-            chats: vec![json!({"id":"a", "lastMessage":"new"})],
-            dirty: Some(PersistDirtyFlags { contacts: true, chats: true, ..Default::default() }),
-            row_deltas: Some(RowDeltas { contacts: Some(vec![]), chats: Some(vec![]) }),
-            ..Default::default()
-        }).unwrap();
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                contacts: vec![json!({"id":"a", "name":"changed"})],
+                chats: vec![json!({"id":"a", "lastMessage":"new"})],
+                dirty: Some(PersistDirtyFlags {
+                    contacts: true,
+                    chats: true,
+                    ..Default::default()
+                }),
+                row_deltas: Some(RowDeltas {
+                    contacts: Some(vec![]),
+                    chats: Some(vec![]),
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(conn.total_changes() - before <= 3);
         assert_eq!(load_table(&conn, "contacts").unwrap().len(), 3);
         assert!(get_message_by_id(&conn, "cold-other").unwrap().is_some());
-        save_snapshot(&conn, &AppSnapshot {
-            dirty: Some(PersistDirtyFlags { contacts: true, chats: true, ..Default::default() }),
-            row_deltas: Some(RowDeltas { contacts: Some(vec!["b".into()]), chats: Some(vec!["b".into()]) }),
-            ..Default::default()
-        }).unwrap();
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                dirty: Some(PersistDirtyFlags {
+                    contacts: true,
+                    chats: true,
+                    ..Default::default()
+                }),
+                row_deltas: Some(RowDeltas {
+                    contacts: Some(vec!["b".into()]),
+                    chats: Some(vec!["b".into()]),
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(load_table(&conn, "contacts").unwrap().len(), 2);
         assert!(get_message_by_id(&conn, "cold-b").unwrap().is_none());
         assert!(get_message_by_id(&conn, "cold-a").unwrap().is_some());
         assert!(get_message_by_id(&conn, "cold-other").unwrap().is_some());
-        assert_eq!(load_table(&conn, "activities").unwrap(), vec![json!({"id":"act-other", "contactId":"other"})]);
+        assert_eq!(
+            load_table(&conn, "activities").unwrap(),
+            vec![json!({"id":"act-other", "contactId":"other"})]
+        );
     }
 
     #[test]
     fn invalid_row_deltas_roll_back_and_complete_restore_retains_replacement_semantics() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        save_snapshot(&conn, &AppSnapshot { contacts: vec![json!({"id":"a", "name":"original"}), json!({"id":"b"})], ..Default::default() }).unwrap();
-        assert!(save_snapshot(&conn, &AppSnapshot {
-            contacts: vec![json!({"id":"a", "name":"changed"})],
-            dirty: Some(PersistDirtyFlags { contacts: true, ..Default::default() }),
-            row_deltas: Some(RowDeltas { contacts: Some(vec!["a".into()]), ..Default::default() }),
-            ..Default::default()
-        }).is_err());
-        assert_eq!(load_table(&conn, "contacts").unwrap()[0]["name"], "original");
-        save_snapshot(&conn, &AppSnapshot {
-            contacts: vec![json!({"id":"restored"})], replace_messages: true,
-            row_deltas: Some(RowDeltas { contacts: Some(vec![]), chats: Some(vec![]) }),
-            ..Default::default()
-        }).unwrap();
-        assert_eq!(load_table(&conn, "contacts").unwrap(), vec![json!({"id":"restored"})]);
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                contacts: vec![json!({"id":"a", "name":"original"}), json!({"id":"b"})],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(save_snapshot(
+            &conn,
+            &AppSnapshot {
+                contacts: vec![json!({"id":"a", "name":"changed"})],
+                dirty: Some(PersistDirtyFlags {
+                    contacts: true,
+                    ..Default::default()
+                }),
+                row_deltas: Some(RowDeltas {
+                    contacts: Some(vec!["a".into()]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+        )
+        .is_err());
+        assert_eq!(
+            load_table(&conn, "contacts").unwrap()[0]["name"],
+            "original"
+        );
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                contacts: vec![json!({"id":"restored"})],
+                replace_messages: true,
+                row_deltas: Some(RowDeltas {
+                    contacts: Some(vec![]),
+                    chats: Some(vec![]),
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            load_table(&conn, "contacts").unwrap(),
+            vec![json!({"id":"restored"})]
+        );
     }
 
     #[test]
@@ -2144,7 +2816,13 @@ mod tests {
                 json!({"id":"new", "accountId":"wa-a", "sentAt":"2026-10-02T00:00:00Z", "waKey":{"remoteJid":"123@s.whatsapp.net"}})],
             dirty: Some(PersistDirtyFlags { messages: true, ..Default::default() }), ..Default::default()
         }).unwrap();
-        clear_remote_messages_before(&conn, "123@s.whatsapp.net", Some("wa-a"), Some("2026-10-01T00:00:00.000Z")).unwrap();
+        clear_remote_messages_before(
+            &conn,
+            "123@s.whatsapp.net",
+            Some("wa-a"),
+            Some("2026-10-01T00:00:00.000Z"),
+        )
+        .unwrap();
         assert!(get_message_by_id(&conn, "old").unwrap().is_none());
         assert!(get_message_by_id(&conn, "new").unwrap().is_some());
     }
@@ -2159,11 +2837,21 @@ mod tests {
             messages: (0..400).map(|i| json!({"id":format!("cold-{i}"), "chatId":"old", "contactId":"duplicate", "accountId":"wa-a", "body":"history"})).collect(),
             ..Default::default()
         }).unwrap();
-        save_snapshot(&conn, &AppSnapshot {
-            chats: vec![target], messages: vec![],
-            chat_message_remaps: vec![ChatMessageRemap { from_chat_id:"old".into(), to_chat_id:"kept".into(), contact_id:"customer".into(), account_id:"wa-a".into() }],
-            ..Default::default()
-        }).unwrap();
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: vec![target],
+                messages: vec![],
+                chat_message_remaps: vec![ChatMessageRemap {
+                    from_chat_id: "old".into(),
+                    to_chat_id: "kept".into(),
+                    contact_id: "customer".into(),
+                    account_id: "wa-a".into(),
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(count_messages_for_chat(&conn, "kept").unwrap(), 400);
         assert_eq!(count_messages_for_chat(&conn, "old").unwrap(), 0);
         let message = get_message_by_id(&conn, "cold-0").unwrap().unwrap();
@@ -2176,15 +2864,29 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let target = json!({"id":"kept", "contactId":"customer", "accountId":"wa-b"});
-        save_snapshot(&conn, &AppSnapshot {
-            chats: vec![json!({"id":"old"}), target.clone()],
-            messages: vec![json!({"id":"cold", "chatId":"old", "accountId":"wa-a"})], ..Default::default()
-        }).unwrap();
-        assert!(save_snapshot(&conn, &AppSnapshot {
-            chats: vec![target],
-            chat_message_remaps: vec![ChatMessageRemap { from_chat_id:"old".into(), to_chat_id:"kept".into(), contact_id:"customer".into(), account_id:"wa-b".into() }],
-            ..Default::default()
-        }).is_err());
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: vec![json!({"id":"old"}), target.clone()],
+                messages: vec![json!({"id":"cold", "chatId":"old", "accountId":"wa-a"})],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: vec![target],
+                chat_message_remaps: vec![ChatMessageRemap {
+                    from_chat_id: "old".into(),
+                    to_chat_id: "kept".into(),
+                    contact_id: "customer".into(),
+                    account_id: "wa-b".into()
+                }],
+                ..Default::default()
+            }
+        )
+        .is_err());
         assert_eq!(count_messages_for_chat(&conn, "old").unwrap(), 1);
     }
 
@@ -2193,16 +2895,29 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let target = json!({"id":"kept", "contactId":"customer", "accountId":"wa-b"});
-        save_snapshot(&conn, &AppSnapshot {
-            chats: vec![json!({"id":"old", "phoneId":"wa-a"}), target.clone()],
-            messages: vec![json!({"id":"legacy", "chatId":"old"})], ..Default::default()
-        }).unwrap();
-        assert!(save_snapshot(&conn, &AppSnapshot {
-            chats: vec![target],
-            chat_message_remaps: vec![ChatMessageRemap { from_chat_id:"old".into(), to_chat_id:"kept".into(), contact_id:"customer".into(), account_id:"wa-b".into() }],
-            ..Default::default()
-        }).is_err());
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: vec![json!({"id":"old", "phoneId":"wa-a"}), target.clone()],
+                messages: vec![json!({"id":"legacy", "chatId":"old"})],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: vec![target],
+                chat_message_remaps: vec![ChatMessageRemap {
+                    from_chat_id: "old".into(),
+                    to_chat_id: "kept".into(),
+                    contact_id: "customer".into(),
+                    account_id: "wa-b".into()
+                }],
+                ..Default::default()
+            }
+        )
+        .is_err());
         assert_eq!(count_messages_for_chat(&conn, "old").unwrap(), 1);
     }
-
 }

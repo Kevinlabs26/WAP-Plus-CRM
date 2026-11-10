@@ -1,6 +1,7 @@
 import { flushPersist, useAppStore } from "@/store/appStore";
 import { translateCurrent } from "@/i18n";
 import { isDataRestoreActive } from "@/store/restoreGuard";
+import { campaignHasMedia } from "@/lib/broadcastCampaign";
 import { lastContactedAccounts, MAX_SCHEDULED_PLANS, MAX_SCHEDULED_PLAN_ITEMS, MIN_SCHEDULED_GAP_SEC, MAX_PLAN_STEPS, planSteps, recipientKey, scheduledPlanTargets, scheduledMediaBytes, type ScheduledPlan } from "./scheduledPlans";
 
 export class DuplicateScheduledPlanError extends Error {
@@ -55,7 +56,7 @@ export async function saveScheduledPlan(input: Omit<ScheduledPlan, "id" | "creat
     !resolved.some(target => target.chatId === item.chatId && target.accountId === item.accountId && target.recipient === item.recipient))) throw new Error(translateCurrent("planQueue.targetsChanged"));
   const duplicates = duplicateScheduledPlans({ ...input, dueAt }, plans).filter(p => !confirmedDuplicates.includes(p.id));
   // Include legacy text broadcasts; their media is cached separately and cannot be compared reliably.
-  const oldDuplicates = (state.broadcastCampaigns || []).filter(c => ["draft", "running", "paused"].includes(c.status) && !c.media?.length && steps.length === 1 && !input.media && c.items.some(i => ["pending", "sending"].includes(i.status) && i.bodyRendered.trim() === input.text.trim() && resolved.some(target => recipientKey(target.accountId,target.recipient) === recipientKey(c.accountId,i.phoneE164))) && !confirmedDuplicates.includes(c.id));
+  const oldDuplicates = (state.broadcastCampaigns || []).filter(c => ["draft", "running", "paused"].includes(c.status) && !campaignHasMedia(c) && steps.length === 1 && !input.media && c.items.some(i => ["pending", "sending"].includes(i.status) && i.bodyRendered.trim() === input.text.trim() && resolved.some(target => recipientKey(target.accountId,target.recipient) === recipientKey(c.accountId,i.phoneE164))) && !confirmedDuplicates.includes(c.id));
   if (duplicates.length || oldDuplicates.length) throw new DuplicateScheduledPlanError([...duplicates, ...oldDuplicates].map(p => p.id), duplicates.length + oldDuplicates.length);
   const plan: ScheduledPlan = { ...input, dueAt, text: input.text.trim(), id: crypto.randomUUID(), createdAt: new Date().toISOString(), status: "pending",
     priority: 0, endAt: input.endAt || undefined,

@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/primitives";
 import { BaileysConnectCard } from "@/components/settings/BaileysConnectCard";
 import { AccountSlotCard } from "./AccountSlotCard";
+import { useCloneCallBindings } from "./CloneCallBinding";
 import { AndroidBridgePanel } from "./AndroidBridgePanel";
 import { applyAccountWarmup } from "@/lib/accountWarmup";
 import { DEFAULT_RATE_LIMITS } from "@/channels";
@@ -291,6 +292,7 @@ export function PhonesView() {
       ),
     [waAccounts, liveId]
   );
+  const cloneClients = useCloneCallBindings(deviceTab === "web" && accounts.length > 0);
   const baseLimits = useMemo(
     () => ({
       ...DEFAULT_RATE_LIMITS,
@@ -515,12 +517,16 @@ export function PhonesView() {
   };
 
   const accountStatusText = (id: string) => {
-    const connection = resolveWaAccountConnection(
-      accounts,
-      id,
-      liveId,
-      baileysUi.connection
-    );
+    const slotStatus = accounts.find((account) => account.id === id)?.status;
+    const connection =
+      slotStatus && slotStatus !== "connected"
+        ? slotStatus
+        : resolveWaAccountConnection(
+            accounts,
+            id,
+            liveId,
+            baileysUi.connection
+          );
     if (connection === "connected") return "connected";
     if (
       connection === "connecting" ||
@@ -800,6 +806,7 @@ export function PhonesView() {
                     <AccountSlotCard
                       key={a.id}
                       account={a}
+                      cloneClients={cloneClients}
                       idx={idx}
                       isDefaultSend={isDefaultSend}
                       isConnectionFocus={isConnectionFocus}

@@ -12,6 +12,7 @@ import {
   BROADCAST_DEFAULT_EXTRA_GAP_MAX_SEC,
   BROADCAST_DEFAULT_EXTRA_GAP_SEC,
   BROADCAST_HARD_CAP,
+  BROADCAST_MAX_VARIANTS,
 } from "@/types/broadcast";
 import type { SalesStage } from "@/types/crm";
 import {
@@ -36,6 +37,7 @@ import { BroadcastMediaPicker } from "./BroadcastMediaPicker";
 import type {
   BroadcastMedia,
   BroadcastMediaMode,
+  BroadcastVariant,
 } from "@/types/broadcast";
 import { cacheMediaUrl } from "@/lib/mediaCache";
 import { isWaAccountConnected } from "@/lib/accountConnection";
@@ -43,6 +45,11 @@ import { lastContactedAccounts, recipientKey } from "@/lib/scheduledPlans";
 import { useI18n } from "@/i18n";
 
 type Step = "setup" | "run";
+
+type VariantDraft = BroadcastVariant & { media: BroadcastMedia[]; mediaMode: BroadcastMediaMode; dataUrls: Record<string, string> };
+function newVariant(template = ""): VariantDraft {
+  return { id: `bv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`, template, media: [], mediaMode: "single", dataUrls: {} };
+}
 
 export function BroadcastView() {
   const { t } = useI18n();
@@ -129,15 +136,16 @@ export function BroadcastView() {
   });
   const [phoneText, setPhoneText] = useState("");
   const [recipientSource, setRecipientSource] = useState<BroadcastRecipientSource>(() => selected.size ? "contacts" : "numbers");
-  const [media, setMedia] = useState<BroadcastMedia[]>([]);
-  const [mediaMode, setMediaMode] = useState<BroadcastMediaMode>("single");
   const [mediaBusy, setMediaBusy] = useState(false);
-  const [mediaDataUrls, setMediaDataUrls] = useState<Record<string, string>>(
-    {}
-  );
-  const [template, setTemplate] = useState(
-    "您好 {name}，我是负责对接的同事。方便了解一下贵司{company}最近的采购计划吗？"
-  );
+  const [versions, setVersions] = useState<VariantDraft[]>(() => [newVariant("您好 {name}，我是负责对接的同事。方便了解一下贵司{company}最近的采购计划吗？")]);
+  const [randomVersions, setRandomVersions] = useState(false);
+  const [versionId, setVersionId] = useState("");
+  const currentVersion = (randomVersions && versions.find(v => v.id === versionId)) || versions[0];
+  const { template, media, mediaMode, dataUrls: mediaDataUrls } = currentVersion;
+  const activeVersions = randomVersions ? versions : [versions[0]];
+  const updateVersion = (patch: Partial<VariantDraft>) => setVersions(all => all.map(v => v.id === currentVersion.id ? { ...v, ...patch } : v));
+  const setTemplate = (value: string) => updateVersion({ template: value });
+  const currentVersionNumber = versions.indexOf(currentVersion) + 1;
   const [extraGapSec, setExtraGapSec] = useState(BROADCAST_DEFAULT_EXTRA_GAP_SEC);
   const [extraGapMaxSec, setExtraGapMaxSec] = useState(
     BROADCAST_DEFAULT_EXTRA_GAP_MAX_SEC
@@ -276,8 +284,10 @@ export function BroadcastView() {
     running ||
     campaigns[0] ||
     null;
-  const templateValidation = validateBroadcastTemplate(template, media.length > 0);
-  const templateError = template.trim() && media.some(item => item.kind === "audio" && item.voiceNote)
+  const versionErrors = activeVersions.map(version => {
+    const { template, media } = version;
+    const templateValidation = validateBroadcastTemplate(template, media.length > 0);
+    return template.trim() && media.some(item => item.kind === "audio" && item.voiceNote)
     ? t("broadcast.voiceCaptionUnsupported") : !templateValidation.ok
     ? templateValidation.reason === "请填写发送内容"
       ? t("broadcast.templateRequired")
@@ -290,6 +300,10 @@ export function BroadcastView() {
               : templateValidation.reason;
           })()
     : "";
+  });
+  const invalidVersion = versionErrors.findIndex(Boolean);
+  const templateError = invalidVersion < 0 ? "" : randomVersions
+    ? `${t("broadcast.variant", { number: invalidVersion + 1 })}：${versionErrors[invalidVersion]}` : versionErrors[invalidVersion];
   const launchBlockedReason = mediaBusy ? t("broadcast.mediaBusy") : !accountId
     ? t("broadcast.selectAccountRequired")
     : !recipientCount
@@ -383,7 +397,7 @@ export function BroadcastView() {
       extraGapMaxSec,
       rateMinIntervalSec ?? 4
     );
-    const mediaSummary = media.length > 0
+    const mediaSummary = randomVersions ? t("broadcast.variantSummary", { count: versions.length }) : media.length > 0
       ? t("broadcast.mediaSummary", {
           count: media.length,
           mode: t(
@@ -407,7 +421,7 @@ export function BroadcastView() {
         t("broadcast.confirmGap", { min: extraGapSec, max: extraGapMaxSec }),
         t("broadcast.confirmEstimate", { minutes: mins }),
         t("broadcast.confirmTemplate", {
-          text: `${template.trim().slice(0, 80)}${template.trim().length > 80 ? "…" : ""}`,
+          text: activeVersions.map((v, index) => `${randomVersions ? `${t("broadcast.variant", { number: index + 1 })}：` : ""}${v.template.trim().slice(0, 80)}${v.template.trim().length > 80 ? "…" : ""}`).join("\n"),
         }),
         "",
         t("broadcast.confirmRisk"),
@@ -418,25 +432,26 @@ export function BroadcastView() {
     if (!ok) return;
 
     // 媒体写入 IDB：战役只存元数据，运行器按需回填 data URL
-    if (media.length) {
-      await Promise.all(
-        media.map((m) =>
-          mediaDataUrls[m.id]
-            ? cacheMediaUrl(m.id, mediaDataUrls[m.id])
-            : Promise.resolve()
-        )
-      );
+    try {
+      await Promise.all(activeVersions.flatMap(v => v.media.map(m => {
+        if (!v.dataUrls[m.id]) throw new Error(t("broadcast.mediaMissing"));
+        return cacheMediaUrl(m.id, v.dataUrls[m.id], true);
+      })));
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : t("broadcast.mediaMissing"), "error");
+      return;
     }
 
     const input = {
       accountId,
-      template,
+      template: versions[0].template,
       contactIds: [...selected],
       phoneNumbers: directPhones,
       extraGapSec,
       extraGapMaxSec,
-      media,
-      mediaMode,
+      media: randomVersions ? undefined : versions[0].media,
+      mediaMode: randomVersions ? undefined : versions[0].mediaMode,
+      variants: randomVersions ? versions.map(({ dataUrls: _dataUrls, ...v }) => v) : undefined,
     };
     let created=createBroadcastCampaign(input);
     if(!created.ok&&created.duplicateIds){
@@ -559,6 +574,31 @@ export function BroadcastView() {
                     </select>
                   </label>
                 </div>
+                <div className="mt-3 flex flex-wrap items-center gap-1.5" role="group" aria-label={t("broadcast.contentMode")}>
+                  <Button size="sm" variant={!randomVersions ? "primary" : "secondary"} disabled={mediaBusy} aria-pressed={!randomVersions}
+                    onClick={() => setRandomVersions(false)}>{t("broadcast.fixedContent")}</Button>
+                  <Button size="sm" variant={randomVersions ? "primary" : "secondary"} disabled={mediaBusy} aria-pressed={randomVersions}
+                    onClick={() => {
+                      if (versions.length === 1) setVersions(all => [...all, newVariant()]);
+                      setRandomVersions(true);
+                    }}>{t("broadcast.randomVersions")}</Button>
+                </div>
+                {randomVersions && <>
+                  <div className="mt-2 flex flex-wrap items-center gap-1" role="tablist" aria-label={t("broadcast.randomVersions")}>
+                    {versions.map((v, index) => <button key={v.id} type="button" role="tab" aria-selected={v.id === currentVersion.id} disabled={mediaBusy}
+                      className={cn("rounded-lg px-2.5 py-1.5 text-xs disabled:opacity-40", v.id === currentVersion.id ? "bg-brand/15 text-brand" : "text-zinc-500 hover:bg-zinc-800")}
+                      onClick={() => setVersionId(v.id)}>{t("broadcast.variant", { number: index + 1 })}{versionErrors[index] ? " · !" : ""}</button>)}
+                    <Button size="sm" variant="ghost" disabled={mediaBusy || versions.length >= BROADCAST_MAX_VARIANTS}
+                      onClick={() => { const v = newVariant(); setVersions(all => [...all, v]); setVersionId(v.id); }}>{t("broadcast.addVariant")}</Button>
+                    <Button size="sm" variant="ghost" disabled={mediaBusy || versions.length <= 1}
+                      onClick={() => {
+                        setVersions(all => all.filter(v => v.id !== currentVersion.id));
+                        setVersionId("");
+                        if (versions.length === 2) setRandomVersions(false);
+                      }}>{t("broadcast.removeVariant")}</Button>
+                  </div>
+                  <p className="mt-1 text-2xs text-zinc-500">{t("broadcast.variantHint")}</p>
+                </>}
                 <p className="mt-1 text-2xs text-zinc-600">
                   {t("broadcast.copyHint")}
                 </p>
@@ -592,14 +632,13 @@ export function BroadcastView() {
                     {t("broadcast.mediaHint")}
                   </div>
                   <BroadcastMediaPicker
+                    key={currentVersion.id}
                     media={media}
                     mediaMode={mediaMode}
                     dataUrls={mediaDataUrls}
                     onBusyChange={setMediaBusy}
                     onChange={(nextMedia, nextMode, dataUrls) => {
-                      setMedia(nextMedia);
-                      setMediaMode(nextMode);
-                      setMediaDataUrls(dataUrls);
+                      updateVersion({ media: nextMedia, mediaMode: nextMode, dataUrls });
                     }}
                   />
                 </div>
@@ -608,6 +647,7 @@ export function BroadcastView() {
               <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
                 <div className="flex items-center justify-between gap-2">
                   <SectionLabel>{t("broadcast.preview")}</SectionLabel>
+                  {randomVersions && <span className="text-xs text-brand">{t("broadcast.variant", { number: currentVersionNumber })}</span>}
                   {previewRecipient ? (
                     <div className="flex min-w-0 items-center gap-1 text-2xs text-zinc-500">
                       <button

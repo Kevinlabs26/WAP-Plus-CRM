@@ -20,6 +20,7 @@ function mockNetwork(t, replies, addresses = [{ address: '8.8.8.8', family: 4 }]
   t.after(() => { dns.lookup = originalLookup; https.request = originalRequest; });
   dns.lookup = async () => addresses;
   https.request = (url, options, callback) => {
+    if (url.hostname.endsWith('.whatsapp.net')) assert.equal(options.headers?.Origin, 'https://web.whatsapp.com');
     assert.equal(options.agent, false);
     assert.notEqual(options.rejectUnauthorized, false);
     options.lookup(url.hostname, { all: true }, (error, pinned) => {
@@ -102,7 +103,7 @@ test('reupload URL is checked again instead of letting SDK fetch it directly', a
   const downloader = createMediaDownloader({ getConnection: () => 'connected', getSocket: () => ({
     updateMediaMessage: async () => { retries++; return { message: { imageMessage: { url: 'https://127.0.0.1/private' } } }; },
   }) });
-  assert.equal(await downloader.mediaToDataUrl({ message: { imageMessage: { url: 'https://mmg.whatsapp.net/a' } } }, 'image'), '');
+  await assert.rejects(downloader.mediaToDataUrl({ message: { imageMessage: { url: 'https://mmg.whatsapp.net/a' } } }, 'image'), e => e.status === 400 && e.code === 'MEDIA_ADDRESS_REJECTED' && e.retryable === false);
   assert.equal(retries, 1);
   assert.equal(requests.length, 1);
 });
@@ -135,20 +136,32 @@ test('media queue rejects overload explicitly, limits concurrency and accepts la
     await new Promise(resolve => setImmediate(resolve));
   }
   const results = await finished;
-  assert.equal(results.filter(result => result.status === 'fulfilled').length, 67);
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 0);
   const rejected = results.filter(result => result.status === 'rejected');
-  assert.equal(rejected.length, 33);
-  assert(rejected.every(result => result.reason.status === 503));
+  assert.equal(rejected.filter(result => result.reason.status === 503).length, 33);
+  assert.equal(rejected.filter(result => result.reason.status === 502).length, 67);
   assert.equal(peak, 3);
   const retry = downloader.mediaToDataUrl(message, 'image');
+  const rejectedRetry = assert.rejects(retry, error => error.status === 502);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(active.length, 1);
   active.splice(0).forEach(release => release());
-  assert.equal(await retry, '');
+  await rejectedRetry;
+});
+
+test('media errors distinguish expired links and size limits without exposing private URLs', async t => {
+  mockNetwork(t, [{status:410}, {headers:{'content-length':'999999999'}}]);
+  const logs=[];
+  const downloader=createMediaDownloader({getConnection:()=>'connected',logger:{warn:(data)=>logs.push(data)}});
+  const message={message:{imageMessage:{url:'https://mmg.whatsapp.net/private?token=secret'}}};
+  await assert.rejects(downloader.mediaToDataUrl(message,'image'), e=>e.status===410&&e.code==='MEDIA_EXPIRED'&&e.retryable===false&&!e.message.includes('secret'));
+  await assert.rejects(downloader.mediaToDataUrl(message,'image'), e=>e.status===413&&e.code==='MEDIA_TOO_LARGE'&&e.retryable===false);
+  assert.equal(JSON.stringify(logs).includes('secret'),false);
 });
 
 test('send and catalog routes hand bounded buffers to SDK and reject private URLs', async t => {
-  const requests = mockNetwork(t, [{ body: Buffer.from('image') }, { body: Buffer.from('product') }]);
+  const vcf = Buffer.from('BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Example\r\nN:;Example;;;\r\nTEL;TYPE=CELL:+12025550101\r\nEND:VCARD\r\n');
+  const requests = mockNetwork(t, [{ body: Buffer.from('image') }, { body: Buffer.from('product') }, {body: vcf}]);
   const sent = [];
   const server = http.createServer(createBaileysRequestHandler({
     token: 'test-token', port: 0, connection: 'connected', resolveSendJid: async () => '123@s.whatsapp.net',
@@ -167,11 +180,16 @@ test('send and catalog routes hand bounded buffers to SDK and reject private URL
     assert(Buffer.isBuffer(sent[0].image));
     assert.equal((await post('/catalog/send', { phoneE164: '123', productId: 'p' })).status, 200);
     assert(Buffer.isBuffer(sent[1].product.productImage));
+    assert.equal((await post('/send', {phoneE164: '123', fileUrl: 'https://media.example/contacts.vcf', fileName: 'contacts.vcf', mimetype: 'application/octet-stream'})).status, 200);
+    assert.deepEqual(sent[2].document, vcf);
+    assert.equal(sent[2].mimetype, 'text/x-vcard');
+    assert.equal(sent[2].contactVcard, false);
+    assert.equal(sent[2].fileName, 'contacts.vcf');
     for (const imageUrl of ['http://media.example/image', 'https://169.254.169.254/latest/meta-data']) {
       assert.equal((await post('/send', { phoneE164: '123', imageUrl })).status, 400);
     }
-    assert.equal(sent.length, 2);
-    assert.equal(requests.length, 2);
+    assert.equal(sent.length, 3);
+    assert.equal(requests.length, 3);
     const busy = await post('/message/media', { key: { id: 'busy' }, mediaType: 'image' });
     assert.equal(busy.status, 503);
     assert.equal(busy.headers.get('retry-after'), '5');

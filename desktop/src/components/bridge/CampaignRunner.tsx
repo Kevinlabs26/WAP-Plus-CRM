@@ -18,6 +18,7 @@ import { isDeliveryUncertain } from "@/store/outgoingRetry";
 import { gatedMediaSend, MediaGateBlockedError } from "@/channels/mediaGate";
 import { baileysSendVoice } from "@/lib/baileys";
 import { nextBatchTask } from "@/lib/scheduledPlans";
+import { broadcastItemMedia } from "@/lib/broadcastCampaign";
 
 type CampaignSendResult = {
   ok: boolean;
@@ -39,7 +40,7 @@ async function sendBroadcastMedia(opts: {
 }): Promise<CampaignSendResult> {
   const { state, campaign, item, channelId, chatId } = opts;
   const accountId = item.accountId || campaign.accountId;
-  const media = campaign.media || [];
+  const media = broadcastItemMedia(campaign, item);
   if (!media.length) return { ok: false, message: "战役没有媒体" };
   const isBaileys = normalizeChannelId(channelId) === "baileys";
 
@@ -234,7 +235,7 @@ export function CampaignRunner() {
           return;
         }
 
-        const hasMedia = !!(campaign.media && campaign.media.length > 0);
+        const hasMedia = broadcastItemMedia(campaign, item).length > 0;
         const canSend = () => {
           const latest = useAppStore.getState();
           const current = latest.broadcastCampaigns.find(c => c.id === campaign.id);

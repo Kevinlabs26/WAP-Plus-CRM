@@ -158,3 +158,25 @@ test("media campaign carries media pool and mode", () => {
   assert.equal(campaign.items[0].bodyRendered, "您好 张三");
   assert.equal(campaign.media[1].kind, "video");
 });
+
+test('version routing and media assignments survive pause, retry and resume', () => {
+  const { actions, get } = setup();
+  get().broadcastCampaigns=[];
+  get().contacts=[{id:'customer',name:'Alice',phone:'+12025550123',accountId:'wa-1'}];
+  get().chats=[{id:'chat-2',contactId:'customer',accountId:'wa-2',lastMessageAt:'2026-11-08T12:00:00Z'}];
+  get().messages=[{id:'latest',chatId:'chat-2',contactId:'customer',accountId:'wa-2',direction:'out',body:'Last conversation',sentAt:'2026-11-08T12:00:00Z'}];
+  const created=actions.createBroadcastCampaign({accountId:'wa-1',template:'Unused',contactIds:['customer'],
+    variants:[{id:'a',template:'Hi {name}',media:[{id:'a-image',kind:'image',mime:'image/png'}]},
+      {id:'b',template:'Bonjour {name}',media:[{id:'b-image',kind:'image',mime:'image/png'}]}]});
+  assert.equal(created.ok,true);
+  let campaign=get().broadcastCampaigns[0];
+  assert.equal(campaign.items[0].accountId,'wa-2');
+  const before=JSON.stringify(campaign.items.map(i=>[i.variantId,i.bodyRendered,i.mediaId,i.accountId]));
+  assert.equal(campaign.variants.length,2);
+  assert.equal(actions.startBroadcastCampaign(created.id).ok,true);
+  actions.pauseBroadcastCampaign(created.id);
+  campaign=get().broadcastCampaigns[0];campaign.items[0].status='failed';campaign.items[0].error='rejected';
+  assert.equal(actions.retryFailedBroadcastCampaign(created.id,[campaign.items[0].id]),1);
+  assert.equal(actions.resumeBroadcastCampaign(created.id).ok,true);
+  assert.equal(JSON.stringify(get().broadcastCampaigns[0].items.map(i=>[i.variantId,i.bodyRendered,i.mediaId,i.accountId])),before);
+});

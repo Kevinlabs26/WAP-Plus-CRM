@@ -16,11 +16,12 @@ export function mediaPlaceholderState(
 }
 
 export function shouldAutoLoadMessageMedia(
-  message: Pick<Message, "mediaType" | "mediaPending" | "mediaUrl">
+  message: Pick<Message, "mediaType" | "mediaPending" | "mediaUrl" | "mediaError">
 ): boolean {
   const mediaType = (message.mediaType || "").toLowerCase();
   return (
     !message.mediaUrl &&
+    !message.mediaError &&
     AUTO_LOAD_MEDIA_TYPES.has(mediaType) &&
     (message.mediaPending === true || mediaType === "audio")
   );
@@ -285,8 +286,12 @@ function copyImageError(
   return new Error(errors.join("；"));
 }
 
-export async function openMediaInNewTab(url: string, mime?: string) {
+export async function openMediaInNewTab(url: string, mime?: string, filename?: string) {
   if (!/^(?:https?:\/\/|blob:|data:)/i.test(url)) throw new Error("不支持的媒体 URL 协议");
+  if (/\.vcf$/i.test(filename || "") || /vcard/i.test(mime || "")) {
+    triggerMediaDownload(url, filename || "contacts.vcf");
+    return;
+  }
   // http(s) 直接开；data/blob 优先 blob 新标签，避免超大 data URL 卡死
   if (url.startsWith("http://") || url.startsWith("https://")) {
     window.open(url, "_blank", "noopener,noreferrer");
@@ -302,7 +307,7 @@ export async function openMediaInNewTab(url: string, mime?: string) {
     // HTML, SVG and other active documents must be downloaded, never opened
     // as a blob inheriting the privileged desktop origin.
     if (!/^(?:image\/(?:png|jpeg|gif|webp|bmp)|audio\/[\w.+-]+|video\/[\w.+-]+|application\/pdf)$/i.test(typed.type)) {
-      triggerMediaDownload(url, "attachment");
+      triggerMediaDownload(url, filename || "attachment");
       return;
     }
     const obj = URL.createObjectURL(typed);

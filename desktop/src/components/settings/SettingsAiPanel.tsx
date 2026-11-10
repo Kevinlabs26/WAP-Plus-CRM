@@ -12,6 +12,9 @@ import { useI18n } from "@/i18n";
 import { TimeZoneSelect } from "@/components/ui/TimeZoneSelect";
 import { systemTimeZone } from "@/lib/timeZone";
 import { isChatModel, type ModelPurpose } from "@/lib/modelCapabilities";
+import { AiUsagePanel } from "./AiUsagePanel";
+import { VertexAiFields } from "./VertexAiFields";
+import { MuseWebFields } from "./MuseWebFields";
 
 export function SettingsAiPanel() {
   const { t } = useI18n();
@@ -28,17 +31,18 @@ export function SettingsAiPanel() {
       <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
         <SectionLabel>{t("settingsAi.modelService")}</SectionLabel>
         <AiServiceFields settings={settings} updateSettings={updateSettings} />
-        <p className="mt-3 text-2xs text-zinc-600">{t("settingsAi.keyHint")}</p>
+        {settings.aiProvider!=="muse"&&<p className="mt-3 text-2xs text-zinc-600">{t("settingsAi.keyHint")}</p>}
         <div className="mt-3">
           <TimeZoneSelect value={settings.aiTimeZone} onChange={aiTimeZone => updateSettings({ aiTimeZone })}
             label={t("settingsAi.myTimeZone")} automatic={t("settingsAi.computerTimeZone", { zone: systemTimeZone() || "UTC" })} />
         </div>
       </section>
+      <AiUsagePanel/>
     </div>
   );
 }
 
-export function AiServiceFields({ settings, updateSettings, showMockHint = true }: { settings: AppSettings; updateSettings: (patch: Partial<AppSettings>) => void; showMockHint?: boolean }) {
+export function AiServiceFields({ settings, updateSettings, showMockHint = true, allowMuse = true }: { settings: AppSettings; updateSettings: (patch: Partial<AppSettings>) => void; showMockHint?: boolean; allowMuse?: boolean }) {
   const { t } = useI18n();
   return (
         <div className="mt-3 grid grid-cols-2 gap-3">
@@ -57,6 +61,8 @@ export function AiServiceFields({ settings, updateSettings, showMockHint = true 
               <option value="zhipu">Zhipu GLM</option>
               <option value="openrouter">OpenRouter</option>
               <option value="gemini">Gemini</option>
+              <option value="vertex">Gemini · Vertex AI</option>
+              {allowMuse&&<option value="muse">Muse · {t("muse.web")}</option>}
               <option value="custom">{t("settingsAi.provider.custom")}</option>
               <option value="ollama">{t("settingsAi.provider.ollama")}</option>
             </select>
@@ -88,6 +94,8 @@ export function AiServiceFields({ settings, updateSettings, showMockHint = true 
           {settings.aiProvider === "gemini" && (
             <SecretInput full label="Gemini API Key" value={settings.geminiKey} placeholder="AIza…" onChange={(value) => updateSettings({ geminiKey: value })} />
           )}
+          {settings.aiProvider==="vertex"&&<VertexAiFields settings={settings} updateSettings={updateSettings}/>}
+          {settings.aiProvider==="muse"&&<MuseWebFields/>}
           {settings.aiProvider === "custom" && (
             <>
               <label className="col-span-2 block text-2xs text-zinc-500">

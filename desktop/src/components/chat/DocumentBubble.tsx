@@ -1,4 +1,5 @@
-import { FileText, RefreshCw } from "lucide-react";
+import { FileText, RefreshCw, UsersRound } from "lucide-react";
+import { useEffect, useState } from "react";
 import type { Message } from "@/types/crm";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
@@ -26,6 +27,24 @@ export function DocumentBubble({
   const { t } = useI18n();
   const name = documentDisplayName(m);
   const ext = documentExtLabel(name, m.mediaMime);
+  const isContactVcf =
+    name.toLowerCase().endsWith(".vcf") ||
+    (m.mediaMime || "").toLowerCase().includes("vcard");
+  const [contactCount, setContactCount] = useState<number | null>(null);
+  useEffect(() => {
+    let active = true;
+    setContactCount(null);
+    if (!isContactVcf || !m.mediaUrl || !/^(data|blob):/i.test(m.mediaUrl))
+      return () => { active = false; };
+    void fetch(m.mediaUrl)
+      .then((response) => response.text())
+      .then((text) => {
+        const count = text.match(/^BEGIN:VCARD\s*$/gim)?.length || 0;
+        if (active && count) setContactCount(count);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [isContactVcf, m.mediaUrl]);
   const bytes = estimateDataUrlBytes(m.mediaUrl);
   const sizeLabel =
     bytes !== undefined ? formatByteSize(bytes) : "";
@@ -37,6 +56,11 @@ export function DocumentBubble({
   const state = mediaPlaceholderState(m, Boolean(mediaBusy));
   const metaLine = [
     ext,
+    isContactVcf
+      ? contactCount
+        ? t("document.contactCount", { count: contactCount })
+        : t("document.contactBundle")
+      : "",
     sizeLabel ||
       (!canUse
         ? state === "loading"
@@ -63,7 +87,11 @@ export function DocumentBubble({
           )}
           aria-hidden
         >
-          <FileText className="h-5 w-5 opacity-90" strokeWidth={1.5} />
+          {isContactVcf ? (
+            <UsersRound className="h-5 w-5 opacity-90" strokeWidth={1.5} />
+          ) : (
+            <FileText className="h-5 w-5 opacity-90" strokeWidth={1.5} />
+          )}
           <span
             className={cn(
               "absolute -bottom-0.5 left-1/2 max-w-[2.5rem] -translate-x-1/2 truncate rounded px-1 py-px text-[7.5px] font-bold leading-none tracking-wide",
@@ -115,7 +143,7 @@ export function DocumentBubble({
               : t("document.load")}
         </button>
       ) : (
-        <div className="mt-2 grid grid-cols-2 gap-px overflow-hidden rounded-md bg-white/[0.06]">
+        <div className={cn("mt-2 grid gap-px overflow-hidden rounded-md bg-white/[0.06]", isContactVcf ? "grid-cols-1" : "grid-cols-2")}>
           <button
             type="button"
             className={cn(
@@ -126,7 +154,7 @@ export function DocumentBubble({
             )}
             onClick={() => {
               if (!m.mediaUrl) return;
-              void openMediaInNewTab(m.mediaUrl, m.mediaMime).catch(() => {
+              void openMediaInNewTab(m.mediaUrl, m.mediaMime, name).catch(() => {
                 try {
                   triggerMediaDownload(m.mediaUrl!, name);
                 } catch {
@@ -135,9 +163,9 @@ export function DocumentBubble({
               });
             }}
           >
-            {t("document.open")}
+            {t(isContactVcf ? "document.saveVcf" : "document.open")}
           </button>
-          <button
+          {!isContactVcf && <button
             type="button"
             className={cn(
               "bg-transparent px-2 py-1.5 text-center text-[12px] font-medium transition",
@@ -155,7 +183,7 @@ export function DocumentBubble({
             }}
           >
             {t("document.saveAs")}
-          </button>
+          </button>}
         </div>
       )}
     </div>

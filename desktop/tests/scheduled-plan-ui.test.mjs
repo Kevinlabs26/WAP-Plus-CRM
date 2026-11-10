@@ -115,6 +115,19 @@ test('folder bulk can switch to scheduled mode without changing recipients, medi
  assert.equal(h.state.settings.scheduledPlans[0].items[0].chatId,'one');assert.equal(h.state.settings.scheduledPlans[0].gapSec,30);
 });
 
+test('confirmed folder bulk send opens progress for the saved task without submitting a second task',async()=>{
+ const h=harness(ScheduledPlanDialog,{folderId:'root',initialStartNow:true});
+ const previous=globalThis.window;const events=[];globalThis.window={dispatchEvent:event=>events.push(event)};
+ try{
+  h.nodes().find(n=>n.type==='select').props.onChange({target:{value:'template'}});h.render();
+  await h.submit();assert.equal(events.length,0);
+  await h.submit();assert.equal(h.state.settings.scheduledPlans.length,1);
+  assert.equal(events.length,1);assert.equal(events[0].type,'wap:open-batch-progress');
+  assert.equal(events[0].detail.planId,h.state.settings.scheduledPlans[0].id);
+  assert.equal(h.closed,1);
+ }finally{globalThis.window=previous;}
+});
+
 test('invalid pace, changed target ownership and persistence failures cannot create runnable plans',async()=>{
  const h=harness(ScheduledPlanDialog,{chatIds:['one']});
  const base={title:'test',text:'text',dueAt:future(),timeZone:'Europe/Paris',gapSec:30,items:[{id:'one',chatId:'one',contactId:'c1',contactName:'One',recipient:'12345@g.us',accountId:'a',status:'pending'}]};

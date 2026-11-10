@@ -5,6 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { translate } from '../src/i18n/core.ts';
 
 const mocks={
+  './MuseWebFields':'export const MuseWebFields="muse-fields";',
+  './AiUsagePanel':'export const AiUsagePanel="ai-usage";',
+  './VertexAiFields':'export const VertexAiFields="vertex-fields";',
   "./SettingsLocalSpeechPanel":"export const SettingsLocalSpeechPanel=()=>null;",
   react:'export const useState=v=>[typeof v==="function"?v():v,()=>{}];export const useRef=v=>({current:v});export const useEffect=()=>{};export const useCallback=f=>f;',
   'react/jsx-runtime':'export const jsx=(type,props,key)=>({type,props,key});export const jsxs=jsx;export const Fragment="fragment";',

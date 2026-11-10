@@ -5,7 +5,7 @@ import { isChatModel } from "./modelCapabilities.ts";
 
 export type TranslationProvider = AppSettings["aiProvider"];
 export const GROQ_TRANSLATION_MODEL = "openai/gpt-oss-20b";
-const PROVIDERS = ["mock", "openai", "groq", "deepseek", "qwen", "zhipu", "openrouter", "gemini", "ollama", "custom"];
+const PROVIDERS = ["mock", "openai", "groq", "deepseek", "qwen", "zhipu", "openrouter", "gemini", "vertex", "ollama", "custom"];
 
 export function resolveTranslationConfig(settings: Partial<AppSettings>) {
   const legacy = settings.translationProvider === undefined;
@@ -45,5 +45,6 @@ export function translationSettingsPatch(patch: Partial<AppSettings>): Partial<A
   if (patch.customAiModel !== undefined) result.translationModel = patch.customAiModel;
   if (patch.customAiBaseUrl !== undefined) result.translationBaseUrl = patch.customAiBaseUrl;
   if (patch.ollamaUrl !== undefined) result.translationBaseUrl = patch.ollamaUrl;
+  for(const key of ["vertexProjectId","vertexLocation","vertexCredentialId"] as const)if(patch[key]!==undefined)result[key]=patch[key];
   return result;
 }

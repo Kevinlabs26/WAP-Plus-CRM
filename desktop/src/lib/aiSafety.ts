@@ -25,12 +25,6 @@ export interface AutoReplySafetyMessage {
   transcript?: string;
 }
 
-export interface AutoReplyReplayMessage extends AutoReplySafetyMessage {
-  id: string;
-  chatId: string;
-  body: string;
-}
-
 export type AutoReplyDecision =
   | { allow: true; kind: "reply"; reason: string }
   | {
@@ -233,34 +227,6 @@ export function evaluateAutoReplyDecision(
     return { allow: false, kind: "risk", reason: risk.reason };
   }
   return { allow: true, kind: "reply", reason: "低风险消息，可以自动回复" };
-}
-
-export function parseAutoReplyReplay(
-  raw: string,
-  now = Date.now()
-): AutoReplyReplayMessage[] {
-  const lines = raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(-14);
-  const messages: AutoReplyReplayMessage[] = [];
-  for (const [index, line] of lines.entries()) {
-    const mine = line.match(/^(?:我|me)\s*[:：]\s*(.*)$/i);
-    const ai = line.match(/^(?:ai|助手)\s*[:：]\s*(.*)$/i);
-    const theirs = line.match(/^(?:对方|客户|customer|them)\s*[:：]\s*(.*)$/i);
-    const body = (mine?.[1] ?? ai?.[1] ?? theirs?.[1] ?? line).trim();
-    if (!body) continue;
-    messages.push({
-      id: `ai-replay-${index}`,
-      chatId: "ai-replay-chat",
-      direction: mine || ai ? "out" : "in",
-      body,
-      sentAt: new Date(now - (lines.length - index) * 60_000).toISOString(),
-      ...(ai ? { systemKind: "ai_auto_reply" } : {}),
-    });
-  }
-  return messages;
 }
 
 /** 发送门闸和重试队列共享复核，防止排队期间自动模式或上下文改变。 */

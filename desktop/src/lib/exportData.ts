@@ -2,6 +2,7 @@ import { isValidAccountId } from "@/types/account";
 import { escapeCsvCell } from "./csv.ts";
 import { getTimezone } from "countries-and-timezones";
 import { validTimeZone } from "./timeZone.ts";
+import { VIDEO_DATA_URL_MAX_CHARS, BACKUP_MEDIA_MAX_CHARS } from "./mediaBlob";
 import type {
   Activity,
   ChatPreview,
@@ -66,6 +67,7 @@ export type SettingsSafeExport = {
   quickReplyCustomCategories: AppSettings["quickReplyCustomCategories"];
   quickReplyRemovedCategories: AppSettings["quickReplyRemovedCategories"];
   quickReplyCategoryLabels: AppSettings["quickReplyCategoryLabels"];
+  quickReplyCategoryOrder: AppSettings["quickReplyCategoryOrder"];
   quickReplyPinnedIds: string[];
   quickReplyRecentIds: string[];
   translateTargetLang: string;
@@ -101,6 +103,12 @@ export type SettingsSafeExport = {
   aiAutoReplyPolicyByAccountId: AppSettings["aiAutoReplyPolicyByAccountId"];
   aiSystemPrompt: string;
   aiSystemPromptByAccountId: Record<string, string>;
+  aiPromptTemplates: AppSettings["aiPromptTemplates"];
+  imagePromptTemplates: AppSettings["imagePromptTemplates"];
+  aiContextMode: AppSettings["aiContextMode"];
+  aiOutreachRuns: AppSettings["aiOutreachRuns"];
+  aiOutreachPaused: boolean;
+  aiOutreachExcludedRecipients: string[];
   translateService: AppSettings["translateService"];
   notifyFollowUpEnabled: boolean;
   notifyGroupMessagesEnabled: boolean;
@@ -149,6 +157,7 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     quickReplyCustomCategories: settings.quickReplyCustomCategories || [],
     quickReplyRemovedCategories: settings.quickReplyRemovedCategories || [],
     quickReplyCategoryLabels: settings.quickReplyCategoryLabels || {},
+    quickReplyCategoryOrder: settings.quickReplyCategoryOrder || [],
     quickReplyPinnedIds: settings.quickReplyPinnedIds || [],
     quickReplyRecentIds: settings.quickReplyRecentIds || [],
     translateTargetLang: settings.translateTargetLang,
@@ -182,6 +191,12 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     aiAutoReplyPolicyByAccountId: settings.aiAutoReplyPolicyByAccountId || {},
     aiSystemPrompt: settings.aiSystemPrompt || "",
     aiSystemPromptByAccountId: settings.aiSystemPromptByAccountId || {},
+    aiPromptTemplates: settings.aiPromptTemplates || [],
+    imagePromptTemplates: settings.imagePromptTemplates || [],
+    aiContextMode: settings.aiContextMode || "full",
+    aiOutreachRuns: settings.aiOutreachRuns || [],
+    aiOutreachPaused: settings.aiOutreachPaused === true,
+    aiOutreachExcludedRecipients: settings.aiOutreachExcludedRecipients || [],
     translateService: settings.translateService,
     notifyFollowUpEnabled: settings.notifyFollowUpEnabled !== false,
     notifyGroupMessagesEnabled: settings.notifyGroupMessagesEnabled === true,
@@ -214,7 +229,7 @@ export function buildExportBundle(input: {
   // 导出时剥离消息里过大的 inline media，减小文件
   const messages = input.messages.map((m) => {
     const url = m.mediaUrl || "";
-    if (!input.includeMedia && url.startsWith("data:") && url.length > 8_000) {
+    if (url.startsWith("blob:") || !input.includeMedia && url.startsWith("data:") && url.length > 8_000) {
       return {
         ...m,
         mediaUrl: undefined,
@@ -255,7 +270,8 @@ export type ParsedBackup = {
 export function sanitizeMediaUrl(url: unknown): string | undefined {
   if (typeof url !== "string") return undefined;
   const u = url.trim();
-  if (!u || u.length > 24 * 1024 * 1024) return undefined;
+  if (!u) return undefined;
+  if (u.length > (u.startsWith("data:video/") ? VIDEO_DATA_URL_MAX_CHARS : 24 * 1024 * 1024)) throw new Error("备份包含超过大小上限的附件");
   if (/^https:\/\//i.test(u)) return u;
   if (/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(u)) return u;
   if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(u)) return u;
@@ -350,6 +366,17 @@ function sanitizeChat(raw: unknown): ChatPreview | null {
     lastMessage: str(c.lastMessage, 2000),
     unread: Math.max(0, Math.min(99999, Number(c.unread) || 0)),
     updatedAt: str(c.updatedAt, 40) || new Date().toISOString(),
+    firstConversationMessage: (() => {
+      if (!c.firstConversationMessage || typeof c.firstConversationMessage !== "object") return undefined;
+      const first = c.firstConversationMessage as Record<string, unknown>, at = str(first.at, 40);
+      return Number.isFinite(Date.parse(at)) && (first.direction === "in" || first.direction === "out")
+        ? { at: new Date(at).toISOString(), direction: first.direction } : undefined;
+    })(),
+    lastSuccessfulOutgoing: (()=>{
+      if(!c.lastSuccessfulOutgoing||typeof c.lastSuccessfulOutgoing!=="object")return undefined;
+      const last=c.lastSuccessfulOutgoing as Record<string,unknown>,at=str(last.at,40);
+      return Number.isFinite(Date.parse(at))?{at:new Date(at).toISOString(),accountId:str(last.accountId,80)||undefined}:undefined;
+    })(),
     replyHandledAt: typeof c.replyHandledAt === "string" && Number.isFinite(Date.parse(c.replyHandledAt))
       ? new Date(c.replyHandledAt).toISOString() : undefined,
     replyPendingSince: c.replyPendingSince === "" ? ""
@@ -383,6 +410,7 @@ function sanitizeMessage(raw: unknown): Message | null {
     direction: dir,
     body: str(m.body, 20000),
     sentAt: str(m.sentAt, 40) || new Date().toISOString(),
+    displayOrderAt: Number.isFinite(Date.parse(str(m.displayOrderAt, 40))) ? new Date(str(m.displayOrderAt, 40)).toISOString() : undefined,
     accountId: str(m.accountId, 80) || undefined,
     deliveryStatus:
       typeof m.deliveryStatus === "string"
@@ -624,7 +652,7 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
     });
   const mediaChars = messages.reduce((sum, message) => sum +
     (message.mediaUrl?.startsWith("data:") ? message.mediaUrl.length : 0), 0);
-  if (mediaChars > 128 * 1024 * 1024) throw new Error("备份附件总量超过 128 MB");
+  if (mediaChars > BACKUP_MEDIA_MAX_CHARS) throw new Error("备份附件编码后的总量超过 192 MB");
   const followUps = asArr(o.followUps)
     .map(sanitizeFollowUp)
     .filter((x): x is FollowUp => Boolean(x));
@@ -646,8 +674,8 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
   // 只恢复客户数据与界面偏好；端点、密钥、自动发送及保护策略沿用本机。
   if (settingsSafe) {
     const allowed = [
-      "quickReplies", "quickReplyCustomCategories", "quickReplyRemovedCategories", "quickReplyCategoryLabels", "quickReplyPinnedIds", "quickReplyRecentIds", "translateTargetLang", "myLang",
-      "voiceInputLang", "aiTimeZone", "leadInbox", "chatFolders", "chatFolderClones",
+      "quickReplies", "quickReplyCustomCategories", "quickReplyRemovedCategories", "quickReplyCategoryLabels", "quickReplyCategoryOrder", "quickReplyPinnedIds", "quickReplyRecentIds", "translateTargetLang", "myLang",
+      "voiceInputLang", "aiTimeZone", "leadInbox", "chatFolders", "chatFolderClones", "aiPromptTemplates", "imagePromptTemplates", "aiContextMode", "aiOutreachRuns", "aiOutreachPaused", "aiOutreachExcludedRecipients",
       "scheduledMessages", "scheduledPlans", "waAccounts", "accountViewMode", "historySyncNote",
       "historySyncNoteByAccountId", "internalNotesByKey", "chatBackground",
       "salesStageLabels", "salesStageOrder", "theme",
@@ -658,10 +686,11 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
     ) as Partial<SettingsSafeExport>;
     if (Object.hasOwn(settingsSafe, "aiTimeZone")) settingsSafe.aiTimeZone = validTimeZone(settingsSafe.aiTimeZone) || "";
     if (Array.isArray(settingsSafe.chatFolders)) {
+      settingsSafe.aiOutreachPaused = true;
       settingsSafe.chatFolders = settingsSafe.chatFolders.map(folder => {
         if (!folder || typeof folder !== "object") return folder;
         const { autoReplyMode: _automation, ...rest } = folder;
-        return rest;
+        return {...rest, ...(rest.aiOutreach ? {aiOutreach:{...rest.aiOutreach,enabled:false}} : {})};
       });
     }
     if (Array.isArray(settingsSafe.scheduledMessages)) {
@@ -696,6 +725,7 @@ export function downloadJson(filename: string, data: unknown) {
   const blob = new Blob([JSON.stringify(data, null, 2)], {
     type: "application/json",
   });
+  if (blob.size > 256 * 1024 * 1024) throw new Error("导出文件超过 256 MB，请减少附件或导出不含附件的备份");
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

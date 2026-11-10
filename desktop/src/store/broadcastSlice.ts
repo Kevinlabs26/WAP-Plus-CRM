@@ -2,6 +2,7 @@ import {
   buildCampaignOrError,
   trimCampaigns,
   broadcastItemUncertain,
+  campaignHasMedia,
 } from "@/lib/broadcastCampaign";
 import type { AppState, SliceContext } from "./types";
 import { resolveActiveSalesStage } from "@/lib/contactWorkflow";
@@ -89,6 +90,7 @@ export function createBroadcastSlice({
         extraGapMaxSec: input.extraGapMaxSec,
         media: input.media,
         mediaMode: input.mediaMode,
+        variants: input.variants,
         accountCreatedAt: accountCreatedAtOf(state.settings, input.accountId),
         blockWarmup: false,
         rateLimits: {
@@ -98,10 +100,10 @@ export function createBroadcastSlice({
         },
       });
       if (!res.ok) return { ok: false, reason: res.reason };
-      if (!res.campaign.media?.length) {
+      if (!campaignHasMedia(res.campaign)) {
         const targets=new Map(res.campaign.items.filter(i=>i.status==="pending").map(i=>[recipientKey(i.accountId || input.accountId,i.phoneE164),i.bodyRendered.trim()]));
         const newer=(state.settings.scheduledPlans||[]).filter(p=>!["done","cancelled","expired"].includes(p.status)&&Math.abs(Date.parse(p.dueAt)-Date.now())<=86400_000&&planSteps(p).length===1&&!p.media&&p.items.some(i=>["pending","sending","unknown"].includes(i.status)&&targets.get(recipientKey(i.accountId,i.recipient))===p.text.trim()));
-        const older=state.broadcastCampaigns.filter(c=>["draft","running","paused"].includes(c.status)&&!c.media?.length&&c.items.some(i=>["pending","sending"].includes(i.status)&&targets.get(recipientKey(i.accountId || c.accountId,i.phoneE164))===i.bodyRendered.trim()));
+        const older=state.broadcastCampaigns.filter(c=>["draft","running","paused"].includes(c.status)&&!campaignHasMedia(c)&&c.items.some(i=>["pending","sending"].includes(i.status)&&targets.get(recipientKey(i.accountId || c.accountId,i.phoneE164))===i.bodyRendered.trim()));
         const duplicateIds=[...newer,...older].map(p=>p.id).filter(id=>!input.confirmedDuplicateIds?.includes(id));
         if(duplicateIds.length)return {ok:false,reason:`发现 ${duplicateIds.length} 个可能重复的未完成任务，请先核对`,duplicateIds};
       }

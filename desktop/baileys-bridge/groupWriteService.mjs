@@ -133,16 +133,13 @@ export function createGroupWriteService(deps) {
       throw err("当前 Baileys 不支持 groupAcceptInvite", "unsupported");
     }
     const gid = await sock.groupAcceptInvite(code);
-    dbg("group.acceptInvite", { code, gid });
-    let group = null;
-    if (gid) {
-      try {
-        group = await refresh(String(gid));
-      } catch {
-        group = normalizeGroupMetadata({ id: gid, subject: "" });
-      }
+    const groupJid=gid?assertGroupJid(gid):"";
+    dbg("group.acceptInvite", { joined: Boolean(groupJid) });
+    if (groupJid) {
+      // Joining is already confirmed; optional metadata must not delay the HTTP result.
+      void refresh(groupJid).catch(() => {});
     }
-    return { groupJid: gid || "", group };
+    return { groupJid };
   }
 
   async function leave(jid) {

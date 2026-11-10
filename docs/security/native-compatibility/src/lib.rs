@@ -1,4 +1,11 @@
 // Compile the actual application database code and run its existing regression tests.
+// This harness tests in-memory SQLite; it must never open the application's encrypted database.
+mod db_encryption {
+    pub fn open(_: &std::path::Path) -> Result<rusqlite::Connection, String> {
+        Err("Compatibility tests only support in-memory databases".into())
+    }
+    pub use open as open_readonly;
+}
 #[path = "../../../../desktop/src-tauri/src/db.rs"]
 mod db;
 

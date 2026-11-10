@@ -51,7 +51,7 @@ export async function baileysSaveContacts(
   accountId: string | null | undefined,
   contacts: Array<{ name: string; phoneE164: string }>
 ) {
-  const totals = { saved: 0, failed: 0 };
+  const totals = { saved: 0, failed: 0, savedPhones: [] as string[] };
   for (let start = 0; start < contacts.length; start += 500) {
     const result = await request<{
       items?: Array<{ status?: "saved" | "failed" }>;
@@ -64,8 +64,8 @@ export async function baileysSaveContacts(
       },
       accountId
     );
-    for (const item of result.items || []) {
-      if (item.status === "saved") totals.saved += 1;
+    for (const [index, item] of (result.items || []).slice(0, Math.min(500, contacts.length - start)).entries()) {
+      if (item.status === "saved") { totals.saved += 1; totals.savedPhones.push(contacts[start + index]!.phoneE164); }
       else totals.failed += 1;
     }
     totals.failed += Math.max(

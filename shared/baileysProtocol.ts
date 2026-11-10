@@ -45,7 +45,7 @@ export interface BaileysBridgeStatus {
   presenceEventCount?: number;
   lastPresenceDebug?: Record<string, unknown> | null;
   eventCursor?: number;
-  capabilities?: { nativeVideo?: boolean };
+  capabilities?: { nativeVideo?: boolean; nativeVideoStream?: boolean };
 }
 
 export type BaileysEventType =
@@ -79,6 +79,9 @@ export interface BaileysEventsResponse {
   baileysVersion: string;
   events: BaileysEvent[];
   cursor: number;
+  realtimeEvents?: BaileysEvent[];
+  recentEvents?: BaileysEvent[];
+  realtimeCursor?: number;
   gap?: {
     after: number;
     from: number;
@@ -98,6 +101,8 @@ export interface BaileysSyncResponse {
     requestId?: string;
     peerMessageId?: string;
     cooldownMs?: number;
+    deferred?: boolean;
+    warning?: string;
   } | null;
 }
 

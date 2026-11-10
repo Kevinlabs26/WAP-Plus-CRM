@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   bucketFollowUpsForToday,
   listUnreadChats,
+  listPrivateChats,
   summarizeToday,
   followUpDayKey,
   listRecentFailedOutbound,
@@ -55,6 +56,21 @@ const unread = listUnreadChats(
 );
 assert.equal(unread.length, 2);
 assert.equal(unread[0].id, "ch1");
+
+assert.deepEqual(
+  listPrivateChats(
+    [
+      { id: "private", contactId: "p1", isGroup: false },
+      { id: "group-flag", contactId: "g1", isGroup: true },
+      { id: "group-contact", contactId: "g2", isGroup: false },
+    ],
+    [
+      { id: "g1", isGroup: true },
+      { id: "g2", channelAddress: "123@g.us" },
+    ]
+  ).map((chat) => chat.id),
+  ["private"]
+);
 
 const sum = summarizeToday({
   followUps: fus,

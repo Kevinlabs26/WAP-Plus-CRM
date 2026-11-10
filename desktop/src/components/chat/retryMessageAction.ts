@@ -6,6 +6,7 @@ import {
   baileysSendImage,
   baileysSendSticker,
   baileysSendVoice,
+  baileysSendVideo,
 } from "@/lib/baileys";
 import type { Message } from "@/types/crm";
 import { translateCurrent } from "@/i18n";
@@ -111,6 +112,11 @@ export async function retryMessage({
                     message.mediaCaption || "",
                     sendAccountId
                   )
+                : type === "video"
+                  ? baileysSendVideo(target, mediaUrl, message.mediaCaption || "", sendAccountId, undefined, (loaded, total) => {
+                      const percent = Math.min(100, Math.floor(loaded / total * 100));
+                      updateMessageDelivery(id, {mediaUpload:{percent,stage:percent === 100 ? "waiting" : "uploading"}});
+                    })
                 : type === "document"
                   ? baileysSendDocument(
                       target,
@@ -135,6 +141,7 @@ export async function retryMessage({
       if (!raw) throw new Error(translateCurrent("runtime.mediaRetryUnsupported"));
       updateMessageDelivery(id, {
         deliveryStatus: "sent",
+        mediaUpload: undefined,
         waMessageId:
           "id" in raw && typeof raw.id === "string" ? raw.id : undefined,
         lastError: undefined,
@@ -144,6 +151,7 @@ export async function retryMessage({
       const detail = error instanceof Error ? error.message : translateCurrent("runtime.mediaResendFailed");
       updateMessageDelivery(id, {
         deliveryStatus: "failed",
+        mediaUpload: undefined,
         lastError: detail,
         deliveryUncertain: (typeof error === "object" && error !== null
           && "deliveryUncertain" in error && error.deliveryUncertain === true)

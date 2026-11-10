@@ -9,7 +9,10 @@ export function ContactVcfDialog({ onClose, onAttach, disabled = false }: {
 }) {
   const { t } = useI18n();
   const [text, setText] = useState("");
-  const [prefix, setPrefix] = useState("");
+  const [prefix, setPrefix] = useState(() => {
+    const today = new Date();
+    return `${String(today.getMonth() + 1).padStart(2, "0")}/${String(today.getDate()).padStart(2, "0")}`;
+  });
   const [suffix, setSuffix] = useState("");
   const [lastFour, setLastFour] = useState(false);
   const [error, setError] = useState(false);
@@ -67,7 +70,7 @@ export function ContactVcfDialog({ onClose, onAttach, disabled = false }: {
       <footer className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-zinc-800 px-5 py-3">
         <p className="max-w-sm text-xs leading-5 text-zinc-500">{t("vcf.attachHint")}</p>
         <Button variant="primary" disabled={disabled || !result.contacts.length || result.issues.length > 0} onClick={() => {
-          try { onAttach(new File([buildContactsVcf(result.contacts, rule)], "contacts.vcf", { type: "text/vcard;charset=utf-8" })); onClose(); }
+          try { onAttach(new File([buildContactsVcf(result.contacts, rule)], "contacts.vcf", { type: "text/x-vcard" })); onClose(); }
           catch { setError(true); }
         }}>{t("vcf.attach")}</Button>
       </footer>

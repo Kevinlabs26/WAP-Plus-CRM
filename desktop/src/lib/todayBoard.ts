@@ -74,6 +74,16 @@ export function bucketFollowUpsForToday(
   };
 }
 
+/** Workbench inbox shows one-to-one conversations only; group chats stay in the Chats view. */
+export function listPrivateChats(chats: ChatPreview[], contacts: Contact[]): ChatPreview[] {
+  const groups = new Set(contacts.filter((contact) =>
+    contact.isGroup || contact.channelAddress?.endsWith("@g.us") || contact.id.includes("@g.us")
+  ).map((contact) => contact.id));
+  return chats.filter((chat) =>
+    !chat.isGroup && !chat.id.includes("@g.us") && !groups.has(chat.contactId)
+  );
+}
+
 /** 未读会话，最近活跃优先 */
 export function listUnreadChats(
   chats: ChatPreview[],

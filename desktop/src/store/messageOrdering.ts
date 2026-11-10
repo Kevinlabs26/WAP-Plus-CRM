@@ -11,6 +11,23 @@ export function isHiddenProtocolMessageBody(body?: string): boolean {
   return HIDDEN_PROTOCOL_BODIES.has((body || "").trim());
 }
 
+export function outgoingSentAt(sentAt: string, localOrderAfter?: string): string {
+  const after = Date.parse(localOrderAfter || "");
+  return Number.isFinite(after) && Date.parse(sentAt) <= after
+    ? new Date(after + 1).toISOString()
+    : sentAt;
+}
+
+export function messageOrderTime(message: Message): string {
+  const display = message.displayOrderAt || (message.localOrderAfter ? outgoingSentAt(message.sentAt, message.localOrderAfter) : "");
+  return display > message.sentAt ? display : message.sentAt || "";
+}
+
+export function compareMessageOrder(a: Message, b: Message): number {
+  return messageOrderTime(a).localeCompare(messageOrderTime(b)) ||
+    (a.displayOrderAt || a.sentAt || "").localeCompare(b.displayOrderAt || b.sentAt || "");
+}
+
 /** 按消息时间合并去重；保持全局数组和按会话索引的顺序一致。 */
 export function mergeMessagesByTime(
   existing: Message[],
@@ -21,8 +38,8 @@ export function mergeMessagesByTime(
   );
   // 实时缓存按到达顺序追加；空页/重复历史页也必须保持时间顺序，避免覆盖正确的会话索引。
   const alreadySorted = kept.every((message, index) => index === 0 ||
-    (kept[index - 1]!.sentAt || "") <= (message.sentAt || ""));
-  if (!alreadySorted) kept.sort((a, b) => (a.sentAt || "").localeCompare(b.sentAt || ""));
+    compareMessageOrder(kept[index - 1]!, message) <= 0);
+  if (!alreadySorted) kept.sort(compareMessageOrder);
   const unchanged = alreadySorted && kept.length === existing.length;
   const added = incoming.filter(
     (message) => !isHiddenProtocolMessageBody(message.body)
@@ -50,13 +67,13 @@ export function mergeMessagesByTime(
     return true;
   });
   if (!unique.length) return unchanged ? existing : kept;
-  unique.sort((a, b) => (a.sentAt || "").localeCompare(b.sentAt || ""));
+  unique.sort(compareMessageOrder);
 
   const merged: Message[] = [];
   let left = 0;
   let right = 0;
   while (left < kept.length && right < unique.length) {
-    if ((kept[left]!.sentAt || "") <= (unique[right]!.sentAt || "")) {
+    if (compareMessageOrder(kept[left]!, unique[right]!) <= 0) {
       merged.push(kept[left++]!);
     } else {
       merged.push(unique[right++]!);

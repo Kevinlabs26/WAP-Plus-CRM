@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { compareMessageOrder } from "@/store/messageOrdering";
+import { retainMessageChats } from "@/store/messageMemory";
 import {
   ArrowLeft,
   ArrowDownUp,
@@ -61,11 +63,13 @@ import { retainOpenWindows, replaceWindowSlot, undoWindowSlot } from "@/features
 export function MultiWindowWorkspace({
   onBack,
   folderRequestId,
+  folderRequestNonce = 0,
   accountScopeId,
   onOpenDevices,
 }: {
   onBack: () => void;
   folderRequestId?: string | null;
+  folderRequestNonce?: number;
   accountScopeId?: string;
   onOpenDevices?: () => void;
 }) {
@@ -85,8 +89,9 @@ export function MultiWindowWorkspace({
     () => scopeTodayBoard({ contacts: allContacts, chats: allChats, messages: allMessages, followUps: [] }, accountScopeId),
     [accountScopeId, allChats, allContacts, allMessages]
   );
-  const initialSourceFolderIds = readStoredFolderIds(accountScopeId);
+  const initialSourceFolderIds = folderRequestId ? [folderRequestId] : readStoredFolderIds(accountScopeId);
   const [openChatIds, setOpenChatIds] = useState<string[]>(() => {
+    if (folderRequestId) return [];
     const contactMap = new Map(contacts.map((contact) => [contact.id, contact]));
     const eligibleChats = filterCandidateChats(chats, contactMap, readIgnoreGroups(accountScopeId));
     const available = new Set(eligibleChats.map(chat => chat.id));
@@ -138,7 +143,7 @@ export function MultiWindowWorkspace({
   const [ignoreGroups, setIgnoreGroups] = useState(() => readIgnoreGroups(accountScopeId));
   const [recentQueueIds, setRecentQueueIds] = useState<string[]>(() => readRecentQueueIds(accountScopeId));
   const [sourceFolderIds, setSourceFolderIds] = useState<string[]>(initialSourceFolderIds);
-  const [folderPrompt, setFolderPrompt] = useState<{ id: string; name: string } | null>(null);
+  const handledFolderRequest = useRef<{ id: string; nonce: number } | null>(null);
   const [activeMemberChatByWindow, setActiveMemberChatByWindow] = useState<Record<string, string>>(() => readStoredActiveMembers(accountScopeId));
   const [manualMemberChatIdsByWindow, setManualMemberChatIdsByWindow] = useState<Record<string, string[]>>(() => readStoredManualMembers(accountScopeId));
   const [lastCompletion, setLastCompletion] = useState<{
@@ -244,9 +249,7 @@ export function MultiWindowWorkspace({
     const grouped = new Map<string, FolderWindow>();
     for (const chat of folderChatIdsForDisplay) {
       const contact = contactById.get(chat.contactId);
-      const rawAddress = contact?.phone || contact?.channelAddress || "";
-      const digits = rawAddress.replace(/\D/g, "");
-      const key = !contact?.isGroup && digits.length >= 7 ? `phone:${digits}` : `chat:${chat.id}`;
+      const key = phoneIdentity(chat, contact);
       const current = grouped.get(key);
       if (!current) {
         grouped.set(key, {
@@ -321,6 +324,13 @@ export function MultiWindowWorkspace({
     [manualWindows]
   );
   const windowByChatId = sourceFolderIds.length ? folderWindowByChatId : manualWindowByChatId;
+  const validActiveMembers = useMemo(() => Object.fromEntries(
+    Object.entries(activeMemberChatByWindow).filter(([windowId, memberId]) => windowByChatId.get(windowId)?.memberChatIds.includes(memberId))
+  ), [activeMemberChatByWindow, windowByChatId]);
+  useEffect(() => {
+    retainMessageChats("multi-window", openChatIds.flatMap(id => windowByChatId.get(id)?.memberChatIds || [id]));
+    return () => retainMessageChats("multi-window", []);
+  }, [openChatIds, windowByChatId]);
   useEffect(() => {
     setActiveMemberChatByWindow((current) => {
       const next = Object.fromEntries(
@@ -361,40 +371,39 @@ export function MultiWindowWorkspace({
       for (const folderId of folderIds) {
         for (const chatId of folderChatIds.get(folderId) || []) ids.add(chatId);
       }
-      return folderWindows
-        .filter((item) => item.memberChatIds.some((chatId) => ids.has(chatId)))
+      const seen = new Set<string>();
+      return candidateChats
+        .filter((chat) => ids.has(chat.id))
         .sort((a, b) => {
-          const aPending = pendingChatIds.has(a.chat.id) ? 1 : 0;
-          const bPending = pendingChatIds.has(b.chat.id) ? 1 : 0;
-          return bPending - aPending || (b.chat.updatedAt || "").localeCompare(a.chat.updatedAt || "");
+          const aPending = pendingChatIds.has(a.id) ? 1 : 0;
+          const bPending = pendingChatIds.has(b.id) ? 1 : 0;
+          return bPending - aPending || (b.updatedAt || "").localeCompare(a.updatedAt || "");
         })
-        .map((item) => item.chat.id);
-    }, [folderChatIds, folderWindows, pendingChatIds]);
-  const applyFolderRequest = useCallback(
-    (mode: "replace" | "append") => {
-      if (!folderRequest) return;
-      const nextFolderIds = mode === "replace"
-        ? [folderRequest.id]
-        : [...sourceFolderIds, folderRequest.id].filter((id, index, ids) => ids.indexOf(id) === index);
-      const nextChatIds = folderIdsToOpen(nextFolderIds);
-      setSourceFolderIds(nextFolderIds);
-      setOpenChatIds(nextChatIds);
-      setSortMode("priority");
-      setPage(0);
-      setLastCompletion(null);
-      setFolderPrompt(null);
-    }, [folderIdsToOpen, folderRequest, pendingChatIds, sourceFolderIds]
-  );
+        .filter((chat) => {
+          const key = phoneIdentity(chat, contactById.get(chat.contactId));
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .map((chat) => chat.id);
+    }, [candidateChats, contactById, folderChatIds, pendingChatIds]);
   useEffect(() => {
     if (!folderRequest) return;
-    if (!sourceFolderIds.length) {
-      applyFolderRequest("replace");
-      return;
-    }
-    if (!sourceFolderIds.includes(folderRequest.id)) {
-      setFolderPrompt({ id: folderRequest.id, name: folderRequest.name });
-    }
-  }, [applyFolderRequest, folderRequest, sourceFolderIds]);
+    const handled = handledFolderRequest.current;
+    if (handled?.id === folderRequest.id && handled.nonce === folderRequestNonce) return;
+    handledFolderRequest.current = { id: folderRequest.id, nonce: folderRequestNonce };
+    setSourceFolderIds([folderRequest.id]);
+    setOpenChatIds(folderIdsToOpen([folderRequest.id]));
+    setActiveMemberChatByWindow({});
+    setManualMemberChatIdsByWindow({});
+    setCollapsedWindowIds([]);
+    setQuickRepliesWindowId(null);
+    setPickerOpen(false);
+    setQuery("");
+    setSortMode("priority");
+    setPage(0);
+    setLastCompletion(null);
+  }, [folderIdsToOpen, folderRequest, folderRequestNonce]);
   useEffect(() => {
     const activeIds = recentQueueIds.filter((id) => pendingChatIds.has(id));
     const fillIds = [...candidateChats]
@@ -409,10 +418,11 @@ export function MultiWindowWorkspace({
   const filteredPickerChats = useMemo(() => {
     const q = query.trim().toLowerCase();
     return [...candidateChats]
+      .filter((chat) => !sourceFolderIds.length || sourceChatIds.has(chat.id))
       .filter((chat) => pendingChatIds.has(chat.id))
       .filter((chat) => !q || titleOf(chat, contactById.get(chat.contactId)).toLowerCase().includes(q))
       .sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
-  }, [candidateChats, contactById, pendingChatIds, query]);
+  }, [candidateChats, contactById, pendingChatIds, query, sourceChatIds, sourceFolderIds]);
   const orderedChatIds = (mode: SortMode) => {
     const anchorId = (id: string) => openChatIds.find(windowId => windowByChatId.get(windowId)?.memberChatIds.includes(id)) || id;
     if (sourceFolderIds.length) {
@@ -454,7 +464,8 @@ export function MultiWindowWorkspace({
       .map(chat => anchorId(chat.id))
       .filter((id, index, ids) => ids.indexOf(id) === index);
   };
-  const displayChatIds = retainOpenWindows(openChatIds, new Set(
+  const requestPending = !!folderRequestId && (handledFolderRequest.current?.id !== folderRequestId || handledFolderRequest.current?.nonce !== folderRequestNonce);
+  const displayChatIds = requestPending ? [] : retainOpenWindows(openChatIds, new Set(
     candidateChats.filter(chat => !sourceFolderIds.length || sourceChatIds.has(chat.id)).map(chat => chat.id)
   ));
   const totalPages = Math.max(1, Math.ceil(displayChatIds.length / MAX_VISIBLE_WINDOWS));
@@ -483,10 +494,10 @@ export function MultiWindowWorkspace({
   const visibleLoadIds = useMemo(() => {
     return selectVisibleLoadIds(
       visibleIdsKey ? visibleIdsKey.split("|") : [],
-      activeMemberChatByWindow,
+      validActiveMembers,
       new Set(collapsedWindowIds)
     );
-  }, [activeMemberChatByWindow, collapsedWindowIds, visibleIdsKey]);
+  }, [validActiveMembers, collapsedWindowIds, visibleIdsKey]);
   const { draggingId, beginDrag, dropOn, endDrag, moveByKeyboard } = useMultiWindowReorder({
     enabled: sortMode === "opened",
     setOpenChatIds,
@@ -498,7 +509,7 @@ export function MultiWindowWorkspace({
     const merged = new Map<string, Message>();
     for (const message of diskMessagesByChatId[chatId] || []) merged.set(message.id, message);
     for (const message of messagesByChatId.get(chatId) || []) merged.set(message.id, message);
-    return [...merged.values()].sort((a, b) => (a.sentAt || "").localeCompare(b.sentAt || ""));
+    return [...merged.values()].sort(compareMessageOrder);
   }, [diskMessagesByChatId, messagesByChatId]);
   const { historyByChatId, registerInitialPage, loadOlder } = useMultiWindowHistory({
     getMessages: messagesForChat,
@@ -543,6 +554,7 @@ export function MultiWindowWorkspace({
   }, [chatById, contactById, visibleUnreadChatIds]);
 
   const addChat = (chatId: string) => {
+    if (sourceFolderIds.length && !sourceChatIds.has(chatId)) return;
     setLastCompletion(null);
     const chat = chatById.get(chatId);
     if (chat) {
@@ -870,7 +882,7 @@ export function MultiWindowWorkspace({
               const baseChat = chatById.get(chatId);
               if (!baseChat) return null;
               const folderWindow = windowByChatId.get(chatId);
-              const activeChat = chatById.get(activeMemberChatByWindow[chatId] || "") || baseChat;
+              const activeChat = chatById.get(validActiveMembers[chatId] || "") || baseChat;
               const chat = activeChat;
               const contact = contactById.get(chat.contactId);
               const accountOptions = folderWindow
@@ -997,33 +1009,7 @@ export function MultiWindowWorkspace({
         </aside>
       )}
       </div>
-      {folderPrompt && (
-        <div
-          className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4 backdrop-blur-[2px]"
-          onMouseDown={(event) => event.target === event.currentTarget && setFolderPrompt(null)}
-        >
-          <div className="w-full max-w-sm rounded-2xl border border-zinc-700 bg-zinc-900 p-5 shadow-2xl shadow-black/60">
-            <div className="text-[14px] font-semibold text-zinc-100">{t("multi.openAnotherFolder")}</div>
-            <p className="mt-2 text-[12px] leading-5 text-zinc-400">
-              {t("multi.folderConflict", {
-                current: folderName || t("multi.otherFolder"),
-                next: folderPrompt.name,
-              })}
-            </p>
-            <div className="mt-4 grid gap-2">
-              <Button variant="primary" onClick={() => applyFolderRequest("append")}>
-                {t("multi.appendFolder")}
-              </Button>
-              <Button variant="secondary" onClick={() => applyFolderRequest("replace")}>
-                {t("multi.replaceFolder")}
-              </Button>
-              <Button variant="ghost" onClick={() => setFolderPrompt(null)}>
-                {t("common.cancel")}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+
     </div>
   );
 }

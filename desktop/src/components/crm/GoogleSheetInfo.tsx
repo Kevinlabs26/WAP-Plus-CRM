@@ -67,14 +67,19 @@ function SheetValue({ contact, field, cell, columnIndex, active }: { contact: Co
   return <p className="whitespace-pre-wrap break-words">{cell.value || "—"}</p>;
 }
 
-export function GoogleSheetInfo({ contact, open = false }: { contact: Contact; open?: boolean }) {
+export function GoogleSheetInfo({ contact, open = false, expanded: controlledExpanded, onExpandedChange }: { contact: Contact; open?: boolean; expanded?: boolean; onExpandedChange?: (expanded: boolean) => void }) {
   const { t } = useI18n();
   const { email, config, data, error, busy } = useGoogleSheets();
-  const [expanded, setExpanded] = useState(open);
-  useEffect(() => { if (open) setExpanded(true); }, [open]);
+  const [localExpanded, setLocalExpanded] = useState(open);
+  const expanded = controlledExpanded ?? localExpanded;
+  const setExpanded = (value: boolean) => {
+    if (controlledExpanded === undefined) setLocalExpanded(value);
+    onExpandedChange?.(value);
+  };
+  useEffect(() => { if (open) setLocalExpanded(true); }, [open]);
   if (!email || !config || contact.isGroup) return null;
   const phone = sheetInternationalPhone(contact.phone);
-  return <details open={expanded || undefined} onToggle={event => setExpanded(event.currentTarget.open)} className="rounded-xl border border-zinc-800 p-2.5">
+  return <details open={expanded} onToggle={event => setExpanded(event.currentTarget.open)} className="rounded-xl border border-zinc-800 p-2.5">
     <summary className="cursor-pointer text-xs font-medium">{t("sheets.info")}</summary>
     {expanded && <div className="mt-2 space-y-2 text-xs">
       <div className="flex justify-between gap-2 text-zinc-500"><span className="truncate" title={config.tab}>{config.tab}</span><button className="text-brand" disabled={busy} onClick={() => void refreshSheets(true)}>{t("sheets.refresh")}</button></div>

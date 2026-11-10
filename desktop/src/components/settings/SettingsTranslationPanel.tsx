@@ -25,7 +25,7 @@ export function SettingsTranslationPanel() {
             </select>
           </label>
       </div>
-      {settings.translateService !== "google" && <AiServiceFields showMockHint={false} settings={getTranslationSettings(settings)} updateSettings={patch => updateSettings(translationSettingsPatch(patch))} />}
+      {settings.translateService !== "google" && <AiServiceFields allowMuse={false} showMockHint={false} settings={getTranslationSettings(settings)} updateSettings={patch => updateSettings(translationSettingsPatch(patch))} />}
     </section>
       <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
 <SectionLabel>{t("settings.translation")}</SectionLabel>

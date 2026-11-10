@@ -3,6 +3,7 @@ import type { AppState } from "@/store/appStore";
 import type { Message } from "@/types/crm";
 import { getSuggestionContextKey, hasRealAiKey } from "@/lib/aiSuggest";
 import { isManualSuggestionContext, SUGGESTION_MAX_AGE_MS } from "@/lib/aiSuggestionCache";
+import { getAiOutputConstraintError } from "./aiReplyConstraints";
 
 export async function hashAiReplyContext(key: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
@@ -12,9 +13,10 @@ export async function hashAiReplyContext(key: string): Promise<string> {
 /** 队列和首次发送使用同一份上下文；仅把摘要落库，不复制聊天内容或密钥。 */
 export function currentAutoReplyContext(
   state: Pick<AppState, "settings" | "contacts" | "chats" | "messages" | "messagesByChatId">,
-  reply: Pick<Message, "id" | "chatId" | "contactId" | "accountId" | "channelId"> & Partial<Pick<Message, "sentAt">>
+  reply: Pick<Message, "id" | "chatId" | "contactId" | "accountId" | "channelId"> & Partial<Pick<Message, "sentAt"|"body">>
 ): string | null {
   if (reply.id) {
+    if(reply.body&&getAiOutputConstraintError(state.settings,reply.accountId,reply.chatId,reply.body))return null;
     const queuedAt = Date.parse(reply.sentAt || "");
     if (!Number.isFinite(queuedAt) || Date.now() < queuedAt || Date.now() - queuedAt >= SUGGESTION_MAX_AGE_MS) return null;
   }

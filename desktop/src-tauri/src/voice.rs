@@ -95,15 +95,15 @@ fn resolve_whisper_files(model_root: &Path) -> Result<(PathBuf, PathBuf, PathBuf
 
     let pick = |tag: &str| -> Result<PathBuf, String> {
         find_file(&dir, 0, &|name: &str| {
-            name.to_ascii_lowercase().contains(tag)
-                && name.to_ascii_lowercase().ends_with(".onnx")
+            name.to_ascii_lowercase().contains(tag) && name.to_ascii_lowercase().ends_with(".onnx")
         })
         .ok_or_else(|| format!("模型缺少 {tag} 文件"))
     };
     let encoder = pick("encoder")?;
     let decoder = pick("decoder")?;
     let tokens = find_file(&dir, 0, &|name: &str| {
-        name.eq_ignore_ascii_case("tokens.txt") || name.to_ascii_lowercase().ends_with("-tokens.txt")
+        name.eq_ignore_ascii_case("tokens.txt")
+            || name.to_ascii_lowercase().ends_with("-tokens.txt")
     })
     .ok_or_else(|| "模型缺少 tokens.txt".to_string())?;
     Ok((encoder, decoder, tokens))
@@ -138,7 +138,10 @@ pub fn list_speech_models(app: AppHandle) -> Result<Vec<SpeechModelInfo>, String
 /// 模型上百 MB：走 Tauri 原始字节通道（Uint8Array → InvokeBody::Raw），
 /// 名称放 x-speech-model-name 头，避免 JSON 数字数组膨胀数倍。
 #[tauri::command]
-pub fn save_speech_model(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<String, String> {
+pub fn save_speech_model(
+    app: AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> Result<String, String> {
     let name = request
         .headers()
         .get("x-speech-model-name")
@@ -147,8 +150,10 @@ pub fn save_speech_model(app: AppHandle, request: tauri::ipc::Request<'_>) -> Re
         .to_string();
     let archive: std::borrow::Cow<'_, [u8]> = match request.body() {
         tauri::ipc::InvokeBody::Raw(bytes) => std::borrow::Cow::Borrowed(bytes.as_slice()),
-        tauri::ipc::InvokeBody::Json(value) => std::borrow::Cow::Owned(serde_json::from_value(value.clone())
-            .map_err(|_| "请求体不是有效字节数组".to_string())?),
+        tauri::ipc::InvokeBody::Json(value) => std::borrow::Cow::Owned(
+            serde_json::from_value(value.clone())
+                .map_err(|_| "请求体不是有效字节数组".to_string())?,
+        ),
     };
     if archive.len() < 1024 {
         return Err("压缩包内容过小，疑似下载失败".into());
@@ -169,16 +174,26 @@ pub fn save_speech_model(app: AppHandle, request: tauri::ipc::Request<'_>) -> Re
         resolve_whisper_files(&staging)?;
         let exists = dest.try_exists().map_err(|e| e.to_string())?;
         if exists {
-            if std::fs::symlink_metadata(&dest).map_err(|e| e.to_string())?.file_type().is_symlink() {
+            if std::fs::symlink_metadata(&dest)
+                .map_err(|e| e.to_string())?
+                .file_type()
+                .is_symlink()
+            {
                 return Err("模型目录不能是链接".into());
             }
             std::fs::rename(&dest, &backup).map_err(|e| e.to_string())?;
         }
         if let Err(error) = std::fs::rename(&staging, &dest) {
-            if exists { std::fs::rename(&backup, &dest).map_err(|restore| format!("{error}；旧模型保留在 {}：{restore}", backup.display()))?; }
+            if exists {
+                std::fs::rename(&backup, &dest).map_err(|restore| {
+                    format!("{error}；旧模型保留在 {}：{restore}", backup.display())
+                })?;
+            }
             return Err(error.to_string());
         }
-        if exists { let _ = std::fs::remove_dir_all(&backup); }
+        if exists {
+            let _ = std::fs::remove_dir_all(&backup);
+        }
         Ok(())
     })();
     let _ = std::fs::remove_dir_all(&staging);
@@ -216,7 +231,8 @@ pub async fn speech_transcribe(
         return Err("仅支持 16kHz 采样率（前端已统一重采样）".into());
     }
 
-    let permit = SPEECH_WORKERS.try_acquire()
+    let permit = SPEECH_WORKERS
+        .try_acquire()
         .map_err(|_| "正在转写另一条语音，请完成后重试".to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         // Keep the permit until native inference actually finishes, even if IPC is cancelled.
@@ -256,7 +272,9 @@ pub async fn speech_transcribe(
         let pcm: Vec<f32> = samples.iter().map(|&s| s as f32 / 32768.0).collect();
         let result = recognizer.transcribe(sample_rate as u32, pcm);
         Ok(SpeechTranscript { text: result.text })
-    }).await.map_err(|e| format!("本地转写任务失败：{e}"))?
+    })
+    .await
+    .map_err(|e| format!("本地转写任务失败：{e}"))?
 }
 
 static SPEECH_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
@@ -275,7 +293,8 @@ mod tests {
 
     #[test]
     fn resolves_official_and_legacy_whisper_models_and_rejects_incomplete_models() {
-        let root = std::env::temp_dir().join(format!("bridgecrm-whisper-check-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("bridgecrm-whisper-check-{}", uuid::Uuid::new_v4()));
         let nested = root.join("sherpa-onnx-whisper-tiny");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(nested.join("tiny-encoder.int8.onnx"), b"fixture").unwrap();
@@ -296,17 +315,22 @@ mod tests {
         // Optional integration check with the official archive, using the unchanged product engine.
         if let Ok(model_dir) = std::env::var("BRIDGECRM_VERIFY_MODEL_DIR") {
             let (encoder, decoder, tokens) = resolve_whisper_files(Path::new(&model_dir)).unwrap();
-            let mut recognizer = sherpa_rs::whisper::WhisperRecognizer::new(sherpa_rs::whisper::WhisperConfig {
-                encoder: encoder.to_string_lossy().into_owned(),
-                decoder: decoder.to_string_lossy().into_owned(),
-                tokens: tokens.to_string_lossy().into_owned(),
-                num_threads: Some(2), ..Default::default()
-            }).unwrap();
+            let mut recognizer =
+                sherpa_rs::whisper::WhisperRecognizer::new(sherpa_rs::whisper::WhisperConfig {
+                    encoder: encoder.to_string_lossy().into_owned(),
+                    decoder: decoder.to_string_lossy().into_owned(),
+                    tokens: tokens.to_string_lossy().into_owned(),
+                    num_threads: Some(2),
+                    ..Default::default()
+                })
+                .unwrap();
             let wav = Path::new(&model_dir).join("test_wavs/0.wav");
             let (samples, rate) = sherpa_rs::read_audio_file(&wav.to_string_lossy()).unwrap();
             let result = recognizer.transcribe(rate, samples);
             assert!(!result.text.trim().is_empty());
-            println!("Current product engine resolved the official model and transcribed its sample");
+            println!(
+                "Current product engine resolved the official model and transcribed its sample"
+            );
         }
     }
 }

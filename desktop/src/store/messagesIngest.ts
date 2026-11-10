@@ -25,7 +25,9 @@ import {
   type MessageSyncIndex,
 } from "./messageSyncIndex";
 import { createChatIdLookup } from "./contactIndex";
-import { isConversationOutgoing } from "@/lib/leadInbox";
+import { earliestConversationMessage, isConversationOutgoing } from "@/lib/leadInbox";
+import { latestSuccessfulOutgoing } from "@/lib/chatActivity";
+import { messageOrderTime } from "./messageOrdering";
 
 let cachedMessageSyncIndex: MessageSyncIndex<Message> | null = null;
 
@@ -72,9 +74,14 @@ function shallowMessageSame(a: Message, b: Message): boolean {
     a.quoted?.mediaSeconds === b.quoted?.mediaSeconds &&
     a.systemKind === b.systemKind &&
     a.systemAction === b.systemAction &&
-    a.waKey === b.waKey &&
+    a.waKey?.id === b.waKey?.id &&
+    a.waKey?.remoteJid === b.waKey?.remoteJid &&
+    a.waKey?.fromMe === b.waKey?.fromMe &&
+    a.waKey?.participant === b.waKey?.participant &&
     a.deliveryStatus === b.deliveryStatus &&
-    a.mentionedJids === b.mentionedJids &&
+    (a.mentionedJids === b.mentionedJids || Boolean(a.mentionedJids && b.mentionedJids &&
+      a.mentionedJids.length === b.mentionedJids.length &&
+      a.mentionedJids.every((jid, index) => jid === b.mentionedJids![index]))) &&
     a.mentionedMe === b.mentionedMe
   );
 }
@@ -286,7 +293,7 @@ export function applyMessagesSync(opts: {
         mediaError: mediaUrl ? undefined : prev.mediaError,
         contactCard: contactCard || prev.contactCard,
         isGroup: isGroup || prev.isGroup,
-        groupJid: groupJid || prev.groupJid,
+        groupJid: isGroup || prev.isGroup ? groupJid || prev.groupJid : undefined,
         senderJid: senderJid || prev.senderJid,
         senderPhoneE164: senderPhoneE164 || prev.senderPhoneE164,
         senderName: senderName || prev.senderName,
@@ -381,9 +388,7 @@ export function applyMessagesSync(opts: {
         }
         if (localIdx >= 0) {
           const prev = messages[localIdx];
-          // WhatsApp timestamps have second precision; keep the newer local enqueue time when an echo rounds backward.
-          const localTs = Date.parse(prev.sentAt);
-          const reconciledSentAt = item.sentAt == null || localTs > echoTs && localTs - echoTs < 2_000 ? prev.sentAt : sentAt;
+          const reconciledSentAt = item.sentAt == null ? prev.sentAt : sentAt;
           // 始终留在用户正在聊的会话，不跟错误的 contact/E 跑
           const keepChatId = prev.chatId || selectedChat || chatId;
           const keepContactId =
@@ -409,8 +414,14 @@ export function applyMessagesSync(opts: {
           const chatIndex = findChatIdx(keepChatId);
           if (chatIndex >= 0) {
             const prevChat = chats[chatIndex];
+            const lastSuccessfulOutgoing=latestSuccessfulOutgoing(prevChat.lastSuccessfulOutgoing,messages[localIdx]!);
+            const firstConversationMessage = earliestConversationMessage(prevChat.firstConversationMessage, messages[localIdx]!);
+            if(lastSuccessfulOutgoing!==prevChat.lastSuccessfulOutgoing || firstConversationMessage !== prevChat.firstConversationMessage)chats[chatIndex]={...prevChat,lastSuccessfulOutgoing,firstConversationMessage};
+            if (prevChat.replyPendingSince && messageOrderTime(messages[localIdx]!) >= prevChat.replyPendingSince) {
+              chats[chatIndex] = { ...chats[chatIndex], replyPendingSince: "" };
+            }
             if (!prevChat.hasMessageHistory && mediaType !== "system" && !systemKind) {
-              chats[chatIndex] = { ...prevChat, hasMessageHistory: true };
+              chats[chatIndex] = { ...chats[chatIndex], hasMessageHistory: true };
             }
             if (!prevChat.updatedAt || reconciledSentAt >= prevChat.updatedAt) {
               chats[chatIndex] = {
@@ -502,6 +513,13 @@ export function applyMessagesSync(opts: {
         }
         if (waId) ensureMsgIndex().set(waId, existingIdx);
         if (waKey?.id) ensureMsgIndex().set(waKey.id, existingIdx);
+        const existingChatIndex=findChatIdx(chatId);
+        if(existingChatIndex>=0){
+          const chat=chats[existingChatIndex];
+          const at=latestSuccessfulOutgoing(chat.lastSuccessfulOutgoing,next);
+          const firstConversationMessage = earliestConversationMessage(chat.firstConversationMessage, next);
+          if(at!==chat.lastSuccessfulOutgoing || firstConversationMessage !== chat.firstConversationMessage)chats[existingChatIndex]={...chat,lastSuccessfulOutgoing:at,firstConversationMessage};
+        }
         if (mediaType !== "system" && !systemKind) {
           const chatIndex = findChatIdx(chatId);
           if (chatIndex >= 0 && !chats[chatIndex].hasMessageHistory) {
@@ -641,13 +659,15 @@ export function applyMessagesSync(opts: {
         isGroup,
         hasOutgoingHistory:
           chats[chatIndex]?.hasOutgoingHistory || conversationOutgoing,
+        firstConversationMessage: earliestConversationMessage(chats[chatIndex]?.firstConversationMessage, messages[newIdx]!),
+        lastSuccessfulOutgoing:latestSuccessfulOutgoing(chats[chatIndex]?.lastSuccessfulOutgoing,messages[newIdx]!),
         hasMessageHistory: chats[chatIndex]?.hasMessageHistory || !isSystemMsg,
       };
       if (chatIndex >= 0) {
         const prev = chats[chatIndex];
         const newer =
           !isSystemMsg &&
-          (!prev.updatedAt || sentAt >= prev.updatedAt || bumpUnread);
+          (!prev.updatedAt || sentAt >= prev.updatedAt);
         const keepName =
           (titleName && !isInternalName(titleName) ? titleName : "") ||
           (prev.contactName && !isInternalName(prev.contactName)
@@ -687,6 +707,8 @@ export function applyMessagesSync(opts: {
               isGroup: isGroup || prev.isGroup,
               hasOutgoingHistory:
                 prev.hasOutgoingHistory || conversationOutgoing,
+              firstConversationMessage: chat.firstConversationMessage,
+              lastSuccessfulOutgoing:chat.lastSuccessfulOutgoing,
               hasMessageHistory: prev.hasMessageHistory || !isSystemMsg,
             };
       } else {

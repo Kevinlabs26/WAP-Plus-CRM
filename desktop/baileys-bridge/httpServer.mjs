@@ -14,6 +14,7 @@ import { tryHandleBlocklistRoutes } from "./blocklistRoutes.mjs";
 import { tryHandleCatalogRoutes } from "./catalogRoutes.mjs";
 import { buildContactVcard } from "./contactVcard.mjs";
 import { downloadRemoteMedia } from "./remoteMedia.mjs";
+import { receiveVideoUpload } from "./videoUpload.mjs";
 
 const syncDebugOn =
   process.env.WAP_SYNC_DEBUG === "1" ||
@@ -47,6 +48,30 @@ export function createBaileysRequestHandler(getD) {
         return json(res, 200, d.statusPayload());
       if (req.method === "GET" && url.pathname === "/events") {
         const after = Number(url.searchParams.get("after") || 0);
+        if (!Number.isSafeInteger(after) || after < 0) return json(res, 400, { error: "Invalid event cursor" });
+        if (d.eventSpool) {
+          const ack = Number(url.searchParams.get("ack") || 0);
+          if (!Number.isSafeInteger(ack) || ack < 0) return json(res, 400, { error: "Invalid checkpoint" });
+          const realtimeAfter = Number(url.searchParams.get("realtimeAfter") || 0);
+          if (!Number.isSafeInteger(realtimeAfter) || realtimeAfter < 0) return json(res, 400, { error: "Invalid realtime cursor" });
+          if (ack <= d.sequence) await d.eventSpool.acknowledge(ack);
+          const batch = await d.eventSpool.read(after, d.events);
+          const cursor = batch.at(-1)?.seq ?? after;
+          const recentEvents = url.searchParams.get("recent") === "1" && d.eventSpool.readRecentMessages
+            ? await d.eventSpool.readRecentMessages(cursor) : [];
+          // Preview fresh live messages without advancing the ordered durable checkpoint.
+          const realtimeEvents = url.searchParams.has("realtimeAfter") ? (d.events || []).filter(event =>
+            event.seq > Math.max(cursor, realtimeAfter) && event.type === "messages.sync" &&
+            event.payload?.live === true && event.ts >= Date.now() - 60_000
+          ).slice(0, 40) : [];
+          const status = d.statusPayload();
+          return json(res, 200, { accountId: d.accountId, protocolVersion: status.protocolVersion,
+            baileysVersion: status.baileysVersion, events: batch,
+            cursor,
+            ...(url.searchParams.get("recent") === "1" ? { recentEvents } : {}),
+            ...(url.searchParams.has("realtimeAfter") ? { realtimeEvents,
+              realtimeCursor: realtimeEvents.at(-1)?.seq ?? d.sequence } : {}) });
+        }
         const status = d.statusPayload();
         const droppedThrough = Number(d.eventsDroppedThrough || 0);
         const gap = after < droppedThrough
@@ -123,7 +148,13 @@ export function createBaileysRequestHandler(getD) {
           url.searchParams.get("requestHistory") === "1" &&
           typeof d.requestFullHistorySync === "function"
         ) {
-          historyRequest = await d.requestFullHistorySync();
+          const storage = d.eventSpool?.health;
+          if (storage?.writeError || storage?.receivingPaused) {
+            throw Object.assign(new Error(storage.warning || "同步存储不可用，请检查磁盘空间和写入权限"), { status: 503 });
+          }
+          historyRequest = storage?.blocked
+            ? { requested: false, deferred: true, warning: `已读取现有会话；完整历史同步暂缓。${storage.warning}` }
+            : await d.requestFullHistorySync();
         }
         const snap = d.snapshot();
         const status = d.statusPayload();
@@ -363,6 +394,22 @@ if (req.method === "POST" && url.pathname === "/restart") {
           ...d.statusPayload(),
         });
       }
+      if (req.method === "POST" && url.pathname === "/send/video") {
+        if (d.connection !== "connected" || !d.socket) return json(res, 409, { error: "WhatsApp 尚未连接" });
+        const upload = await receiveVideoUpload(req);
+        let response;
+        try {
+          const jid = await d.resolveSendJid(upload.metadata.phoneE164.trim());
+          if (!jid || jid === "@s.whatsapp.net") return json(res, 400, { error: "找不到视频接收人" });
+          const result = await d.socket.sendMessage(jid, {
+            video: { url: upload.path }, mimetype: "video/mp4",
+            jpegThumbnail: await safeVideoThumbnail(upload.path),
+            ...(upload.metadata.caption ? { caption: upload.metadata.caption } : {}),
+          });
+          response = {ok:true, id:result?.key?.id || null, jid};
+        } finally { await upload.cleanup(); }
+        return json(res, 200, response);
+      }
       if (req.method === "POST" && url.pathname === "/send") {
         if (d.connection !== "connected" || !d.socket)
           return json(res, 409, { error: "WhatsApp 尚未连接" });
@@ -585,7 +632,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
           );
         } else if (hasVideo || mediaType === "video") {
           const parsed = parseDataUrl(videoDataUrl);
-          if (!parsed?.buf?.length || parsed.mime !== "video/mp4" || parsed.buf.length > 8 * 1024 * 1024) return json(res,400,{error:"视频需为不超过8 MB的MP4文件"});
+          if (!parsed?.buf?.length || parsed.mime !== "video/mp4" || parsed.buf.length > 24 * 1024 * 1024) return json(res,400,{error:"视频需为不超过24 MB的MP4文件；更大视频请先压缩"});
           result = await d.socket.sendMessage(jid, { video: parsed.buf, mimetype: "video/mp4",
             jpegThumbnail: await safeVideoThumbnail(parsed.buf), ...(caption ? {caption} : {}) }, quotedOpt ? {quoted:quotedOpt} : undefined);
         } else if (hasGifUrl) {
@@ -649,9 +696,9 @@ if (req.method === "POST" && url.pathname === "/restart") {
         } else if (hasFileUrl) {
           result = await d.socket.sendMessage(jid, {
             document: (await downloadRemoteMedia(fileUrl, 15_000_000)).buffer,
-            mimetype: isVcardDocument ? "text/vcard" : mimeIn || "application/octet-stream",
+            mimetype: isVcardDocument ? "text/x-vcard" : mimeIn || "application/octet-stream",
             fileName: documentName,
-            ...(isVcardDocument ? { contactVcard: true } : {}),
+            ...(isVcardDocument ? { contactVcard: false } : {}),
             caption: caption || undefined,
           }, quotedOpt ? { quoted: quotedOpt } : undefined);
         } else if (hasFile) {
@@ -664,9 +711,9 @@ if (req.method === "POST" && url.pathname === "/restart") {
             jid,
             {
               document: parsed.buf,
-              mimetype: isVcardDocument ? "text/vcard" : mimeIn || parsed.mime || "application/octet-stream",
+              mimetype: isVcardDocument ? "text/x-vcard" : mimeIn || parsed.mime || "application/octet-stream",
               fileName: documentName,
-              ...(isVcardDocument ? { contactVcard: true } : {}),
+              ...(isVcardDocument ? { contactVcard: false } : {}),
               caption: caption || undefined,
             },
             quotedOpt ? { quoted: quotedOpt } : undefined
@@ -1095,8 +1142,9 @@ if (req.method === "POST" && url.pathname === "/restart") {
       // SDK errors may carry customer messages, URLs and credentials in data.
       console.error(`[${req.method}] request failed`, { status: error.status || 500, name: error.name || "Error" });
       if (error.status === 503) res.setHeader("Retry-After", "5");
-      return json(res, [400, 413, 503].includes(error.status) ? error.status : 500, {
+      return json(res, [400, 410, 413, 502, 503].includes(error.status) ? error.status : 500, {
         error: error instanceof Error ? error.message : String(error),
+        ...(typeof error.code === "string" && error.code.startsWith("MEDIA_") ? { code: error.code, retryable: error.retryable } : {}),
       });
     }
   
@@ -1105,6 +1153,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
 
 export function startBaileysHttpServer(listenPort, getD) {
   const server = http.createServer(createBaileysRequestHandler(getD));
+  server.requestTimeout = 900_000;
   server.listen(listenPort, "127.0.0.1", () => {
     const d = typeof getD === "function" ? getD() : getD;
     void d.connect({ clearAuth: false }).catch((error) => {

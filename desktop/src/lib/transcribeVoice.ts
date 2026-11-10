@@ -1,4 +1,5 @@
 import { readAiJson } from "./aiResponse.ts";
+import { trackAiRequest } from "./aiUsage.ts";
 /**
  * 语音转文字：使用独立语音服务；旧配置只在迁移时读取文字服务设置。
  * 无 Key / 失败时返回空正文与错误；错误说明不得进入转写或消息草稿。
@@ -52,26 +53,34 @@ async function postTranscription(opts: {
   const language = normalizeVoiceInputLanguage(opts.settings.voiceInputLang);
   if (language) form.append("language", language);
 
-  const res = await fetch(`${baseUrl}/audio/transcriptions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: form,
-    signal: opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(90_000)]) : AbortSignal.timeout(90_000),
-  });
+  return trackAiRequest({provider,model,endpoint:baseUrl,feature:"transcription"},async observe=>{
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}/audio/transcriptions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+      signal: opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(90_000)]) : AbortSignal.timeout(90_000),
+    });
+  } catch (error) {
+    if (opts.signal?.aborted) throw error;
+    throw new Error(`${provider} 语音服务连接失败：${error instanceof Error ? error.message : String(error)}`);
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try {
-      const errBody = (await readAiJson(res)) as { error?: { message?: string } };
+      const errBody = (await readAiJson(res,observe)) as { error?: { message?: string } };
       detail = errBody.error?.message || detail;
     } catch {
       /* ignore */
     }
     throw new Error(`${provider} ${res.status}: ${detail}`);
   }
-  const data = (await readAiJson(res)) as { text?: string };
+  const data = (await readAiJson(res,observe)) as { text?: string };
   const text = (data.text || "").trim();
   if (!text) throw new Error(`${provider} 空转写`);
   return text;
+  });
 }
 
 function blobToBase64(blob: Blob): Promise<string> {
@@ -138,7 +147,12 @@ async function transcribeVoiceImpl(
   if (!config.apiKey || !config.model || (provider !== "gemini" && !config.baseUrl))
     return failedTranscript("语音转写服务缺少 API Key、模型名或 Base URL，请检查独立的语音设置");
   try {
-    const blob = await mediaUrlToBlob(dataUrl, mimeType || "audio/webm", signal);
+    let blob: Blob;
+    try { blob = await mediaUrlToBlob(dataUrl, mimeType || "audio/webm", signal); }
+    catch (error) {
+      if (signal?.aborted) throw error;
+      throw new Error(`读取语音文件失败：${error instanceof Error ? error.message : String(error)}`);
+    }
     const mime = mimeType || blob.type || "audio/webm";
     if (provider === "gemini") {
       const base64 = await blobToBase64(blob);

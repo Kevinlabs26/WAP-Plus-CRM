@@ -19,7 +19,7 @@ const text=t=>Array.isArray(t)?t.map(text).join(''):t?.props?text(t.props.childr
 function fixture(){
  const oldDocument=globalThis.document;globalThis.document={activeElement:null};
  const cells=[],effects=[],files=[];let index=0,closed=0;
- globalThis.vcfHooks={state(v){const n=index++;cells[n]??={value:v};return[cells[n].value,v=>cells[n].value=v];},ref(v){return cells[index++]??={current:v};},effect(fn,deps){const n=index++;if(!cells[n]){cells[n]={};effects.push(()=>cells[n].cleanup=fn());}}};
+ globalThis.vcfHooks={state(v){const n=index++;cells[n]??={value:typeof v==='function'?v():v};return[cells[n].value,v=>cells[n].value=v];},ref(v){return cells[index++]??={current:v};},effect(fn,deps){const n=index++;if(!cells[n]){cells[n]={};effects.push(()=>cells[n].cleanup=fn());}}};
  globalThis.vcfTranslate=(key,params)=>translate('zh-CN',key,params);
  const props={onClose:()=>closed++,onAttach:file=>files.push(file)};
  const ui={props,files,get closed(){return closed;},render(){index=0;const tree=ContactVcfDialog(props);while(effects.length)effects.shift()();return nodes(tree);},close(){cells.forEach(c=>c?.cleanup?.());globalThis.document=oldDocument;delete globalThis.vcfHooks;delete globalThis.vcfTranslate;}};
@@ -29,12 +29,22 @@ test('paste, name rules and preview produce a single UTF-8 attachment only after
  const ui=fixture();try{
   let tree=ui.render();tree.find(n=>n.type==='textarea').props.onChange({target:{value:'Jean Exemple\t12025550101\nNathalie Mère Exemple\t12025550102'}});
   tree=ui.render();let inputs=tree.filter(n=>n.type==='input'&&n.props.type!=='checkbox');
+  const today=new Date();assert.equal(inputs[0].props.value,`${String(today.getMonth()+1).padStart(2,'0')}/${String(today.getDate()).padStart(2,'0')}`);
   inputs[0].props.onChange({target:{value:'10/30'}});inputs[1].props.onChange({target:{value:'Team'}});
   tree.find(n=>n.props.type==='checkbox').props.onChange({target:{checked:true}});tree=ui.render();
   assert.ok(text(tree).includes('10/30 Nathalie Mère Exemple Team 0102'));assert.deepEqual(ui.files,[]);
   const attach=tree.find(n=>n.type==='button'&&text(n)==='生成并添加附件');assert.equal(attach.props.disabled,false);attach.props.onClick();
-  assert.equal(ui.files.length,1);assert.equal(ui.files[0].name,'contacts.vcf');assert.equal(ui.files[0].type,'text/vcard;charset=utf-8');
+  assert.equal(ui.files.length,1);assert.equal(ui.files[0].name,'contacts.vcf');assert.equal(ui.files[0].type,'text/x-vcard');
   const content=await ui.files[0].text();assert.equal((content.match(/BEGIN:VCARD/g)||[]).length,2);assert.match(content,/FN:10\/30 Jean Exemple Team 0101/);assert.equal(ui.closed,1);
+ }finally{ui.close();}
+});
+
+test('clearing the default date stays cleared when contacts change',()=>{
+ const ui=fixture();try{
+  let tree=ui.render();tree.find(n=>n.type==='input'&&n.props.type!=='checkbox').props.onChange({target:{value:''}});
+  tree.find(n=>n.type==='textarea').props.onChange({target:{value:'Example\t12025550101'}});tree=ui.render();
+  assert.equal(tree.find(n=>n.type==='input'&&n.props.type!=='checkbox').props.value,'');
+  assert.ok(text(tree).includes('Example'));
  }finally{ui.close();}
 });
 test('invalid rows and unavailable attachment state block creation; escape dismisses without attaching',()=>{

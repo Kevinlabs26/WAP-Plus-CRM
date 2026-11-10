@@ -36,7 +36,7 @@ export function MultiWindowQuickReplies({ chatId, onPick, onClose, variant = "po
     </header>
     <QuickReplyBrowser replies={settings.quickReplies || []} categories={settings.quickReplyCustomCategories || []}
       removedCategories={settings.quickReplyRemovedCategories}
-      categoryLabels={settings.quickReplyCategoryLabels}
+      categoryLabels={settings.quickReplyCategoryLabels} categoryOrder={settings.quickReplyCategoryOrder}
       contextKey={["multi", chatId, accountId, settings.sendChannel, chat?.phoneId].join(":")} compact={!isPanel} disabled={!chat}
       target={chat ? { title: title || chat.contactName || contact?.name || chat.id, account: identity } : undefined}
       pinnedIds={settings.quickReplyPinnedIds} recentIds={settings.quickReplyRecentIds} onTogglePin={togglePin} onUsed={recordUsage}

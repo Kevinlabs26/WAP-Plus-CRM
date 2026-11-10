@@ -208,6 +208,9 @@ export function BaileysConnectCard({
         : s
     );
     try {
+      const current = await baileysStatus(slotAccountId);
+      applyStatus(current);
+      if (current.connection === "connected" || current.signedIn) return;
       await baileysRestart(true, slotAccountId);
       const deadline = Date.now() + 45_000;
       while (Date.now() < deadline) {
@@ -284,10 +287,10 @@ export function BaileysConnectCard({
       ] as Parameters<typeof ingestBridgeEvents>[0]);
       setLastSyncedAt(new Date());
       pushToast(
-        result.historyRequest?.requested
+        result.historyRequest?.warning || (result.historyRequest?.requested
           ? t("baileysConnect.historySyncStarted", { count: result.messages.length })
-          : t("baileysConnect.syncDone", { contacts: result.contacts.length, messages: result.messages.length }),
-        result.historyRequest?.requested ? "info" : "success"
+          : t("baileysConnect.syncDone", { contacts: result.contacts.length, messages: result.messages.length })),
+        result.historyRequest?.requested || result.historyRequest?.warning ? "info" : "success"
       );
     } catch (reason) {
       pushToast(reason instanceof Error ? reason.message : String(reason), "error");

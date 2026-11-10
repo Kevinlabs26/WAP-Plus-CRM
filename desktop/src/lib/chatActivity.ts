@@ -1,6 +1,11 @@
 import type { ChatPreview, Contact, Message } from "@/types/crm";
 import { isConversationOutgoing } from "./leadInbox.ts";
 
+export function latestSuccessfulOutgoing(current: ChatPreview["lastSuccessfulOutgoing"], message: Pick<Message,"direction"|"mediaType"|"deliveryStatus"|"deliveryUncertain"|"sentAt"|"accountId"|"deviceId">) {
+  if(!isConversationOutgoing(message)||message.deliveryStatus==="local"||message.deliveryUncertain||!Number.isFinite(Date.parse(message.sentAt)))return current;
+  return Date.parse(message.sentAt)>(Date.parse(current?.at||"")||0)?{at:message.sentAt,accountId:message.accountId||message.deviceId||undefined}:current;
+}
+
 export function isConversationMessage(message: Pick<Message, "direction" | "mediaType" | "systemKind" | "deliveryStatus">) {
   return !message.systemKind && message.mediaType !== "system" &&
     (message.direction === "in" || isConversationOutgoing(message));

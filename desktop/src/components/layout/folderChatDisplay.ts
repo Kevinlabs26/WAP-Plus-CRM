@@ -1,5 +1,6 @@
 import type { ChatPreview, Contact } from "@/types/crm";
 import { chatHasMessageHistory } from "../../lib/chatActivity.ts";
+import { phoneIdentity } from "../../features/multiWindow/identity.ts";
 
 export type FolderDisplayChat = {
   chat: ChatPreview;
@@ -22,11 +23,7 @@ export function collapseAllAccountFolderChats(
   >();
   for (const chat of chats) {
     const contact = contactById.get(chat.contactId);
-    const digits = (contact?.phone || "").replace(/\D/g, "");
-    const key =
-      !contact?.isGroup && digits.length >= 7
-        ? `phone:${digits}`
-        : `chat:${chat.id}`;
+    const key = phoneIdentity(chat, contact);
     const accountId =
       chat.accountId || chat.phoneId || contact?.accountId || contact?.boundPhoneId || chat.id;
     const current = grouped.get(key);

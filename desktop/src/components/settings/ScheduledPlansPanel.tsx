@@ -56,6 +56,7 @@ export function ScheduledPlansPanel({ filter, onFilterChange: setFilter }: { fil
         <p className="line-clamp-2 whitespace-pre-wrap text-sm text-zinc-400">{plan.text || plan.media?.fileName}</p>
         {plan.media && <p className="text-xs text-zinc-500">{plan.media.fileName}</p>}
         <p className="text-xs text-zinc-400">{t("planQueue.progress", { sent, total: plan.items.length, failed, pending })}</p>
+        <div role="progressbar" aria-label={t("planQueue.progressTitle")} aria-valuemin={0} aria-valuemax={plan.items.length || 1} aria-valuenow={sent} className="h-1.5 overflow-hidden rounded bg-zinc-800"><div className="h-full bg-brand transition-all" style={{ width: `${plan.items.length ? sent / plan.items.length * 100 : 0}%` }} /></div>
         <p className="text-xs text-zinc-500">{t("planQueue.receipts",{delivered:receipts.filter(r=>r==="delivered"||r==="read").length,read:receipts.filter(r=>r==="read").length})}</p>
         {plan.endAt&&<p className="text-xs text-amber-500">{t("planQueue.deadline")}: {new Date(plan.endAt).toLocaleString(locale,{timeZone:plan.timeZone})}</p>}
         {plan.quietHours&&<p className="text-xs text-zinc-500">{t("planQueue.quietHours")}: {plan.quietHours.start}–{plan.quietHours.end} · {plan.timeZone}</p>}

@@ -13,6 +13,7 @@ const mocks = {
     export const baileysStatus = async () => ({connection: 'connected'});
     export const baileysSend = (...args) => globalThis.deliverySend(args);
     export const baileysSendDocument = (...args) => globalThis.deliverySend(args);
+    export const baileysSendVideo = (...args) => globalThis.deliverySend(args);
     export const baileysSendGif = (...args) => globalThis.deliverySend(args);
     export const baileysSendImage = (...args) => globalThis.deliverySend(args);
     export const baileysSendSticker = (...args) => globalThis.deliverySend(args);
@@ -135,6 +136,14 @@ test('a media retry that loses its transport result requires checking again', as
   assert.equal(isRetryableOutgoing({...message(), ...run.updates.at(-1)}), false);
 });
 
+test('video retry preserves the original video payload and sending account', async () => {
+  const run=setup(message({mediaType:'video',mediaUrl:'data:video/mp4;base64,fixture',mediaCaption:'caption'}),()=>true);
+  await retryMessage(run.deps);
+  assert.equal(run.sends.length,1);assert.equal(run.sends[0][1],'data:video/mp4;base64,fixture');
+  assert.equal(run.sends[0][2],'caption');assert.equal(run.sends[0][3],'original-account');
+  assert.equal(run.updates.at(-1).deliveryStatus,'sent');
+});
+
 for (const mediaType of [undefined, 'image', 'document']) test(`campaign ${mediaType || 'text'} retry must return to its owning queue`,async()=>{
   const run=setup(message({systemKind:'broadcast_campaign',mediaType,mediaUrl:'data:image/png;base64,fixture'}),()=>true);
   let opened=0;run.deps.openBroadcast=()=>{opened++;};
@@ -159,4 +168,13 @@ test('actual message bubble distinguishes an unknown result from a definite fail
   assert.doesNotMatch(unknown, /messageBubble.failed/);
   const definite = renderBubble({...props, m: message({deliveryUncertain: false})});
   assert.match(definite, /messageBubble.failed/); assert.match(definite, /messageBubble.retry/);
+});
+test('video bubble distinguishes byte upload progress from waiting for WhatsApp',()=>{
+ globalThis.deliveryState={settings:{waAccounts:[]},contacts:[],chats:[],messages:[]};
+ const props={onRetry(){},onOpenMenu(){},onReloadMedia(){},onPreview(){}};
+ const pending=message({deliveryStatus:'pending',deliveryUncertain:false,lastError:undefined,mediaType:'video',mediaUrl:'blob:video',mediaUpload:{percent:42,stage:'uploading'}});
+ assert.match(renderBubble({...props,m:pending}),/messageBubble.videoUploading/);
+ const waiting={...pending,mediaUpload:{percent:100,stage:'waiting'}};
+ assert.match(renderBubble({...props,m:waiting}),/messageBubble.videoWaiting/);
+ assert.doesNotMatch(renderBubble({...props,m:{...waiting,deliveryStatus:'sent'}}),/messageBubble.videoWaiting/);
 });
