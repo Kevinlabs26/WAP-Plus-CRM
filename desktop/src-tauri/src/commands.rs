@@ -434,22 +434,27 @@ pub fn open_chat_media_folder(app: AppHandle) -> Result<(), String> {
         .map_err(|error| format!("无法打开下载文件夹：{error}"))
 }
 
-#[tauri::command]
-pub fn read_dropped_video(path: String) -> Result<tauri::ipc::Response, String> {
+fn read_binary_attachment(path: String, extensions: &[&str]) -> Result<tauri::ipc::Response, String> {
     let path = PathBuf::from(path);
-    if !path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("mp4")) {
-        return Err("请选择 MP4 视频".into());
+    if !path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| extensions.iter().any(|allowed| ext.eq_ignore_ascii_case(allowed))) {
+        return Err("附件格式不支持".into());
     }
-    let file = std::fs::File::open(path).map_err(|e| format!("无法读取视频：{e}"))?;
+    let file = std::fs::File::open(path).map_err(|e| format!("无法读取附件：{e}"))?;
     let metadata = file.metadata().map_err(|e| e.to_string())?;
     let limit = 100 * 1024 * 1024;
-    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > limit {
-        return Err("视频为空或超过 100 MB".into());
-    }
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > limit { return Err("附件为空或超过 100 MiB".into()); }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(limit + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > limit { return Err("视频超过 100 MB".into()); }
+    if bytes.len() as u64 > limit { return Err("附件超过 100 MiB".into()); }
     Ok(tauri::ipc::Response::new(bytes))
+}
+
+#[tauri::command]
+pub fn read_dropped_video(path: String) -> Result<tauri::ipc::Response, String> { read_binary_attachment(path, &["mp4"]) }
+
+#[tauri::command]
+pub fn read_dropped_audio(path: String) -> Result<tauri::ipc::Response, String> {
+    read_binary_attachment(path, &["mp3", "m4a", "aac", "wav", "flac", "ogg", "oga", "opus"])
 }
 
 #[tauri::command]
@@ -460,8 +465,10 @@ pub fn read_dropped_file(path: String) -> Result<DroppedFile, String> {
         return Err("拖入的项目不是文件".into());
     }
     let mp4 = file_path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("mp4"));
-    if metadata.len() > (if mp4 { 24 } else { 14 }) * 1024 * 1024 {
-        return Err(if mp4 { "视频超过 24 MB，请先压缩" } else { "文件请小于 14MB" }.into());
+    let audio = file_path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext|
+        matches!(ext.to_ascii_lowercase().as_str(), "m4a" | "aac" | "mp3" | "wav" | "flac" | "ogg" | "oga" | "opus"));
+    if metadata.len() > (if mp4 { 24 } else if audio { 16 } else { 14 }) * 1024 * 1024 {
+        return Err(if mp4 { "视频超过 24 MB，请先压缩" } else if audio { "音频超过 16 MiB" } else { "文件请小于 14MB" }.into());
     }
     let bytes = std::fs::read(&file_path).map_err(|e| format!("无法读取拖入文件：{e}"))?;
     let mime = match file_path
@@ -804,8 +811,16 @@ pub fn send_whatsapp_media(
     mime: String,
     caption: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    if !data_url.starts_with("data:") || data_url.len() > 20 * 1024 * 1024 {
-        return Err("媒体数据无效或超过 14MB".into());
+    let limit = if mime.starts_with("audio/") { 24 } else { 20 };
+    if !data_url.starts_with("data:") || data_url.len() > limit * 1024 * 1024 {
+        return Err(if mime.starts_with("audio/") { "音频数据无效或超过 16 MiB" } else { "媒体数据无效或超过 14MB" }.into());
+    }
+    if mime.starts_with("audio/") {
+        use base64::Engine as _;
+        let payload = data_url.split_once(',').filter(|(header, _)| header.ends_with(";base64"))
+            .ok_or("音频数据无效")?.1;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(payload).map_err(|_| "音频数据无效")?;
+        if bytes.len() > 16 * 1024 * 1024 { return Err("音频超过 16 MiB".into()); }
     }
     let envelope = make_envelope(
         "wa.send_media",

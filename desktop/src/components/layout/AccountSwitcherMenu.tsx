@@ -1,3 +1,4 @@
+import { MAX_ACCOUNT_SLOTS } from "@/types/account";
 /**
  * 左上角 WhatsApp 账号菜单（独立文件，避免塞进 PhoneSidebar）
  * - 切换：全部 / 单号
@@ -607,8 +608,8 @@ export function AccountSwitcherMenu({
               type="button"
               className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px] text-zinc-200 hover:bg-zinc-800"
               onClick={() => {
-                if (accounts.length >= 5) {
-                  pushToast(t("account.maxReached"), "info");
+                if (accounts.length >= MAX_ACCOUNT_SLOTS) {
+                  pushToast(t("account.maxReached", { count: MAX_ACCOUNT_SLOTS }), "info");
                   return;
                 }
                 const id = `wa-${Date.now().toString(36)}`;

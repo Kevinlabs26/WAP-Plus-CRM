@@ -37,7 +37,7 @@ export async function requestBody(req) {
   for await (const chunk of req) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     bytes += buffer.length;
-    // 前端允许 14MB 音频（base64 约 18.7MB），限制需放得下
+    // 16 MiB 音频和 24 MiB 视频的 base64 请求须能容纳，仍保留有界请求体
     if (bytes > 40_000_000) throw Object.assign(new Error("request too large"), { status: 413 });
     chunks.push(buffer);
   }

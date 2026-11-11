@@ -1,3 +1,4 @@
+import {PlaybookPlans} from './PlaybookPlans';
 import { useRef, useState } from 'react';
 import { useAppStore } from '@/store/appStore';
 import { useI18n } from '@/i18n';
@@ -22,7 +23,7 @@ export function PlaybookLibrary() {
     setId(nextId); setName(book?.name || ''); setSummary(book?.summary || ''); setError('');
   };
   const used = (settings.chatFolders || []).filter(folder => folder.aiPlaybookId === id).length +
-    Object.values(settings.aiPlaybookBindings || {}).filter(value => value === id).length + Number(!!id && settings.aiPlaybookOverviewId === id);
+    Object.values(settings.aiPlaybookBindings || {}).filter(value => value === id).length + Number(!!id && settings.aiPlaybookOverviewId === id) + (settings.aiPlaybookPlans||[]).filter(plan=>plan.days.includes(id)).length;
   const save = () => {
     const current = useAppStore.getState();
     const latest = current.settings.aiPlaybooks.find(book => book.id === id);
@@ -92,10 +93,11 @@ export function PlaybookLibrary() {
         <Button disabled={busy || used > 0} onClick={async () => {
           if (!await useAppStore.getState().requestConfirm({title: t('playbook.deleteTitle', {name: selected.name}), description: t('playbook.deleteHint'), confirmLabel: t('common.delete'), tone: 'danger'})) return;
           const current = useAppStore.getState(), config = current.settings;
-          if (config.aiPlaybookOverviewId === id || config.chatFolders.some(folder => folder.aiPlaybookId === id) || Object.values(config.aiPlaybookBindings || {}).includes(id)) return;
+          if (config.aiPlaybookOverviewId === id || config.chatFolders.some(folder => folder.aiPlaybookId === id) || Object.values(config.aiPlaybookBindings || {}).includes(id) || (config.aiPlaybookPlans||[]).some(plan=>plan.days.includes(id))) return;
           current.updateSettings({aiPlaybooks: config.aiPlaybooks.filter(book => book.id !== id)}); choose('');
         }}>{t('common.delete')}</Button></div>
     </>}
+    <PlaybookPlans/>
     {error && <p role="alert" className="text-xs text-rose-400">{error}</p>}
   </section>;
 }

@@ -191,18 +191,32 @@ export const baileysSendVideo = async (phoneE164: string, videoDataUrl: string |
 };
 
 /** 发文件/文档 */
-export const baileysSendDocument = (
+export const baileysSendDocument = async (
   phoneE164: string,
-  fileDataUrl: string,
+  fileDataUrl: string | Blob,
   fileName: string,
   opts?: {
     mimetype?: string;
     caption?: string;
     quoted?: QuotePayload;
     accountId?: string | null;
+    canSend?: () => boolean;
+    onUploadProgress?: (loaded:number,total:number)=>void;
   }
-) =>
-  request<BaileysSendResponse>("/send", {
+) => {
+  if(fileDataUrl instanceof Blob||fileDataUrl.startsWith('blob:')){
+    let status;
+    try {status=await baileysStatus(opts?.accountId);}catch(error){throw Object.assign(error instanceof Error?error:new Error(String(error)),{deliveryUncertain:false});}
+    if(status.connection!=='connected'||!status.capabilities?.documentStream)throw Object.assign(new Error('请重启对应账号连接，以加载大文件发送支持'),{deliveryUncertain:false});
+    const blob=fileDataUrl instanceof Blob?fileDataUrl:await fetch(fileDataUrl).then(r=>{if(!r.ok)throw Error('本地文件缓存已不可用，请重新选择文件');return r.blob();});
+    if(!blob.size||blob.size>100*1024*1024)throw Object.assign(new Error('文件为空或超过 100 MiB'),{deliveryUncertain:false});
+    if(opts?.quoted)throw Object.assign(new Error('大文件暂不支持引用发送，请取消引用后重试'),{deliveryUncertain:false});
+    const metadata=new TextEncoder().encode(JSON.stringify({phoneE164,caption:opts?.caption||'',fileName,mimetype:opts?.mimetype||blob.type||'application/octet-stream',size:blob.size}));
+    const length=new Uint8Array(4);new DataView(length.buffer).setUint32(0,metadata.length);
+    if(opts?.canSend&&!opts.canSend())throw Object.assign(new Error('发送已取消'),{deliveryUncertain:false});
+    return request<BaileysSendResponse>('/send/document',{method:'POST',signal:AbortSignal.timeout(900_000),headers:{'Content-Type':'application/octet-stream'},body:new Blob([length,metadata,blob])},opts?.accountId,opts?.onUploadProgress);
+  }
+  return request<BaileysSendResponse>("/send", {
     method: "POST",
     signal: AbortSignal.timeout(120_000),
     body: JSON.stringify({
@@ -215,6 +229,7 @@ export const baileysSendDocument = (
       quoted: opts?.quoted,
     }),
   }, opts?.accountId);
+};
 
 /** 编辑已发文本（需协议 key） */
 export const baileysMessageEdit = (

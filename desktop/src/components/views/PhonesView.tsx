@@ -1,3 +1,4 @@
+import { MAX_ACCOUNT_SLOTS } from "@/types/account";
 import {
   Plus,
   QrCode,
@@ -332,8 +333,8 @@ export function PhonesView() {
   };
 
   const addAccountSlot = () => {
-    if (accounts.length >= 5) {
-      pushToast(t("phones.accountLimit", { count: 5 }), "info");
+    if (accounts.length >= MAX_ACCOUNT_SLOTS) {
+      pushToast(t("phones.accountLimit", { count: MAX_ACCOUNT_SLOTS }), "info");
       return;
     }
     const id = `wa-${Date.now().toString(36)}`;

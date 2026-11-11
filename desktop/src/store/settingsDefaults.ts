@@ -1,3 +1,4 @@
+import { normalizePlaybookPlans, normalizePlaybookSchedule, type PlaybookPlan, type PlaybookSchedule } from '@/lib/playbookPlans';
 import { autoReplyDelayRange } from "@/lib/autoReplyDelay";
 import type { AutoReplyMode } from "@/lib/autoReplyScope";
 import { normalizePlaybooks, normalizePlaybookBindings, type AiPlaybook } from "@/lib/aiPlaybooks";
@@ -76,6 +77,7 @@ export interface SettingsChatFolder {
   aiPromptMode?: "inherit" | "append" | "replace";
   aiPromptTemplateId?: string;
   aiPlaybookId?: string;
+  aiPlaybookSchedule?: PlaybookSchedule;
   aiOutreach?: AiOutreachRule;
   aiReplyMaxChars?: number;
   aiReplyForbiddenTerms?: string[];
@@ -204,6 +206,7 @@ export interface SettingsShape {
   aiSystemPromptByAccountId: Record<string, string>;
   aiPromptTemplates: AiPromptTemplate[];
   aiPlaybooks: AiPlaybook[];
+  aiPlaybookPlans: PlaybookPlan[];
   aiPlaybookOverviewId: string;
   aiPlaybookBindings: Record<string, string>;
   aiPlaybookMuseRoot: string;
@@ -399,6 +402,7 @@ export const defaultSettings: SettingsShape = {
   aiSystemPromptByAccountId: {},
   aiPromptTemplates: [],
   aiPlaybooks: [],
+  aiPlaybookPlans: [],
   aiPlaybookOverviewId: "",
   aiPlaybookBindings: {},
   aiPlaybookMuseRoot: "",
@@ -718,6 +722,7 @@ export function normalizeLoadedSettings(
     : [];
   merged.aiAutoReplyPaused = merged.aiAutoReplyPaused === true;
   merged.aiPromptTemplates = normalizePromptTemplates(merged.aiPromptTemplates);
+  merged.aiPlaybookPlans = normalizePlaybookPlans(merged.aiPlaybookPlans);
   merged.aiPlaybooks = normalizePlaybooks(merged.aiPlaybooks);
   merged.aiPlaybookOverviewId = typeof merged.aiPlaybookOverviewId === "string" ? merged.aiPlaybookOverviewId.slice(0,120) : "";
   merged.aiPlaybookBindings = normalizePlaybookBindings(merged.aiPlaybookBindings);
@@ -1035,6 +1040,7 @@ export function normalizeLoadedSettings(
           ? { aiSystemPrompt: f.aiSystemPrompt.trim().slice(0, 6000) } : {}),
         ...(f?.aiPromptMode === "inherit" || f?.aiPromptMode === "append" || f?.aiPromptMode === "replace" ? {aiPromptMode: f.aiPromptMode} : {}),
         ...(typeof f?.aiPromptTemplateId === "string" && f.aiPromptTemplateId ? {aiPromptTemplateId: f.aiPromptTemplateId.slice(0,120)} : {}),
+        ...(f?.aiPlaybookSchedule ? {aiPlaybookSchedule:normalizePlaybookSchedule(f.aiPlaybookSchedule)} : {}),
         ...(typeof f?.aiPlaybookId === "string" && f.aiPlaybookId ? {aiPlaybookId: f.aiPlaybookId.slice(0,120)} : {}),
         ...(f?.aiOutreach ? {aiOutreach: normalizeOutreachRule(f.aiOutreach)} : {}),
         ...(typeof f?.aiReplyMaxChars==="number"&&Number.isFinite(f.aiReplyMaxChars)?{aiReplyMaxChars:Math.min(2000,Math.max(20,Math.round(f.aiReplyMaxChars)))}:{}),

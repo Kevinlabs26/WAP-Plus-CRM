@@ -1500,7 +1500,7 @@ function statusPayload() {
     protocolVersion: BAILEYS_BRIDGE_PROTOCOL_VERSION,
     baileysVersion: BAILEYS_LIBRARY_VERSION,
     connection,
-    capabilities: { nativeVideo: true, nativeVideoStream: true },
+    capabilities: { nativeVideo: true, nativeVideoStream: true, documentStream: true },
     qrDataUrl: connection === "qr" ? qrDataUrl : "",
     user,
     lastError,

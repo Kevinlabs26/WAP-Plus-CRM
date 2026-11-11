@@ -57,8 +57,9 @@ export async function sendFileMessage(
     return false;
   }
   const nativeVideo = deps.isBaileys && (file.type === "video/mp4" || /\.mp4$/i.test(file.name));
-  if (file.size > (nativeVideo ? 100 : 14) * 1024 * 1024) {
-    deps.pushToast(translateCurrent(nativeVideo ? "runtime.videoTooLarge" : "runtime.fileTooLarge"), "error");
+  const streamFile=deps.isBaileys&&!nativeVideo&&file.size>14*1024*1024;
+  if (file.size > (deps.isBaileys ? 100 : 14) * 1024 * 1024) {
+    deps.pushToast(translateCurrent(nativeVideo ? "runtime.videoTooLarge" : deps.isBaileys ? "runtime.largeFileTooLarge" : "runtime.fileTooLarge"), "error");
     return false;
   }
   deps.setSending(true);
@@ -72,7 +73,7 @@ export async function sendFileMessage(
     deps.patchMessage(msgId, {mediaUpload:{percent, stage:percent === 100 ? "waiting" : "uploading"}});
   };
   try {
-    let dataUrl = nativeVideo ? "" : await new Promise<string>((resolve, reject) => {
+    let dataUrl = nativeVideo || streamFile ? "" : await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(String(reader.result || ""));
       reader.onerror = reader.onabort = () => reject(new Error(translateCurrent("runtime.fileReadFailed")));
@@ -90,7 +91,7 @@ export async function sendFileMessage(
       mediaType: nativeVideo ? "video" : undefined,
     });
     if (msgId) {
-      if (nativeVideo) {
+      if (nativeVideo || streamFile) {
         dataUrl = await cacheMediaBlob(msgId, file);
       }
       deps.patchMessage(msgId, {
@@ -101,17 +102,19 @@ export async function sendFileMessage(
         mediaCaption: caption || undefined,
       });
     }
-    if (nativeVideo && !msgId) throw new Error("无法保存视频消息，请重试");
+    if ((nativeVideo || streamFile) && !msgId) throw new Error("无法保存附件消息，请重试");
     if (!msgId && deps.requiredMinGapSec !== undefined) throw new Error("无法保存出站消息，群发已停止");
     await deps.persistBeforeSend?.();
     const raw = deps.isBaileys
       ? await gatedMediaSend(
           { phoneE164: recipient, accountId: deps.chatAccountId },
           () =>
-            nativeVideo ? baileysSendVideo(recipient, file, caption, deps.chatAccountId, deps.canSend, onUploadProgress) : baileysSendDocument(recipient, dataUrl, file.name, {
+            nativeVideo ? baileysSendVideo(recipient, file, caption, deps.chatAccountId, deps.canSend, onUploadProgress) : baileysSendDocument(recipient, streamFile?file:dataUrl, file.name, {
               mimetype: file.type || "application/octet-stream",
               caption,
               accountId: deps.chatAccountId,
+              canSend: deps.canSend,
+              onUploadProgress: streamFile?onUploadProgress:undefined,
             }),
           deps.canSend,
           deps.requiredMinGapSec

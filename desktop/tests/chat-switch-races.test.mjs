@@ -464,3 +464,15 @@ test('continuous typing still checkpoints at five seconds and completed restore 
     assert.equal(writes.length, 2); assert.equal(intervals.size, 0);
   } finally { r.unmount(); Object.assign(globalThis, original); }
 });
+
+test('explicit file selection preserves audio as a document and oversized audio defaults to the file route',async()=>{
+ const r=runtime(),calls=[];
+ const render=()=>r.render(()=>useComposerMedia({chatKey:'audio-document-route',readDraft:()=>'',setDraftLocal(){},flushDraftNow(){},onError:assert.fail,onSendImage:async()=>false,onSendAudio:async()=>{calls.push('audio');return true;},onSendFile:async()=>{calls.push('file');return true;},onSendGif:async()=>false,onSendSticker:async()=>false}));
+ try{
+  let ui=render();ui.stageMedia([new File(['small'],'lecture.mp3',{type:'audio/mpeg'})],'file');
+  const large=new File(['fixture'],'large.mp3',{type:'audio/mpeg'});Object.defineProperty(large,'size',{value:30*1024*1024});
+  ui=render();ui.stageMedia([large]);ui=render();
+  assert.deepEqual(ui.pendingMedia.map(item=>item.kind),['file','file']);
+  await ui.sendPendingMedia();assert.deepEqual(calls,['file','file']);
+ }finally{r.unmount();}
+});

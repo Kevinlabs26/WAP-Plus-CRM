@@ -84,7 +84,7 @@ test('default restores inheritance for this chat only, preserving other override
  let tree=h.render(ChatAiStatusBar);assert.equal(tree.find(node=>node.type==='button'&&text(node)==='multi.replyMode.manual').props['aria-pressed'],true);
  tree.find(node=>node.type==='button'&&text(node)==='crmPanel.inheritShort').props.onClick();
  assert.deepEqual(h.state.settings.aiAutoReplyModeByChatId,{other:'manual'});assert.deepEqual(h.state.settings.aiAutoReplyManualChatIds,['other']);assert.equal(h.state.settings.aiReplyMode,'auto');assert.equal(h.state.settings.chatFolders[0].autoReplyMode,'manual');
- tree=h.render(ChatAiStatusBar);assert.equal(tree.find(node=>node.type==='button'&&text(node)==='crmPanel.inheritShort').props['aria-pressed'],true);assert.ok(tree.some(node=>node.props.role==='status'&&text(node).includes('aiChat.manual')));
+ tree=h.render(ChatAiStatusBar);assert.equal(tree.find(node=>node.type==='button'&&text(node)==='aiChat.followFolderManual').props['aria-pressed'],true);assert.ok(tree.some(node=>node.props.role==='status'&&text(node).includes('aiChat.manual')));
 });
 
 test('outreach progress follows delivery immediately without waiting for the ledger tick',()=>{
@@ -105,4 +105,13 @@ test('immediate round targets the selected folder and preserves its recurring ti
  assert.equal(h.state.settings.chatFolders[1].aiOutreach.runNowAt,undefined);
  h.state.settings.aiOutreachPaused=true;tree=h.render();
  assert.equal(tree.find(node=>node.type==='button'&&text(node)==='aiOutreach.runNow').props.disabled,true);
+});
+
+test('inherited chat label follows folder mode changes without creating individual overrides',()=>{
+ const h=fixture();h.state.settings.chatFolders[0].autoReplyMode='auto';
+ let tree=h.render(ChatAiStatusBar);
+ assert.equal(tree.find(n=>n.type==='button'&&text(n)==='aiChat.followFolderAuto').props['aria-pressed'],true);
+ h.state.settings.chatFolders[0].autoReplyMode='manual';tree=h.render(ChatAiStatusBar);
+ assert.equal(tree.find(n=>n.type==='button'&&text(n)==='aiChat.followFolderManual').props['aria-pressed'],true);
+ assert.deepEqual(h.state.settings.aiAutoReplyModeByChatId,{});
 });

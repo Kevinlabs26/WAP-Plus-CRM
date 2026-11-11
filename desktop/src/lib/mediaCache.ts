@@ -160,9 +160,9 @@ export async function cacheMediaUrl(
   }
 }
 
-/** Raw video cache shares the existing total budget without a Base64 copy. */
+/** Raw attachment cache shares the existing total budget without a Base64 copy. */
 export async function cacheMediaBlob(messageId: string, blob: Blob): Promise<string> {
-  if (!messageId || !blob.size || blob.size > 100 * 1024 * 1024) throw new Error("视频为空或超过 100 MB");
+  if (!messageId || !blob.size || blob.size > 100 * 1024 * 1024) throw new Error("附件为空或超过 100 MiB");
   await runMediaMutation(async () => {
     const index = await loadMediaIndex();
     const savedBytes = Object.entries(index).reduce((sum, [id, entry]) => sum + (id.startsWith("saved-") && id !== messageId ? entry.chars : 0), 0);

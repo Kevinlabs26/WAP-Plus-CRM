@@ -1,3 +1,7 @@
+import {PlaybookScheduleFields} from '@/components/settings/PlaybookScheduleFields';
+import {scheduledPlaybook} from '@/lib/playbookPlans';
+import { FirstContactAllocation } from '@/components/settings/FirstContactAllocation';
+import { allocateFirstContacts } from '@/lib/aiOutreachAllocation';
 import { useState } from "react";
 import { useAppStore, flushPersist } from "@/store/appStore";
 import { useI18n } from "@/i18n";
@@ -19,6 +23,7 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
   const [draft, setDraft] = useState(folder?.aiSystemPrompt || "");
   const [templateId,setTemplateId]=useState(folder?.aiPromptTemplateId||"");
   const [playbookId,setPlaybookId]=useState(folder?.aiPlaybookId||"");
+  const [schedule,setSchedule]=useState(folder?.aiPlaybookSchedule);
   const [replyMode,setReplyMode]=useState<"inherit"|"auto"|"manual">(folder?.autoReplyMode||"inherit");
   const [previewAccount,setPreviewAccount]=useState("");
   const [followingAccount]=useState(()=>{
@@ -43,16 +48,17 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
   const forbiddenTerms=forbidden.split(/[\n,，]/).map(term=>term.trim()).filter(Boolean);
   const draftSettings:typeof settings={...settings,chatFolders:settings.chatFolders.map(item=>item.id===folderId?{...item,
     aiPromptMode:mode==="custom"?"replace":mode as "append"|"inherit",aiSystemPrompt:custom?draft:undefined,aiPromptTemplateId:custom?templateId||undefined:undefined,
-    aiReplyMaxChars:maxChars?Number(maxChars):undefined,aiReplyForbiddenTerms:forbiddenTerms,aiOutreach:outreach}:item)};
+    aiReplyMaxChars:maxChars?Number(maxChars):undefined,aiReplyForbiddenTerms:forbiddenTerms,...(outreach.firstContactQuotas?{scope:{type:'all' as const}}:{}),aiPlaybookId:playbookId||undefined,aiPlaybookSchedule:schedule,aiOutreach:outreach}:item)};
   const preview=resolveFolderAiProfile(draftSettings,folderId,accountId);
   const limits=resolveAiReplyConstraints(draftSettings,accountId,undefined,folderId);
-  const invalid=custom&&!draft.trim()&&!templateId||!!preview.error||forbiddenTerms.length>50||forbiddenTerms.some(term=>term.length>100)||!!maxChars&&(!Number.isInteger(Number(maxChars))||Number(maxChars)<20||Number(maxChars)>2000);
+  const invalid=!!(schedule&&scheduledPlaybook(settings.aiPlaybookPlans||[],schedule).error)||custom&&!draft.trim()&&!templateId||!!preview.error||forbiddenTerms.length>50||forbiddenTerms.some(term=>term.length>100)||!!maxChars&&(!Number.isInteger(Number(maxChars))||Number(maxChars)<20||Number(maxChars)>2000);
   const save = (immediate = false) => {
     if (invalid || immediate && (!outreach.enabled || outreach.paused || settings.aiAutoReplyPaused || settings.aiOutreachPaused)) return;
     const current = useAppStore.getState();
+    const savedOutreach=outreach.firstContactQuotas?{...outreach,firstContactAssignments:allocateFirstContacts(current,current.settings.chatFolders.find(f=>f.id===folderId)?.chatIds||[],outreach.firstContactQuotas,outreach.firstContactAssignments).assignments}:outreach;
     current.updateSettings({ chatFolders: current.settings.chatFolders.map(item => item.id === folderId
       ? { ...item, aiSystemPrompt: custom ? draft.trim().slice(0, 6000) : undefined,
-        aiPromptMode:mode==="custom"?"replace":mode as "append"|"inherit",aiPromptTemplateId:custom?templateId||undefined:undefined,aiPlaybookId:playbookId||undefined,aiOutreach:immediate?{...outreach,runNowAt:Date.now()}:outreach,...(hideReplyMode?{}:{autoReplyMode:replyMode==="inherit"?undefined:replyMode}),
+        aiPromptMode:mode==="custom"?"replace":mode as "append"|"inherit",aiPromptTemplateId:custom?templateId||undefined:undefined,aiPlaybookId:playbookId||undefined,aiPlaybookSchedule:schedule,...(outreach.firstContactQuotas?{scope:{type:'all' as const}}:{}),aiOutreach:immediate?{...savedOutreach,runNowAt:Date.now()}:savedOutreach,...(hideReplyMode?{}:{autoReplyMode:replyMode==="inherit"?undefined:replyMode}),
         aiReplyMaxChars:maxChars?Number(maxChars):undefined,aiReplyForbiddenTerms:forbiddenTerms } : item) });
     if (immediate) {
       void flushPersist(useAppStore.getState).then(()=>{
@@ -109,7 +115,9 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
           <option value="">{t("aiLibrary.followChat",{account:settings.waAccounts?.find(account=>account.id===followingAccount)?.label||followingAccount||"—"})}</option>
           {settings.waAccounts?.map(account=><option key={account.id} value={account.id}>{account.label}: {account.userName||account.phoneE164}</option>)}
         </select>}
-        <div className="mt-3"><PlaybookSelect value={playbookId} onChange={setPlaybookId}/></div>
+        <fieldset disabled={!!schedule} className="mt-3 disabled:opacity-50"><PlaybookSelect value={playbookId} onChange={setPlaybookId}/></fieldset>
+        <PlaybookScheduleFields value={schedule} onChange={setSchedule}/>
+        <FirstContactAllocation folderId={folderId} value={outreach} onChange={setOutreach}/>
         <AiOutreachControls value={outreach} onChange={setOutreach}/>
         {outreach.enabled&&<div className="mt-3 space-y-2">
           {settings.aiAutoReplyPaused&&<p role="status" className="text-xs text-amber-500">{t("aiChat.paused")}</p>}

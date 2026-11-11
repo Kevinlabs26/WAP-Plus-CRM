@@ -209,9 +209,11 @@ export function CrmAiPanel() {
   const needsHuman=replyScope.mode==="auto"&&autoRuntime?.phase==="human"&&autoRuntime.inboundId===lastIn?.id&&(!autoRuntime.accountId||autoRuntime.accountId===aiAccountId);
   const expansionKey=JSON.stringify([selectedChatId,aiAccountId,replyScope.mode,needsHuman?lastIn?.id:""]);
   const suggestionsOpen=suggestionExpansion?.key===expansionKey?suggestionExpansion.open:replyScope.mode!=="auto"||needsHuman;
-  const baseSuggestionKey=useMemo(()=>getSuggestionContextKey(contact,thread,settings,aiAccountId,{chatId:selectedChatId||undefined}),[selectedChatId,selectedContactId,contact,thread,settings,aiAccountId]);
+  const [planClock,setPlanClock]=useState(0);
+  useEffect(()=>{if(!settings.aiPlaybookPlans?.length)return;const timer=window.setInterval(()=>setPlanClock(Date.now()),30000);return()=>window.clearInterval(timer);},[settings.aiPlaybookPlans?.length]);
+  const baseSuggestionKey=useMemo(()=>getSuggestionContextKey(contact,thread,settings,aiAccountId,{chatId:selectedChatId||undefined}),[selectedChatId,selectedContactId,contact,thread,settings,aiAccountId,planClock]);
   const suggestionKey = useMemo(() => getSuggestionContextKey(contact, thread, settings, aiAccountId, { chatId: selectedChatId || undefined,count:1 }),
-    [selectedChatId, selectedContactId, contact, thread, settings, aiAccountId]);
+    [selectedChatId, selectedContactId, contact, thread, settings, aiAccountId,planClock]);
   const latestSuggestionKey = useRef(suggestionKey);
   latestSuggestionKey.current = suggestionKey;
 

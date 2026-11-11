@@ -129,6 +129,23 @@ export async function tickAiOutreach(now=Date.now()) {
 
 async function generateOutreach(folderId:string,chatId:string,id:string,now=Date.now()) {
   const epoch=getDataRestoreGeneration();
+  const routingState=useAppStore.getState();
+  const routed=outreachCandidate(routingState,folderId,chatId,now,id);
+  if(!routed)return false;
+  if(routed.rule.firstContactQuotas&&routed.chat.accountId!==routed.accountId){
+    const target=routingState.chats.find(c=>{
+      const contact=routingState.contacts.find(person=>person.id===c.contactId);
+      return (c.accountId||contact?.accountId)===routed.accountId&&contact&&recipientKey('',resolveSendTarget({phone:contact.phone,channelAddress:contact.channelAddress,entityId:contact.id}))===recipientKey('',routed.recipient);
+    })?.id||routingState.ensureChatForContact(routed.contact.id,routed.accountId);
+    if(!target)return false;
+    const fresh=useAppStore.getState();
+    if(!fresh.settings.chatFolders.some(f=>f.id===folderId&&f.chatIds.includes(chatId)))return false;
+    if(!routingState.chats.some(c=>c.id===target))fresh.patchChat(target,{hasMessageHistory:false});
+    fresh.updateSettings({chatFolders:fresh.settings.chatFolders.map(f=>f.id===folderId?{...f,chatIds:[...new Set(f.chatIds.map(id=>id===chatId?target:id))]}:f)});
+    chatId=target;
+    await flushPersist(useAppStore.getState);
+    now=Date.now();
+  }
   scheduler={at:Date.now(),phase:"history",error:""};
   await hydrateOutreachHistory(chatId);
   if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return false;

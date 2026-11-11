@@ -202,6 +202,7 @@ pub fn run() {
             commands::open_chat_media_folder,
             commands::read_dropped_file,
             commands::read_dropped_video,
+            commands::read_dropped_audio,
             commands::clipboard_write_image,
             commands::clipboard_write_text,
             commands::show_windows_branded_notification,

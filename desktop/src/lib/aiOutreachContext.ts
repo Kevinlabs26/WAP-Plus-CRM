@@ -1,3 +1,4 @@
+import { outreachPeople } from './aiOutreachAllocation';
 import { isImmediateOutreach, outreachRunClock, outreachWindowOffset } from './aiOutreachRules';
 import type { AppState } from "../store/types";
 import type { Message, ChatPreview, Contact } from "../types/crm";
@@ -11,7 +12,7 @@ import { getAiOutputConstraintError } from "./aiReplyConstraints";
 import { lastContactedAccounts, recipientKey } from "./scheduledPlans";
 
 export type OutreachState = Pick<AppState,"settings"|"chats"|"contacts"|"messages"|"messagesByChatId"|"baileysUi">;
-export type OutreachReason = "ready"|"disabled"|"folder_paused"|"not_member"|"all_paused"|"master_paused"|"unsupported_channel"|"missing_ai"|"invalid_contact"|"invalid_recipient"|"person_excluded"|"latest_account"|"invalid_account"|"account_paused"|"offline"|"manual_optout"|"outside_hours"|"not_time"|"missed_window"|"delivery_pending"|"takeover"|"optout"|"stale_history"|"changed_context"|"already_contacted"|"daily_limit"|"unknown_history"|"not_new"|"same_day"|"idle"|"unanswered"|"missing_prompt"|"capacity"|"duplicate";
+export type OutreachReason = "ready"|"disabled"|"folder_paused"|"not_member"|"all_paused"|"master_paused"|"unsupported_channel"|"missing_ai"|"invalid_contact"|"invalid_recipient"|"person_excluded"|"latest_account"|"invalid_account"|"account_paused"|"offline"|"manual_optout"|"outside_hours"|"not_time"|"missed_window"|"delivery_pending"|"takeover"|"optout"|"stale_history"|"changed_context"|"already_contacted"|"daily_limit"|"unknown_history"|"not_new"|"same_day"|"idle"|"unanswered"|"missing_prompt"|"capacity"|"duplicate"|"unallocated";
 type Candidate = {chat:ChatPreview;contact:Contact;accountId:string;recipient:string;rule:ReturnType<typeof normalizeOutreachRule>;day:string;basisAt:string;thread:Message[];policy:ReturnType<typeof resolveAutoReplyPolicy>};
 export type OutreachCheck = {candidate:Candidate;reason:"ready"}|{candidate:null;reason:Exclude<OutreachReason,"ready">};
 export function isOutreachPaused(settings: OutreachState["settings"], messageId: string) {
@@ -35,12 +36,21 @@ export function inspectOutreachCandidate(state: OutreachState, folderId: string,
   const recipient=resolveSendTarget({phone:contact.phone,channelAddress:contact.channelAddress,entityId:contact.id});
   if(!recipient)return {candidate:null,reason:"invalid_recipient"};
   if(settings.aiOutreachExcludedRecipients?.includes(recipientKey("",recipient)))return {candidate:null,reason:"person_excluded"};
-  const accountId=chat.accountId||contact.accountId||settings.liveBaileysAccountId||settings.activeAccountId;
+  let accountId=chat.accountId||contact.accountId||settings.liveBaileysAccountId||settings.activeAccountId;
+  let routedExisting=false;
+  if(rule.firstContactQuotas){
+    const person=outreachPeople(state,folder.chatIds).get(recipientKey('',recipient));
+    if(!person||person.kind==='unknown')return {candidate:null,reason:'unknown_history'};
+    routedExisting=person.kind==='existing'&&!ownMessage;
+    if(routedExisting&&rule.trigger==='new')return {candidate:null,reason:'not_new'};
+    accountId=person.kind==='existing'?person.accountId:rule.firstContactAssignments?.[recipientKey('',recipient)]||'';
+    if(!accountId)return {candidate:null,reason:'unallocated'};
+  }
   if(folder.scope?.type==="all") {
     const preferred=(lookup?.lastAccounts||lastContactedAccounts(state.chats,state.contacts,state.messages)).get(recipientKey("",recipient));
     if(preferred&&preferred!==accountId)return {candidate:null,reason:"latest_account"};
   }
-  if (!accountId || !settings.waAccounts.some(account=>account.id===accountId) || contact.accountId && contact.accountId!==accountId || folder.scope?.type==="account" && folder.scope.accountId!==accountId)return {candidate:null,reason:"invalid_account"};
+  if (!accountId || !settings.waAccounts.some(account=>account.id===accountId) || !rule.firstContactQuotas && contact.accountId && contact.accountId!==accountId || folder.scope?.type==="account" && folder.scope.accountId!==accountId)return {candidate:null,reason:"invalid_account"};
   if(settings.sendPausedAccountIds?.includes(accountId))return {candidate:null,reason:"account_paused"};
   if(!allowOffline&&!isWaAccountConnected(settings.waAccounts,accountId,settings.liveBaileysAccountId,state.baileysUi.connection))return {candidate:null,reason:"offline"};
   if(settings.aiAutoReplyManualChatIds?.includes(chatId))return {candidate:null,reason:"manual_optout"};
@@ -65,7 +75,7 @@ export function inspectOutreachCandidate(state: OutreachState, folderId: string,
   if ((lookup?.recipientRuns||runs).some(item=>item.id!==runId && (item.chatId===chatId&&item.accountId===accountId||item.recipient&&recipientKey("",item.recipient)===recipientKey("",recipient)) &&
       (item.day===clock.day || ["draft","generating","queued"].includes(item.status) || item.status==="sent" && (!lastInbound||lastInbound.sentAt<=item.at)))) return {candidate:null,reason:"already_contacted"};
   if ((lookup?.dayRunCount??runs.filter(item=>item.folderId===folderId&&item.day===clock.day&&item.id!==runId).length)>=rule.dailyLimit) return {candidate:null,reason:"daily_limit"};
-  const knownHistory=!!(chat.hasMessageHistory||chat.hasOutgoingHistory||contact.lastMessageAt||thread.length||!ownPreview&&(chat.lastMessage||chat.lastMessageDirection));
+  const knownHistory=!!(routedExisting||chat.hasMessageHistory||chat.hasOutgoingHistory||contact.lastMessageAt||thread.length||!ownPreview&&(chat.lastMessage||chat.lastMessageDirection));
   const newContact=!knownHistory&&(chat.hasMessageHistory===false||chat.id.startsWith("chat-c-"));
   if (rule.trigger==="new"||rule.trigger==="both"&&newContact) {
     if (chat.hasMessageHistory!==false&&!chat.id.startsWith("chat-c-")) return {candidate:null,reason:"unknown_history"};

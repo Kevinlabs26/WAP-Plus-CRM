@@ -16,6 +16,8 @@ import { buildContactVcard } from "./contactVcard.mjs";
 import { downloadRemoteMedia } from "./remoteMedia.mjs";
 import { receiveVideoUpload } from "./videoUpload.mjs";
 
+export const MAX_AUDIO_FILE_BYTES = 16 * 1024 * 1024;
+
 const syncDebugOn =
   process.env.WAP_SYNC_DEBUG === "1" ||
   process.env.WAP_BAILEYS_LOG === "info" ||
@@ -394,6 +396,16 @@ if (req.method === "POST" && url.pathname === "/restart") {
           ...d.statusPayload(),
         });
       }
+      if (req.method === "POST" && url.pathname === "/send/document") {
+        if (d.connection !== "connected" || !d.socket) return json(res,409,{error:"WhatsApp 尚未连接"});
+        const upload=await receiveVideoUpload(req,true);
+        try {
+          const jid=await d.resolveSendJid(upload.metadata.phoneE164);
+          if(!jid||jid==="@s.whatsapp.net")return json(res,400,{error:"无法解析发送目标"});
+          const result=await d.socket.sendMessage(jid,{document:{url:upload.path},fileName:upload.metadata.fileName,mimetype:upload.metadata.mimetype,...(upload.metadata.caption?{caption:upload.metadata.caption}:{})});
+          return json(res,200,{ok:true,id:result?.key?.id||null,jid});
+        } finally {await upload.cleanup();}
+      }
       if (req.method === "POST" && url.pathname === "/send/video") {
         if (d.connection !== "connected" || !d.socket) return json(res, 409, { error: "WhatsApp 尚未连接" });
         const upload = await receiveVideoUpload(req);
@@ -576,7 +588,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
           );
         } else if (hasAudioUrl) {
           result = await d.socket.sendMessage(jid, {
-            audio: (await downloadRemoteMedia(audioUrl, 14_000_000)).buffer,
+            audio: (await downloadRemoteMedia(audioUrl, MAX_AUDIO_FILE_BYTES)).buffer,
             mimetype: mimeIn || "audio/mpeg",
             ptt: ptt === true,
           }, quotedOpt ? { quoted: quotedOpt } : undefined);
@@ -603,8 +615,8 @@ if (req.method === "POST" && url.pathname === "/restart") {
             if (!parsed?.buf?.length) {
               return json(res, 400, { error: "音频 dataUrl 无效" });
             }
-            if (parsed.buf.length > 14_000_000) {
-              return json(res, 400, { error: "音频过大（限约 14MB）" });
+            if (parsed.buf.length > MAX_AUDIO_FILE_BYTES) {
+              return json(res, 400, { error: "音频过大（上限 16 MiB）" });
             }
             buf = parsed.buf;
             mimetype = mimeIn || parsed.mime || "audio/mp4";

@@ -104,3 +104,10 @@ test('library and account-scoped bindings survive settings reload and backup res
   assert.equal(restored.aiPlaybookBindings[playbookBindingKey('a','chat')],'stage-b');
   assert.equal(restored.chatFolders.find(folder=>folder.id==='parent').aiPlaybookId,'stage-a');
 });
+
+test('conversation plans and folder schedules survive normalization and backup restore',()=>{
+ const schedule={planId:'plan',startDate:'2026-11-11',timeZone:'Europe/Paris',switchTime:'09:00'};
+ const settings=normalizeLoadedSettings({...defaultSettings,aiPlaybookPlans:[{id:'plan',name:'Welcome',days:['one','two']}],chatFolders:[{id:'f',name:'F',sort:0,chatIds:[],scope:{type:'all'},aiPlaybookSchedule:schedule}]});
+ const restored=normalizeLoadedSettings(parseBackupJson({version:2,settingsSafe:buildSettingsSafe(settings),contacts:[{id:"person",name:"Customer",phone:"+15551234567",tags:[]}],chats:[],messages:[]}).settingsSafe);
+ assert.deepEqual(restored.aiPlaybookPlans,settings.aiPlaybookPlans);assert.deepEqual(restored.chatFolders[0].aiPlaybookSchedule,schedule);
+});

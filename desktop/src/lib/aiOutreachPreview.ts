@@ -1,3 +1,4 @@
+import { outreachPeople } from './aiOutreachAllocation';
 import type { OutreachState, OutreachReason } from "./aiOutreachContext";
 import { inspectOutreachCandidate } from "./aiOutreachContext";
 import { normalizeOutreachRule, nextOutreachWindow, outreachClock, outreachRunClock, outreachWindowOffset, type AiOutreachRun } from "./aiOutreachRules";
@@ -29,12 +30,14 @@ export async function buildOutreachPreview(state:OutreachState,folderIds:readonl
   let readyNow=0;
   for(const folder of folders){
     const rule=normalizeOutreachRule(folder.aiOutreach),members=new Set(folder.chatIds);
+    const people=rule.firstContactQuotas?outreachPeople(snapshot,folder.chatIds):undefined;
     for(const chatId of members){
       options.signal?.throwIfAborted();
       if(rows.length&&rows.length%25===0){options.onProgress?.(rows.length);await new Promise<void>(resolve=>setTimeout(resolve,0));options.signal?.throwIfAborted();}
       const chat=chats.get(chatId),contact=chat&&contacts.get(chat.contactId);
       const recipient=contact?resolveSendTarget({phone:contact.phone,channelAddress:contact.channelAddress,entityId:contact.id}):"";
-      const accountId=chat?.accountId||contact?.accountId||settings.liveBaileysAccountId||settings.activeAccountId;
+      const personRoute=people?.get(recipientKey('',recipient));
+      const accountId=people?(personRoute?.kind==='existing'?personRoute.accountId:rule.firstContactAssignments?.[recipientKey('',recipient)]||''):chat?.accountId||contact?.accountId||settings.liveBaileysAccountId||settings.activeAccountId;
       const person=recipient?recipientKey("",recipient):"",recipientRuns=[...new Set([...(byRecipient.get(person)||[]),...(byChat.get(chatId)||[])])];
       const check=(at:number)=>inspectOutreachCandidate(snapshot,folder.id,chatId,at,undefined,undefined,chat&&contact?{chat,contact,members,rule,clock:outreachClock(rule.timeZone,at),lastAccounts:latest,recipientRuns,dayRunCount:daily.get(`${folder.id}:${outreachRunClock(rule,at).day}`)||0}:undefined);
       const current=check(now);

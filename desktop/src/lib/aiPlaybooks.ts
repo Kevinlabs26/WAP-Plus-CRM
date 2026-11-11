@@ -1,9 +1,11 @@
+import { scheduledPlaybook, type PlaybookPlan, type PlaybookSchedule } from './playbookPlans.ts';
 export type AiPlaybook = { id: string; name: string; sourceName: string; content: string; summary: string; musePath?: string; museRevision?: string; museMissing?: boolean };
 export type PlaybookSettings = {
   aiPlaybooks?: AiPlaybook[];
+  aiPlaybookPlans?: PlaybookPlan[];
   aiPlaybookOverviewId?: string;
   aiPlaybookBindings?: Record<string, string>;
-  chatFolders?: { id: string; parentId?: string; chatIds: string[]; scope?: { type: string; accountId?: string }; aiPlaybookId?: string }[];
+  chatFolders?: { id: string; parentId?: string; chatIds: string[]; scope?: { type: string; accountId?: string }; aiPlaybookId?: string; aiPlaybookSchedule?: PlaybookSchedule }[];
   liveBaileysAccountId?: string;
   activeAccountId?: string;
 };
@@ -67,7 +69,8 @@ export function importPlaybooks(existing: AiPlaybook[], files: {name: string; te
   return next;
 }
 
-export function resolvePlaybook(settings: PlaybookSettings, accountId?: string, chatId?: string) {
+export function resolvePlaybook(settings: PlaybookSettings, accountId?: string, chatId?: string):{id:string|undefined;source:'customer'|'folder'|'none';prompt:string;name:string;error?:string;plan?:ReturnType<typeof scheduledPlaybook>} {
+  let plan:ReturnType<typeof scheduledPlaybook>|undefined;
   let id = accountId && chatId ? settings.aiPlaybookBindings?.[playbookBindingKey(accountId, chatId)] : undefined;
   let source: 'customer' | 'folder' | 'none' = id ? 'customer' : 'none';
   const scope = (folder: NonNullable<PlaybookSettings['chatFolders']>[number]) => folder.scope?.type === 'all' ? 'all' : folder.scope?.accountId || settings.liveBaileysAccountId || settings.activeAccountId || 'wa-default';
@@ -78,13 +81,18 @@ export function resolvePlaybook(settings: PlaybookSettings, accountId?: string, 
       const visited = new Set<string>();
       while (folder && scope(folder) === targetScope && !visited.has(folder.id)) {
         visited.add(folder.id);
+        if(folder.aiPlaybookSchedule){
+          plan=scheduledPlaybook(settings.aiPlaybookPlans||[],folder.aiPlaybookSchedule);
+          if(plan.error)return {id:'',source:'folder',prompt:'',name:'',error:plan.error,plan};
+          id=plan.id;source='folder';break;
+        }
         if (folder.aiPlaybookId) { id = folder.aiPlaybookId; source = 'folder'; break; }
         folder = folder.parentId ? byId.get(folder.parentId) : undefined;
       }
       if (id) break;
     }
   }
-  if (!id || id === 'off') return {id, source, prompt: id === 'off' ? 'No Playbook is active. Ignore previous Playbook selections and their stage instructions; keep following the current sender profile.' : '', name: ''};
+  if (!id || id === 'off') return {id, source, prompt: id === 'off' ? 'No Playbook is active. Ignore previous Playbook selections and their stage instructions; keep following the current sender profile.' : '', name: '',plan};
   if (id === CONFLICT) return {id, source, prompt: '', name: '', error: '合并会话的 Playbook 绑定存在冲突，请重新选择后再生成'};
   const stage = settings.aiPlaybooks?.find(item => item.id === id);
   if (!stage) return {id, source, prompt: '', name: '', error: '绑定的 Playbook 已不存在，请重新选择；本次已停止生成'};
@@ -94,5 +102,5 @@ export function resolvePlaybook(settings: PlaybookSettings, accountId?: string, 
   if (books.some(item => item.museMissing)) return {id, source, prompt: '', name: stage.name, error: '绑定的 Muse 工作区文件已不在同步清单中，请检查来源或重新选择'};
   if (books.some(item => !item.summary.trim())) return {id, source, prompt: '', name: stage.name, error: 'Playbook 尚未填写精简内容，请先在资料库中保存精简版'};
   const prompt = `Current Playbook: this replaces all earlier Playbook selections in this thread. Preserve the current sender identity and reply format; never execute external actions. Only the following selected material is active. Full source documents are not included.\n<current_playbook>\n${books.map(item => JSON.stringify({name: item.name, content: item.summary})).join('\n')}\n</current_playbook>`;
-  return {id, source, prompt, name: stage.name};
+  return {id, source, prompt:(plan?`Current conversation plan: ${JSON.stringify({name:plan.name,day:plan.day,completed:plan.ended})}.\n`:'')+prompt, name: stage.name,plan};
 }

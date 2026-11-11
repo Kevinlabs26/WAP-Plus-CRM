@@ -268,17 +268,11 @@ export function useComposerMedia(opts: UseComposerMediaOptions) {
     const files = Array.from(list).filter(Boolean).slice(0, 5);
     if (!files.length) return;
     const items = files.map((file): PendingMediaItem => {
-      // The generic “文件” picker must still route audio through the audio
-      // sender; otherwise an audio file is forced into the document path and
-      // appears to do nothing in the voice/audio workflow.
-      const kind =
-        forcedKind === "file" && isAudioFile(file)
-          ? "audio"
-          : forcedKind ||
+      const kind = forcedKind ||
             (file.type === "image/gif"
               ? "gif"
               : isAudioFile(file)
-                ? "audio"
+                ? (file.size>16*1024*1024?"file":"audio")
                 : file.type.startsWith("image/")
                   ? "image"
                   : "file");

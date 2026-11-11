@@ -107,6 +107,7 @@ export type SettingsSafeExport = {
   aiSystemPromptByAccountId: Record<string, string>;
   aiPromptTemplates: AppSettings["aiPromptTemplates"];
   aiPlaybooks: AppSettings["aiPlaybooks"];
+  aiPlaybookPlans?: AppSettings["aiPlaybookPlans"];
   aiPlaybookOverviewId: string;
   aiPlaybookBindings: AppSettings["aiPlaybookBindings"];
   aiPlaybookMuseRoot: string;
@@ -202,6 +203,7 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     aiSystemPromptByAccountId: settings.aiSystemPromptByAccountId || {},
     aiPromptTemplates: settings.aiPromptTemplates || [],
     aiPlaybooks: settings.aiPlaybooks || [],
+    aiPlaybookPlans: settings.aiPlaybookPlans || [],
     aiPlaybookOverviewId: settings.aiPlaybookOverviewId || "",
     aiPlaybookBindings: settings.aiPlaybookBindings || {},
     aiPlaybookMuseRoot: settings.aiPlaybookMuseRoot || "",
@@ -689,7 +691,7 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
   if (settingsSafe) {
     const allowed = [
       "quickReplies", "quickReplyCustomCategories", "quickReplyRemovedCategories", "quickReplyCategoryLabels", "quickReplyCategoryOrder", "quickReplyPinnedIds", "quickReplyRecentIds", "translateTargetLang", "myLang",
-      "voiceInputLang", "aiTimeZone", "leadInbox", "chatFolders", "chatFolderClones", "aiPromptTemplates", "aiPlaybooks", "aiPlaybookOverviewId", "aiPlaybookBindings", "aiPlaybookMuseRoot", "imagePromptTemplates", "aiContextMode", "aiOutreachRuns", "aiOutreachPaused", "aiOutreachExcludedRecipients",
+      "voiceInputLang", "aiTimeZone", "leadInbox", "chatFolders", "chatFolderClones", "aiPromptTemplates", "aiPlaybooks", "aiPlaybookPlans", "aiPlaybookOverviewId", "aiPlaybookBindings", "aiPlaybookMuseRoot", "imagePromptTemplates", "aiContextMode", "aiOutreachRuns", "aiOutreachPaused", "aiOutreachExcludedRecipients",
       "scheduledMessages", "scheduledPlans", "waAccounts", "accountViewMode", "historySyncNote",
       "historySyncNoteByAccountId", "internalNotesByKey", "chatBackground",
       "salesStageLabels", "salesStageOrder", "theme",

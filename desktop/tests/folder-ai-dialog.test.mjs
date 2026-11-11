@@ -4,7 +4,7 @@ import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 
 const mocks = {
-  react: 'export const useState = initial => globalThis.folderAiHooks.state(initial);',
+  react: 'export const useEffect=()=>{};export const useState = initial => globalThis.folderAiHooks.state(initial);',
   'react/jsx-runtime': 'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
   '@/i18n': 'export const useI18n=()=>({t:key=>key});',
   '@/components/ui/primitives': 'export const Textarea="textarea";',
@@ -128,4 +128,25 @@ test('folder can save and start a round from its own dialog without changing its
  const rule=h.state.settings.chatFolders[1].aiOutreach;
  assert.ok(rule.runNowAt);assert.equal(rule.time,'22:55');assert.equal(rule.dailyLimit,10);assert.equal(h.closed,1);
  h.state.settings.aiOutreachPaused=true;h.render();assert.equal(button().props.disabled,true);
+});
+
+test('saving account allocation converts only this folder to cross-account scope and persists a fixed assignment',()=>{
+ const h=harness('',state=>{
+  state.settings.waAccounts=[{id:'a',label:'A',status:'connected'}];state.baileysUi={connection:'connected'};
+  state.contacts=[{id:'p',accountId:'a',phone:'+12025550101'}];state.messages=[];
+  state.chats=[{id:'chat',contactId:'p',accountId:'a',hasMessageHistory:false,updatedAt:'2026-01-01T00:00:00Z'}];
+ });
+ const allocation=h.nodes().find(n=>typeof n.type==='function'&&n.type.name==='FirstContactAllocation');
+ allocation.props.onChange({...allocation.props.value,firstContactQuotas:{a:1}});h.render();h.click('dialog.save');
+ const folder=h.state.settings.chatFolders.find(f=>f.id==='f');
+ assert.equal(folder.scope.type,'all');assert.equal(folder.aiOutreach.firstContactAssignments[':12025550101'],'a');
+ assert.equal(h.state.settings.chatFolders[0].scope.type,'account');
+});
+
+test('folder plan schedules are saved explicitly without deleting the existing fixed binding',()=>{
+ const h=harness('',state=>{state.settings.aiPlaybookPlans=[{id:'p',name:'Welcome',days:['one','two']}];state.settings.chatFolders[1].aiPlaybookId='fixed';});
+ const control=h.nodes().find(n=>typeof n.type==='function'&&n.type.name==='PlaybookScheduleFields');
+ const schedule={planId:'p',startDate:'2026-11-11',timeZone:'Europe/Paris',switchTime:'09:00'};
+ control.props.onChange(schedule);h.render();h.click('dialog.save');
+ assert.deepEqual(h.state.settings.chatFolders[1].aiPlaybookSchedule,schedule);assert.equal(h.state.settings.chatFolders[1].aiPlaybookId,'fixed');
 });

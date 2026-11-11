@@ -20,6 +20,10 @@ export function ChatAiStatusBar({chatId,accountId,connected,thread,recipient}:{c
   const profile=resolveAiReplyProfile(settings,accountId,chatId);
   const scope=resolveAutoReplyScope(settings,chatId);
   const override=settings.aiAutoReplyManualChatIds?.includes(chatId)?"manual":settings.aiAutoReplyModeByChatId?.[chatId]||"inherit";
+  const followsSettings=!settings.aiAutoReplyManualChatIds?.includes(chatId)&&!settings.aiAutoReplyModeByChatId?.[chatId];
+  const inheritedLabel=followsSettings&&(scope.source==="folder"||scope.source==="default")
+    ? t(scope.source==="folder"?(scope.mode==="auto"?"aiChat.followFolderAuto":"aiChat.followFolderManual"):(scope.mode==="auto"?"aiChat.followGlobalAuto":"aiChat.followGlobalManual"))
+    : t("crmPanel.inheritShort");
   const status=getChatAiStatus({settings,chatId,accountId,connected,thread,runtime,now});
   const templates=profile.templateIds?.map(id=>settings.aiPromptTemplates.find(template=>template.id===id)?.name).filter(Boolean).join(" + ");
   const source=templates||profile.folderName||t(`folderAi.source.${profile.source}`,{name:profile.folderName||""});
@@ -41,7 +45,7 @@ export function ChatAiStatusBar({chatId,accountId,connected,thread,recipient}:{c
     <div role="group" aria-label={t("aiFolder.reply")} className="ml-auto flex shrink-0 items-center gap-0.5 rounded-full bg-zinc-800 p-0.5">
       {(["inherit","auto","manual"] as const).map(mode=><button key={mode} type="button" disabled={scope.source==="paused"} aria-pressed={override===mode} onClick={()=>setMode(mode)}
         className={`rounded-full px-2.5 py-1 transition-colors disabled:opacity-40 ${override===mode?"bg-brand/15 font-medium text-brand":"text-zinc-500 hover:text-zinc-200"}`}>
-        {t(mode==="inherit"?"crmPanel.inheritShort":mode==="auto"?"multi.replyMode.auto":"multi.replyMode.manual")}
+        {mode==="inherit"?inheritedLabel:t(mode==="auto"?"multi.replyMode.auto":"multi.replyMode.manual")}
       </button>)}
     </div>
     {personKey&&<label className="flex shrink-0 items-center gap-1.5 text-zinc-500" title={t("aiOutreach.personHint")}>{t("aiOutreach.person")}

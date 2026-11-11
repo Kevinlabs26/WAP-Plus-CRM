@@ -518,6 +518,12 @@ function ComposerInner({
                   const bytes = await invoke<ArrayBuffer>("read_dropped_video", {path});
                   return new File([bytes], path.split(/[\\/]/).pop() || "video.mp4", {type:"video/mp4"});
                 }
+                const audioExt=/\.(mp3|m4a|aac|wav|flac|ogg|oga|opus)$/i.exec(path)?.[1].toLowerCase();
+                if(audioExt){
+                  const bytes=await invoke<ArrayBuffer>('read_dropped_audio',{path});
+                  const types:Record<string,string>={mp3:'audio/mpeg',m4a:'audio/mp4',aac:'audio/aac',wav:'audio/wav',flac:'audio/flac',ogg:'audio/ogg',oga:'audio/ogg',opus:'audio/opus'};
+                  return new File([bytes],path.split(/[\\/]/).pop()||'audio.'+audioExt,{type:types[audioExt]});
+                }
                 const dropped = await invoke<{
                   name: string;
                   mime: string;

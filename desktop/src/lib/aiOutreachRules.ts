@@ -1,6 +1,6 @@
 export type AiOutreachRule = {
   enabled: boolean; paused?: boolean; mode: "draft" | "auto"; trigger: "new" | "daily" | "both";
-  time: string; timeZone: string; minIdleHours: number; dailyLimit: number; goal: string; runNowAt?: number;
+  time: string; timeZone: string; minIdleHours: number; dailyLimit: number; goal: string; runNowAt?: number; firstContactQuotas?: Record<string,number>; firstContactAssignments?: Record<string,string>;
 };
 export type AiOutreachRun = {
   id: string; folderId: string; chatId: string; accountId: string; day: string; at: string;
@@ -15,7 +15,9 @@ export function normalizeOutreachRule(raw: unknown): AiOutreachRule {
   let zone = typeof value.timeZone === "string" ? value.timeZone : "UTC";
   try {new Intl.DateTimeFormat("en",{timeZone:zone});} catch {zone="UTC";}
   const number = (value: unknown, fallback: number, min: number, max: number) => typeof value === "number" && Number.isFinite(value) ? Math.min(max,Math.max(min,Math.round(value))) : fallback;
-  return {...(typeof value.runNowAt === "number" && Number.isFinite(value.runNowAt) ? {runNowAt:value.runNowAt} : {}), enabled: value.enabled === true, ...(value.paused===true?{paused:true}:{}), mode: value.mode === "auto" ? "auto" : "draft", trigger: value.trigger === "new" ? "new" : value.trigger==="both"?"both":"daily",
+  const quotas=value.firstContactQuotas&&typeof value.firstContactQuotas==='object'?Object.fromEntries(Object.entries(value.firstContactQuotas).filter(([id,n])=>id.length<=200&&typeof n==='number'&&Number.isFinite(n)).slice(0,100).map(([id,n])=>[id,Math.min(100,Math.max(0,Math.floor(n)))])):undefined;
+  const assignments=quotas&&value.firstContactAssignments&&typeof value.firstContactAssignments==='object'?Object.fromEntries(Object.entries(value.firstContactAssignments).filter(([key,id])=>key.length<=200&&typeof id==='string'&&Object.hasOwn(quotas,id)).slice(0,10000)):undefined;
+  return {...(quotas?{firstContactQuotas:quotas,firstContactAssignments:assignments||{}}:{}),...(typeof value.runNowAt === "number" && Number.isFinite(value.runNowAt) ? {runNowAt:value.runNowAt} : {}), enabled: value.enabled === true, ...(value.paused===true?{paused:true}:{}), mode: value.mode === "auto" ? "auto" : "draft", trigger: value.trigger === "new" ? "new" : value.trigger==="both"?"both":"daily",
     time: typeof value.time === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value.time) ? value.time : "09:00", timeZone: zone,
     minIdleHours: number(value.minIdleHours,12,1,168), dailyLimit: number(value.dailyLimit,10,1,100), goal: typeof value.goal === "string" ? value.goal.trim().slice(0,2000) : ""};
 }

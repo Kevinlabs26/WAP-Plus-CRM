@@ -12,7 +12,7 @@ const mocks={
  '@/lib/storage':'export const loadMessagesPage=async()=>({items:globalThis.outreachHistoryItems||[]});',
  '@/store/restoreGuard':'export const isDataRestoreActive=()=>false;export const getDataRestoreGeneration=()=>globalThis.outreachRestoreEpoch||0;',
 };
-const result=await build({stdin:{contents:`export * from './src/lib/aiOutreach.ts';export * from './src/lib/aiOutreachContext.ts';export * from './src/lib/aiOutreachRules.ts';export * from './src/lib/aiOutreachPreview.ts';export * from './src/lib/aiReplyStatus.ts';export {SendQueueWatcher} from './src/components/bridge/SendQueueWatcher.tsx';export {normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {buildSettingsSafe,parseBackupJson} from './src/lib/exportData.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',alias:{'@':root+'src'},plugins:[{name:'outreach-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
+const result=await build({stdin:{contents:`export * from './src/lib/aiOutreach.ts';export * from './src/lib/aiOutreachAllocation.ts';export * from './src/lib/aiOutreachContext.ts';export * from './src/lib/aiOutreachRules.ts';export * from './src/lib/aiOutreachPreview.ts';export * from './src/lib/aiReplyStatus.ts';export {SendQueueWatcher} from './src/components/bridge/SendQueueWatcher.tsx';export {normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {buildSettingsSafe,parseBackupJson} from './src/lib/exportData.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',alias:{'@':root+'src'},plugins:[{name:'outreach-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
 let sequence=0;
 async function fixture(mode='auto',trigger='new'){
  const api=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].text+'\n//# sourceURL=ai-proactive-fixture-'+sequence+++'.js').toString('base64'));
@@ -436,5 +436,62 @@ test('late evening outreach continues after midnight under the original round da
   assert.equal(h.state.settings.aiOutreachRuns[0].status,'queued');
   assert.equal(h.api.outreachWindowOffset(rule,Date.parse('2026-11-06T23:55:00Z')),120);
   assert.equal(h.api.nextOutreachWindow(rule,Date.parse('2026-11-06T23:55:00Z')),Date.parse('2026-11-07T21:55:00Z'));
+ }finally{h.close();}
+});
+
+test('first-contact allocation persists exact quotas, skips unknown and existing people and deduplicates accounts',async()=>{
+ const h=await fixture();try{
+  const state=h.state;
+  for(let i=1;i<=4;i++){state.contacts.push({...state.contacts[0],id:'p'+i,phone:'+1202555010'+(i+1)});state.chats.push({...state.chats[0],id:'chat-'+i,contactId:'p'+i});state.settings.chatFolders[0].chatIds.push('chat-'+i);}
+  state.chats[4].hasMessageHistory=undefined;
+  state.chats.push({...state.chats[0],id:'duplicate',accountId:'b'});
+  state.chats[3].hasMessageHistory=true;state.chats[3].accountId='b';
+  const plan=h.api.allocateFirstContacts(state,state.settings.chatFolders[0].chatIds,{a:2,b:1});
+  assert.equal(plan.people.size,5);assert.equal(Object.keys(plan.assignments).length,3);
+  assert.equal(Object.values(plan.assignments).filter(id=>id==='a').length,2);
+  assert.equal(Object.values(plan.assignments).filter(id=>id==='b').length,1);
+  assert.equal(plan.people.get(':12025550104').kind,'existing');assert.equal(plan.people.get(':12025550105').kind,'unknown');
+  assert.deepEqual(h.api.allocateFirstContacts(state,state.settings.chatFolders[0].chatIds,{a:2,b:1},plan.assignments).assignments,plan.assignments);
+  state.settings.waAccounts.find(a=>a.id==='b').status='disconnected';state.baileysUi.connection='disconnected';
+  assert.deepEqual(h.api.allocateFirstContacts(state,state.settings.chatFolders[0].chatIds,{a:2,b:1},plan.assignments).assignments,plan.assignments,'offline assignments remain fixed');
+  assert.equal(Object.values(h.api.allocateFirstContacts(state,state.settings.chatFolders[0].chatIds,{a:0,b:3}).assignments).length,0,'new assignments require online accounts');
+ }finally{h.close();}
+});
+
+test('allocation preview and candidate choose the assigned identity while unassigned and offline targets wait',async()=>{
+ const h=await fixture();try{
+  const folder=h.state.settings.chatFolders[0];folder.scope={type:'all'};
+  folder.aiOutreach.firstContactQuotas={b:1};folder.aiOutreach.firstContactAssignments={':12025550101':'b'};
+  assert.equal(h.api.outreachCandidate(h.state,'folder','chat',h.now).accountId,'b');
+  const preview=await h.api.buildOutreachPreview(h.state,['folder'],h.now);assert.equal(preview.rows[0].accountId,'b');
+  const restored=h.api.normalizeLoadedSettings(h.state.settings);assert.deepEqual(restored.chatFolders[0].aiOutreach.firstContactAssignments,folder.aiOutreach.firstContactAssignments);
+  h.state.settings.waAccounts.find(a=>a.id==='b').status='disconnected';h.state.baileysUi.connection='disconnected';assert.equal(h.api.inspectOutreachCandidate(h.state,'folder','chat',h.now).reason,'offline');
+  folder.aiOutreach.firstContactAssignments={};assert.equal(h.api.inspectOutreachCandidate(h.state,'folder','chat',h.now).reason,'unallocated');
+ }finally{h.close();}
+});
+
+test('allocated new recipients get an account-specific conversation before generation and keep that account through delivery',async()=>{
+ const h=await fixture();try{
+  const folder=h.state.settings.chatFolders[0];folder.scope={type:'all'};folder.aiOutreach.firstContactQuotas={b:1};folder.aiOutreach.firstContactAssignments={':12025550101':'b'};
+  h.state.ensureChatForContact=(contactId,accountId)=>{h.advance(25);h.state.chats.push({...h.state.chats[0],id:'target',contactId,accountId,phoneId:accountId,hasMessageHistory:false,updatedAt:new Date(h.now).toISOString()});return 'target';};
+  h.state.patchChat=(id,patch)=>Object.assign(h.state.chats.find(c=>c.id===id),patch);
+  await h.api.tickAiOutreach();
+  assert.equal(h.state.settings.aiOutreachRuns[0].chatId,'target');assert.equal(h.state.settings.aiOutreachRuns[0].accountId,'b');
+  assert.deepEqual(h.state.settings.chatFolders[0].chatIds,['target']);
+  assert.equal(h.state.chats.find(c=>c.id==='chat').accountId,'a','original empty conversation is preserved');
+  assert.equal(h.state.settings.aiOutreachRuns[0].status,'queued');
+  h.api.SendQueueWatcher();for(let i=0;i<30;i++)await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(globalThis.outreachSent[0].request.accountId,'b');
+ }finally{h.close();}
+});
+
+test('successful outgoing metadata prevents a historical recipient being treated as a first contact',async()=>{
+ const h=await fixture();try{
+  h.state.chats[0].lastSuccessfulOutgoing={at:'2026-11-05T12:00:00Z',accountId:'b'};
+  const folder=h.state.settings.chatFolders[0];folder.scope={type:'all'};folder.aiOutreach.firstContactQuotas={a:1};
+  const plan=h.api.allocateFirstContacts(h.state,folder.chatIds,{a:1});
+  assert.equal(plan.people.get(':12025550101').kind,'existing');assert.equal(plan.people.get(':12025550101').accountId,'b');
+  assert.deepEqual(plan.assignments,{});
+  assert.equal(h.api.inspectOutreachCandidate(h.state,'folder','chat',h.now).reason,'not_new');
  }finally{h.close();}
 });

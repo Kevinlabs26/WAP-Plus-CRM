@@ -1,3 +1,4 @@
+import { MAX_AUDIO_BYTES } from "@/lib/mediaBlob";
 import { baileysSendVoice } from "@/lib/baileys";
 import { gatedMediaSend } from "@/channels/mediaGate";
 import type { ChannelId } from "@/channels";
@@ -62,7 +63,7 @@ export async function sendAudioMessage(
     deps.setBaileysLoginOpen(true);
     return false;
   }
-  if (file.size > 14 * 1024 * 1024) {
+  if (file.size > MAX_AUDIO_BYTES) {
     deps.pushToast(translateCurrent("runtime.audioTooLarge"), "error");
     return false;
   }

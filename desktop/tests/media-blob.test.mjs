@@ -22,7 +22,7 @@ test("media callers enforce their own byte limit without changing the default au
 test("audio reads reject oversized headers and actual streams, and cancel the reader", async () => {
   const originalFetch = globalThis.fetch;
   try {
-    for (const advertised of [0, 14_000_001]) {
+    for (const advertised of [0, 16 * 1024 * 1024 + 1]) {
       let cancelled = false;
       let released = false;
       const reader = {
@@ -35,7 +35,7 @@ test("audio reads reject oversized headers and actual streams, and cancel the re
         body: { getReader: () => reader, cancel: reader.cancel },
         blob: async () => new Blob(["unbounded old path"]),
       });
-      await assert.rejects(mediaUrlToBlob("https://example.com/voice"), /14 MB/);
+      await assert.rejects(mediaUrlToBlob("https://example.com/voice"), /16 MiB/);
       assert.equal(cancelled, true);
       assert.equal(released, advertised === 0);
     }
@@ -50,6 +50,11 @@ test("oversized data URL is rejected before base64 decoding", () => {
   const originalAtob = globalThis.atob;
   try {
     globalThis.atob = () => { throw new Error("decoder should not be called"); };
-    assert.throws(() => dataUrlToBlob("data:audio/ogg;base64," + "A".repeat(18_666_672)), /14 MB/);
+    assert.throws(() => dataUrlToBlob("data:audio/ogg;base64," + "A".repeat(22_369_628)), /16 MiB/);
   } finally { globalThis.atob = originalAtob; }
+});
+
+test('a regular audio attachment around 15 MiB decodes without the old 14 MB rejection',()=>{
+ const payload=Buffer.alloc(15*1024*1024).toString('base64');
+ assert.equal(dataUrlToBlob('data:audio/mpeg;base64,'+payload).size,15*1024*1024);
 });

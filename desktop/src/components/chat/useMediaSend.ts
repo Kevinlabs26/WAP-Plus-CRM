@@ -80,7 +80,7 @@ export function useMediaSend(opts: UseMediaSendOptions) {
   };
 
   const sendAudio = (file: File, captionOverride?: string) =>
-    sendAudioMessage(file, captionOverride, {
+    opts.isBaileys&&file.size>16*1024*1024 ? sendFile(file,captionOverride) : sendAudioMessage(file, captionOverride, {
       sending: opts.sending,
       setSending: opts.setSending,
       guardBlockedSend: opts.guardBlockedSend,
