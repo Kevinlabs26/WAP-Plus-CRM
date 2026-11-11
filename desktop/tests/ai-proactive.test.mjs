@@ -181,7 +181,7 @@ test('preview counts each person once, enforces daily limits across projected ro
   h.state.settings.chatFolders[0].aiOutreach.dailyLimit=1;
   for(let i=1;i<=2;i++){h.state.contacts.push({...h.state.contacts[0],id:'person-'+i,phone:'+1202555010'+(i+1)});h.state.chats.push({...h.state.chats[0],id:'chat-'+i,contactId:'person-'+i});h.state.settings.chatFolders[0].chatIds.push('chat-'+i);}
   h.state.contacts.push({...h.state.contacts[0],id:'outside-person',phone:'+12025550199'});h.state.chats.push({...h.state.chats[0],id:'outside',contactId:'outside-person'});
-  const result=await h.api.buildOutreachPreview(h.state,['folder'],h.now);assert.equal(result.rows.length,3);assert.equal(result.eligible,1);assert.equal(result.rows.filter(row=>row.reason==='daily_limit').length,2);assert.ok(!result.rows.some(row=>row.chatId==='outside'));
+  const result=await h.api.buildOutreachPreview(h.state,['folder'],h.now);assert.equal(result.rows.length,3);assert.equal(result.eligible,1);assert.equal(result.quotaWaiting,2);assert.equal(result.rows.filter(row=>row.reason==='daily_limit').length,2);assert.ok(!result.rows.some(row=>row.chatId==='outside'));
   h.state.settings.chatFolders.push({...h.state.settings.chatFolders[0],id:'duplicate',chatIds:['chat']});
   const duplicated=await h.api.buildOutreachPreview(h.state,['folder','duplicate'],h.now);assert.equal(duplicated.eligible,1);assert.ok(duplicated.rows.some(row=>row.reason==='duplicate'));
  }finally{h.close();}
@@ -380,5 +380,61 @@ test('read-only large-folder preview stays bounded under repeated load',{skip:pr
   assert.equal(h.calls,0);assert.equal(h.state.messages.length,0);assert.equal(h.state.settings.aiOutreachRuns.length,0);
   const growth=metrics.at(-1).heapBytes-metrics[Math.min(4,metrics.length-1)].heapBytes;assert.ok(!globalThis.gc||growth<32*1024*1024,'retained heap growth stays below 32 MiB after warmup');
   t.diagnostic(JSON.stringify({kind:'outreach-preview-load',size,iterations,gc:!!globalThis.gc,growth,metrics}));
+ }finally{h.close();}
+});
+
+test('immediate round opens only a temporary window and retains recipient and quota checks',async()=>{
+ const h=await fixture();try{
+  const rule=h.state.settings.chatFolders[0].aiOutreach;
+  rule.time='23:00';
+  assert.equal(h.api.inspectOutreachCandidate(h.state,'folder','chat',h.now).reason,'not_time');
+  rule.runNowAt=h.now;
+  assert.equal(h.api.inspectOutreachCandidate(h.state,'folder','chat',h.now).reason,'ready');
+  assert.equal(h.api.nextOutreachWindow(rule,h.now),h.now);
+  assert.equal(h.api.isImmediateOutreach(rule,h.now+2*3600_000),false);
+  assert.equal(h.api.isImmediateOutreach(rule,h.now-1),false);
+  assert.equal(h.api.normalizeOutreachRule(rule).runNowAt,h.now);
+  assert.equal(rule.time,'23:00');
+  h.state.settings.waAccounts[0].status='disconnected';
+  assert.equal(h.api.inspectOutreachCandidate(h.state,'folder','chat',h.now).reason,'offline');
+  h.state.settings.waAccounts[0].status='connected';
+  rule.dailyLimit=1;
+  h.state.settings.aiOutreachRuns=[{id:'other',folderId:'folder',chatId:'other',accountId:'a',day:h.api.outreachClock('UTC',h.now).day,at:new Date(h.now).toISOString(),basisAt:'',status:'sent'}];
+  assert.equal(h.api.inspectOutreachCandidate(h.state,'folder','chat',h.now).reason,'daily_limit');
+ }finally{h.close();}
+});
+
+test('runner starts an immediate round before the regular schedule without changing that schedule',async()=>{
+ const h=await fixture();try{
+  h.state.settings.chatFolders[0].aiOutreach.time='23:00';
+  h.state.settings.chatFolders[0].aiOutreach.runNowAt=h.now;
+  await h.api.tickAiOutreach();
+  assert.equal(h.calls,1);
+  assert.equal(h.api.getOutreachSchedulerStatus().phase,'waiting');
+  assert.ok(h.api.getOutreachSchedulerStatus().at);
+  assert.equal(h.state.settings.aiOutreachRuns[0].status,'queued');
+  assert.equal(h.state.settings.chatFolders[0].aiOutreach.time,'23:00');
+  assert.equal(h.state.draftReply,'UNSENT HUMAN DRAFT');
+ }finally{h.close();}
+});
+
+test('late evening outreach continues after midnight under the original round day and quota',async()=>{
+ const h=await fixture();try{
+  const rule=h.state.settings.chatFolders[0].aiOutreach;rule.time='22:55';rule.timeZone='Europe/Paris';
+  h.advance(Date.parse('2026-11-06T23:06:00Z')-h.now);
+  assert.equal(h.api.outreachRunClock(rule,h.now).day,'2026-11-06');
+  assert.equal(h.api.nextOutreachWindow(rule,h.now),h.now);
+  assert.equal(h.api.inspectOutreachCandidate(h.state,'folder','chat',h.now).reason,'ready');
+  const preview=await h.api.buildOutreachPreview(h.state,['folder'],h.now);
+  assert.equal(preview.readyNow,1);
+  rule.dailyLimit=1;
+  h.state.settings.aiOutreachRuns=[{id:'prior',folderId:'folder',chatId:'other',accountId:'a',day:'2026-11-06',at:'2026-11-06T22:00:00Z',basisAt:'',status:'sent'}];
+  assert.equal(h.api.inspectOutreachCandidate(h.state,'folder','chat',h.now).reason,'daily_limit');
+  const limited=await h.api.buildOutreachPreview(h.state,['folder'],h.now);assert.equal(limited.readyNow,0);
+  h.state.settings.aiOutreachRuns=[];
+  await h.api.tickAiOutreach();assert.equal(h.state.settings.aiOutreachRuns[0].day,'2026-11-06');
+  assert.equal(h.state.settings.aiOutreachRuns[0].status,'queued');
+  assert.equal(h.api.outreachWindowOffset(rule,Date.parse('2026-11-06T23:55:00Z')),120);
+  assert.equal(h.api.nextOutreachWindow(rule,Date.parse('2026-11-06T23:55:00Z')),Date.parse('2026-11-07T21:55:00Z'));
  }finally{h.close();}
 });

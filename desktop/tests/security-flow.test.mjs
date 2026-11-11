@@ -158,20 +158,49 @@ test('manual takeover prevents voice upload and model use across multiple incomi
  await autoReplyInbound(inbound);assert.deepEqual(globalThis.sentFlow,[]);
 });
 
-test('new text does not wait for old voice work, and cancelled voice never overwrites its runtime status',async()=>{
+test('new text waits for the unanswered voice and cancelled work cannot publish an incomplete reply',async()=>{
  for(const stage of ['download','transcription']){
   const voice=setup('cancel-voice-'+stage);voice.mediaType='audio';voice.body='[语音]';if(stage==='transcription')voice.mediaUrl='fixture';
   let release,started=false,oldSignal;const work=new Promise(resolve=>{release=resolve;});
-  globalThis.reloadFlow=async opts=>{started=true;oldSignal=opts.signal;await work;};
-  globalThis.transcribeFlow=async(_url,_mime,_settings,opts)=>{started=true;oldSignal=opts.signal;return work;};
-  globalThis.generateFlow=async()=>reply;
+  globalThis.reloadFlow=async opts=>{started=true;oldSignal ||= opts.signal;await work;if(!opts.signal.aborted)flowState.patchMessage(voice.id,{mediaUrl:'fixture'});};
+  globalThis.transcribeFlow=async(_url,_mime,_settings,opts)=>{started=true;oldSignal ||= opts.signal;return work;};
+  globalThis.generateFlow=async(_contact,thread)=>{assert.equal(thread.find(item=>item.id===voice.id).transcript,'Recognized voice');return reply;};
   const running=autoReplyInbound(voice);while(!started)await new Promise(resolve=>setImmediate(resolve));
   assert.equal(useAutoReplyRuntime.getState().byChat[voice.chatId].phase,'transcribing');
   const latest={...voice,id:'new-text-'+stage,body:'A new question',mediaType:undefined,mediaUrl:undefined,sentAt:new Date(Date.now()+1).toISOString()};globalThis.flowState.messages.push(latest);
-  await autoReplyInbound(latest);await running;
-  assert.equal(oldSignal.aborted,true);assert.deepEqual(globalThis.sentFlow,['Hello there']);assert.equal(useAutoReplyRuntime.getState().byChat[voice.chatId],undefined);
-  release({text:'Old voice',fallback:false});await new Promise(resolve=>setImmediate(resolve));assert.equal(voice.transcript,undefined);assert.equal(globalThis.sentFlow.length,1);
+  await autoReplyInbound(latest);assert.equal(oldSignal.aborted,true);assert.deepEqual(globalThis.sentFlow,[]);
+  release({text:'Recognized voice',fallback:false});await running;
+  assert.deepEqual(globalThis.sentFlow,['Hello there']);assert.equal(voice.transcript,'Recognized voice');assert.equal(useAutoReplyRuntime.getState().byChat[voice.chatId],undefined);
  }
+});
+
+test('mixed voice and text turns transcribe every pending audio, reuse existing text and retain the latest question',async()=>{
+  const first=setup('mixed-voice-text');first.body='[语音]';first.mediaMime='audio/ogg';first.mediaUrl='voice-one';
+  const second={...first,id:'voice-two',mediaType:'ptt',mediaMime:undefined,mediaUrl:'voice-two',transcript:'   ',sentAt:new Date(Date.now()+1).toISOString()};
+  const cached={...first,id:'voice-cached',mediaPtt:true,mediaUrl:'cached',transcript:'Already recognized',sentAt:new Date(Date.now()+2).toISOString()};
+  const latest={...first,id:'text-latest',mediaMime:undefined,mediaUrl:undefined,body:'And what about tomorrow?',sentAt:new Date(Date.now()+3).toISOString()};
+  flowState.messages.push(second,cached,latest);
+  const transcribed=[];
+  globalThis.transcribeFlow=async url=>{transcribed.push(url);return{text:`Recognized ${url}`,fallback:false};};
+  globalThis.generateFlow=async(_contact,thread)=>{assert.equal(thread.find(item=>item.id===first.id).transcript,'Recognized voice-one');assert.equal(thread.find(item=>item.id===second.id).transcript,'Recognized voice-two');assert.equal(thread.at(-1).body,latest.body);return reply;};
+  await autoReplyInbound(latest);assert.deepEqual(transcribed,['voice-one','voice-two']);assert.equal(sentFlow.length,1);
+});
+
+test('a failed outgoing message cannot hide earlier unrecognized audio',async()=>{
+  const voice=setup('failed-out-voice');voice.mediaType='audio';voice.mediaUrl='voice';voice.body='[语音]';
+  flowState.messages.push({...voice,id:'failed-out',direction:'out',systemKind:'ai_auto_reply',deliveryStatus:'failed',sentAt:new Date(Date.now()+1).toISOString()});
+  const latest={...voice,id:'latest-after-failure',mediaType:undefined,mediaUrl:undefined,body:'Hello',sentAt:new Date(Date.now()+2).toISOString()};flowState.messages.push(latest);
+  let count=0;globalThis.transcribeFlow=async()=>{count++;return{text:'Good morning',fallback:false};};globalThis.generateFlow=async()=>reply;
+  await autoReplyInbound(latest);assert.equal(count,1);assert.equal(sentFlow.length,1);
+});
+
+test('risk in an earlier voice or a recognition error blocks a mixed-turn automatic reply',async()=>{
+  for(const result of [{text:'Please refund my payment',fallback:false},{text:'Partial transcript',fallback:false,error:'Recognition failed'}]){
+    const voice=setup('mixed-voice-block-'+String(Boolean(result.error)));voice.mediaType='audio';voice.mediaUrl='fixture';voice.body='[语音]';
+    const latest={...voice,id:voice.id+'-text',mediaType:undefined,mediaUrl:undefined,body:'Thank you',sentAt:new Date(Date.now()+1).toISOString()};flowState.messages.push(latest);
+    globalThis.transcribeFlow=async()=>result;globalThis.generateFlow=()=>assert.fail('must not generate for risky or failed recognition');
+    await autoReplyInbound(latest);assert.deepEqual(sentFlow,[]);assert.equal(useAutoReplyRuntime.getState().byChat[voice.chatId].phase,'human');
+  }
 });
 
 test('runtime exposes generation, retry and permanent failure without retaining an old message status',async()=>{
@@ -323,4 +352,19 @@ test("a single conversation override does not enable another conversation",async
  globalThis.generateFlow=async()=>reply;await autoReplyInbound(inbound);assert.equal(globalThis.sentFlow.length,1);
  const other=setup("individual-other");Object.assign(globalThis.flowState.settings,{aiReplyMode:"semi",aiAutoReplyModeByChatId:{individual:"auto"}});
  await autoReplyInbound(other);assert.equal(globalThis.sentFlow.length,0);
+});
+
+test('random reply wait uses the configured range, resets for new messages and rechecks manual mode',async t=>{
+ const clock=fakeTimers();try{
+  const first=setup('random-wait');Object.assign(globalThis.flowState.settings,{aiAutoReplyDelayMinMs:20000,aiAutoReplyDelayMaxMs:60000});
+  let calls=0;globalThis.generateFlow=async()=>{calls++;return reply;};
+  const random=t.mock.method(Math,'random',()=>0);
+  scheduleAutoReplyInbound(first);assert.equal([...clock.timers.values()][0].delay,20000);
+  random.mock.restore();t.mock.method(Math,'random',()=>0.999999);
+  const second={...first,id:'random-second',sentAt:new Date(Date.now()+1).toISOString()};globalThis.flowState.messages.push(second);
+  scheduleAutoReplyInbound(second);assert.equal(clock.timers.size,1);assert.equal([...clock.timers.values()][0].delay,60000);
+  assert.equal(calls,0);await clock.fire();assert.equal(calls,1);assert.equal(globalThis.sentFlow.length,1);
+  const paused=setup('random-pause');Object.assign(globalThis.flowState.settings,{aiAutoReplyDelayMinMs:10000,aiAutoReplyDelayMaxMs:10000});
+  scheduleAutoReplyInbound(paused);globalThis.flowState.settings.aiReplyMode='semi';await clock.fire();assert.equal(calls,1);
+ }finally{clock.close();}
 });

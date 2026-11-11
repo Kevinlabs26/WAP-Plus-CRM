@@ -11,7 +11,7 @@ const mocks = {
   '@/components/settings/AiPromptLibrary':'export const AiPromptLibrary="prompt-library";',
   '@/components/settings/AiOutreachControls':'export const AiOutreachControls="outreach-controls";',
   '@/components/settings/AiOutreachPreview':'export const AiOutreachPreview="outreach-preview";',
-  '@/store/appStore': 'export const useAppStore=selector=>selector(globalThis.folderAiState);useAppStore.getState=()=>globalThis.folderAiState;',
+  '@/store/appStore': 'export const flushPersist=async()=>{};export const useAppStore=selector=>selector(globalThis.folderAiState);useAppStore.getState=()=>globalThis.folderAiState;',
 };
 const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/layout/FolderAiPromptDialog.tsx',import.meta.url))],
   bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},
@@ -114,4 +114,18 @@ test('choosing a template from inherited mode appends it without enabling automa
  h.nodes().find(node=>node.type==='select'&&node.props['aria-label']==='aiLibrary.choose').props.onChange({target:{value:'t'}});h.render();
  h.click('dialog.save');const folder=h.state.settings.chatFolders.find(folder=>folder.id==='f');
  assert.equal(folder.aiPromptMode,'append');assert.equal(folder.aiPromptTemplateId,'t');assert.equal(folder.autoReplyMode,undefined);assert.equal(folder.aiOutreach.enabled,false);
+});
+
+test('folder can save and start a round from its own dialog without changing its recurring schedule',async()=>{
+ const h=harness('',state=>{
+  state.settings.chatFolders[1].aiOutreach={enabled:true,mode:'auto',trigger:'both',time:'22:55',timeZone:'UTC',dailyLimit:10,minIdleHours:12,goal:''};
+  state.pushToast=()=>{};
+ });
+ const button=()=>h.nodes().find(n=>n.type==='button'&&n.props.children==='aiOutreach.saveRunNow');
+ assert.equal(!!button().props.disabled,false);
+ h.click('aiOutreach.saveRunNow');
+ await new Promise(resolve=>setImmediate(resolve));
+ const rule=h.state.settings.chatFolders[1].aiOutreach;
+ assert.ok(rule.runNowAt);assert.equal(rule.time,'22:55');assert.equal(rule.dailyLimit,10);assert.equal(h.closed,1);
+ h.state.settings.aiOutreachPaused=true;h.render();assert.equal(button().props.disabled,true);
 });

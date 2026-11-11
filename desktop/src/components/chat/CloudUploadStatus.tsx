@@ -36,12 +36,12 @@ export function CloudUploadBanner() {
     const timer = setTimeout(() => setNow(Date.now()), Math.max(0, job.completedAt + 10_000 - Date.now()));
     return () => clearTimeout(timer);
   }, [job?.id, job?.stage, job?.completedAt]);
-  const doneVisible = job?.stage === "done" && Boolean(job.completedAt) && now < job.completedAt! + 10_000;
+  const doneVisible = job?.stage === "done" && Boolean(job.completedAt) && Math.max(now, Date.now()) < job.completedAt! + 10_000;
   if (!job || (job.stage === "done" && !doneVisible)) return null;
   const uploading = job.stage === "uploading";
   const percent = job.uploadProgress ?? 0;
   const copy = () => { void retryDriveUpload(job.id); };
-  return <div role="region" aria-label={t("cloud.upload")} className="ml-auto flex min-w-0 max-w-[42vw] items-center gap-2 rounded-md border border-[var(--app-border)] bg-[var(--app-surface)] px-2.5 py-1.5 text-[var(--app-text)] shadow-sm xl:max-w-[34rem]">
+  return <div role="region" aria-label={t("cloud.upload")} className="flex min-w-0 max-w-[42vw] items-center gap-2 rounded-md border border-[var(--app-border)] bg-[var(--app-surface)] px-2.5 py-1.5 text-[var(--app-text)] shadow-sm xl:max-w-[34rem]">
     {uploading ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-brand"/> : job.stage === "done" ? <CheckCircle2 className="h-4 w-4 shrink-0 text-brand"/> : <CloudUpload className="h-4 w-4 shrink-0 text-amber-500"/>}
     <div className="min-w-0 flex-1">
       <div className="flex min-w-0 items-baseline gap-2 text-[11px] leading-4">

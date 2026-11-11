@@ -1,12 +1,12 @@
 import type { OutreachState, OutreachReason } from "./aiOutreachContext";
 import { inspectOutreachCandidate } from "./aiOutreachContext";
-import { normalizeOutreachRule, nextOutreachWindow, outreachClock, type AiOutreachRun } from "./aiOutreachRules";
+import { normalizeOutreachRule, nextOutreachWindow, outreachClock, outreachRunClock, outreachWindowOffset, type AiOutreachRun } from "./aiOutreachRules";
 import { lastContactedAccounts, recipientKey } from "./scheduledPlans";
 import { resolveSendTarget } from "./utils";
 import { isWithinAutoReplyHours, resolveAutoReplyPolicy } from "./aiSafety";
 
 export type OutreachPreviewRow={folderId:string;folderName:string;chatId:string;name:string;accountId:string;recipient:string;timeZone:string;mode:"auto"|"draft";dailyLimit:number;scheduledAt:number|null;reason:OutreachReason;eligible:boolean;historyPending:boolean};
-export type OutreachPreview={checkedAt:number;rows:OutreachPreviewRow[];eligible:number;readyNow:number;blocked:number;nextAt:number|null};
+export type OutreachPreview={checkedAt:number;rows:OutreachPreviewRow[];eligible:number;readyNow:number;blocked:number;quotaWaiting:number;nextAt:number|null};
 
 /** Read-only snapshot. Yields between batches and never loads history, generates text or enqueues messages. */
 export async function buildOutreachPreview(state:OutreachState,folderIds:readonly string[],now=Date.now(),options:{assumeRunning?:boolean;signal?:AbortSignal;onProgress?:(checked:number)=>void}={}):Promise<OutreachPreview>{
@@ -36,7 +36,7 @@ export async function buildOutreachPreview(state:OutreachState,folderIds:readonl
       const recipient=contact?resolveSendTarget({phone:contact.phone,channelAddress:contact.channelAddress,entityId:contact.id}):"";
       const accountId=chat?.accountId||contact?.accountId||settings.liveBaileysAccountId||settings.activeAccountId;
       const person=recipient?recipientKey("",recipient):"",recipientRuns=[...new Set([...(byRecipient.get(person)||[]),...(byChat.get(chatId)||[])])];
-      const check=(at:number)=>inspectOutreachCandidate(snapshot,folder.id,chatId,at,undefined,undefined,chat&&contact?{chat,contact,members,rule,clock:outreachClock(rule.timeZone,at),lastAccounts:latest,recipientRuns,dayRunCount:daily.get(`${folder.id}:${outreachClock(rule.timeZone,at).day}`)||0}:undefined);
+      const check=(at:number)=>inspectOutreachCandidate(snapshot,folder.id,chatId,at,undefined,undefined,chat&&contact?{chat,contact,members,rule,clock:outreachClock(rule.timeZone,at),lastAccounts:latest,recipientRuns,dayRunCount:daily.get(`${folder.id}:${outreachRunClock(rule,at).day}`)||0}:undefined);
       const current=check(now);
       let scheduledAt=next(rule,now),projected=current;
       if(scheduledAt!==null&&["ready","not_time","missed_window","outside_hours","same_day","idle","daily_limit","takeover"].includes(current.reason)){
@@ -44,8 +44,7 @@ export async function buildOutreachPreview(state:OutreachState,folderIds:readonl
         // Account reply hours are also a runtime gate; estimate their first overlap with the folder window.
         const fitHours=(start:number)=>{
           let at=start;while(at<start+120*60_000&&!isWithinAutoReplyHours(policy,new Date(at)))at+=60_000;
-          const clock=outreachClock(rule.timeZone,at),late=Number(clock.time.slice(0,2))*60+Number(clock.time.slice(3))-(Number(rule.time.slice(0,2))*60+Number(rule.time.slice(3)));
-          return late>=0&&late<120&&isWithinAutoReplyHours(policy,new Date(at))?at:start;
+          return outreachWindowOffset(rule,at)<120&&isWithinAutoReplyHours(policy,new Date(at))?at:start;
         };
         scheduledAt=fitHours(scheduledAt);
         projected=check(scheduledAt);
@@ -58,12 +57,12 @@ export async function buildOutreachPreview(state:OutreachState,folderIds:readonl
       }
       let reason=projected.reason==="ready"?current.reason:projected.reason,eligible=projected.reason==="ready";
       if(eligible&&person&&recipients.has(person)){eligible=false;reason="duplicate";}
-      const slot=scheduledAt!==null?`${folder.id}:${outreachClock(rule.timeZone,scheduledAt).day}`:"";
+      const slot=scheduledAt!==null?`${folder.id}:${outreachRunClock(rule,scheduledAt).day}`:"";
       if(eligible&&(reserved.get(slot)||0)>=(rule.dailyLimit-(daily.get(slot)||0))){eligible=false;reason="daily_limit";}
       if(eligible){if(person)recipients.add(person);reserved.set(slot,(reserved.get(slot)||0)+1);if(current.reason==="ready")readyNow++;}
       rows.push({folderId:folder.id,folderName:folder.name,chatId,name:contact?.name||chat?.contactName||recipient||chatId,accountId:accountId||"",recipient,timeZone:rule.timeZone,mode:rule.mode,dailyLimit:rule.dailyLimit,scheduledAt,reason,eligible,historyPending:!!chat?.hasMessageHistory&&!(state.messagesByChatId[chatId]?.length)});
     }
   }
   const eligible=rows.filter(row=>row.eligible),nextAt=eligible.reduce<number|null>((best,row)=>row.scheduledAt!==null&&(best===null||row.scheduledAt<best)?row.scheduledAt:best,null);
-  return {checkedAt:now,rows,eligible:eligible.length,readyNow,blocked:rows.length-eligible.length,nextAt};
+  return {checkedAt:now,rows,eligible:eligible.length,readyNow,blocked:rows.length-eligible.length,quotaWaiting:rows.filter(row=>row.reason==="daily_limit").length,nextAt};
 }

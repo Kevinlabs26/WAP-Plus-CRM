@@ -11,8 +11,8 @@ import {
   isWaAccountConnected,
   resolveWaSendAccountId,
 } from "@/lib/accountConnection";
-import { canSendAutoReply } from "@/lib/aiSafety";
-import { currentAutoReplyContext, hashAiReplyContext } from "@/lib/aiReplyContext";
+import { getAutoReplySendError, canSendAutoReply } from "@/lib/aiSafety";
+import { currentAutoReplyContext, inspectAutoReplyContext, hashAiReplyContext } from "@/lib/aiReplyContext";
 import { currentOutreachContext, isOutreachPaused } from "@/lib/aiOutreachContext";
 import { hydrateOutreachHistory } from "@/lib/aiOutreachHistory";
 import { translateCurrent } from "@/i18n";
@@ -106,9 +106,12 @@ export function SendQueueWatcher() {
       const aiContextKey = proactive ? currentOutreachContext(state,msg) : msg.systemKind === "ai_auto_reply" ? currentAutoReplyContext(state, msg) : null;
       if (msg.systemKind === "ai_auto_reply"||proactive) {
         let verified = false;
+        let verificationError = proactive ? "主动联系的规则、轮次或聊天内容已变化，请重新生成" : inspectAutoReplyContext(state,msg).error;
+        if(!proactive&&!verificationError)verificationError=getAutoReplySendError(settings,state.messages,msg)||"";
+        if(!msg.aiReplyContextHash)verificationError="此消息缺少生成校验记录，不能重试旧回复，请重新生成";
         if (aiContextKey && msg.aiReplyContextHash && (proactive||canSendAutoReply(settings, state.messages, msg))) {
           try { verified = await hashAiReplyContext(aiContextKey) === msg.aiReplyContextHash; }
-          catch { /* 无法校验时交给人工，不能每轮重试未知的自动回复。 */ }
+          catch { verificationError="本机无法执行摘要校验，请重启应用后重新生成"; }
         }
         if (cancelled) return;
         const latest = useAppStore.getState();
@@ -122,7 +125,7 @@ export function SendQueueWatcher() {
         if (!verified || (proactive?currentOutreachContext(latest,current):currentAutoReplyContext(latest, current)) !== aiContextKey) {
           latest.updateMessageDelivery(current.id, {
             deliveryStatus: "failed", retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined,
-            lastError: "自动回复无法验证当前配置和上下文，请重新生成或手动撰写回复",
+            lastError: verificationError || "生成后聊天内容、客户资料、提示词或 Playbook 已变化，旧回复已停止，请根据最新聊天重新生成",
           });
           return;
         }

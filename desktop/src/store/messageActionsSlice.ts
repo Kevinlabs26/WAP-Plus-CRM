@@ -1,4 +1,5 @@
 import type { ChatPreview, Message, WaMessageKey } from "@/types/crm";
+import { remapPlaybookBindings } from "@/lib/aiPlaybooks";
 import { getMessageFromDb, searchMessagesInDb } from "@/lib/storage";
 import { cacheMediaUrl, dropMediaCache } from "@/lib/mediaCache";
 import type { AppState, SliceContext } from "./types";
@@ -253,6 +254,7 @@ export function createMessageActionsSlice({
             ...state.settings,
             chatFolders: folderRefs.folders,
             chatFolderClones: folderRefs.clones,
+            aiPlaybookBindings: remapPlaybookBindings(state.settings.aiPlaybookBindings || {}, new Map([[chatId, null]])),
           },
         };
       });

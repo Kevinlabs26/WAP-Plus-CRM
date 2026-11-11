@@ -99,11 +99,18 @@ export type SettingsSafeExport = {
   aiAutoReplyModeByChatId: AppSettings["aiAutoReplyModeByChatId"];
   aiAutoReplyManualChatIds: string[];
   aiAutoReplyIntervalMs: number;
+  aiAutoReplyDelayMinMs?: number;
+  aiAutoReplyDelayMaxMs?: number;
   aiAutoReplyPolicy: AppSettings["aiAutoReplyPolicy"];
   aiAutoReplyPolicyByAccountId: AppSettings["aiAutoReplyPolicyByAccountId"];
   aiSystemPrompt: string;
   aiSystemPromptByAccountId: Record<string, string>;
   aiPromptTemplates: AppSettings["aiPromptTemplates"];
+  aiPlaybooks: AppSettings["aiPlaybooks"];
+  aiPlaybookOverviewId: string;
+  aiPlaybookBindings: AppSettings["aiPlaybookBindings"];
+  aiPlaybookMuseRoot: string;
+  aiPlaybookAutoSync: boolean;
   imagePromptTemplates: AppSettings["imagePromptTemplates"];
   aiContextMode: AppSettings["aiContextMode"];
   aiOutreachRuns: AppSettings["aiOutreachRuns"];
@@ -187,11 +194,18 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     aiAutoReplyModeByChatId: settings.aiAutoReplyModeByChatId || {},
     aiAutoReplyManualChatIds: settings.aiAutoReplyManualChatIds || [],
     aiAutoReplyIntervalMs: settings.aiAutoReplyIntervalMs,
+    aiAutoReplyDelayMinMs: settings.aiAutoReplyDelayMinMs,
+    aiAutoReplyDelayMaxMs: settings.aiAutoReplyDelayMaxMs,
     aiAutoReplyPolicy: settings.aiAutoReplyPolicy,
     aiAutoReplyPolicyByAccountId: settings.aiAutoReplyPolicyByAccountId || {},
     aiSystemPrompt: settings.aiSystemPrompt || "",
     aiSystemPromptByAccountId: settings.aiSystemPromptByAccountId || {},
     aiPromptTemplates: settings.aiPromptTemplates || [],
+    aiPlaybooks: settings.aiPlaybooks || [],
+    aiPlaybookOverviewId: settings.aiPlaybookOverviewId || "",
+    aiPlaybookBindings: settings.aiPlaybookBindings || {},
+    aiPlaybookMuseRoot: settings.aiPlaybookMuseRoot || "",
+    aiPlaybookAutoSync: false,
     imagePromptTemplates: settings.imagePromptTemplates || [],
     aiContextMode: settings.aiContextMode || "full",
     aiOutreachRuns: settings.aiOutreachRuns || [],
@@ -675,7 +689,7 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
   if (settingsSafe) {
     const allowed = [
       "quickReplies", "quickReplyCustomCategories", "quickReplyRemovedCategories", "quickReplyCategoryLabels", "quickReplyCategoryOrder", "quickReplyPinnedIds", "quickReplyRecentIds", "translateTargetLang", "myLang",
-      "voiceInputLang", "aiTimeZone", "leadInbox", "chatFolders", "chatFolderClones", "aiPromptTemplates", "imagePromptTemplates", "aiContextMode", "aiOutreachRuns", "aiOutreachPaused", "aiOutreachExcludedRecipients",
+      "voiceInputLang", "aiTimeZone", "leadInbox", "chatFolders", "chatFolderClones", "aiPromptTemplates", "aiPlaybooks", "aiPlaybookOverviewId", "aiPlaybookBindings", "aiPlaybookMuseRoot", "imagePromptTemplates", "aiContextMode", "aiOutreachRuns", "aiOutreachPaused", "aiOutreachExcludedRecipients",
       "scheduledMessages", "scheduledPlans", "waAccounts", "accountViewMode", "historySyncNote",
       "historySyncNoteByAccountId", "internalNotesByKey", "chatBackground",
       "salesStageLabels", "salesStageOrder", "theme",
@@ -685,6 +699,7 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
         .map((key) => [key, (settingsSafe as Record<string, unknown>)[key]])
     ) as Partial<SettingsSafeExport>;
     if (Object.hasOwn(settingsSafe, "aiTimeZone")) settingsSafe.aiTimeZone = validTimeZone(settingsSafe.aiTimeZone) || "";
+    settingsSafe.aiPlaybookAutoSync = false;
     if (Array.isArray(settingsSafe.chatFolders)) {
       settingsSafe.aiOutreachPaused = true;
       settingsSafe.chatFolders = settingsSafe.chatFolders.map(folder => {

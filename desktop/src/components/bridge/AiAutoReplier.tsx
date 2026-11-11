@@ -16,7 +16,7 @@ export function AiAutoReplier() {
         scheduleAutoReplyInbound(m);
       }
     });
-    const timer=window.setInterval(()=>{void tickAiOutreach().catch(()=>{});},30_000);
+    const timer=window.setInterval(()=>{void tickAiOutreach().catch(error=>console.error("[ai-outreach] scheduler failed",error));},30_000);
     return () => { window.clearInterval(timer);stopAiOutreach();unsubscribe(); stopAutoReplies(); };
   }, []);
 

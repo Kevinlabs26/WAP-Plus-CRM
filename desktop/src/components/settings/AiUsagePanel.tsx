@@ -196,8 +196,8 @@ function ActivityChart({ buckets, locale }: { buckets: AiUsageBucket[]; locale: 
   const dateFormat = new Intl.DateTimeFormat(locale, { dateStyle: "medium" });
   const monthFormat = new Intl.DateTimeFormat(locale, { month: "short" });
   const amount = (value: ActivityValue) => `${numberLabel(value.tokens)} Token · ${t("aiUsage.requests", { count: value.requests })}`;
-  const opacity = (tokens: number, requests: number) => !requests ? 0 : tokens ? 0.18 + 0.76 * Math.sqrt(tokens / maxTokens) : 0.22;
-  const colorStyle = (value: ActivityValue) => value.requests ? { backgroundColor: `rgba(var(--brand-rgb), ${opacity(value.tokens, value.requests)})` } : undefined;
+  const opacity = (tokens: number, requests: number) => !requests ? 0 : tokens ? 0.35 + 0.65 * Math.sqrt(tokens / maxTokens) : 0.35;
+  const colorStyle = (value: ActivityValue) => value.requests ? { backgroundColor: `rgb(var(--brand-rgb) / ${opacity(value.tokens, value.requests)})` } : undefined;
   const tabClass = (active: boolean) => `rounded-lg px-2.5 py-1.5 text-xs transition-colors ${active ? "bg-brand/15 font-medium text-brand" : "text-[var(--app-muted)] hover:bg-[var(--app-surface)]"}`;
   const gridColumns = { gridTemplateColumns: `repeat(53, minmax(0, 1fr))` };
   const chartItems = mode === "day"
@@ -231,7 +231,7 @@ function ActivityChart({ buckets, locale }: { buckets: AiUsageBucket[]; locale: 
                     key={key}
                     title={title}
                     aria-label={title}
-                    className={`aspect-square rounded-[3px] ${mode === "week" ? "min-w-2.5" : "min-w-0"} ${value.requests ? "ring-1 ring-black/5" : "bg-[var(--app-surface)]"}`}
+                    className={`aspect-square rounded-[3px] ${mode === "week" ? "min-w-2.5" : "min-w-0"} ${value.requests ? "ring-1 ring-black/10" : "bg-[var(--app-surface)] ring-1 ring-inset ring-[var(--app-border)]"}`}
                     style={colorStyle(value)}
                   />
                 );
@@ -260,7 +260,7 @@ function ActivityChart({ buckets, locale }: { buckets: AiUsageBucket[]; locale: 
 
       <div className="mt-2 flex items-center justify-end gap-1 text-[10px] text-[var(--app-muted)]">
         <span>{t("aiUsage.less")}</span>
-        {[0, 1, 2, 3].map((step) => <span key={step} aria-hidden className="h-2.5 w-2.5 rounded-[3px]" style={step ? { backgroundColor: `rgba(var(--brand-rgb), ${0.18 + step * 0.2})` } : { backgroundColor: "var(--app-surface)" }} />)}
+        {[0, 1, 2, 3].map((step) => <span key={step} aria-hidden className="h-3 w-3 rounded-[3px] ring-1 ring-inset ring-[var(--app-border)]" style={step ? { backgroundColor: `rgb(var(--brand-rgb) / ${0.35 + (step - 1) * 0.325})` } : { backgroundColor: "var(--app-surface)" }} />)}
         <span>{t("aiUsage.more")}</span>
       </div>
     </section>

@@ -23,6 +23,7 @@ import {
 import { generateSuggestions, getSuggestionContextKey, hasRealAiKey, type GenerateSuggestionsResult } from "@/lib/aiSuggest";
 import { createSuggestionCache, isManualSuggestionContext, SUGGESTION_MAX_AGE_MS } from "@/lib/aiSuggestionCache";
 import { resolveAiReplyProfile } from "@/lib/aiPromptScope";
+import { PlaybookBinding } from "./PlaybookBinding";
 import type { Message, WhatsAppLabel } from "@/types/crm";
 import { ContactAvatar } from "./ContactAvatar";
 import { GoogleSheetInfo } from "./GoogleSheetInfo";
@@ -571,6 +572,7 @@ export function CrmAiPanel() {
             )}
 
             <SalesStageField value={contact.stage} onChange={stage => updateContact(contact.id, { stage })} />
+            {selectedChatId && <PlaybookBinding accountId={aiAccountId} chatId={selectedChatId}/>}
 
             {activeOrder && contact.stage !== "won" && contact.stage !== "after_sales" && (
               <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-2.5">

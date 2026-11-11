@@ -1,4 +1,6 @@
+import { autoReplyDelayRange } from "@/lib/autoReplyDelay";
 import type { AutoReplyMode } from "@/lib/autoReplyScope";
+import { normalizePlaybooks, normalizePlaybookBindings, type AiPlaybook } from "@/lib/aiPlaybooks";
 import { validTimeZone } from "@/lib/timeZone";
 import { normalizeScheduledPlans, type ScheduledPlan } from "@/lib/scheduledPlans";
 import {
@@ -73,6 +75,7 @@ export interface SettingsChatFolder {
   aiSystemPrompt?: string;
   aiPromptMode?: "inherit" | "append" | "replace";
   aiPromptTemplateId?: string;
+  aiPlaybookId?: string;
   aiOutreach?: AiOutreachRule;
   aiReplyMaxChars?: number;
   aiReplyForbiddenTerms?: string[];
@@ -188,6 +191,8 @@ export interface SettingsShape {
   aiAutoReplyModeByChatId: Record<string, AutoReplyMode>;
   /** 自动回复防刷屏：同一会话两次自动回复的最小间隔（毫秒） */
   aiAutoReplyIntervalMs: number;
+  aiAutoReplyDelayMinMs: number;
+  aiAutoReplyDelayMaxMs: number;
   /** 单独交给人工处理的会话 id；全局自动回复仍可保留 */
   aiAutoReplyManualChatIds: string[];
   /** 默认自动回复策略；各账号可以完整覆盖 */
@@ -198,6 +203,14 @@ export interface SettingsShape {
   /** WhatsApp 账号级身份覆盖；空值或无条目时继承 aiSystemPrompt */
   aiSystemPromptByAccountId: Record<string, string>;
   aiPromptTemplates: AiPromptTemplate[];
+  aiPlaybooks: AiPlaybook[];
+  aiPlaybookOverviewId: string;
+  aiPlaybookBindings: Record<string, string>;
+  aiPlaybookMuseRoot: string;
+  aiPlaybookAutoSync: boolean;
+  aiPlaybookMuseSyncedAt: number;
+  aiPlaybookMuseAttemptAt: number;
+  aiPlaybookMuseError: string;
   imagePromptTemplates: AiPromptTemplate[];
   aiContextMode: "compact" | "full";
   aiOutreachRuns: AiOutreachRun[];
@@ -377,12 +390,22 @@ export const defaultSettings: SettingsShape = {
   aiAutoReplyPaused: false,
   aiAutoReplyModeByChatId: {},
   aiAutoReplyIntervalMs: 30000,
+  aiAutoReplyDelayMinMs: 20000,
+  aiAutoReplyDelayMaxMs: 60000,
   aiAutoReplyManualChatIds: [],
   aiAutoReplyPolicy: { ...DEFAULT_AUTO_REPLY_POLICY },
   aiAutoReplyPolicyByAccountId: {},
   aiSystemPrompt: "",
   aiSystemPromptByAccountId: {},
   aiPromptTemplates: [],
+  aiPlaybooks: [],
+  aiPlaybookOverviewId: "",
+  aiPlaybookBindings: {},
+  aiPlaybookMuseRoot: "",
+  aiPlaybookAutoSync: false,
+  aiPlaybookMuseSyncedAt: 0,
+  aiPlaybookMuseAttemptAt: 0,
+  aiPlaybookMuseError: "",
   imagePromptTemplates: [],
   aiContextMode: "full",
   aiOutreachRuns: [],
@@ -457,6 +480,8 @@ export function normalizeLoadedSettings(
     ...defaultSettings,
     ...(src as Partial<SettingsShape>),
   };
+  const delay=autoReplyDelayRange(merged);
+  merged.aiAutoReplyDelayMinMs=delay.min;merged.aiAutoReplyDelayMaxMs=delay.max;
   merged.todayIncludeGroups = merged.todayIncludeGroups === true;
   const categoryLabels = merged.quickReplyCategoryLabels;
   merged.quickReplyCategoryLabels = {};
@@ -693,6 +718,14 @@ export function normalizeLoadedSettings(
     : [];
   merged.aiAutoReplyPaused = merged.aiAutoReplyPaused === true;
   merged.aiPromptTemplates = normalizePromptTemplates(merged.aiPromptTemplates);
+  merged.aiPlaybooks = normalizePlaybooks(merged.aiPlaybooks);
+  merged.aiPlaybookOverviewId = typeof merged.aiPlaybookOverviewId === "string" ? merged.aiPlaybookOverviewId.slice(0,120) : "";
+  merged.aiPlaybookBindings = normalizePlaybookBindings(merged.aiPlaybookBindings);
+  merged.aiPlaybookMuseRoot = typeof merged.aiPlaybookMuseRoot === "string" && merged.aiPlaybookMuseRoot.length <= 500 ? merged.aiPlaybookMuseRoot : "";
+  merged.aiPlaybookAutoSync = merged.aiPlaybookAutoSync === true;
+  merged.aiPlaybookMuseSyncedAt = Number.isFinite(merged.aiPlaybookMuseSyncedAt) && merged.aiPlaybookMuseSyncedAt > 0 ? merged.aiPlaybookMuseSyncedAt : 0;
+  merged.aiPlaybookMuseAttemptAt = Number.isFinite(merged.aiPlaybookMuseAttemptAt) && merged.aiPlaybookMuseAttemptAt > 0 ? merged.aiPlaybookMuseAttemptAt : 0;
+  merged.aiPlaybookMuseError = typeof merged.aiPlaybookMuseError === "string" ? merged.aiPlaybookMuseError.slice(0,400) : "";
   merged.imagePromptTemplates = normalizePromptTemplates(merged.imagePromptTemplates).map(item => ({ ...item, prompt: item.prompt.slice(0, 4000) }));
   merged.aiContextMode = merged.aiContextMode === "compact" ? "compact" : "full";
   merged.aiOutreachRuns = normalizeOutreachRuns(merged.aiOutreachRuns);
@@ -730,7 +763,7 @@ export function normalizeLoadedSettings(
     const prompts: Record<string, string> = {};
     for (const [rawId, rawPrompt] of Object.entries(raw)) {
       const id = String(rawId || "").trim();
-      const prompt = typeof rawPrompt === "string" ? rawPrompt.trim().slice(0, 6000) : "";
+      const prompt = typeof rawPrompt === "string" ? rawPrompt.trim() : "";
       if (id && prompt) prompts[id] = prompt;
     }
     merged.aiSystemPromptByAccountId = prompts;
@@ -1002,6 +1035,7 @@ export function normalizeLoadedSettings(
           ? { aiSystemPrompt: f.aiSystemPrompt.trim().slice(0, 6000) } : {}),
         ...(f?.aiPromptMode === "inherit" || f?.aiPromptMode === "append" || f?.aiPromptMode === "replace" ? {aiPromptMode: f.aiPromptMode} : {}),
         ...(typeof f?.aiPromptTemplateId === "string" && f.aiPromptTemplateId ? {aiPromptTemplateId: f.aiPromptTemplateId.slice(0,120)} : {}),
+        ...(typeof f?.aiPlaybookId === "string" && f.aiPlaybookId ? {aiPlaybookId: f.aiPlaybookId.slice(0,120)} : {}),
         ...(f?.aiOutreach ? {aiOutreach: normalizeOutreachRule(f.aiOutreach)} : {}),
         ...(typeof f?.aiReplyMaxChars==="number"&&Number.isFinite(f.aiReplyMaxChars)?{aiReplyMaxChars:Math.min(2000,Math.max(20,Math.round(f.aiReplyMaxChars)))}:{}),
         ...(Array.isArray(f?.aiReplyForbiddenTerms)?{aiReplyForbiddenTerms:[...new Set(f.aiReplyForbiddenTerms.filter((term):term is string=>typeof term==="string"&&!!term.trim()).map(term=>term.trim().slice(0,100)))].slice(0,50)}:{}),

@@ -15,6 +15,8 @@ test("extended context includes earlier conversation, real voice examples, trans
   const history = Array.from({ length: 50 }, (_, i) => message(String(i)));
   history[0] = message("0", { direction: "out", body: "Salut, ça marche !" });
   history[1] = message("1", { direction: "out", systemKind: "ai_auto_reply", body: "ARTIFICIAL VOICE" });
+  history[2] = message("2", { direction: "out", mediaType: "audio", body: "[语音 8s]" });
+  history[3] = message("3", { direction: "out", mediaType: "audio", body: "[语音 4s]", transcript: "REAL TRANSCRIBED STYLE" });
   history[25].body = "IMPORTANT EARLIER DETAIL";
   history[49] = message("49", { mediaType: "audio", body: "[audio]", transcript: "Le rendez-vous est mardi.", quoted: { id: "25", body: "À quelle date ?", fromMe: true } });
   history.push(message("50", { direction: "out", deliveryStatus: "queued", body: "NOT SENT YET" }));
@@ -26,8 +28,36 @@ test("extended context includes earlier conversation, real voice examples, trans
   assert.ok(input.includes("À quelle date ?"));
   assert.ok(input.includes("Salut, ça marche !"));
   assert.ok(!input.includes("ARTIFICIAL VOICE"));
+  assert.ok(!input.includes('[语音 8s]'));
+  assert.ok(input.includes('REAL TRANSCRIBED STYLE'));
   assert.ok(!input.includes("NOT SENT YET"));
   assert.equal(result.suggestions.length, 1, "never duplicate a reply to fill three slots");
+});
+
+test("old numbered contact lists are compacted without removing conversation or directly referenced lists", async (t) => {
+  let input;
+  t.mock.method(globalThis, "fetch", async (_url, opts) => {
+    input = JSON.parse(opts.body).messages[1].content;
+    return Response.json({ choices: [{ message: { content: '[{"text":"OK"}]' } }] });
+  });
+  const list = Array.from({ length: 12 }, (_, i) => `${i+1}- Person ${i} https://wa.me/1555000${String(i).padStart(4, '0')}`).join('\n');
+  const old = message('0', { body: `Follow up tomorrow; not today.\n${list}` });
+  const latest = message('1', { body: 'How are you?' });
+  await generateSuggestions(contact, [old, latest], settings);
+  assert.match(input, /Shared contact list: 12 entries/);
+  assert.match(input, /Follow up tomorrow; not today/);
+  assert.match(input, /How are you/);
+  assert.doesNotMatch(input, /wa\.me|Person 0/);
+  await generateSuggestions(contact, [old, latest], settings, { replyTo: old });
+  assert.match(input, /wa\.me\/15550000000/);
+  await generateSuggestions(contact, [old, { ...latest, quoted: { id: old.id, body: 'The list', fromMe: false } }], settings);
+  assert.match(input, /wa\.me\/15550000000/);
+  await generateSuggestions(contact, [old], settings);
+  assert.match(input, /wa\.me\/15550000000/);
+  const discussion = message('0', { body: 'Ask Alice at https://wa.me/15551111111 about her appointment.\nBob declined: https://wa.me/15552222222\nCarol confirmed Friday: https://wa.me/15553333333' });
+  await generateSuggestions(contact, [discussion, latest], settings);
+  assert.match(input, /Bob declined/);
+  assert.match(input, /Carol confirmed Friday/);
 });
 
 test("long context stays bounded and truncation cannot split an emoji", async (t) => {

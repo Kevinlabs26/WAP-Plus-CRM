@@ -215,3 +215,15 @@ test('queued scoped replies stop when their folder is disabled in the send gate'
  globalThis.__beforeDispatch=()=>{state.settings.chatFolders[0].autoReplyMode='manual';};
  SendQueueWatcher();await waitForAiQueue(reply);assert.deepEqual(globalThis.__sentRequests,[]);assert.equal(reply.deliveryStatus,'failed');
 });
+
+test('blocked queued AI replies explain expiry, missing metadata and newer incoming messages',async()=>{
+ for(const kind of ['expired','legacy','new-inbound']){
+  const {state,reply}=queuedAi();
+  if(kind==='expired')reply.sentAt=new Date(Date.now()-6*60_000).toISOString();
+  if(kind==='legacy')delete reply.aiReplyContextHash;
+  if(kind==='new-inbound')state.messages.push({id:'new-inbound',chatId:'chat',accountId:'wa-b',direction:'in',body:'One more thing',sentAt:new Date().toISOString()});
+  SendQueueWatcher();await waitForAiQueue(reply);
+  assert.equal(reply.deliveryStatus,'failed');assert.equal(globalThis.__sentRequests.length,0);
+  assert.match(reply.lastError,kind==='expired'?/超过 5 分钟/:kind==='legacy'?/缺少生成校验记录/:/新消息/);
+ }
+});

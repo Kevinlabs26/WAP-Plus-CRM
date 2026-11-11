@@ -230,20 +230,25 @@ export function evaluateAutoReplyDecision(
 }
 
 /** 发送门闸和重试队列共享复核，防止排队期间自动模式或上下文改变。 */
-export function canSendAutoReply(
+export function getAutoReplySendError(
   settings: AutoReplyScopeSettings & { aiAutoReplyPolicy: unknown; aiAutoReplyPolicyByAccountId: unknown },
   messages: readonly (AutoReplySafetyMessage & { id: string; chatId: string; accountId?: string })[],
   reply: { id: string; chatId: string; body: string; sentAt: string; accountId?: string },
   inboundId?: string
-): boolean {
-  if (resolveAutoReplyScope(settings, reply.chatId).mode !== "auto") return false;
+): string | null {
+  if (resolveAutoReplyScope(settings, reply.chatId).mode !== "auto") return "此会话已暂停自动回复或切换为人工模式";
   const thread = messages.filter((item) => item.chatId === reply.chatId)
     .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
   const inbound = thread.filter((item) => item.direction === "in").at(-1);
-  if (!inbound || (inboundId && inbound.id !== inboundId)) return false;
+  if (!inbound) return "待回复的入站消息尚未载入，请重新打开会话后生成";
+  if (inboundId && inbound.id !== inboundId) return "对方又发来了新消息，请根据最新聊天重新生成";
   if (thread.some((item) => item.id !== reply.id && item.sentAt >= reply.sentAt &&
-      (item.direction === "in" && !inboundId || item.direction === "out" && !item.systemKind))) return false;
+      (item.direction === "in" && !inboundId || item.direction === "out" && !item.systemKind))) return "生成后收到新消息或检测到手动回复，旧自动回复已停止";
   const policy = resolveAutoReplyPolicy(settings.aiAutoReplyPolicy, settings.aiAutoReplyPolicyByAccountId, reply.accountId);
-  return evaluateAutoReplyDecision(thread, inbound, Date.now(), policy).allow &&
-    !getAutoReplyOutputBlockReason(reply.body, { allowPricing: policy.allowPricing });
+  const decision=evaluateAutoReplyDecision(thread, inbound, Date.now(), policy);
+  return decision.allow ? getAutoReplyOutputBlockReason(reply.body, { allowPricing: policy.allowPricing }) : decision.reason;
+}
+
+export function canSendAutoReply(...args:Parameters<typeof getAutoReplySendError>):boolean {
+  return getAutoReplySendError(...args)===null;
 }

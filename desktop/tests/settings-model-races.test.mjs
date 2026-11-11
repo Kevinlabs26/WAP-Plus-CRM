@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 const mocks={
+ './PlaybookLibrary':'export const PlaybookLibrary="playbook-library";',
  './MuseWebFields':'export const MuseWebFields="muse-fields";',
  './AiUsagePanel':'export const AiUsagePanel="ai-usage";',
  './VertexAiFields':'export const VertexAiFields="vertex-fields";',

@@ -1,4 +1,5 @@
 import { deferDuringRestore } from "./restoreGuard";
+import { remapPlaybookBindings } from "@/lib/aiPlaybooks";
 import type { AppState, SliceContext } from "./types";
 import {
   applyMessagesAck,
@@ -619,6 +620,8 @@ export function createIngestSlice({
               chatFolderClones: folderRefs.clones,
             };
           }
+          const aiPlaybookBindings = remapPlaybookBindings(state.settings.aiPlaybookBindings || {}, chatReplacements);
+          if (aiPlaybookBindings !== state.settings.aiPlaybookBindings) settingsPatch = {...settingsPatch, aiPlaybookBindings};
         }
         if (blocklist) {
           const byAcc = setAccountBlocklist(

@@ -187,6 +187,7 @@ export function StatsBar() {
           );
         }
       )}
+      <div className="ml-auto flex min-w-0 max-w-full items-center gap-1.5">
       <CloudUploadBanner />
       {activeNav === "chats" && crmPanelCollapsed && hasSelection && (
         <button
@@ -194,11 +195,12 @@ export function StatsBar() {
           title={t("stats.openCrmPanel")}
           aria-label={t("stats.openCrmPanel")}
           onClick={() => setCrmPanelCollapsed(false)}
-          className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200"
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200"
         >
           <PanelRightOpen className="h-4 w-4" />
         </button>
       )}
+      </div>
     </div>
   );
 }

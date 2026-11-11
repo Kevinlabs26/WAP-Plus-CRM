@@ -109,6 +109,7 @@ const BaileysWatcher = lazy(() =>
     default: m.BaileysWatcher,
   }))
 );
+const PlaybookSyncWatcher = lazy(() => import('@/components/bridge/PlaybookSyncWatcher').then(m => ({default: m.PlaybookSyncWatcher})));
 const SendQueueWatcher = lazy(() =>
   import("@/components/bridge/SendQueueWatcher").then((m) => ({
     default: m.SendQueueWatcher,
@@ -438,6 +439,7 @@ function DeferredWatchers({ interactive }: { interactive: boolean }) {
     <Suspense fallback={null}>
       <BridgeWatcher />
       <BaileysWatcher />
+      <PlaybookSyncWatcher />
       <SendQueueWatcher />
       <CampaignRunner />
       <ScheduledMessageWatcher />

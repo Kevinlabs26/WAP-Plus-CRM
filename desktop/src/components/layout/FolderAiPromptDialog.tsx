@@ -1,15 +1,15 @@
 import { useState } from "react";
-import { useAppStore } from "@/store/appStore";
+import { useAppStore, flushPersist } from "@/store/appStore";
 import { useI18n } from "@/i18n";
 import { Textarea } from "@/components/ui/primitives";
 import { resolveFolderAiProfile } from "@/lib/aiPromptScope";
-import { AiPromptLibrary } from "@/components/settings/AiPromptLibrary";
 import { AiOutreachControls } from "@/components/settings/AiOutreachControls";
 import { normalizeOutreachRule } from "@/lib/aiOutreachRules";
 import { resolveAiReplyConstraints } from "@/lib/aiReplyConstraints";
 import { lastContactedAccounts, recipientKey } from "@/lib/scheduledPlans";
 import { resolveSendTarget } from "@/lib/utils";
 import { AiOutreachPreview } from "@/components/settings/AiOutreachPreview";
+import { PlaybookSelect } from "@/components/crm/PlaybookBinding";
 
 export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }: { folderId: string; onClose: () => void; hideReplyMode?:boolean }) {
   const { t } = useI18n();
@@ -18,6 +18,7 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
   const [mode, setMode] = useState(folder?.aiPromptMode === "append" ? "append" : folder?.aiPromptMode === "inherit" ? "inherit" : folder?.aiSystemPrompt?.trim()||folder?.aiPromptTemplateId ? "custom" : "inherit");
   const [draft, setDraft] = useState(folder?.aiSystemPrompt || "");
   const [templateId,setTemplateId]=useState(folder?.aiPromptTemplateId||"");
+  const [playbookId,setPlaybookId]=useState(folder?.aiPlaybookId||"");
   const [replyMode,setReplyMode]=useState<"inherit"|"auto"|"manual">(folder?.autoReplyMode||"inherit");
   const [previewAccount,setPreviewAccount]=useState("");
   const [followingAccount]=useState(()=>{
@@ -46,14 +47,19 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
   const preview=resolveFolderAiProfile(draftSettings,folderId,accountId);
   const limits=resolveAiReplyConstraints(draftSettings,accountId,undefined,folderId);
   const invalid=custom&&!draft.trim()&&!templateId||!!preview.error||forbiddenTerms.length>50||forbiddenTerms.some(term=>term.length>100)||!!maxChars&&(!Number.isInteger(Number(maxChars))||Number(maxChars)<20||Number(maxChars)>2000);
-  const save = () => {
-    if (invalid) return;
+  const save = (immediate = false) => {
+    if (invalid || immediate && (!outreach.enabled || outreach.paused || settings.aiAutoReplyPaused || settings.aiOutreachPaused)) return;
     const current = useAppStore.getState();
     current.updateSettings({ chatFolders: current.settings.chatFolders.map(item => item.id === folderId
       ? { ...item, aiSystemPrompt: custom ? draft.trim().slice(0, 6000) : undefined,
-        aiPromptMode:mode==="custom"?"replace":mode as "append"|"inherit",aiPromptTemplateId:custom?templateId||undefined:undefined,aiOutreach:outreach,...(hideReplyMode?{}:{autoReplyMode:replyMode==="inherit"?undefined:replyMode}),
+        aiPromptMode:mode==="custom"?"replace":mode as "append"|"inherit",aiPromptTemplateId:custom?templateId||undefined:undefined,aiPlaybookId:playbookId||undefined,aiOutreach:immediate?{...outreach,runNowAt:Date.now()}:outreach,...(hideReplyMode?{}:{autoReplyMode:replyMode==="inherit"?undefined:replyMode}),
         aiReplyMaxChars:maxChars?Number(maxChars):undefined,aiReplyForbiddenTerms:forbiddenTerms } : item) });
-    onClose();
+    if (immediate) {
+      void flushPersist(useAppStore.getState).then(()=>{
+        useAppStore.getState().pushToast(t("aiOutreach.runNowStarted"),"info");
+        onClose();
+      }).catch(error=>useAppStore.getState().pushToast(String(error),"error"));
+    } else onClose();
   };
   return (
     <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/65 p-4 backdrop-blur-[2px]" onClick={onClose}>
@@ -103,25 +109,28 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
           <option value="">{t("aiLibrary.followChat",{account:settings.waAccounts?.find(account=>account.id===followingAccount)?.label||followingAccount||"—"})}</option>
           {settings.waAccounts?.map(account=><option key={account.id} value={account.id}>{account.label}: {account.userName||account.phoneE164}</option>)}
         </select>}
+        <div className="mt-3"><PlaybookSelect value={playbookId} onChange={setPlaybookId}/></div>
         <AiOutreachControls value={outreach} onChange={setOutreach}/>
+        {outreach.enabled&&<div className="mt-3 space-y-2">
+          {settings.aiAutoReplyPaused&&<p role="status" className="text-xs text-amber-500">{t("aiChat.paused")}</p>}
+          {settings.aiOutreachPaused&&<p role="status" className="text-xs text-amber-500">{t("aiOutreach.masterPaused")}</p>}
+          <button type="button" disabled={invalid||!!outreach.paused||settings.aiAutoReplyPaused||settings.aiOutreachPaused} onClick={()=>save(true)} className="rounded-lg bg-brand px-3 py-2 text-xs text-[var(--brand-foreground)] disabled:opacity-40">{t("aiOutreach.saveRunNow")}</button>
+        </div>}
         {outreach.enabled&&<AiOutreachPreview settings={draftSettings} folderIds={[folderId]} assumeRunning={settings.aiOutreachPaused}/>}
-        <details className="mt-3 rounded-lg border border-zinc-800 p-3 text-xs"><summary className="cursor-pointer">{t("aiFolder.advanced")}</summary>
-        <details className="mt-3 text-xs"><summary className="cursor-pointer">{t("aiLibrary.preview")}</summary>
+        <details className="mt-3 text-xs"><summary className="cursor-pointer">{t("folderAi.basePreview")}</summary>
           <p className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap text-zinc-400">{preview.error||preview.prompt||t("folderAi.source.default")}</p>
         </details>
-        <details className="mt-3 rounded-lg border border-zinc-800 p-3 text-xs"><summary className="cursor-pointer">{t("aiConstraints.title")}</summary>
+        <details className="mt-3 rounded-lg border border-zinc-800 p-3 text-xs"><summary className="cursor-pointer">{t("folderAi.otherLimits")}</summary>
           <p className="mt-2 text-2xs text-zinc-500">{t("aiConstraints.hint")}</p>
           <label className="mt-2 block">{t("aiConstraints.max")}<input type="number" min={20} max={2000} value={maxChars} onChange={event=>setMaxChars(event.target.value)} className="ui-control mt-1 w-full px-2 py-2" /></label>
           <label className="mt-2 block">{t("aiConstraints.forbidden")}<Textarea rows={3} maxLength={5000} value={forbidden} onChange={event=>setForbidden(event.target.value)}/></label>
           <p className="mt-2 text-2xs text-zinc-500">{t("aiConstraints.effective",{max:limits.maxChars||"—",terms:limits.forbiddenTerms.join("、")||"—"})}</p>
         </details>
-        <div className="mt-3"><AiPromptLibrary /></div>
-        </details>
         {preview.error&&<p role="alert" className="mt-3 text-xs text-rose-400">{preview.error}</p>}
         <div className="mt-5 flex justify-end gap-2">
           <button type="button" className="rounded-lg px-3 py-2 text-xs text-zinc-400 hover:bg-zinc-800" onClick={onClose}>{t("dialog.cancel")}</button>
           <button type="button" className="rounded-lg bg-brand px-3 py-2 text-xs text-[var(--brand-foreground)] disabled:opacity-40"
-            disabled={invalid} onClick={save}>{t("dialog.save")}</button>
+            disabled={invalid} onClick={()=>save()}>{t("dialog.save")}</button>
         </div>
       </div>
     </div>

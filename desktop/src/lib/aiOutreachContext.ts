@@ -1,3 +1,4 @@
+import { isImmediateOutreach, outreachRunClock, outreachWindowOffset } from './aiOutreachRules';
 import type { AppState } from "../store/types";
 import type { Message, ChatPreview, Contact } from "../types/crm";
 import { normalizeOutreachRule, outreachClock, outreachGoal } from "./aiOutreachRules.ts";
@@ -45,10 +46,10 @@ export function inspectOutreachCandidate(state: OutreachState, folderId: string,
   if(settings.aiAutoReplyManualChatIds?.includes(chatId))return {candidate:null,reason:"manual_optout"};
   const policy=resolveAutoReplyPolicy(settings.aiAutoReplyPolicy,settings.aiAutoReplyPolicyByAccountId,accountId);
   if (!isWithinAutoReplyHours(policy,new Date(now))) return {candidate:null,reason:"outside_hours"};
-  const clock=lookup?.clock||outreachClock(rule.timeZone,now),minutes=(value:string)=>Number(value.slice(0,2))*60+Number(value.slice(3));
+  const clock=outreachRunClock(rule,now),minutes=(value:string)=>Number(value.slice(0,2))*60+Number(value.slice(3));
   const late=minutes(clock.time)-minutes(rule.time);
-  if(late<0)return {candidate:null,reason:"not_time"};
-  if(late>=120)return {candidate:null,reason:"missed_window"};
+  if(!isImmediateOutreach(rule,now)&&outreachWindowOffset(rule,now)>=120&&late<0)return {candidate:null,reason:"not_time"};
+  if(!isImmediateOutreach(rule,now)&&outreachWindowOffset(rule,now)>=120)return {candidate:null,reason:"missed_window"};
   const runs=settings.aiOutreachRuns||[], run=runId?runs.find(item=>item.id===runId):undefined;
   if(runs.length>=10_000&&!run)return {candidate:null,reason:"capacity"};
   const thread=(state.messagesByChatId ? state.messagesByChatId[chatId]||[] : state.messages.filter(item=>item.chatId===chatId)).filter(item=>item.id!==ownMessage?.id);

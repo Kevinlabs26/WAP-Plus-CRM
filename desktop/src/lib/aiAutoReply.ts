@@ -1,3 +1,4 @@
+import { autoReplyDelayRange } from "./autoReplyDelay";
 import { resolveAutoReplyScope } from "./autoReplyScope";
 import type { ChannelId } from "@/channels";
 import type { ChatPreview, Contact, Message } from "@/types/crm";
@@ -56,19 +57,22 @@ const activeRequests = new Map<string, { id: string; sentAt: string; controller:
 const retries = new Map<string, { id: string; attempts: number; startedAt: number }>();
 const mediaResyncAt = new Map<string, number>();
 const mediaInFlight = new Set<string>();
+const isVoiceMessage = (message: Message) => ["audio", "ptt"].includes(message.mediaType || "") || message.mediaPtt === true || Boolean(message.mediaMime?.toLowerCase().startsWith("audio/"));
 
-/** Live short messages share a 1.2-second quiet period before generating. */
+/** Wait before generating so a delayed reply does not expire in the send queue. */
 export function scheduleAutoReplyInbound(message: Message): void {
   if ((activeRequests.get(message.chatId)?.sentAt || "") > message.sentAt ||
       (debounceTimers.get(message.chatId)?.message.sentAt || "") > message.sentAt) return;
   activeRequests.get(message.chatId)?.controller.abort();
   const previous = debounceTimers.get(message.chatId);
   if (previous) clearTimeout(previous.timer);
-  setAutoReplyRuntime(message.chatId, { phase: "waiting", inboundId: message.id, accountId: message.accountId });
+  const range=autoReplyDelayRange(useAppStore.getState().settings);
+  const delay=Math.max(1200,range.min+Math.floor(Math.random()*(range.max-range.min+1)));
+  setAutoReplyRuntime(message.chatId, { phase: "waiting", inboundId: message.id, accountId: message.accountId, reason:"等待回复间隔", retryAt:Date.now()+delay });
   debounceTimers.set(message.chatId, { message, timer: setTimeout(() => {
     debounceTimers.delete(message.chatId);
     return autoReplyInbound(message);
-  }, 1200) });
+  }, delay) });
 }
 
 export function stopAutoReplies(): void {
@@ -277,14 +281,14 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
 
   const policy = resolveAutoReplyPolicy(settings.aiAutoReplyPolicy, settings.aiAutoReplyPolicyByAccountId, accountId);
   const beforeVoice = evaluateAutoReplyDecision(conversation, m, Date.now(), policy);
-  if (!beforeVoice.allow && (beforeVoice.kind !== "risk" || !["audio", "ptt"].includes(m.mediaType || "") || !!m.transcript)) {
+  if (!beforeVoice.allow && (beforeVoice.kind !== "risk" || !isVoiceMessage(m) || !!m.transcript?.trim())) {
     logAutoSkipOnce(m.chatId, contact.id, `decision:${beforeVoice.kind}`, "自动回复：暂停", beforeVoice.reason);
     runtime("human",beforeVoice.reason);
     return;
   }
-  const lastOut = conversation.map(x => x.direction).lastIndexOf("out");
-  const voices = ["audio", "ptt"].includes(m.mediaType || "")
-    ? conversation.slice(lastOut + 1).filter(x => x.direction === "in" && ["audio", "ptt"].includes(x.mediaType || "") && !x.transcript) : [];
+  const lastOut = conversation.map(x => x.direction === "out" && !["pending", "queued", "failed", "local"].includes(x.deliveryStatus || "")).lastIndexOf(true);
+  const unansweredVoices = conversation.slice(lastOut + 1).filter(x => x.direction === "in" && isVoiceMessage(x));
+  const voices = unansweredVoices.filter(x => !x.transcript?.trim());
   for (const voice of voices) {
     if (signal.aborted) return;
     runtime("transcribing");
@@ -298,11 +302,11 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
     }
     if (signal.aborted) return;
     const current = useAppStore.getState().messages.find(x => x.id === voice.id);
-    if (!current?.mediaUrl) return "retry";
+    if (!current?.mediaUrl) { runtime("waiting", current?.mediaError || "语音文件尚未加载，稍后重试"); return "retry"; }
     const { transcribeVoice } = await import("@/lib/transcribeVoice");
     const result = await abortable(transcribeVoice(current.mediaUrl, current.mediaMime || "audio/ogg", settings, { signal, language: "" }), signal);
     if (signal.aborted || !useAppStore.getState().messages.some(x => x.id === voice.id && x.chatId === m.chatId)) return;
-    if (result.fallback || !result.text.trim()) {
+    if (result.fallback || result.error || !result.text.trim()) {
       logAutoDecision(contact.id, "自动回复：语音未识别", result.error || "转写为空，请人工处理");
       runtime("human", result.error || "语音转写为空");
       return /正在转写|fetch|network|timeout|超时|\b(?:429|5\d\d)\b/i.test(result.error || "") ? "retry" : undefined;
@@ -314,7 +318,10 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
   conversation = state.messagesByChatId?.[m.chatId] || state.messages.filter(x => x.chatId === m.chatId).sort((a, b) => a.sentAt.localeCompare(b.sentAt));
   m = conversation.find(x => x.id === m.id) || m;
   if (resolveAutoReplyScope(state.settings, m.chatId).mode !== "auto") return;
-  const decision = evaluateAutoReplyDecision(conversation, m, Date.now(), policy);
+  const pendingVoiceIds = new Set(unansweredVoices.map(x => x.id));
+  const decision = conversation.filter(x => x.id === m.id || pendingVoiceIds.has(x.id))
+    .map(inbound => evaluateAutoReplyDecision(conversation, inbound, Date.now(), policy)).find(item => !item.allow)
+    || evaluateAutoReplyDecision(conversation, m, Date.now(), policy);
   if (!decision.allow) {
     if (
       decision.kind !== "manual_takeover" ||

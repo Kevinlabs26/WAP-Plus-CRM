@@ -6,12 +6,14 @@ import { outreachCandidate, outreachContextKey, isOutreachOptOut } from "./aiOut
 import { getAutoReplyOutputBlockReason } from "./aiSafety";
 import { resolveSendTarget } from "./utils";
 import type { AiOutreachRun } from "./aiOutreachRules";
-import { normalizeOutreachRule, outreachClock, outreachGoal } from "./aiOutreachRules";
+import { normalizeOutreachRule, outreachGoal, isImmediateOutreach, outreachRunClock, outreachWindowOffset } from "./aiOutreachRules";
 import type { Message } from "@/types/crm";
 import { retainMessageChats } from "@/store/messageMemory";
 import { hydrateOutreachHistory } from "./aiOutreachHistory";
 import { lastContactedAccounts, recipientKey } from "./scheduledPlans";
 
+let scheduler:{at:number;phase:"idle"|"checking"|"history"|"generating"|"waiting"|"error";error:string}={at:0,phase:"idle",error:""};
+export const getOutreachSchedulerStatus=()=>scheduler;
 let running=false;
 let lastTick=0;
 let controller: AbortController|undefined;
@@ -74,14 +76,14 @@ export async function tickAiOutreach(now=Date.now()) {
   const epoch=getDataRestoreGeneration();
   const initial=useAppStore.getState();
   if (running||isDataRestoreActive()||!initial.hydrated||!initial.uiReady||now-lastTick<30_000) return;
-  lastTick=now;running=true;
+  lastTick=now;running=true;scheduler={at:now,phase:"checking",error:""};
   try {
     for (const run of initial.settings.aiOutreachRuns||[]) {
       if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return;
       if(run.status==="draft"){
         const folder=initial.settings.chatFolders.find(folder=>folder.id===run.folderId),rule=folder?.aiOutreach&&normalizeOutreachRule(folder.aiOutreach);
-        const clock=rule&&outreachClock(rule.timeZone,now),minutes=(value:string)=>Number(value.slice(0,2))*60+Number(value.slice(3));
-        if(!rule||clock!.day!==run.day||minutes(clock!.time)-minutes(rule.time)>=120)await saveRun({...run,status:"cancelled",error:"草稿已过期，未自动发送"});
+        const clock=rule&&outreachRunClock(rule,now);
+        if(!rule||clock!.day!==run.day||!isImmediateOutreach(rule,now)&&outreachWindowOffset(rule,now)>=120)await saveRun({...run,status:"cancelled",error:"草稿已过期，未自动发送"});
       }
       if (run.status==="generating") await saveRun({...run,status:"failed",error:"生成被中断，未自动重试以避免重复花费"});
       if (run.status==="queued") {
@@ -103,9 +105,8 @@ export async function tickAiOutreach(now=Date.now()) {
     const lastAccounts=folders.some(folder=>folder.scope?.type==="all")?lastContactedAccounts(state.chats,state.contacts,state.messages):undefined;
     for (const folder of folders) {
       if (!folder.aiOutreach?.enabled) continue;
-      const rule=normalizeOutreachRule(folder.aiOutreach),clock=outreachClock(rule.timeZone,now);
-      const minutes=(value:string)=>Number(value.slice(0,2))*60+Number(value.slice(3));
-      if(clock.time<rule.time||minutes(clock.time)-minutes(rule.time)>=120||(state.settings.aiOutreachRuns||[]).filter(run=>run.folderId===folder.id&&run.day===clock.day).length>=rule.dailyLimit)continue;
+      const rule=normalizeOutreachRule(folder.aiOutreach),clock=outreachRunClock(rule,now);
+      if(!isImmediateOutreach(rule,now)&&outreachWindowOffset(rule,now)>=120||(state.settings.aiOutreachRuns||[]).filter(run=>run.folderId===folder.id&&run.day===clock.day).length>=rule.dailyLimit)continue;
       const members=new Set(folder.chatIds);
       for (const chatId of folder.chatIds) {
         const chat=chats.get(chatId),contact=chat&&contacts.get(chat.contactId);
@@ -117,11 +118,18 @@ export async function tickAiOutreach(now=Date.now()) {
         return; // One generation per tick, no parallel requests or bulk token bursts.
       }
     }
-  } finally {running=false;}
+  } catch(error) {
+    scheduler={at:Date.now(),phase:"error",error:String(error).slice(0,500)};
+    throw error;
+  } finally {
+    running=false;
+    if(scheduler.phase!=="error")scheduler={at:Date.now(),phase:"waiting",error:""};
+  }
 }
 
 async function generateOutreach(folderId:string,chatId:string,id:string,now=Date.now()) {
   const epoch=getDataRestoreGeneration();
+  scheduler={at:Date.now(),phase:"history",error:""};
   await hydrateOutreachHistory(chatId);
   if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return false;
   const state=useAppStore.getState(),candidate=outreachCandidate(state,folderId,chatId,now,id);
@@ -130,6 +138,7 @@ async function generateOutreach(folderId:string,chatId:string,id:string,now=Date
   let run:AiOutreachRun={id,folderId,chatId,accountId:candidate.accountId,recipient:candidate.recipient,day:candidate.day,basisAt:candidate.basisAt,at:new Date(now).toISOString(),status:"generating"};
   await saveRun(run);
   if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch||useAppStore.getState().settings.aiOutreachRuns.find(item=>item.id===id)?.status!=="generating"||outreachContextKey(useAppStore.getState(),folderId,chatId,id)!==key)return false;
+  scheduler={at:Date.now(),phase:"generating",error:""};
   controller=new AbortController();
   try {
     const result=await generateSuggestions(candidate.contact,candidate.thread,useAppStore.getState().settings,

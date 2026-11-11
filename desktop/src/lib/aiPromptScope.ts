@@ -1,4 +1,5 @@
 import type { SettingsShape, SettingsChatFolder } from "../store/settingsDefaults";
+import { resolvePlaybook, type PlaybookSettings } from "./aiPlaybooks.ts";
 
 export type AiPromptTemplate = { id: string; name: string; prompt: string };
 export const MAX_EFFECTIVE_PROMPT_CHARS = 24_000;
@@ -11,7 +12,7 @@ export function normalizePromptTemplates(value: unknown): AiPromptTemplate[] {
     return [{id: item.id, name: item.name.trim().slice(0,80), prompt: item.prompt.trim().slice(0,6000)}];
   });
 }
-type PromptSettings = Pick<SettingsShape, "aiSystemPrompt" | "aiSystemPromptByAccountId" | "chatFolders" | "liveBaileysAccountId" | "activeAccountId"> & {aiPromptTemplates?: AiPromptTemplate[]};
+type PromptSettings = Pick<SettingsShape, "aiSystemPrompt" | "aiSystemPromptByAccountId" | "chatFolders" | "liveBaileysAccountId" | "activeAccountId"> & Omit<PlaybookSettings, 'chatFolders'> & {aiPromptTemplates?: AiPromptTemplate[]};
 export type AiReplyProfile = { prompt: string; source: "folder" | "account" | "global" | "default"; folderId?: string; folderName?: string; primaryFolderIds?: string[]; error?: string; templateIds?: string[] };
 
 function scopeKey(settings: PromptSettings, folder: SettingsChatFolder): string {
@@ -60,7 +61,7 @@ export function resolveFolderAiProfile(settings: PromptSettings, folderId: strin
 }
 
 /** Membership is primary-only and independent of the sidebar's current view or clones. */
-export function resolveAiReplyProfile(settings: PromptSettings, accountId?: string, chatId?: string): AiReplyProfile {
+function resolveBaseReplyProfile(settings: PromptSettings, accountId?: string, chatId?: string): AiReplyProfile {
   const id = accountId?.trim();
   const primary = (settings.chatFolders || []).filter(folder => chatId && folder.chatIds.includes(chatId));
   const scopes = id ? [`account:${id}`, "all"] : ["all"];
@@ -72,4 +73,14 @@ export function resolveAiReplyProfile(settings: PromptSettings, accountId?: stri
     if (profile.source === "folder"||profile.error) return { ...profile, primaryFolderIds };
   }
   return { ...defaultProfile(settings, id), primaryFolderIds };
+}
+
+export function resolveAiReplyProfile(settings: PromptSettings, accountId?: string, chatId?: string): AiReplyProfile {
+  const profile = resolveBaseReplyProfile(settings, accountId, chatId);
+  if (profile.error) return profile;
+  const playbook = resolvePlaybook(settings, accountId, chatId);
+  if (playbook.error) return {...profile, prompt: '', error: playbook.error};
+  const prompt = [profile.prompt, playbook.prompt].filter(Boolean).join('\n\n');
+  return prompt.length > MAX_EFFECTIVE_PROMPT_CHARS
+    ? {...profile, prompt: '', error: '合并 Playbook 后超过 24000 字符，请精简后重试'} : {...profile, prompt};
 }

@@ -16,7 +16,7 @@ const mocks={
  './AiOutreachControls':'export const AiOutreachControls="outreach-controls";',
  './AiOutreachPreview':'export const AiOutreachPreview="outreach-preview";',
  '@/components/layout/FolderAiPromptDialog':'export const FolderAiPromptDialog="folder-editor";',
- '@/lib/aiOutreach':'export const queueOutreachDraft=async()=>{throw Error("unexpected send")};export const retryAiOutreach=async()=>{throw Error("unexpected AI call")};',
+ '@/lib/aiOutreach':'export const getOutreachSchedulerStatus=()=>({at:0,phase:"idle",error:""});export const tickAiOutreach=async()=>{};export const queueOutreachDraft=async()=>{throw Error("unexpected send")};export const retryAiOutreach=async()=>{throw Error("unexpected AI call")};',
 };
 const built=await build({stdin:{contents:`export {AiOutreachTasks} from './src/components/settings/AiOutreachTasks.tsx';export {ChatAiStatusBar} from './src/components/chat/ChatAiStatusBar.tsx';`,resolveDir:root},bundle:true,write:false,platform:'node',format:'esm',jsx:'automatic',alias:{'@':root+'src'},plugins:[{name:'ui-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
 const {AiOutreachTasks,ChatAiStatusBar}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text+'\n//# sourceURL=ai-workflow-ui.js').toString('base64'));
@@ -91,4 +91,18 @@ test('outreach progress follows delivery immediately without waiting for the led
  const h=fixture();h.state.settings.aiOutreachRuns[0].messageId='out';h.state.messagesByChatId.chat=[{id:'out',deliveryStatus:'sent'}];
  let tree=h.render();assert.ok(tree.some(node=>node.type==='button'&&text(node)==='aiTasks.sent2'));assert.ok(tree.some(node=>node.type==='button'&&text(node)==='aiTasks.pending0'));
  h.state.messagesByChatId.chat=[{id:'out',deliveryStatus:'failed',lastError:'Delivery unknown',deliveryUncertain:true}];tree=h.render();assert.ok(tree.some(node=>node.props.role==='alert'&&text(node)==='Delivery unknown'));assert.equal(h.state.settings.aiOutreachRuns[0].status,'queued');
+});
+
+test('immediate round targets the selected folder and preserves its recurring time and quota',async()=>{
+ const h=fixture();let tree=h.render();
+ assert.equal(tree.find(node=>node.type==='button'&&text(node)==='aiOutreach.runNow').props.disabled,true);
+ tree.find(node=>node.type==='select').props.onChange({target:{value:'f'}});tree=h.render();
+ tree.find(node=>node.type==='button'&&text(node)==='aiOutreach.runNow').props.onClick();
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.ok(h.state.settings.chatFolders[0].aiOutreach.runNowAt);
+ assert.equal(h.state.settings.chatFolders[0].aiOutreach.time,'09:00');
+ assert.equal(h.state.settings.chatFolders[0].aiOutreach.dailyLimit,10);
+ assert.equal(h.state.settings.chatFolders[1].aiOutreach.runNowAt,undefined);
+ h.state.settings.aiOutreachPaused=true;tree=h.render();
+ assert.equal(tree.find(node=>node.type==='button'&&text(node)==='aiOutreach.runNow').props.disabled,true);
 });

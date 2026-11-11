@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { translate } from '../src/i18n/core.ts';
 
 const mocks={
+  './PlaybookLibrary':'export const PlaybookLibrary="playbook-library";',
   './MuseWebFields':'export const MuseWebFields="muse-fields";',
   './AiUsagePanel':'export const AiUsagePanel="ai-usage";',
   './VertexAiFields':'export const VertexAiFields="vertex-fields";',

@@ -85,7 +85,7 @@ export function getSuggestionContextKey(
     resolveAiTimeZones(contact, settings),
     buildSystemPrompt(contact, { ...settings, aiSystemPrompt: prompt }, opts?.auto, opts?.replyTo, opts?.count),
     opts?.replyTo?.id || "",
-    buildUserPrompt(contact, [...recent].sort((a, b) => a.sentAt.localeCompare(b.sentAt)), opts?.auto, opts?.replyTo, undefined, {outreach:opts?.outreach,compact:settings.aiContextMode === "compact"}),
+    buildUserPrompt(contact, [...recent].sort((a, b) => a.sentAt.localeCompare(b.sentAt)), opts?.auto, opts?.replyTo, undefined, {count:opts?.count,outreach:opts?.outreach,compact:settings.aiContextMode === "compact"}),
   ]);
 }
 
@@ -168,7 +168,7 @@ export async function generateSuggestions(
     if(provider==="muse"){
       const suggestions=await trackAiRequest({provider:"muse",model:"muse-web",feature:opts?.outreach?"outreach":opts?.auto?"autoReply":"suggestion"},async()=>{
         const system=buildSystemPrompt(contact,effectiveSettings,opts?.auto,opts?.replyTo,opts?.count,false);
-        const user=buildUserContext(contact,sorted,opts?.auto,opts?.replyTo,buildAiTimeContext(contact,effectiveSettings),{outreach:opts?.outreach,compact:settings.aiContextMode==="compact"});
+        const user=buildUserContext(contact,sorted,opts?.auto,opts?.replyTo,buildAiTimeContext(contact,effectiveSettings),{count:opts?.count,outreach:opts?.outreach,compact:settings.aiContextMode==="compact"});
         const context={profile:effectivePrompt,...user,prefix:`Draft the requested WhatsApp reply as text only. Do not use tools, browse, contact anyone, or execute tasks. Use only the provided conversation; do not use other threads or saved memories. Follow the current user profile and latest reply instructions together; the latest profile replaces older profiles, and latest reply instructions replace earlier turn rules. The latest conversation_data contains authoritative WhatsApp facts, either a recent snapshot or an explicitly marked incremental update; earlier generated replies are drafts, not evidence of messages actually sent.\n\n<reply_instructions>\n${system}\n</reply_instructions>\n\n<conversation_data>\n${user.prefix}`,suffix:`${user.suffix}\n</conversation_data>`};
         const musePrompt=context.prefix+context.history.map(item=>item.text).join('\n')+context.suffix;
         const customerId=contact?.id||chatId;
@@ -308,10 +308,24 @@ function buildUserPrompt(
   auto = false,
   replyTo?: Message,
   timeContext?: string,
-  options?: {outreach?: string; compact?: boolean}
+  options?: {outreach?: string; compact?: boolean; count?: 1 | 3}
 ) {
   const context=buildUserContext(contact,messages,auto,replyTo,timeContext,options);
   return context.prefix+context.history.map(item=>item.text).join('\n')+context.suffix;
+}
+
+function compactContactList(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const contactLine = (line: string) => /^\s*\d+\s*[.)、:-]\s*[^\r\n]{0,120}https?:\/\/wa\.me\/\d{6,15}\/?\s*$/i.test(line);
+  const count = lines.filter(contactLine).length;
+  if (count < 3 || count < lines.filter(line => line.trim()).length * 0.6) return text;
+  let replaced = false;
+  return lines.flatMap(line => {
+    if (!contactLine(line)) return [line];
+    if (replaced) return [];
+    replaced = true;
+    return [`[Shared contact list: ${count} entries; individual names and phone links omitted from this excerpt]`];
+  }).join("\n");
 }
 
 function buildUserContext(
@@ -320,16 +334,19 @@ function buildUserContext(
   auto = false,
   replyTo?: Message,
   timeContext?: string,
-  options?: {outreach?: string; compact?: boolean}
+  options?: {outreach?: string; compact?: boolean; count?: 1 | 3}
 ) {
   const history: {id:string;text:string}[] = [];
   const voice: string[] = [];
+  const latest = messages.at(-1);
+  const directContextIds = new Set([latest?.id, latest?.quoted?.id, replyTo?.id, replyTo?.quoted?.id]);
   let size = 0;
   let i = messages.length - 1;
   for (let checked = 0; i >= 0 && checked < 200 && history.length < (options?.compact ? 12 : 40); i--, checked++) {
     const m = messages[i];
     if (m.direction === "out" && ["pending", "queued", "failed", "local"].includes(m.deliveryStatus || "")) continue;
-    const text = ingestString(m.transcript, 2000) || ingestString(m.body || m.mediaCaption, 2000);
+    const raw = m.transcript?.trim() || m.body || m.mediaCaption || "";
+    const text = ingestString(directContextIds.has(m.id) ? raw : compactContactList(raw), 2000);
     if (!text) continue;
     const speaker = m.direction === "in" ? "Customer" : m.systemKind ? "Me (automated)" : "Me";
     const quote = m.quoted?.body ? ` [replying to ${m.quoted.fromMe ? "Me" : "Customer"}: ${JSON.stringify(ingestString(m.quoted.body, 500))}]` : "";
@@ -342,7 +359,10 @@ function buildUserContext(
   for (let checked = 0; i >= 0 && checked < 160 && voice.length < 3; i--, checked++) {
     const m = messages[i];
     if (m.direction !== "out" || m.systemKind || ["pending", "queued", "failed", "local"].includes(m.deliveryStatus || "")) continue;
-    const text = ingestString(m.transcript, 300) || ingestString(m.body, 300);
+    if (m.mediaType && !m.transcript?.trim() && !m.mediaCaption?.trim()) continue;
+    const raw = m.transcript?.trim() || m.body || "";
+    if (compactContactList(raw) !== raw) continue;
+    const text = ingestString(raw, 300);
     if (text) voice.unshift(`Me: ${JSON.stringify(text)}`);
   }
   const prefix = [
@@ -376,7 +396,7 @@ function buildUserContext(
         })}\nWrite ONE reply specifically to this selected message, even if newer messages appear above. Use the recent chat as context, avoid repeating answers already given, and do not explain your reasoning.`
       : auto
       ? "Write one reply to the customer's latest message."
-      : "Write 3 alternative next messages for Me. If the latest sent message is from Customer, respond to it; if it is from Me, suggest a useful continuation without repeating my answer or inventing a customer reply. Respect an explicit goodbye or refusal; do not push for a response. If there is no history, write a short first message appropriate to the configured context. Do not explain or summarize the conversation.",
+      : `Write ${options?.count === 1 ? "one next message" : "3 alternative next messages"} for Me. If the latest sent message is from Customer, respond to it; if it is from Me, suggest a useful continuation without repeating my answer or inventing a customer reply. Respect an explicit goodbye or refusal; do not push for a response. If there is no history, write a short first message appropriate to the configured context. Do not explain or summarize the conversation.`,
   ].join("\n");
   return {prefix,history,suffix};
 }
@@ -447,7 +467,7 @@ async function openAiCompatibleSuggest(opts: {
         },
         {
           role: "user",
-          content: buildUserPrompt(opts.contact, opts.messages, opts.auto, opts.replyTo, buildAiTimeContext(opts.contact, opts.settings || {}), {outreach:opts.outreach,compact:opts.settings?.aiContextMode === "compact"}),
+          content: buildUserPrompt(opts.contact, opts.messages, opts.auto, opts.replyTo, buildAiTimeContext(opts.contact, opts.settings || {}), {count:opts.count,outreach:opts.outreach,compact:opts.settings?.aiContextMode === "compact"}),
         },
       ],
       ...(opts.onProgress ? { stream: true, stream_options: {include_usage:true} } : {}),
@@ -548,7 +568,7 @@ async function geminiSuggest(
     apiKey: settings.geminiKey,
     model: settings.aiModel.trim() || undefined,
     system: buildSystemPrompt(contact, settings, auto, replyTo, count),
-    user: buildUserPrompt(contact, messages, auto, replyTo, buildAiTimeContext(contact, settings), {outreach,compact:settings.aiContextMode === "compact"}),
+    user: buildUserPrompt(contact, messages, auto, replyTo, buildAiTimeContext(contact, settings), {count,outreach,compact:settings.aiContextMode === "compact"}),
     temperature: auto ? 0.3 : 0.7,
     json: true,
     maxOutputTokens: auto || replyTo || count === 1 ? SINGLE_REPLY_TOKENS : MULTI_REPLY_TOKENS,
@@ -612,7 +632,7 @@ async function ollamaSuggest(
           role: "system",
           content: buildSystemPrompt(contact, settings, auto, replyTo, count),
         },
-        { role: "user", content: buildUserPrompt(contact, messages, auto, replyTo, buildAiTimeContext(contact, settings || {}), {outreach,compact:settings?.aiContextMode === "compact"}) },
+        { role: "user", content: buildUserPrompt(contact, messages, auto, replyTo, buildAiTimeContext(contact, settings || {}), {count,outreach,compact:settings?.aiContextMode === "compact"}) },
       ],
     }),
   });

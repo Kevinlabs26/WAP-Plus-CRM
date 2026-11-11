@@ -10,6 +10,25 @@ const target = { id: 'target', chatId: 'chat', accountId: 'a', direction: 'in', 
 const settings = { aiProvider: 'custom', customAiBaseUrl: 'https://example.invalid/v1', customAiKey: 'test', customAiModel: 'model', aiModel: '',
   geminiKey: 'test', ollamaUrl: 'http://localhost:11434', aiSystemPrompt: 'GLOBAL ROLE', aiSystemPromptByAccountId: { a: 'ACCOUNT A ROLE', b: 'ACCOUNT B ROLE' } };
 
+test('explicit single suggestions use one output instruction in both prompts across providers', async t => {
+  for (const provider of ['custom', 'gemini', 'ollama']) {
+    let body;
+    const output = '[{"text":"One reply"}]';
+    const mock = t.mock.method(globalThis, 'fetch', async (_url, opts) => {
+      body = JSON.parse(opts.body);
+      return Response.json(provider === 'gemini' ? { candidates: [{ content: { parts: [{ text: output }] } }] }
+        : provider === 'ollama' ? { message: { content: output } } : { choices: [{ message: { content: output } }] });
+    });
+    await generateSuggestions(contact, [target], { ...settings, aiProvider: provider }, { accountId: 'a', count: 1 });
+    const system = provider === 'gemini' ? body.systemInstruction.parts[0].text : body.messages[0].content;
+    const user = provider === 'gemini' ? body.contents[0].parts[0].text : body.messages[1].content;
+    assert.match(system, /exactly 1 object/);
+    assert.match(user, /Write one next message for Me/);
+    assert.doesNotMatch(user, /Write 3 alternative/);
+    mock.mock.restore();
+  }
+});
+
 test('selected-message replies request one draft across all provider paths, with the explicit target and correct account role', async t => {
   for (const provider of ['custom', 'gemini', 'ollama']) {
     let body;

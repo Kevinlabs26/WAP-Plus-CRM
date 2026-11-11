@@ -41,7 +41,7 @@ export function AiOutreachPreview({settings,folderIds,assumeRunning=false,auto=t
     {busy&&<p role="status" className="mt-2 text-zinc-500">{t("outreachPreview.checking",{count:checked})}</p>}
     {error&&<p role="alert" className="mt-2 text-amber-500">{error}</p>}
     {data&&<>
-      <p className="mt-2 text-brand">{t("outreachPreview.counts",{eligible:data.eligible,ready:data.readyNow,blocked:data.blocked})}</p>
+      <p className="mt-2 text-brand">{t("outreachPreview.counts",{eligible:data.eligible+data.quotaWaiting,ready:data.readyNow,blocked:data.blocked-data.quotaWaiting,quota:data.quotaWaiting})}</p>
       <p className="mt-1 text-zinc-500">{t("outreachPreview.snapshot",{time:format(data.checkedAt,displayZone)})}</p>
       {data.nextAt!==null&&<p className="mt-1">{t("outreachPreview.next",{time:`${format(data.nextAt,displayZone)} · ${displayZone}`})}</p>}
       {!data.rows.length&&<p className="mt-2 text-zinc-500">{t("outreachPreview.noMembers")}</p>}

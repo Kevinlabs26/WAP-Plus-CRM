@@ -15,6 +15,7 @@ import { isChatModel, type ModelPurpose } from "@/lib/modelCapabilities";
 import { AiUsagePanel } from "./AiUsagePanel";
 import { VertexAiFields } from "./VertexAiFields";
 import { MuseWebFields } from "./MuseWebFields";
+import { PlaybookLibrary } from "./PlaybookLibrary";
 
 export function SettingsAiPanel() {
   const { t } = useI18n();
@@ -37,6 +38,7 @@ export function SettingsAiPanel() {
             label={t("settingsAi.myTimeZone")} automatic={t("settingsAi.computerTimeZone", { zone: systemTimeZone() || "UTC" })} />
         </div>
       </section>
+      <PlaybookLibrary/>
       <AiUsagePanel/>
     </div>
   );

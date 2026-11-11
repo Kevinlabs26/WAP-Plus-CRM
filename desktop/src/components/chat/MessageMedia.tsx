@@ -209,11 +209,11 @@ export const MessageMedia = memo(function MessageMedia({
   }
 
   if ((t === "image" || t === "sticker") && m.mediaUrl) {
-    // 固定盒：避免图片 decode 后改变行高 → Virtuoso 滚动中反复 remeasure
+    // 图片按原比例撑开气泡；固定高度仅用于贴纸。
     const box =
       t === "sticker"
         ? "h-40 w-40 max-w-full"
-        : "h-64 w-full max-w-[min(72vw,22rem)]";
+        : "w-full max-w-[min(72vw,22rem)]";
     return (
       <button
         type="button"
@@ -234,7 +234,7 @@ export const MessageMedia = memo(function MessageMedia({
           className={cn(
             t === "sticker"
               ? "h-full w-full object-contain p-1"
-              : "block h-full w-full object-contain"
+              : "block h-auto max-h-[32rem] w-full object-contain"
           )}
           loading="lazy"
           decoding="async"
@@ -387,7 +387,7 @@ export const MessageMedia = memo(function MessageMedia({
   }
 
   if (t === "image" || t === "sticker") {
-    // 固定盒占位：与加载后同高，避免媒体到达时高度突变触发 Virtuoso 重排闪烁
+    // 未取得图片尺寸前使用占位；加载后由图片原比例决定高度。
     const box =
       t === "sticker"
         ? "h-40 w-40 max-w-full"

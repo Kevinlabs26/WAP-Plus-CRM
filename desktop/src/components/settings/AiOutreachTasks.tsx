@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useAppStore, flushPersist } from "@/store/appStore";
 import { useI18n } from "@/i18n";
 import { Button, Switch } from "@/components/ui/primitives";
-import { queueOutreachDraft, retryAiOutreach } from "@/lib/aiOutreach";
+import { queueOutreachDraft, retryAiOutreach, tickAiOutreach, getOutreachSchedulerStatus } from "@/lib/aiOutreach";
 import { FolderAiPromptDialog } from "@/components/layout/FolderAiPromptDialog";
 import { outreachClock, normalizeOutreachRule } from "@/lib/aiOutreachRules";
 import { AiOutreachControls } from "./AiOutreachControls";
@@ -36,7 +36,7 @@ export function AiOutreachTasks() {
   const [enablePreview,setEnablePreview]=useState(false);
   const [selectedIds,setSelectedIds]=useState<string[]>([]);
   const [bulkRule,setBulkRule]=useState(()=>normalizeOutreachRule({enabled:true,mode:"auto",trigger:"both",timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}));
-  useEffect(()=>{const timer=window.setInterval(()=>setNow(Date.now()),60_000);return()=>window.clearInterval(timer);},[]);
+  useEffect(()=>{const timer=window.setInterval(()=>setNow(Date.now()),5_000);return()=>window.clearInterval(timer);},[]);
   const byId=new Map(folders.map(folder=>[folder.id,folder]));
   const accountNames=new Map(settings.waAccounts.map(account=>[account.id,account.label]));
   const days=useMemo(()=>{
@@ -60,6 +60,20 @@ export function AiOutreachTasks() {
     state.updateSettings({chatFolders:state.settings.chatFolders.map(folder=>selected.has(folder.id)?{...folder,aiOutreach:normalizeOutreachRule({...bulkRule,paused:false})}:folder)});
     try{await flushPersist(useAppStore.getState);setBulkOpen(false);setSelectedIds([]);}catch(error){useAppStore.getState().pushToast(String(error),"error");}
   };
+  const runNow=async()=>{
+    if(busy||!folderId)return;
+    setBusy("run-now");
+    try {
+      const state=useAppStore.getState();
+      if(state.settings.aiAutoReplyPaused||state.settings.aiOutreachPaused)return;
+      state.updateSettings({chatFolders:state.settings.chatFolders.map(folder=>folder.id===folderId&&folder.aiOutreach?.enabled&&!folder.aiOutreach.paused
+        ? {...folder,aiOutreach:{...folder.aiOutreach,runNowAt:Date.now()}}:folder)});
+      await flushPersist(useAppStore.getState);
+      await tickAiOutreach();
+      useAppStore.getState().pushToast(t("aiOutreach.runNowStarted"),"info");
+    } catch(error){useAppStore.getState().pushToast(String(error),"error");}
+    finally{setBusy("");}
+  };
   const execute=async(id:string,send:boolean|"retry")=>{
     if(busy)return;setBusy(id);
     try {
@@ -74,6 +88,7 @@ export function AiOutreachTasks() {
     } catch(error){useAppStore.getState().pushToast(String(error),"error");}
     finally{setBusy("");}
   };
+  const scheduler=getOutreachSchedulerStatus();
   return <main className="min-w-0 flex-1 overflow-y-auto p-4 md:p-6"><div className="mx-auto max-w-5xl space-y-4">
     <header className="flex flex-wrap items-center justify-between gap-3">
       <h2 className="text-lg font-semibold">{t("nav.aiOutreach")}</h2>
@@ -81,6 +96,8 @@ export function AiOutreachTasks() {
         if(event.target.checked){setBulkOpen(false);setEnablePreview(true);}else{setEnablePreview(false);useAppStore.getState().updateSettings({aiOutreachPaused:true});}
       }}/></label>
     </header>
+    <p role="status" className="text-xs text-zinc-500">{t("aiOutreach.scheduler")} · {t(`aiOutreach.scheduler.${scheduler.phase}`)}{scheduler.at?` · ${new Date(scheduler.at).toLocaleTimeString()}`:""}{scheduler.error&&<span role="alert" className="text-amber-500"> · {scheduler.error}</span>}</p>
+    {!folderId&&<p className="text-xs text-zinc-500">{t("aiOutreach.selectFolderNow")}</p>}
     {settings.aiAutoReplyPaused&&<p role="status" className="text-xs text-amber-500">{t("aiChat.paused")} <Button size="xs" onClick={()=>useAppStore.getState().updateSettings({aiAutoReplyPaused:false})}>{t("aiTasks.resumeAll")}</Button></p>}
     {settings.aiOutreachPaused&&<p role="status" className="text-xs text-amber-500">{t("aiOutreach.masterPaused")}</p>}
     <div className="flex flex-wrap gap-2">
@@ -88,6 +105,7 @@ export function AiOutreachTasks() {
         <option value="">{t("aiTasks.allFolders")}</option>{folders.map(folder=><option key={folder.id} value={folder.id}>{folder.parentId&&`${byId.get(folder.parentId)?.name||""} / `}{folder.name}{folder.scope?.type==="account"&&` · ${accountNames.get(folder.scope.accountId)||folder.scope.accountId}`}</option>)}
       </select>
       <Button size="sm" disabled={!folderId} onClick={()=>setEditing(folderId)}>{t("aiTasks.configure")}</Button>
+      <Button size="sm" disabled={!!busy||!folderId||settings.aiAutoReplyPaused||settings.aiOutreachPaused||!byId.get(folderId)?.aiOutreach?.enabled||!!byId.get(folderId)?.aiOutreach?.paused} onClick={()=>void runNow()}>{t("aiOutreach.runNow")}</Button>
       <Button size="sm" aria-expanded={bulkOpen} onClick={()=>setBulkOpen(!bulkOpen)}>{t("aiOutreach.bulk")}</Button>
       <Button size="sm" aria-pressed={todayOnly} onClick={()=>{setTodayOnly(!todayOnly);setLimit(30);}}>{t(todayOnly?"aiTasks.today":"aiTasks.history")}</Button>
     </div>
