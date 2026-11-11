@@ -776,6 +776,8 @@ export const MessageBubble = memo(function MessageBubble({
               <MessageBody
                 text={m.quoted.body || t("messageBubble.message")}
                 outbound={m.quoted.fromMe}
+                accountId={m.accountId || m.deviceId || undefined}
+                chatId={m.chatId}
               />
             </div>
           </div>

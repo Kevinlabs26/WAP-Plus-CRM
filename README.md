@@ -90,7 +90,7 @@ You can also work from `desktop/` or `desktop/baileys-bridge/`. The `shared/` pa
 
 ## Quick start
 
-Use Node.js 22.23.4 as pinned in `.nvmrc`. On Windows, an official portable runtime at `.audit-cache/node-v22.23.4-win-x64` can be used with `powershell -NoProfile -ExecutionPolicy Bypass -File tools/project-node.ps1 run dev` (or `run tauri -- dev`). The helper scopes Node and the required full Perl to the command; Tauri dev also gets an isolated WebView2 data folder under `.audit-cache`, leaving the installed app profile and system settings untouched.
+Use Node.js 22.23.5 as pinned in `.nvmrc`. On Windows, an official portable runtime at `.audit-cache/node-v22.23.5-win-x64` can be used with `powershell -NoProfile -ExecutionPolicy Bypass -File tools/project-node.ps1 run dev` (or `run tauri -- dev`). The helper scopes Node and the required full Perl to the command; Tauri dev also gets an isolated WebView2 data folder under `.audit-cache`, leaving the installed app profile and system settings untouched.
 
 ### Desktop UI
 

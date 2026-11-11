@@ -3,6 +3,9 @@ import { cn, splitTextWithLinks, splitWhatsAppFormatting } from "@/lib/utils";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { useAppStore } from "@/store/appStore";
 import { isWhatsAppCallLink, tryOpenBoundCallLink } from "@/lib/cloneCalls";
+import { isTauri } from "@/lib/bridge";
+
+const openingLinks = new Set<string>();
 
 /** 高亮正文里的 @token（与发送时写入的 @显示名 对齐） */
 function splitMentions(text: string, mentionLabels?: string[]) {
@@ -114,16 +117,19 @@ export const MessageBody = memo(function MessageBody({
                 e.stopPropagation();
                 e.preventDefault();
                 const href = isPhone ? waHref : p.href;
+                const state = useAppStore.getState();
+                const owner = accountId || state.chats.find((chat) => chat.id === chatId)?.accountId;
+                const key = JSON.stringify([href, owner]);
+                if (openingLinks.has(key)) return;
+                openingLinks.add(key);
                 void (async () => {
                   if (isWhatsAppCallLink(href)) {
-                    const state = useAppStore.getState();
-                    const owner = accountId || state.chats.find((chat) => chat.id === chatId)?.accountId;
                     if (await tryOpenBoundCallLink(href, owner, state.settings.waAccounts || [])) return;
                   }
-                  await openExternal(href).catch(() => {
-                    window.open(href, "_blank", "noopener,noreferrer");
-                  });
-                })();
+                  if (isTauri()) await openExternal(href);
+                  else window.open(href, "_blank", "noopener,noreferrer");
+                })().catch(() => useAppStore.getState().pushToast("无法打开链接，请重试", "error"))
+                  .finally(() => { setTimeout(() => openingLinks.delete(key), 1000); });
               }}
             >
               {p.value}
@@ -135,7 +141,7 @@ export const MessageBody = memo(function MessageBody({
     return out;
     // mentionKey 稳定比较标签内容，避免父组件每次 new [] 废掉缓存
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text, outbound, mentionKey]);
+  }, [text, outbound, mentionKey, accountId, chatId]);
 
   return <>{nodes}</>;
 });

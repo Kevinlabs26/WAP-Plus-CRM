@@ -188,17 +188,27 @@ fn require_verified(
 }
 
 fn valid_call_link_url(raw: &str) -> bool {
+    call_link_token(raw).is_some()
+}
+
+fn call_link_token(raw: &str) -> Option<String> {
     let Ok(url) = url::Url::parse(raw) else {
-        return false;
+        return None;
     };
-    url.scheme() == "https"
+    let token = url.path().strip_prefix("/voice/")?;
+    (url.scheme() == "https"
         && url.host_str() == Some("call.whatsapp.com")
         && url.username().is_empty()
         && url.password().is_none()
         && url.port().is_none()
-        && url.path().strip_prefix("/voice/").is_some_and(|token| {
-            !token.is_empty() && !token.contains('/') && token != "." && token != ".."
-        })
+        && !token.is_empty() && token.len() <= 128
+        && token.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b)))
+        .then(|| token.to_string())
+}
+
+fn call_link_activation_args(raw: &str) -> Result<String, String> {
+    let token = call_link_token(raw).ok_or("无效的 WhatsApp 通话链接")?;
+    Ok(format!("action=LaunchVoip&link={token}&video=0&isFirst=0"))
 }
 
 fn list_apps() -> Result<Vec<CloneApp>, String> {
@@ -364,7 +374,7 @@ pub async fn clone_call_open_link(
         installed_app(&app_id)?;
         #[cfg(windows)]
         {
-            platform::open_protocol(&app_id, &url)
+            platform::open_call_link(&app_id, &url)
         }
         #[cfg(not(windows))]
         {
@@ -521,6 +531,7 @@ mod tests {
     }
     #[test]
     fn call_link_url_accepts_only_whatsapp_voice_links() {
+        assert_eq!(call_link_activation_args("https://call.whatsapp.com/voice/Abc_123?tracking=ignored").unwrap(), "action=LaunchVoip&link=Abc_123&video=0&isFirst=0");
         for url in [
             "https://call.whatsapp.com/voice/Abc_123?x=1",
             "https://CALL.WHATSAPP.COM/voice/token",
@@ -535,6 +546,8 @@ mod tests {
             "https://evil.example/voice/token",
             "https://user@call.whatsapp.com/voice/token",
             "https://call.whatsapp.com:444/voice/token",
+            "https://call.whatsapp.com/voice/a&action=AnswerVoip",
+            "https://call.whatsapp.com/voice/a%26link=other",
         ] {
             assert!(!valid_call_link_url(url), "{url}");
         }

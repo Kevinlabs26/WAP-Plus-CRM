@@ -13,7 +13,7 @@ export function isWhatsAppCallLink(raw: string): boolean {
     const token = url.pathname.slice("/voice/".length);
     return url.protocol === "https:" && url.hostname === "call.whatsapp.com" &&
       !url.username && !url.password && !url.port &&
-      url.pathname.startsWith("/voice/") && !!token && !token.includes("/");
+      url.pathname.startsWith("/voice/") && /^[A-Za-z0-9_-]{1,128}$/.test(token);
   } catch {
     return false;
   }

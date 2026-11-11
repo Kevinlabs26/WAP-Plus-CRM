@@ -460,17 +460,22 @@ pub fn read_dropped_audio(path: String) -> Result<tauri::ipc::Response, String> 
 #[tauri::command]
 pub fn read_dropped_file(path: String) -> Result<DroppedFile, String> {
     let file_path = PathBuf::from(&path);
-    let metadata = std::fs::metadata(&file_path).map_err(|e| format!("无法读取拖入文件：{e}"))?;
+    let file = std::fs::File::open(&file_path).map_err(|e| format!("无法读取拖入文件：{e}"))?;
+    let metadata = file.metadata().map_err(|e| format!("无法读取拖入文件：{e}"))?;
     if !metadata.is_file() {
         return Err("拖入的项目不是文件".into());
     }
     let mp4 = file_path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("mp4"));
     let audio = file_path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext|
         matches!(ext.to_ascii_lowercase().as_str(), "m4a" | "aac" | "mp3" | "wav" | "flac" | "ogg" | "oga" | "opus"));
-    if metadata.len() > (if mp4 { 24 } else if audio { 16 } else { 14 }) * 1024 * 1024 {
+    let limit = (if mp4 { 24 } else if audio { 16 } else { 14 }) * 1024 * 1024;
+    if metadata.len() > limit {
         return Err(if mp4 { "视频超过 24 MB，请先压缩" } else if audio { "音频超过 16 MiB" } else { "文件请小于 14MB" }.into());
     }
-    let bytes = std::fs::read(&file_path).map_err(|e| format!("无法读取拖入文件：{e}"))?;
+    // Bound the actual read too: a selected file can grow after the metadata check.
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(limit + 1).read_to_end(&mut bytes).map_err(|e| format!("无法读取拖入文件：{e}"))?;
+    if bytes.len() as u64 > limit { return Err("拖入文件超过大小限制".into()); }
     let mime = match file_path
         .extension()
         .and_then(|ext| ext.to_str())

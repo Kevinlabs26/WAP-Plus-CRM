@@ -1,6 +1,6 @@
 [package]
 name = "wap-plus-crm"
-version = "0.1.70"
+version = "0.1.71"
 description = "WAP Plus CRM — WhatsApp sales CRM desktop"
 authors = ["WAP Plus CRM"]
 edition = "2021"
@@ -39,7 +39,7 @@ chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-rusqlite = { version = "0.41.1", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.42.0", features = ["bundled-sqlcipher-vendored-openssl"] }
 tar = "0.4"
 bzip2 = "0.4"
 # 本地语音识别：静态链接运行库，模型仍由用户进入应用后按需下载。
@@ -48,7 +48,7 @@ sherpa-rs = { version = "0.5", default-features = false, features = ["download-b
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "0.7"
 windows-registry = "0.6"
-windows = { version = "0.61.3", features = ["ApplicationModel_Core", "Management_Deployment", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_WinRT", "Win32_Storage_Packaging_Appx", "Win32_Storage_EnhancedStorage", "Win32_System_Threading", "Win32_System_Variant", "Win32_System_Ole", "Win32_UI_Accessibility", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.61.3", features = ["ApplicationModel_Core", "Data_Xml_Dom", "Management_Deployment", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_WinRT", "Win32_Storage_Packaging_Appx", "Win32_Storage_EnhancedStorage", "Win32_System_Threading", "Win32_System_Variant", "Win32_System_Ole", "Win32_UI_Accessibility", "Win32_UI_Notifications", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_Storage_FileSystem"] }
 
 [profile.release]

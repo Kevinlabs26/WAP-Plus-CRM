@@ -2,14 +2,15 @@ use super::{valid_app_id, valid_client_name, CloneApp};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use windows::{
-    core::{Interface, BSTR, HSTRING, PCWSTR, PWSTR},
+    core::{Interface, BSTR, GUID, HSTRING, PCWSTR, PWSTR},
+    Data::Xml::Dom::XmlDocument,
     Management::Deployment::PackageManager,
     Win32::{
         Foundation::{CloseHandle, HWND, LPARAM},
         Storage::{EnhancedStorage::PKEY_AppUserModel_ID, Packaging::Appx::GetPackageFamilyName},
         System::{
             Com::{
-                CoCreateInstance, CoTaskMemFree,
+                CoAllowSetForegroundWindow, CoCreateInstance, CoTaskMemFree,
                 StructuredStorage::{PropVariantClear, PropVariantToStringAlloc},
                 CLSCTX_ALL,
             },
@@ -22,11 +23,10 @@ use windows::{
         },
         UI::{
             Accessibility::*,
+            Notifications::INotificationActivationCallback,
             Shell::{
                 ApplicationActivationManager, IApplicationActivationManager,
                 PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow},
-                SHCreateItemFromParsingName, SHCreateShellItemArrayFromShellItem, IShellItem,
-                IShellItemArray,
                 AO_NONE,
             },
             WindowsAndMessaging::*,
@@ -127,21 +127,47 @@ pub fn open(id: &str) -> Result<(), String> {
     unsafe { activate(id) }
 }
 
-pub fn open_protocol(id: &str, url: &str) -> Result<(), String> {
+pub fn open_call_link(id: &str, url: &str) -> Result<(), String> {
     let _apartment = Apartment::new()?;
+    let args = super::call_link_activation_args(url)?;
+    let activator = call_link_activator(id)?;
     unsafe {
-        let item: IShellItem = SHCreateItemFromParsingName(&HSTRING::from(url), None)
-            .map_err(|e| format!("无法准备通话链接：{e}"))?;
-        let items: IShellItemArray = SHCreateShellItemArrayFromShellItem(&item)
-            .map_err(|e| format!("无法准备通话链接：{e}"))?;
-        let manager: IApplicationActivationManager =
-            CoCreateInstance(&ApplicationActivationManager, None, CLSCTX_ALL)
-                .map_err(|e| e.to_string())?;
-        manager
-            .ActivateForProtocol(&HSTRING::from(id), &items)
+        // The client's own call-link action also works for clones without protocol registration.
+        let callback: INotificationActivationCallback = CoCreateInstance(&activator, None, CLSCTX_ALL)
+            .map_err(|e| format!("无法启动绑定客户端：{e}"))?;
+        let _ = CoAllowSetForegroundWindow(&callback, None);
+        callback.Activate(&HSTRING::from(id), &HSTRING::from(args), &[])
             .map_err(|e| format!("无法将通话链接交给绑定客户端：{e}"))?;
         Ok(())
     }
+}
+
+fn call_link_activator(id: &str) -> Result<GUID, String> {
+    use std::io::Read;
+    if !valid_app_id(id) { return Err("无效的 WhatsApp 客户端".into()); }
+    let (family, entry) = id.split_once('!').ok_or("无效的客户端入口")?;
+    let packages = PackageManager::new()
+        .and_then(|manager| manager.FindPackagesByUserSecurityIdPackageFamilyName(&HSTRING::new(), &HSTRING::from(family)))
+        .map_err(|e| e.to_string())?;
+    for package in packages {
+        let path = package.InstalledPath().map_err(|e| e.to_string())?;
+        let file = std::fs::File::open(std::path::Path::new(&path.to_string_lossy()).join("AppxManifest.xml"))
+            .map_err(|e| e.to_string())?;
+        let mut xml = String::new();
+        file.take(256 * 1024 + 1).read_to_string(&mut xml).map_err(|e| e.to_string())?;
+        if xml.len() > 256 * 1024 { return Err("客户端清单过大".into()); }
+        return call_link_activator_from_manifest(&xml, entry);
+    }
+    Err("绑定的客户端已卸载或不可用".into())
+}
+
+fn call_link_activator_from_manifest(xml: &str, entry: &str) -> Result<GUID, String> {
+    let document = XmlDocument::new().map_err(|e| e.to_string())?;
+    document.LoadXml(&HSTRING::from(xml)).map_err(|e| e.to_string())?;
+    let selector = format!("//*[local-name()='Application' and @Id='{entry}']/*[local-name()='Extensions']/*[local-name()='Extension']/*[local-name()='ToastNotificationActivation']/@ToastActivatorCLSID");
+    let value = document.SelectSingleNode(&HSTRING::from(selector))
+        .and_then(|node| node.InnerText()).map_err(|_| "客户端不支持直接打开通话链接".to_string())?;
+    GUID::try_from(value.to_string_lossy().as_str()).map_err(|_| "客户端激活入口无效".into())
 }
 
 unsafe fn process_family(pid: u32) -> Option<String> {
@@ -1190,6 +1216,14 @@ pub fn call(id: &str, recipient: &str, cancelled: &AtomicBool) -> Result<(), Str
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn call_links_select_the_bound_apps_notification_entry() {
+        let _apartment = super::Apartment::new().unwrap();
+        let xml = r#"<Package xmlns="urn:test"><Applications><Application Id="Other"><Extensions><Extension><ToastNotificationActivation ToastActivatorCLSID="11111111-1111-1111-1111-111111111111"/></Extension></Extensions></Application><Application Id="App"><Extensions><Extension><ToastNotificationActivation ToastActivatorCLSID="ddddf9e0-75ae-8802-a944-96ac22ad8814"/></Extension></Extensions></Application></Applications></Package>"#;
+        assert_eq!(super::call_link_activator_from_manifest(xml, "App").unwrap(), windows::core::GUID::try_from("ddddf9e0-75ae-8802-a944-96ac22ad8814").unwrap());
+        assert!(super::call_link_activator_from_manifest(xml, "Missing").is_err());
+        assert!(super::call_link_activator_from_manifest("<broken", "App").is_err());
+    }
     use super::*;
     #[test]
     #[ignore = "Read-only header diagnostic on an already open client; no input or calls"]

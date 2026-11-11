@@ -12,6 +12,38 @@ mod db;
 
 #[cfg(windows)]
 #[test]
+fn sqlcipher_419_database_and_uncheckpointed_wal_survive_upgrade_and_restore() {
+    let root = std::env::temp_dir().join(format!("wap-sqlcipher-upgrade-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("wap-plus.db");
+    std::fs::write(&path, include_bytes!("fixtures/sqlcipher-4.19.db.bin")).unwrap();
+    std::fs::write(root.join("wap-plus.db-wal"), include_bytes!("fixtures/sqlcipher-4.19.wal.bin")).unwrap();
+    let protected_key = commands::protect_secrets(&[7; 32]).unwrap();
+    std::fs::write(root.join("db-key.dpapi"), &protected_key).unwrap();
+    {
+        let conn = db_encryption::open(&path).unwrap();
+        assert!(rusqlite::version_number() >= 3_054_001);
+        let cipher: String = conn.query_row("PRAGMA cipher_version", [], |r| r.get(0)).unwrap();
+        assert!(cipher.starts_with("4.20."), "unexpected cipher: {cipher}");
+        let rows: Vec<String> = conn.prepare("SELECT body FROM private_data ORDER BY rowid").unwrap()
+            .query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
+        assert_eq!(rows, ["LEGACY_SQLCIPHER_ROW", "LEGACY_SQLCIPHER_WAL_ROW"]);
+        conn.execute("INSERT INTO private_data VALUES (?1)", ["UPGRADED_ROW"]).unwrap();
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
+    }
+    let backup = root.join("restored");
+    std::fs::create_dir(&backup).unwrap();
+    std::fs::copy(&path, backup.join("wap-plus.db")).unwrap();
+    std::fs::write(backup.join("db-key.dpapi"), protected_key).unwrap();
+    for candidate in [&path, &backup.join("wap-plus.db")] {
+        let conn = db_encryption::open_readonly(candidate).unwrap();
+        assert_eq!(conn.query_row("SELECT count(*) FROM private_data", [], |r| r.get::<_, i64>(0)).unwrap(), 3);
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
 fn encrypted_migration_survives_restart_and_missing_or_wrong_keys_preserve_the_database() {
     let root=std::env::temp_dir().join(format!("wap-db-encryption-{}",uuid::Uuid::new_v4()));
     std::fs::create_dir(&root).unwrap();

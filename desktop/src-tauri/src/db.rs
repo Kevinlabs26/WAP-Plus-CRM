@@ -1643,7 +1643,7 @@ mod tests {
     fn patched_sqlite_migrates_a_real_3460_file_without_losing_history() {
         use std::io::Read;
         assert!(
-            rusqlite::version_number() >= 3_053_002,
+            rusqlite::version_number() >= 3_054_001,
             "bundled SQLite is older than the security baseline"
         );
         let mut bytes = Vec::new();

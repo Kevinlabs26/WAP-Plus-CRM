@@ -515,7 +515,7 @@ class WaAssistService : AccessibilityService() {
         }
         try {
             launch(PACKAGE_WAB)
-            Log.i(TAG, "openChat WAB $digits")
+            Log.i(TAG, "openChat WAB")
             return true
         } catch (e: Exception) {
             Log.w(TAG, "WAB missing, fallback WA", e)
