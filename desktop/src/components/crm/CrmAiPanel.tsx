@@ -752,7 +752,7 @@ export function CrmAiPanel() {
               )}
             </div>
 
-            <GoogleSheetInfo contact={contact} expanded={sheetInfoOpen} onExpandedChange={setSheetInfoOpen} />
+            <GoogleSheetInfo contact={contact} chatId={selectedChatId} expanded={sheetInfoOpen} onExpandedChange={setSheetInfoOpen} />
 
             <details open={moreDetailsOpen} onToggle={event => setMoreDetailsOpen(event.currentTarget.open)} className="py-1">
               <summary className="cursor-pointer py-1 text-xs text-zinc-500 hover:text-zinc-300">{t("crmPanel.moreDetails")}</summary>

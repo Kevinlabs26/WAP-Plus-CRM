@@ -52,6 +52,8 @@ const lastSkipLogByChat = new Map<string, string>();
 const inFlightChats = new Set<string>();
 const pendingByChat = new Map<string, Message>();
 const cooldownTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const takeoverWaits = new Map<string, { message: Message; timer: ReturnType<typeof setTimeout> }>();
+const pausedByChat = new Map<string, Message>();
 const debounceTimers = new Map<string, { message: Message; timer: ReturnType<typeof setTimeout> }>();
 const activeRequests = new Map<string, { id: string; sentAt: string; controller: AbortController }>();
 const retries = new Map<string, { id: string; attempts: number; startedAt: number }>();
@@ -59,10 +61,23 @@ const mediaResyncAt = new Map<string, number>();
 const mediaInFlight = new Set<string>();
 const isVoiceMessage = (message: Message) => ["audio", "ptt"].includes(message.mediaType || "") || message.mediaPtt === true || Boolean(message.mediaMime?.toLowerCase().startsWith("audio/"));
 
+function canScheduleAutoReply(message: Message,ignorePause=false): boolean {
+  const state=useAppStore.getState();
+  const chat=state.chats.find(chat=>chat.id===message.chatId);
+  const contact=state.contacts.find(contact=>contact.id===chat?.contactId);
+  return message.direction==="in"&&!message.isGroup&&!!chat&&!chat.isGroup&&!chat.localOnly&&!!contact&&!contact.isGroup&&
+    !contact.channelAddress?.endsWith("@g.us")&&resolveAutoReplyScope(ignorePause?{...state.settings,aiAutoReplyPaused:false}:state.settings,message.chatId).mode==="auto";
+}
+
 /** Wait before generating so a delayed reply does not expire in the send queue. */
 export function scheduleAutoReplyInbound(message: Message): void {
+  if(useAppStore.getState().settings.aiAutoReplyPaused){holdPausedReply(message);return;}
+  if (!canScheduleAutoReply(message)) return;
+  if (useAppStore.getState().settings.aiTaskDismissedIds?.includes(`runtime:${message.chatId}:${message.id}`)) return;
   if ((activeRequests.get(message.chatId)?.sentAt || "") > message.sentAt ||
       (debounceTimers.get(message.chatId)?.message.sentAt || "") > message.sentAt) return;
+  const takeover = takeoverWaits.get(message.chatId);
+  if (takeover) { clearTimeout(takeover.timer); takeoverWaits.delete(message.chatId); }
   activeRequests.get(message.chatId)?.controller.abort();
   const previous = debounceTimers.get(message.chatId);
   if (previous) clearTimeout(previous.timer);
@@ -78,8 +93,117 @@ export function scheduleAutoReplyInbound(message: Message): void {
 export function stopAutoReplies(): void {
   for (const timer of [...Array.from(debounceTimers.values(), item => item.timer), ...cooldownTimers.values()]) clearTimeout(timer);
   for (const request of activeRequests.values()) request.controller.abort();
+  for (const wait of takeoverWaits.values()) clearTimeout(wait.timer);
+  takeoverWaits.clear();
+  pausedByChat.clear();
   debounceTimers.clear(); cooldownTimers.clear(); pendingByChat.clear(); retries.clear();
   useAutoReplyRuntime.setState({ byChat: {} });
+}
+
+function holdPausedReply(message: Message): void {
+  if(!canScheduleAutoReply(message,true)||useAppStore.getState().settings.aiTaskDismissedIds?.includes(`runtime:${message.chatId}:${message.id}`))return;
+  const previous=pausedByChat.get(message.chatId);
+  if(previous&&previous.sentAt>message.sentAt)return;
+  pausedByChat.set(message.chatId,message);
+  setAutoReplyRuntime(message.chatId,{phase:"waiting",inboundId:message.id,accountId:message.accountId,reason:"AI 总开关已暂停"});
+}
+
+export function refreshAutoReplyPause(): void {
+  const state=useAppStore.getState();
+  if(state.settings.aiAutoReplyPaused){
+    for(const [chatId,runtime] of Object.entries(useAutoReplyRuntime.getState().byChat)){
+      if(runtime.phase==="human")continue;
+      const message=state.messages.find(message=>message.id===runtime.inboundId&&message.chatId===chatId);
+      if(!message)continue;
+      clearTimeout(debounceTimers.get(chatId)?.timer);debounceTimers.delete(chatId);
+      clearTimeout(cooldownTimers.get(chatId));cooldownTimers.delete(chatId);
+      clearTimeout(takeoverWaits.get(chatId)?.timer);takeoverWaits.delete(chatId);
+      activeRequests.get(chatId)?.controller.abort();pendingByChat.delete(chatId);retries.delete(chatId);
+      holdPausedReply(message);
+    }
+  }else{
+    for(const message of pausedByChat.values())scheduleAutoReplyInbound(message);
+    pausedByChat.clear();
+  }
+}
+
+export function stopAutoReplyTask(chatId:string,inboundId?:string,messageId?:string):void{
+  const state=useAppStore.getState(),keys=[...(state.settings.aiTaskDismissedIds||[])];
+  if(inboundId){
+    keys.push(`runtime:${chatId}:${inboundId}`);
+    if(debounceTimers.get(chatId)?.message.id===inboundId){clearTimeout(debounceTimers.get(chatId)?.timer);debounceTimers.delete(chatId);}
+    if(takeoverWaits.get(chatId)?.message.id===inboundId){clearTimeout(takeoverWaits.get(chatId)?.timer);takeoverWaits.delete(chatId);}
+    if(useAutoReplyRuntime.getState().byChat[chatId]?.inboundId===inboundId||retries.get(chatId)?.id===inboundId){clearTimeout(cooldownTimers.get(chatId));cooldownTimers.delete(chatId);}
+    if(pendingByChat.get(chatId)?.id===inboundId)pendingByChat.delete(chatId);
+    if(pausedByChat.get(chatId)?.id===inboundId)pausedByChat.delete(chatId);
+    if(retries.get(chatId)?.id===inboundId)retries.delete(chatId);
+    if(activeRequests.get(chatId)?.id===inboundId)activeRequests.get(chatId)?.controller.abort();
+    setAutoReplyRuntime(chatId,null,inboundId);
+  }
+  for(const message of state.messages)if(message.chatId===chatId&&message.systemKind==="ai_auto_reply"&&(message.id===messageId||inboundId&&message.aiReplyInboundId===inboundId)){
+    keys.push(`reply:${message.id}`);
+    if(["pending","queued","failed"].includes(message.deliveryStatus||"")&&!message.deliveryUncertain)state.updateMessageDelivery(message.id,{deliveryStatus:"failed",retryCount:5,nextAttemptAt:undefined,lastError:"本次自动回复已停止"});
+  }
+  state.updateSettings({aiTaskDismissedIds:[...new Set(keys)]});
+}
+
+export function stopChatAutoReply(chatId: string): void {
+  const state=useAppStore.getState();
+  const inbound=(state.messagesByChatId?.[chatId]||state.messages.filter(message=>message.chatId===chatId)).filter(message=>message.direction==="in").at(-1);
+  if(inbound)state.updateSettings({aiTaskDismissedIds:[...new Set([...(state.settings.aiTaskDismissedIds||[]),`runtime:${chatId}:${inbound.id}`])]});
+  clearTimeout(debounceTimers.get(chatId)?.timer);
+  clearTimeout(cooldownTimers.get(chatId));
+  clearTimeout(takeoverWaits.get(chatId)?.timer);
+  debounceTimers.delete(chatId);cooldownTimers.delete(chatId);takeoverWaits.delete(chatId);
+  pendingByChat.delete(chatId);retries.delete(chatId);
+  pausedByChat.delete(chatId);
+  activeRequests.get(chatId)?.controller.abort();
+  for(const message of state.messages)if(message.chatId===chatId&&message.systemKind==="ai_auto_reply"&&["pending","queued","failed"].includes(message.deliveryStatus||"")&&!message.deliveryUncertain)
+    state.updateMessageDelivery(message.id,{deliveryStatus:"failed",retryCount:5,nextAttemptAt:undefined,lastError:"本次自动回复已停止"});
+  setAutoReplyRuntime(chatId,null);
+}
+
+export async function retryAutoReplyTask(chatId:string,inboundId?:string,messageId?:string,regenerate=false):Promise<boolean>{
+  const state=useAppStore.getState();
+  const message=messageId?state.messages.find(message=>message.id===messageId&&message.chatId===chatId&&message.systemKind==="ai_auto_reply"):undefined;
+  if(messageId&&(!message||message.deliveryUncertain||message.deliveryStatus!=="failed"))return false;
+  if(message&&!regenerate){
+    const key=currentAutoReplyContext(state,message);
+    if(!key||!message.aiReplyContextHash||!canSendAutoReply(state.settings,state.messages,message,message.aiReplyInboundId))return false;
+    if(await hashAiReplyContext(key)!==message.aiReplyContextHash)return false;
+    const fresh=useAppStore.getState(),current=fresh.messages.find(item=>item.id===message.id);
+    if(!current||current.deliveryStatus!=="failed"||current.deliveryUncertain||currentAutoReplyContext(fresh,current)!==key||!canSendAutoReply(fresh.settings,fresh.messages,current,current.aiReplyInboundId))return false;
+    fresh.updateMessageDelivery(current.id,{deliveryStatus:"queued",retryCount:0,nextAttemptAt:new Date().toISOString(),lastError:undefined});
+    return true;
+  }
+  const thread=state.messagesByChatId?.[chatId]||state.messages.filter(item=>item.chatId===chatId);
+  const latest=thread.filter(item=>item.direction==="in").at(-1);
+  const targetId=inboundId||message?.aiReplyInboundId||thread.filter(item=>item.direction==="in"&&message&&item.sentAt<=message.sentAt).at(-1)?.id;
+  if(!latest||latest.id!==targetId||!canScheduleAutoReply(latest))return false;
+  stopAutoReplyTask(chatId,targetId,messageId);
+  const current=useAppStore.getState();
+  current.updateSettings({aiTaskDismissedIds:(current.settings.aiTaskDismissedIds||[]).filter(key=>key!==`runtime:${chatId}:${targetId}`)});
+  await autoReplyInbound(latest);
+  return true;
+}
+
+export function refreshManualTakeovers(): void {
+  for (const { message, timer } of [...takeoverWaits.values()]) {
+    clearTimeout(timer);
+    takeoverWaits.delete(message.chatId);
+    void autoReplyInbound(message);
+  }
+}
+
+function waitForManualTakeover(message: Message, retryAt: number, reason: string): void {
+  const previous = takeoverWaits.get(message.chatId);
+  if (previous) clearTimeout(previous.timer);
+  takeoverWaits.set(message.chatId, { message, timer: setTimeout(() => {
+    takeoverWaits.delete(message.chatId);
+    void autoReplyInbound(message);
+  }, Math.max(1, retryAt - Date.now())) });
+  setAutoReplyRuntime(message.chatId, { phase: "waiting", inboundId: message.id,
+    accountId: message.accountId, reason, retryAt });
 }
 
 function logAutoDecision(
@@ -104,8 +228,11 @@ function logAutoSkipOnce(
 
 export async function autoReplyInbound(m: Message): Promise<void> {
   if (!m.chatId) return;
+  if(useAppStore.getState().settings.aiAutoReplyPaused){holdPausedReply(m);return;}
+  if (!canScheduleAutoReply(m)) { setAutoReplyRuntime(m.chatId,null,m.id);return; }
+  if (useAppStore.getState().settings.aiTaskDismissedIds?.includes(`runtime:${m.chatId}:${m.id}`)) return;
   const active = activeRequests.get(m.chatId);
-  if (active && (active.id === m.id || active.sentAt > m.sentAt)) return;
+  if (active && !active.controller.signal.aborted && (active.id === m.id || active.sentAt > m.sentAt)) return;
   const pending = pendingByChat.get(m.chatId);
   if (pending && pending.sentAt > m.sentAt) return;
   if (!pending || m.sentAt >= pending.sentAt) pendingByChat.set(m.chatId, m);
@@ -120,6 +247,7 @@ export async function autoReplyInbound(m: Message): Promise<void> {
     while (pendingByChat.has(m.chatId)) {
       const next = pendingByChat.get(m.chatId)!;
       pendingByChat.delete(m.chatId);
+      if(useAppStore.getState().settings.aiAutoReplyPaused){holdPausedReply(next);break;}
       const recovery = retries.get(m.chatId);
       if (recovery?.id === next.id && Date.now() - recovery.startedAt >= 5 * 60_000) {
         retries.delete(m.chatId);
@@ -164,7 +292,7 @@ export async function autoReplyInbound(m: Message): Promise<void> {
         setAutoReplyRuntime(m.chatId, { phase: "human", inboundId: next.id, accountId: next.accountId, reason: "重试次数或等待时间已达上限" }, next.id);
       }
       const runtime = useAutoReplyRuntime.getState().byChat[m.chatId];
-      if (!controller.signal.aborted && runtime?.inboundId === next.id && runtime.phase !== "human") setAutoReplyRuntime(m.chatId, null, next.id);
+      if (!controller.signal.aborted && runtime?.inboundId === next.id && runtime.phase !== "human" && !takeoverWaits.has(m.chatId)) setAutoReplyRuntime(m.chatId, null, next.id);
       retries.delete(m.chatId);
     }
   } finally {
@@ -197,6 +325,7 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
   if (!m.chatId || !m.contactId) return;
   let conversation = state.messagesByChatId?.[m.chatId] || state.messages.filter(x => x.chatId === m.chatId).sort((a, b) => a.sentAt.localeCompare(b.sentAt));
   if (conversation.filter(x => x.direction === "in").at(-1)?.id !== m.id ||
+      conversation.some(x => x.direction === "out" && !x.systemKind && x.sentAt >= m.sentAt) ||
       conversation.some(x => x.direction === "out" && x.systemKind === "ai_auto_reply" && x.sentAt >= m.sentAt &&
         (x.deliveryStatus !== "failed" || x.deliveryUncertain))) return;
   m = conversation.find(x => x.id === m.id) || m;
@@ -283,7 +412,8 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
   const beforeVoice = evaluateAutoReplyDecision(conversation, m, Date.now(), policy);
   if (!beforeVoice.allow && (beforeVoice.kind !== "risk" || !isVoiceMessage(m) || !!m.transcript?.trim())) {
     logAutoSkipOnce(m.chatId, contact.id, `decision:${beforeVoice.kind}`, "自动回复：暂停", beforeVoice.reason);
-    runtime("human",beforeVoice.reason);
+    if (beforeVoice.kind === "manual_takeover" && beforeVoice.retryAt) waitForManualTakeover(m, beforeVoice.retryAt, beforeVoice.reason);
+    else runtime("human",beforeVoice.reason);
     return;
   }
   const lastOut = conversation.map(x => x.direction === "out" && !["pending", "queued", "failed", "local"].includes(x.deliveryStatus || "")).lastIndexOf(true);
@@ -340,7 +470,8 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
         decision.reason
       );
     }
-    runtime("human",decision.reason);
+    if (decision.kind === "manual_takeover" && decision.retryAt) waitForManualTakeover(m, decision.retryAt, decision.reason);
+    else runtime("human",decision.reason);
     return;
   }
   const contextKey = getSuggestionContextKey(contact, conversation, settings, accountId, { auto: true });
@@ -351,6 +482,7 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
     auto: true,
     accountId,
     signal,
+    onMuseQueue:running=>{if(!signal.aborted)runtime(running?"generating":"waiting",running?"Muse 正在生成":"等待 Muse 排队");},
   });
   if (signal.aborted) return;
   if (Date.now() < generationStartedAt || Date.now() - generationStartedAt >= SUGGESTION_MAX_AGE_MS) {
@@ -464,6 +596,7 @@ export async function sendAutoReplyText(opts: {
     deliveryStatus: "pending",
     systemKind: "ai_auto_reply",
     aiReplyContextHash,
+    aiReplyInboundId: opts.inboundId,
   });
   if (!msgId) return false;
   // enqueueOutgoingMessage 会清空 draftReply，恢复用户在其它会话正在打的草稿

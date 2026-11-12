@@ -5,6 +5,7 @@ import { displayContactLabel, resolveSendTarget } from "@/lib/utils";
 import { chatInView, contactInView } from "@/store/accountScope";
 import type { LeadCandidate } from "@/lib/leadInbox";
 import { isAwaitingReply } from "@/lib/replyStatus";
+import { messageOrderTime } from "@/store/messageOrdering";
 
 export type ChatSortMode =
   | "recent"
@@ -55,6 +56,7 @@ export function isGhostSelfContact(
 /** 按消息库计算会话最后一条时间/正文/方向（比 chat.updatedAt 更准） */
 export function buildChatActivityMaps(messages: Message[]) {
   const lastMsgAtByChat = new Map<string, string>();
+  const lastOrderAtByChat = new Map<string, string>();
   const lastBodyByChat = new Map<string, string>();
   const lastDirByChat = new Map<string, Message["direction"]>();
   const lastDeliveryStatusByChat = new Map<
@@ -64,8 +66,11 @@ export function buildChatActivityMaps(messages: Message[]) {
   for (const m of messages) {
     // 系统事件不参与「最后聊天时间」（官方列表也不靠进群通知顶序）
     if (m.mediaType === "system" || m.systemKind) continue;
-    const prev = lastMsgAtByChat.get(m.chatId);
-    if (!prev || m.sentAt >= prev) {
+    const at = messageOrderTime(m);
+    const prev = lastOrderAtByChat.get(m.chatId);
+    if (!prev || at >= prev) {
+      // Use order time only for comparison; keep the real timestamp for display.
+      lastOrderAtByChat.set(m.chatId, at);
       lastMsgAtByChat.set(m.chatId, m.sentAt);
       lastBodyByChat.set(m.chatId, m.body);
       lastDirByChat.set(m.chatId, m.direction);
@@ -87,7 +92,8 @@ export function buildChatActivityMaps(messages: Message[]) {
  */
 export function buildChatActivityMapsFromPreviews(
   chats: ChatPreview[],
-  messages?: Message[]
+  messages?: Message[],
+  messagesByChatId?: Readonly<Record<string, Message[]>>
 ) {
   const lastMsgAtByChat = new Map<string, string>();
   const lastBodyByChat = new Map<string, string>();
@@ -106,8 +112,19 @@ export function buildChatActivityMapsFromPreviews(
   }
   // 2) 有消息库时：用「真实最后一条」覆盖时间/正文（对齐官方按最后消息排序）
   //    不能只在 preview 缺失时才扫——否则错误/过期的 updatedAt 会一直主导顺序
-  if (messages && messages.length) {
-    const fromMsg = buildChatActivityMaps(messages);
+  if ((messages && messages.length) || messagesByChatId) {
+    const ownerByChat = new Map(
+      chats.map((chat) => [chat.id, chat.accountId || chat.phoneId || ""])
+    );
+    const sourceMessages = messagesByChatId
+      ? chats.flatMap((chat) => messagesByChatId[chat.id] || [])
+      : messages || [];
+    const scopedMessages = sourceMessages.filter((message) => {
+      const chatOwner = ownerByChat.get(message.chatId);
+      const messageOwner = message.accountId || message.deviceId || "";
+      return !chatOwner || !messageOwner || chatOwner === messageOwner;
+    });
+    const fromMsg = buildChatActivityMaps(scopedMessages);
     for (const [id, at] of fromMsg.lastMsgAtByChat) {
       // 有真实消息则强制用消息时间（官方同源）
       lastMsgAtByChat.set(id, at);
@@ -166,6 +183,8 @@ export function filterAndSortSidebarChats(opts: {
   contactById?: ReadonlyMap<string, Contact>;
   /** 可选；侧栏默认不传，避免订阅全量 messages */
   messages?: Message[];
+  /** 已按会话索引的消息；优先于全量 messages，避免侧栏时间落后于聊天窗口 */
+  messagesByChatId?: Readonly<Record<string, Message[]>>;
   query: string;
   showArchived: boolean;
   selfName: string;
@@ -198,7 +217,11 @@ export function filterAndSortSidebarChats(opts: {
     lastDirByChat,
     lastDeliveryStatusByChat,
   } =
-    buildChatActivityMapsFromPreviews(opts.chats, opts.messages);
+    buildChatActivityMapsFromPreviews(
+      opts.chats,
+      opts.messages,
+      opts.messagesByChatId
+    );
   const q = opts.query.trim().toLowerCase();
   const qPhone = phoneDigits(q);
 

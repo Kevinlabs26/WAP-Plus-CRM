@@ -123,6 +123,41 @@ export function isDataUrl(url: string | undefined | null): url is string {
   return !!url && DATA_URL_RE.test(url);
 }
 
+/** Batch bridge history media so one ingest batch updates the index once. */
+export function cacheMediaUrls(
+  entries: readonly { messageId: string; url: string }[]
+): Promise<void> {
+  const unique = new Map<string, string>();
+  for (const entry of entries) {
+    if (!entry.messageId || !isDataUrl(entry.url)) continue;
+    const max = entry.url.startsWith("data:video/")
+      ? VIDEO_DATA_URL_MAX_CHARS
+      : MEDIA_CACHE_MAX_ITEM_CHARS;
+    if (entry.url.length <= max) unique.set(entry.messageId, entry.url);
+  }
+  if (!unique.size) return Promise.resolve();
+  return runMediaMutation(async () => {
+    try {
+      const index = await loadMediaIndex();
+      const now = Date.now();
+      const puts = [...unique].map(([messageId, url]) => {
+        index[messageId] = { chars: url.length, cachedAt: now };
+        return { key: mediaCacheKey(messageId), value: url };
+      });
+      const evicted = selectMediaCacheEvictions(index);
+      for (const id of evicted) delete index[id];
+      await idbSet(MEDIA_INDEX_KEY, index, [
+        ...puts,
+        ...evicted.map((id) => ({ key: mediaCacheKey(id), remove: true })),
+      ]);
+      unique.forEach((_url, id) => releaseBlobUrl(id));
+      evicted.forEach(releaseBlobUrl);
+    } catch {
+      /* bridge media caching is best-effort and must not delay message ingest */
+    }
+  });
+}
+
 /** 大 data URL 落盘前转存 IDB，返回要保留的（小 URL 或 undefined） */
 export async function cacheMediaUrl(
   messageId: string,

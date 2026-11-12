@@ -21,6 +21,16 @@
     const fields = [...document.querySelectorAll('textarea')].filter(node => node.offsetParent !== null);
     return fields.length === 1 ? fields[0] : null;
   };
+  const clearInputDraft = () => {
+    const field = input();
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+    if (!field || !setter) return false;
+    if (!field.value.trim()) return true;
+    setter.call(field, '');
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+    return !field.value.trim();
+  };
   const imageFileInput = () => {
     const fields = [...document.querySelectorAll('input[type="file"]')];
     const images = fields.filter(node => /image|\.(?:png|jpe?g|webp)/i.test(node.getAttribute('accept') || ''));
@@ -180,7 +190,7 @@
     if (inspect().state !== 'ready') return inspect();
     if (job && !['done','error'].includes(job.state)) return { state: 'error', error: 'Muse 当前请求尚未结束' };
     if (typeof prompt !== 'string' || !prompt.trim() || [...prompt].length > 110000) return { state: 'error', error: 'Muse 提示词为空或超过长度限制' };
-    if (input()?.value.trim()) return { state: 'error', error: 'Muse 输入框有未发送内容，请先处理草稿' };
+    if (input()?.value.trim() && !clearInputDraft()) return { state: 'error', error: 'Muse 输入框旧草稿无法自动清除，未发送' };
     const fileField = reference ? imageFileInput() : null;
     if (reference && (!fileField || fileField.files?.length)) return { state: 'error', error: 'Muse 没有唯一可用的图片附件入口，或草稿已有附件；未发送' };
     const attachments = reference ? attachmentSnapshot() : null;

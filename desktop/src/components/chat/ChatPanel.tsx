@@ -99,7 +99,7 @@ import { openAndroidMediaShare as openAndroidMediaShareAction } from "./openAndr
 import { compareMessageOrder } from "@/store/messageOrdering";
 import { toggleBlock } from "./toggleBlockAction";
 import { createStickerFavoriteActions } from "./stickerFavoriteActions";
-import { loadStickerFavorites, normalizeStickerFavorites, saveStickerFavorites } from "@/lib/stickerFavorites";
+import { loadStickerFavorites, mergeStickerFavoritesFromMessages, normalizeStickerFavorites, saveStickerFavorites } from "@/lib/stickerFavorites";
 import { workflowForStage } from "@/lib/contactWorkflow";
 import {
   imageToStickerDataUrl,
@@ -403,6 +403,7 @@ export function ChatPanel() {
   } | null>(null);
   const [mediaBusyId, setMediaBusyId] = useState<string | null>(null);
   const [favoriteStickers, setFavoriteStickers] = useState<string[]>([]);
+  const storeHydrated = useAppStore((state) => state.hydrated);
   const messageListRef = useRef<MessageListHandle | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   /** 用户上翻看历史时不强制吸底；切会话 / 自己发消息时强制到底 */
@@ -463,8 +464,20 @@ export function ChatPanel() {
   });
 
   useEffect(() => {
-    void loadStickerFavorites().then(setFavoriteStickers);
-  }, []);
+    if (!storeHydrated) return;
+    let cancelled = false;
+    void loadStickerFavorites().then(async (saved) => {
+      if (cancelled) return;
+      const synced = mergeStickerFavoritesFromMessages(saved, useAppStore.getState().messages);
+      if (synced.length !== saved.length || synced.some((item, index) => item !== saved[index])) {
+        try { await saveStickerFavorites(synced); } catch { /* keep the in-memory sync available */ }
+      }
+      if (!cancelled) setFavoriteStickers(synced);
+    }).catch(() => {
+      if (!cancelled) setFavoriteStickers([]);
+    });
+    return () => { cancelled = true; };
+  }, [storeHydrated]);
 
   const importStickerFiles = useCallback(async (files: File[]) => {
     let storedFavorites: string[];

@@ -160,7 +160,7 @@ export function MultiWindowCard({
   const [mediaBusyId, setMediaBusyId] = useState<string | null>(null);
   const [mediaSending, setMediaSending] = useState(false);
   const [sheetInfoOpen, setSheetInfoOpen] = useState(false);
-  const hasSheetConfig = useGoogleSheets(state => !!state.email && !!state.config);
+  const hasSheetConfig = useGoogleSheets(state => !!state.email && (!!state.config||Object.keys(state.connections||{}).length>0));
   const [messageMenu, setMessageMenu] = useState<{
     x: number;
     y: number;
@@ -416,7 +416,7 @@ export function MultiWindowCard({
         </MultiWindowReplyControls>
       </header>
       {!collapsed && <>
-      {sheetInfoOpen && contact && <div className="max-h-48 shrink-0 overflow-y-auto p-2"><GoogleSheetInfo contact={contact} open /></div>}
+      {sheetInfoOpen && contact && <div className="max-h-48 shrink-0 overflow-y-auto p-2"><GoogleSheetInfo contact={contact} chatId={chat.id} open /></div>}
       {loadError && <div className="mx-2.5 mt-2 flex items-center justify-between gap-2 rounded-lg border border-rose-400/20 bg-rose-500/5 px-2.5 py-1.5 text-[10px] text-rose-200/80"><span className="min-w-0 truncate" title={loadError}>{t("multi.loadFailed")}</span>{onRefresh && <button type="button" onClick={onRefresh} disabled={refreshing} className="shrink-0 text-rose-300 underline underline-offset-2 hover:text-rose-100 disabled:opacity-50">{t("common.retry")}</button>}</div>}
       <div className="relative flex min-h-0 flex-1 flex-col">
       <div ref={scrollRef} onScroll={onScroll} onLoadCapture={onMediaLoad} className="chat-canvas min-h-0 flex-1 overflow-y-auto [overflow-anchor:none]">

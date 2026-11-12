@@ -10,7 +10,7 @@ const mocks={
  '@/components/ui/primitives':'export const Button="button",SectionLabel="label";',
  '@/i18n':'export const useI18n=()=>({t:k=>k});',
  '@/lib/googleSheetApi':'export const spreadsheetId=v=>v.includes("abc")?"abc":null;',
- '@/lib/googleSheets':'export const useGoogleSheets=()=>globalThis.sheetSettingsState;export const initializeSheets=async()=>{};export const letter=i=>String.fromCharCode(65+i);export const sheetHeaders=async()=>["Phone","Order"];export const saveSheetConfig=async config=>globalThis.sheetSaved=config;export const readSheet=async()=>({sheets:[]});export const connectSheets=async()=>{};export const cancelSheetsConnect=async()=>{globalThis.sheetConnectCancelled=true;};export const disconnectSheets=async()=>{globalThis.sheetDisconnected=true;};export const refreshSheets=async()=>{};',
+ '@/lib/googleSheets':'export const DEFAULT_SHEET_ID="default";export const sheetConnections=s=>s.config?[{id:"default",name:"Main table",config:s.config,data:s.data,error:s.error}]:[];export const removeSheetConnection=async()=>{};export const useGoogleSheets=()=>globalThis.sheetSettingsState;export const initializeSheets=async()=>{};export const letter=i=>String.fromCharCode(65+i);export const sheetHeaders=async()=>["Phone","Order"];export const saveSheetConfig=async(config,id,name)=>{globalThis.sheetSaved=config;globalThis.sheetSavedTarget={id,name};};export const readSheet=async()=>({sheets:[]});export const connectSheets=async()=>{};export const cancelSheetsConnect=async()=>{globalThis.sheetConnectCancelled=true;};export const disconnectSheets=async()=>{globalThis.sheetDisconnected=true;};export const refreshSheets=async()=>{};',
 };
 const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/settings/SettingsGoogleSheets.tsx',import.meta.url))],bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},plugins:[{name:'boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
 const {SettingsGoogleSheets}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
@@ -40,6 +40,9 @@ test('reopening a saved connection and reloading headers preserves custom labels
  try{
   render();effects.splice(0).forEach(fn=>fn());
   let tree=render();
+  assert.ok(tree.some(node=>node.type==='table'));
+  assert.ok(!tree.some(node=>node.type==='input'&&node.props.placeholder?.includes('spreadsheets')));
+  tree.find(node=>node.type==='button'&&node.props.children==='sheets.edit').props.onClick();await new Promise(resolve=>setImmediate(resolve));render();effects.splice(0).forEach(fn=>fn());tree=render();
   assert.ok(tree.some(node=>node.type==='input'&&node.props.value==='https://docs.google.com/spreadsheets/d/abc/edit'));
   const columns=tree.find(node=>node.type==='button'&&node.props.children==='sheets.columns');
   columns.props.onClick();await new Promise(resolve=>setImmediate(resolve));
@@ -50,6 +53,10 @@ test('reopening a saved connection and reloading headers preserves custom labels
   assert.equal(save.props.disabled,false);save.props.onClick();await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(globalThis.sheetSaved.fields,fields);
   assert.equal(globalThis.sheetSaved.headerRow,2);
+  assert.deepEqual(globalThis.sheetSavedTarget,{id:'default',name:'Main table'});
+  tree=render();effects.splice(0).forEach(fn=>fn());tree=render();
+  tree.find(node=>node.type==='button'&&node.props.children==='sheets.edit').props.onClick();await new Promise(resolve=>setImmediate(resolve));render();effects.splice(0).forEach(fn=>fn());tree=render();
+  tree.find(node=>node.type==='button'&&node.props.children==='sheets.columns').props.onClick();await new Promise(resolve=>setImmediate(resolve));tree=render();
   const disconnect=tree.find(node=>node.type==='button'&&node.props.children==='sheets.disconnect');
   disconnect.props.onClick();await new Promise(resolve=>setImmediate(resolve));
   assert.equal(globalThis.sheetDisconnectPrompt.tone,'danger');
@@ -67,6 +74,6 @@ test('reopening a saved connection and reloading headers preserves custom labels
   globalThis.sheetSettingsState={...globalThis.sheetSettingsState,email:null,config:null};
   render();effects.splice(0).forEach(fn=>fn());
   globalThis.sheetSettingsState={...globalThis.sheetSettingsState,email:'new@example.com'};
-  assert.ok(render().some(node=>node.type==='input'&&node.props.placeholder?.includes('spreadsheets')&&node.props.value===''));
+  assert.ok(!render().some(node=>node.type==='input'&&node.props.placeholder?.includes('spreadsheets')));
  }finally{globalThis.window=oldWindow;for(const key of ['sheetSettingsHooks','sheetSettingsState','sheetSaved','sheetCloseGuard','sheetDisconnectPrompt','sheetDisconnectApproved','sheetDisconnected'])delete globalThis[key];}
 });

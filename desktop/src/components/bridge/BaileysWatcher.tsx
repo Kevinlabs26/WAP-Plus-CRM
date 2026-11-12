@@ -14,7 +14,6 @@ import { hasRealtimeIngestEvents } from "@/lib/ingestGate";
 import { useAppStore } from "@/store/appStore";
 import { flushPersist, persist, prunePersistedMessageMemory } from "@/store/persist";
 import { useI18n } from "@/i18n";
-import { waitForMediaCacheWrites } from "@/lib/mediaCache";
 import { resolveAccountIdentity } from "@/lib/accountIdentity";
 import type { BridgeEvent } from "@/lib/bridge";
 import {
@@ -169,6 +168,13 @@ export function BaileysWatcher() {
     let lastIngestAt = Date.now();
     let checkpointInFlight = false;
     let checkpointRetryTimer: number | null = null;
+    if (import.meta.env?.DEV) Object.assign(window, { __wapInspectSync: () => ({
+      pending: pendingEvents.length, history: ingestQueue.length, realtime: realtimeIngestQueue.length,
+      inFlight: ingestInFlightEvents.map(e => ({ type: e.type, seq: e.seq, account: e.deviceId })),
+      checkpointInFlight, cursors: Object.fromEntries(pendingCursorByAccount),
+      accounts: [...byAccount.current].map(([id, r]) => ({ id, cursor: r.cursor, saved: readCursor(id) })),
+      first: ingestQueue.slice(0, 2).map(c => c.map(e => ({ type: e.type, seq: e.seq, account: e.deviceId }))),
+    }) });
 
     const commitPendingCursors = () => {
       if (cancelled || checkpointInFlight || checkpointRetryTimer != null ||
@@ -178,6 +184,8 @@ export function BaileysWatcher() {
         const inspect = (events: BridgeEvent[]) => {
           for (const event of events) {
             if (event.deviceId !== accountId) continue;
+            // /sync 快照独立于事件日志，不能挡住已保存的日志前缀。
+            if (typeof event.seq !== "number" && (event.payload as {source?: string})?.source === "snapshot") continue;
             through = typeof event.seq === "number" ? Math.min(through, event.seq - 1) : 0;
           }
         };
@@ -195,10 +203,8 @@ export function BaileysWatcher() {
       checkpointInFlight = true;
       let retryDelay = 0;
       const epochs = new Map([...cursorSnapshot.keys()].map(id => [id, baileysSessionEpoch(id)]));
-      void Promise.all([
-        waitForMediaCacheWrites(),
-        flushPersist(() => useAppStore.getState()),
-      ])
+      // 媒体缓存是可恢复的 best-effort 写入，不能阻塞消息游标；否则视频/图片批量同步会让事件缓存无限增长。
+      void flushPersist(() => useAppStore.getState())
         .then(() => {
           if (cancelled) return;
           for (const [accountId, cursor] of cursorSnapshot) {
@@ -645,8 +651,6 @@ export function BaileysWatcher() {
       const raw = status.connection;
       const epoch = baileysSessionEpoch(accountId);
       const now = Date.now();
-      const stickyMs = 90_000;
-      const recentlyConnected = now - r.lastConfirmedConnectedAt < stickyMs;
       // 只信本槽 bridge 回报的 user；绝不用全局 baileysUi.userName 回填其它槽
       const statusPhoneE164 =
         typeof status.user?.id === "string"
@@ -662,7 +666,7 @@ export function BaileysWatcher() {
       const needScan =
         raw === "qr" ||
         raw === "logged_out" ||
-        (raw === "error" && !recentlyConnected);
+        raw === "error";
 
       const isLive = accountId === liveId();
       const connectedNow = raw === "connected";
@@ -784,7 +788,7 @@ export function BaileysWatcher() {
 
       // 非 live 槽：照常入库/同步，但不改全局 baileysUi
       if (!isLive) {
-        return connectedNow || (recentlyConnected && !needScan);
+        return connectedNow;
       }
 
       // —— 以下仅「当前浏览槽」更新 baileysUi（顶栏/弹窗）——
@@ -811,12 +815,9 @@ export function BaileysWatcher() {
         return true;
       }
 
-      if (
-        (recentlyConnected || status.signedIn || r.prevConnected) &&
-        (raw === "reconnecting" || raw === "starting" || raw === "close")
-      ) {
-        patchUi("connected", userName || null, false);
-        return true;
+      if (raw === "reconnecting" || raw === "starting" || raw === "close") {
+        patchUi("reconnecting", userName || null, false);
+        return false;
       }
 
       const nextConn = needScan ? raw : raw === "error" ? "error" : raw;
@@ -882,9 +883,11 @@ export function BaileysWatcher() {
 
         // 连接状态不等消息拉取；消息超时也不能挡住顶栏和账号列表更新。
         let connected = r.prevConnected;
+        let storageBacklog = false;
         let userName: string | null = null;
         if (status) {
-          const syncStorage = (status as typeof status & {syncStorage?:{warning?:string;warningCode?:string}}).syncStorage;
+          const syncStorage = (status as typeof status & {syncStorage?:{warning?:string;warningCode?:string;blocked?:boolean}}).syncStorage;
+          storageBacklog = syncStorage?.blocked === true;
           const warning = syncStorage?.warning || "";
           const warningCode = syncStorage?.warningCode || warning;
           if(warning && storageWarningByAccount.get(accountId)!==warningCode)useAppStore.getState().pushToast(`${accountId}：${warning}`,"error");
@@ -904,7 +907,13 @@ export function BaileysWatcher() {
           userName = slot?.userName || null;
         }
 
-        const result = await baileysEvents(r.cursor, accountId, readCursor(accountId), r.realtimeCursor);
+        const result = await baileysEvents(
+          r.cursor,
+          accountId,
+          readCursor(accountId),
+          r.realtimeCursor,
+          { eventLimit: pendingCursorByAccount.has(accountId) ? 0 : storageBacklog ? 200 : 40 }
+        );
         if (cancelled || epoch !== baileysSessionEpoch(accountId)) return;
 
         r.failStreak = 0;

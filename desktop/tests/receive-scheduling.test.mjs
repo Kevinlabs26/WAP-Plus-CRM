@@ -6,7 +6,7 @@ import {needsFullMessageReconcile} from '../src/store/messageReconcilePolicy.ts'
 const mocks={
  'react':`export const useRef=current=>({current});export const useEffect=fn=>{globalThis.receiveCleanup=fn();};`,
  '@/store/appStore':`export const useAppStore=f=>f(globalThis.receiveState);useAppStore.getState=()=>globalThis.receiveState;useAppStore.setState=p=>Object.assign(globalThis.receiveState,typeof p==='function'?p(globalThis.receiveState):p);`,
- '@/lib/baileys':`export const baileysSessionEpoch=id=>globalThis.receiveEpochs[id]||0;export const baileysEvents=(cursor,id,ack,realtimeAfter)=>globalThis.receiveEvents(cursor,id,ack,realtimeAfter);export const baileysStatus=id=>globalThis.receiveStatus(id);export const baileysSync=id=>globalThis.receiveSync(id);export const baileysLabels=async()=>({labels:[]});export const baileysFetchAvatar=async()=>null;`,
+ '@/lib/baileys':`export const baileysSessionEpoch=id=>globalThis.receiveEpochs[id]||0;export const baileysEvents=(cursor,id,ack,realtimeAfter,opts)=>globalThis.receiveEvents(cursor,id,ack,realtimeAfter,opts);export const baileysStatus=id=>globalThis.receiveStatus(id);export const baileysSync=id=>globalThis.receiveSync(id);export const baileysLabels=async()=>({labels:[]});export const baileysFetchAvatar=async()=>null;`,
  '@/store/persist':`export const prunePersistedMessageMemory=()=>{};export const persist=()=>{};export const flushPersist=()=>globalThis.receiveSave();`,
  '@/lib/mediaCache':`export const waitForMediaCacheWrites=async()=>{};`,
  '@/lib/composerActivity':`export const isComposerTypingBusy=()=>Boolean(globalThis.receiveTyping);`,
@@ -168,6 +168,41 @@ test('a busy account acknowledges completed sequences without waiting for its re
   waiting.resolve();await settle();await ui.advance(2000);
   assert.equal(ui.cursors.get('wap.baileys.eventCursor.a'),'2');
  }finally{waiting.resolve();await settle();ui.close();}
+});
+
+test('an independent startup snapshot cannot hold the checkpoint of already ingested spool events',async()=>{
+ const first=deferred(),snapshot=deferred();let sent=false;
+ const ui=fixture({accounts:1,focused:'a',onIngest:async events=>{
+  if(events.some(e=>e.seq===1))await first.promise;
+  if(events.some(e=>e.payload.source==='snapshot'))await snapshot.promise;
+ }});
+ globalThis.receiveStatus=async()=>({connection:'connected'});
+ globalThis.receiveEvents=async()=>sent?{cursor:1,events:[]}:(sent=true,{cursor:1,events:[{seq:1,type:'messages.sync',payload:{live:true,items:[{id:'durable'}]}}]});
+ globalThis.receiveSync=async()=>({contacts:Array.from({length:1000},(_,i)=>({id:'snapshot-'+i})),messages:[]});
+ try{
+  await ui.advance(3200);assert.equal(ui.cursors.size,0,'unfinished durable ingest must remain unacknowledged');
+  first.resolve();await settle();await ui.advance(100);
+  assert.equal(ui.cursors.get('wap.baileys.eventCursor.a'),'1','a separate snapshot must not block a saved durable prefix');
+ }finally{first.resolve();snapshot.resolve();await settle();ui.close();}
+});
+
+test('history polling waits for the current saved page while realtime polling keeps receiving',async()=>{
+ const save=deferred(),polls=[];let sent=false,liveSent=false;
+ const ui=fixture({accounts:1,focused:'a'});
+ globalThis.receiveSave=()=>save.promise;
+ globalThis.receiveEvents=async(cursor,_id,ack,_realtime,opts)=>{
+  polls.push({cursor,ack,limit:opts?.eventLimit});
+  if(!sent){sent=true;return {cursor:1,events:[{seq:1,type:'contacts.sync',payload:{items:[{id:'old'}]}}]};}
+  const realtimeEvents=liveSent?[]:[{seq:100,type:'messages.sync',payload:{live:true,items:[{id:'fresh'}]}}];liveSent=true;
+  return {cursor,events:[],realtimeEvents,realtimeCursor:100};
+ };
+ try{
+  await ui.advance(8000);assert.ok(polls.slice(1).every(p=>p.limit===0),'unconfirmed history pages cannot accumulate in memory');
+  assert.ok(ui.ingested.flat().some(e=>e.payload.items.some(i=>i.id==='fresh')),'a slow database must not stop fresh message delivery');
+  assert.equal(ui.cursors.size,0);
+  save.resolve();await settle();await ui.advance(3500);
+  assert.ok(polls.some(p=>p.ack===1&&p.limit>0),'history resumes after the durable checkpoint');
+ }finally{save.resolve();await settle();ui.close();}
 });
 
 test('fresh live delivery overtakes old history without acknowledging that unfinished history',async()=>{

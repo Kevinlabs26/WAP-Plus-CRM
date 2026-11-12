@@ -1,5 +1,6 @@
 import { normalizePlaybookPlans, normalizePlaybookSchedule, type PlaybookPlan, type PlaybookSchedule } from '@/lib/playbookPlans';
 import { autoReplyDelayRange } from "@/lib/autoReplyDelay";
+import { normalizeAiReplyTaskRecords, type AiReplyTaskRecord } from "@/lib/aiTaskRecords";
 import type { AutoReplyMode } from "@/lib/autoReplyScope";
 import { normalizePlaybooks, normalizePlaybookBindings, type AiPlaybook } from "@/lib/aiPlaybooks";
 import { validTimeZone } from "@/lib/timeZone";
@@ -77,6 +78,7 @@ export interface SettingsChatFolder {
   aiPromptMode?: "inherit" | "append" | "replace";
   aiPromptTemplateId?: string;
   aiPlaybookId?: string;
+  sheetConnectionId?: string;
   aiPlaybookSchedule?: PlaybookSchedule;
   aiOutreach?: AiOutreachRule;
   aiReplyMaxChars?: number;
@@ -219,6 +221,8 @@ export interface SettingsShape {
   aiOutreachRuns: AiOutreachRun[];
   aiOutreachPaused: boolean;
   aiOutreachExcludedRecipients: string[];
+  aiTaskDismissedIds: string[];
+  aiReplyTaskRecords: AiReplyTaskRecord[];
   /** AI 回复的本人时区；空值跟随电脑时区。 */
   aiTimeZone: string;
   /**
@@ -325,6 +329,9 @@ export interface SettingsShape {
   salesStageOrder: SalesStage[];
   /** UI 主题：dark | light */
   theme: "dark" | "light";
+  folderDefaultColor?: string;
+  folderColorDepth?: number;
+  folderRowDensity?: "compact" | "standard" | "comfortable";
   /** FluentChat 桌面界面语言；不影响联系人、分类和聊天内容 */
   uiLanguage: "zh-CN" | "en" | "fr";
   /** 聊天背景：无 / 纯色 / 图片 / 内建图案 */
@@ -415,6 +422,8 @@ export const defaultSettings: SettingsShape = {
   aiOutreachRuns: [],
   aiOutreachPaused: false,
   aiOutreachExcludedRecipients: [],
+  aiTaskDismissedIds: [],
+  aiReplyTaskRecords: [],
   aiTimeZone: "",
   translateService: "auto",
   automaticBackupEnabled: true,
@@ -610,6 +619,9 @@ export function normalizeLoadedSettings(
   merged.notificationPrivacy = merged.notificationPrivacy === "name" || merged.notificationPrivacy === "hidden"
     ? merged.notificationPrivacy : "full";
   merged.theme = merged.theme === "light" ? "light" : "dark";
+  merged.folderDefaultColor=typeof merged.folderDefaultColor==="string"&&/^#[0-9a-f]{6}$/i.test(merged.folderDefaultColor)?merged.folderDefaultColor:undefined;
+  merged.folderColorDepth=typeof merged.folderColorDepth==="number"&&Number.isFinite(merged.folderColorDepth)?Math.min(40,Math.max(0,merged.folderColorDepth)):10;
+  if(merged.folderRowDensity!=="compact"&&merged.folderRowDensity!=="comfortable")merged.folderRowDensity="standard";
   merged.uiLanguage =
     merged.uiLanguage === "en" || merged.uiLanguage === "fr"
       ? merged.uiLanguage
@@ -736,6 +748,8 @@ export function normalizeLoadedSettings(
   merged.aiOutreachRuns = normalizeOutreachRuns(merged.aiOutreachRuns);
   merged.aiOutreachPaused = merged.aiOutreachPaused === true;
   merged.aiOutreachExcludedRecipients = Array.isArray(merged.aiOutreachExcludedRecipients)?[...new Set(merged.aiOutreachExcludedRecipients.filter((value):value is string=>typeof value==="string"&&!!value.trim()&&value.length<=240).map(value=>value.trim()))].slice(0,50_000):[];
+  merged.aiTaskDismissedIds = Array.isArray(merged.aiTaskDismissedIds)?[...new Set(merged.aiTaskDismissedIds.filter((value):value is string=>typeof value==="string"&&value.length>0&&value.length<=600))].slice(-50_000):[];
+  merged.aiReplyTaskRecords = normalizeAiReplyTaskRecords(merged.aiReplyTaskRecords);
   merged.aiAutoReplyModeByChatId = Object.fromEntries(
     Object.entries(merged.aiAutoReplyModeByChatId && typeof merged.aiAutoReplyModeByChatId === "object" ? merged.aiAutoReplyModeByChatId : {})
       .filter(([id, mode]) => id.trim() && (mode === "auto" || mode === "manual"))
@@ -1036,6 +1050,7 @@ export function normalizeLoadedSettings(
         sort,
         collapsed: !!f?.collapsed,
         ...(f?.autoReplyMode === "auto" || f?.autoReplyMode === "manual" ? { autoReplyMode: f.autoReplyMode } : {}),
+        ...(typeof f?.sheetConnectionId==="string"&&/^[\w-]{1,120}$/.test(f.sheetConnectionId)?{sheetConnectionId:f.sheetConnectionId}:{}),
         ...(typeof f?.aiSystemPrompt === "string" && f.aiSystemPrompt.trim()
           ? { aiSystemPrompt: f.aiSystemPrompt.trim().slice(0, 6000) } : {}),
         ...(f?.aiPromptMode === "inherit" || f?.aiPromptMode === "append" || f?.aiPromptMode === "replace" ? {aiPromptMode: f.aiPromptMode} : {}),

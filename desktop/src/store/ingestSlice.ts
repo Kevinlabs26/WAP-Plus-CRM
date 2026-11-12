@@ -35,7 +35,7 @@ import { pruneChatFolderRefs } from "./chatFolderCleanup";
 import { resolveFollowUpRules } from "@/lib/followUpRules";
 import {
   bridgeMessageMediaCacheId,
-  cacheMediaUrl,
+  cacheMediaUrls,
 } from "@/lib/mediaCache";
 import {
   clearStoredRemoteMessages,
@@ -144,6 +144,7 @@ export function createIngestSlice({
       if (!events.length) { resolve(); return; }
       if (deferDuringRestore(() => { get().ingestBridgeEvents(events).then(resolve, reject); })) return;
       const ingestStarted = performance.now();
+      const mediaCacheEntries: { messageId: string; url: string }[] = [];
       for (const event of events) {
         const payload = ingestObject(event.payload) ?? {};
         const ownerAccountId =
@@ -166,9 +167,10 @@ export function createIngestSlice({
             (event.type === "messages.sync"
               ? bridgeMessageMediaCacheId(rawId, ownerAccountId)
               : rawId);
-          if (id) void cacheMediaUrl(id, mediaUrl);
+          if (id) mediaCacheEntries.push({ messageId: id, url: mediaUrl });
         }
       }
+      if (mediaCacheEntries.length) void cacheMediaUrls(mediaCacheEntries);
 
       // presence 很密：只 patch 窄字段，禁止克隆 phones/contacts/chats/messages
       const onlyPresence =

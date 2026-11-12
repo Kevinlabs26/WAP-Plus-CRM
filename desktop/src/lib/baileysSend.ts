@@ -5,6 +5,8 @@ import type {
 import type { WhatsAppProduct } from "@/types/crm";
 import { baileysStatus, request } from "./baileysCore";
 import { dataUrlToBlob } from "./mediaBlob";
+const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+const VIDEO_STREAM_THRESHOLD_CHARS = 24 * 1024 * 1024;
 
 export type QuotePayload = BaileysQuotePayload;
 
@@ -170,12 +172,12 @@ export const baileysSendVideo = async (phoneE164: string, videoDataUrl: string |
   catch (error) { throw Object.assign(error instanceof Error ? error : new Error(String(error)), { deliveryUncertain: false }); }
   if (status.connection !== "connected") throw Object.assign(new Error("WhatsApp 尚未连接"), { code: "baileys_not_connected", deliveryUncertain: false });
   if (status.capabilities?.nativeVideo !== true) throw Object.assign(new Error("当前桥接不支持原生视频，请更新桥接或改用文件发送"), { code: "native_video_unsupported", deliveryUncertain: false });
-  if (videoDataUrl instanceof Blob || videoDataUrl.startsWith("blob:") || videoDataUrl.startsWith("data:video/mp4;") && videoDataUrl.length > 24 * 1024 * 1024) {
+  if (videoDataUrl instanceof Blob || videoDataUrl.startsWith("blob:") || videoDataUrl.startsWith("data:video/mp4;") && videoDataUrl.length > VIDEO_STREAM_THRESHOLD_CHARS) {
     if (!status.capabilities?.nativeVideoStream) throw Object.assign(new Error("请重启对应账号连接，以加载大视频上传支持"), {deliveryUncertain:false});
     const video = videoDataUrl instanceof Blob ? videoDataUrl : videoDataUrl.startsWith("data:")
-      ? dataUrlToBlob(videoDataUrl, "video/mp4", 100 * 1024 * 1024)
+      ? dataUrlToBlob(videoDataUrl, "video/mp4", MAX_VIDEO_BYTES)
       : await fetch(videoDataUrl).then(response => response.blob());
-    if (!video.size || video.size > 100 * 1024 * 1024) throw Object.assign(new Error("视频为空或超过 100 MB"), {deliveryUncertain:false});
+    if (!video.size || video.size > MAX_VIDEO_BYTES) throw Object.assign(new Error("视频为空或超过 100 MB"), {deliveryUncertain:false});
     const header = new TextEncoder().encode(JSON.stringify({phoneE164, caption, size:video.size}));
     const length = new Uint8Array(4);
     new DataView(length.buffer).setUint32(0, header.length);

@@ -17,6 +17,7 @@ import { currentOutreachContext, isOutreachPaused } from "@/lib/aiOutreachContex
 import { hydrateOutreachHistory } from "@/lib/aiOutreachHistory";
 import { translateCurrent } from "@/i18n";
 import { scheduledMessageExpired } from "@/lib/scheduledMessageExpiry";
+import { isAppLockActive } from "@/lib/appLockRuntime";
 
 const MAX_AUTO_RETRIES = 5;
 
@@ -84,6 +85,7 @@ export function SendQueueWatcher() {
       if (msg.mediaType) return;
 
       let settings = state.settings;
+      if(msg.systemKind==="ai_auto_reply"&&settings.aiAutoReplyPaused)return;
       const scheduled = settings.scheduledMessages?.find(task => task.messageId === msg!.id);
       if (scheduled && scheduledMessageExpired(scheduled)) {
         const error = translateCurrent("scheduled.expired");
@@ -107,9 +109,9 @@ export function SendQueueWatcher() {
       if (msg.systemKind === "ai_auto_reply"||proactive) {
         let verified = false;
         let verificationError = proactive ? "主动联系的规则、轮次或聊天内容已变化，请重新生成" : inspectAutoReplyContext(state,msg).error;
-        if(!proactive&&!verificationError)verificationError=getAutoReplySendError(settings,state.messages,msg)||"";
+        if(!proactive&&!verificationError)verificationError=getAutoReplySendError(settings,state.messages,msg,msg.aiReplyInboundId)||"";
         if(!msg.aiReplyContextHash)verificationError="此消息缺少生成校验记录，不能重试旧回复，请重新生成";
-        if (aiContextKey && msg.aiReplyContextHash && (proactive||canSendAutoReply(settings, state.messages, msg))) {
+        if (aiContextKey && msg.aiReplyContextHash && (proactive||canSendAutoReply(settings, state.messages, msg,msg.aiReplyInboundId))) {
           try { verified = await hashAiReplyContext(aiContextKey) === msg.aiReplyContextHash; }
           catch { verificationError="本机无法执行摘要校验，请重启应用后重新生成"; }
         }
@@ -204,7 +206,7 @@ export function SendQueueWatcher() {
                 (!task || (task.status === "queued" && !scheduledMessageExpired(task))) &&
                 (!proactive||currentOutreachContext(latest,message)===aiContextKey) &&
                 (msg.systemKind !== "ai_auto_reply" || (currentAutoReplyContext(latest, message) === aiContextKey &&
-                  canSendAutoReply(latest.settings, latest.messages, message)));
+                  canSendAutoReply(latest.settings, latest.messages, message,message.aiReplyInboundId)));
             },
             rateLimitEnabled: settings.rateLimitEnabled !== false,
             rateLimits: {
@@ -282,7 +284,7 @@ export function SendQueueWatcher() {
     };
 
     const tick = () => {
-      if (cancelled) return;
+      if (cancelled || isAppLockActive()) return;
       const state = useAppStore.getState();
       const due = state.listRetryableOutgoing().filter(msg =>
         !msg.mediaType && isRetryableOutgoing(msg) &&
@@ -307,9 +309,16 @@ export function SendQueueWatcher() {
     };
 
     void tick();
+    const onQueueChanged = () => void tick();
+    if (typeof window.addEventListener === "function") {
+      window.addEventListener("wap:outgoing-queue-changed", onQueueChanged);
+    }
     const id = window.setInterval(() => void tick(), 4000);
     return () => {
       cancelled = true;
+      if (typeof window.removeEventListener === "function") {
+        window.removeEventListener("wap:outgoing-queue-changed", onQueueChanged);
+      }
       window.clearInterval(id);
     };
   }, []);

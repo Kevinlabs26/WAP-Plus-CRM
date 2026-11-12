@@ -73,7 +73,7 @@ export function inspectOutreachCandidate(state: OutreachState, folderId: string,
   if (!Number.isFinite(basis)||basis>now||thread.some(item=>Date.parse(item.sentAt)>basis)) return {candidate:null,reason:"stale_history"};
   if (run && (run.accountId!==accountId||run.day!==clock.day||run.basisAt!==basisAt||run.recipient&&run.recipient!==recipient)) return {candidate:null,reason:"changed_context"};
   if ((lookup?.recipientRuns||runs).some(item=>item.id!==runId && (item.chatId===chatId&&item.accountId===accountId||item.recipient&&recipientKey("",item.recipient)===recipientKey("",recipient)) &&
-      (item.day===clock.day || ["draft","generating","queued"].includes(item.status) || item.status==="sent" && (!lastInbound||lastInbound.sentAt<=item.at)))) return {candidate:null,reason:"already_contacted"};
+      (item.day===clock.day || ["waiting","draft","generating","queued"].includes(item.status) || item.status==="sent" && (!lastInbound||lastInbound.sentAt<=item.at)))) return {candidate:null,reason:"already_contacted"};
   if ((lookup?.dayRunCount??runs.filter(item=>item.folderId===folderId&&item.day===clock.day&&item.id!==runId).length)>=rule.dailyLimit) return {candidate:null,reason:"daily_limit"};
   const knownHistory=!!(routedExisting||chat.hasMessageHistory||chat.hasOutgoingHistory||contact.lastMessageAt||thread.length||!ownPreview&&(chat.lastMessage||chat.lastMessageDirection));
   const newContact=!knownHistory&&(chat.hasMessageHistory===false||chat.id.startsWith("chat-c-"));
@@ -102,6 +102,7 @@ export function outreachContextKey(state: OutreachState, folderId:string,chatId:
 
 export function currentOutreachContext(state: OutreachState,message: Message) {
   const run=state.settings.aiOutreachRuns?.find(item=>item.messageId===message.id);
+  if(run&&state.settings.aiTaskDismissedIds?.includes(`outreach:${run.id}`))return null;
   if (!run||run.status!=="queued"||message.systemKind!=="ai_proactive"||message.accountId!==run.accountId||message.chatId!==run.chatId||message.channelId!=="baileys"||message.body!==run.text||message.aiReplyContextHash!==run.contextHash) return null;
   const folder=state.settings.chatFolders.find(item=>item.id===run.folderId);
   if (folder?.aiOutreach?.mode!=="auto"&&!run.approved) return null;

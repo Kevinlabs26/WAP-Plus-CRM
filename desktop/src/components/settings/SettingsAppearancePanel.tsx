@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { folderBackground, folderRowPadding } from "@/lib/folderAppearance";
 import { Check, Image as ImageIcon, Moon, Sun, X } from "lucide-react";
 import { useAppStore } from "@/store/appStore";
 import { getLocaleOptions, normalizeLocale, useI18n, type TranslationKey } from "@/i18n";
@@ -74,10 +75,14 @@ export function SettingsAppearancePanel() {
   const theme = useAppStore((s) => s.settings.theme);
   const uiLanguage = useAppStore((s) => s.settings.uiLanguage);
   const chatBackground = useAppStore((s) => s.settings.chatBackground);
+  const folderColor=useAppStore(s=>s.settings.folderDefaultColor);
+  const folderDepth=useAppStore(s=>s.settings.folderColorDepth)??10;
+  const folderDensity=useAppStore(s=>s.settings.folderRowDensity)??"standard";
   const updateSettings = useAppStore((s) => s.updateSettings);
   const pushToast = useAppStore((s) => s.pushToast);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
+  const [tab,setTab]=useState("interface");
 
   const applyColor = (color: string) =>
     updateSettings({ chatBackground: { kind: "color", color } });
@@ -122,6 +127,20 @@ export function SettingsAppearancePanel() {
         <p className="mt-1 break-words text-[11px] text-zinc-500">{t("appearance.description")}</p>
       </header>
 
+      <div role="tablist" aria-label={t("appearance.title")} className="inline-flex max-w-full gap-1 rounded-lg bg-zinc-800/60 p-1">
+        {(["interface","folders","background"] as const).map(id=><button key={id} type="button" role="tab" id={`appearance-tab-${id}`} aria-controls={`appearance-panel-${id}`} aria-selected={tab===id} tabIndex={tab===id?0:-1} onClick={()=>setTab(id)} onKeyDown={event=>{const ids=["interface","folders","background"];let index=ids.indexOf(id);if(event.key==="ArrowRight")index=(index+1)%3;else if(event.key==="ArrowLeft")index=(index+2)%3;else if(event.key==="Home")index=0;else if(event.key==="End")index=2;else return;event.preventDefault();setTab(ids[index]);document.getElementById(`appearance-tab-${ids[index]}`)?.focus();}} className={cn("rounded-md px-4 py-2 text-sm",tab===id?"bg-brand/15 text-brand":"text-zinc-400 hover:text-zinc-200")}>{t(id==="interface"?"appearance.interfaceTab":id==="folders"?"appearance.folderDefaults":"appearance.chatBackground")}</button>)}
+      </div>
+      <div role="tabpanel" id="appearance-panel-folders" aria-labelledby="appearance-tab-folders" hidden={tab!=="folders"}>
+      <section className="space-y-3">
+        <div className="flex items-center justify-between"><SectionLabel className="!mb-0">{t("appearance.folderDefaults")}</SectionLabel><Button size="xs" variant="ghost" onClick={()=>updateSettings({folderDefaultColor:"",folderColorDepth:10,folderRowDensity:"standard"})}>{t("appearance.reset")}</Button></div>
+        <div className="flex flex-wrap items-center gap-3"><label className="flex items-center gap-2 text-xs">{t("appearance.folderColor")}<input type="color" value={folderColor||"#009688"} onChange={event=>updateSettings({folderDefaultColor:event.target.value})}/></label>
+        <label className="flex flex-1 items-center gap-2 text-xs whitespace-nowrap">{t("appearance.folderDepth")}<input className="min-w-20 flex-1 accent-brand" type="range" min={0} max={40} value={folderDepth} onChange={event=>updateSettings({folderColorDepth:Number(event.target.value)})}/><output className="w-9">{folderDepth}%</output></label></div>
+        <div className="flex flex-wrap items-center gap-3"><span className="text-xs">{t("appearance.folderRowHeight")}</span><div className="inline-flex rounded-lg bg-zinc-800/60 p-1">{(["compact","standard","comfortable"] as const).map(value=><button key={value} type="button" aria-pressed={folderDensity===value} className={cn("rounded-md px-3 py-1.5 text-xs",folderDensity===value?"bg-brand/15 text-brand":"text-zinc-400")} onClick={()=>updateSettings({folderRowDensity:value})}>{t(`appearance.density.${value}`)}</button>)}</div></div>
+        <div className="flex min-h-6 items-center rounded-md px-3 text-sm" style={{backgroundColor:folderBackground(folderColor,folderDepth),paddingTop:folderRowPadding(folderDensity),paddingBottom:folderRowPadding(folderDensity)}}>📁 {t("appearance.folderPreview")}</div>
+        <p className="text-2xs text-zinc-500">{t("appearance.folderHint")}</p>
+      </section>
+      </div>
+      <div role="tabpanel" id="appearance-panel-interface" aria-labelledby="appearance-tab-interface" hidden={tab!=="interface"} className="space-y-6">
       <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -234,6 +253,8 @@ export function SettingsAppearancePanel() {
         </div>
       </section>
 
+      </div>
+      <div role="tabpanel" id="appearance-panel-background" aria-labelledby="appearance-tab-background" hidden={tab!=="background"}>
       <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">
@@ -337,6 +358,7 @@ export function SettingsAppearancePanel() {
         </div>
         <p className="mt-2 break-words text-2xs text-zinc-600">{t("appearance.imageHint")}</p>
       </section>
+      </div>
     </div>
   );
 }

@@ -167,6 +167,7 @@ pub fn run() {
             clone_calls::clone_call_start,
             clone_calls::clone_call_cancel,
             muse_web::muse_web_open,
+            muse_web::muse_web_switch_account,
             muse_web::muse_web_status,
             muse_web::muse_web_generate,
             muse_web::muse_web_collect_media,

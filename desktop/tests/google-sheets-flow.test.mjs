@@ -6,11 +6,11 @@ import { sheetInternationalPhone } from '../src/lib/googleSheetMatch.ts';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const built = await build({entryPoints:[root+'src/lib/googleSheets.ts'],bundle:true,write:false,format:'esm',platform:'node',plugins:[{name:'mock-boundaries',setup(build){
   build.onLoad({filter:/src[\\/]lib[\\/]bridge\.ts$/},()=>({contents:'export const isTauri=()=>true;',loader:'ts'}));
-  build.onLoad({filter:/src[\\/]lib[\\/]idb\.ts$/},()=>({contents:'export const idbGet=async()=>undefined;export const idbSet=async()=>{if(globalThis.sheetDiskFailure)throw new Error("disk full")};export const idbDel=async()=>{};',loader:'ts'}));
+  build.onLoad({filter:/src[\\/]lib[\\/]idb\.ts$/},()=>({contents:'export const idbGet=async()=>globalThis.sheetStored;export const idbSet=async(key,value)=>{if(globalThis.sheetDiskFailure)throw new Error("disk full");globalThis.sheetStored=structuredClone(value)};export const idbDel=async()=>{globalThis.sheetStored=undefined;};',loader:'ts'}));
   build.onResolve({filter:/^@tauri-apps\/api\/core$/},()=>({path:'invoke',namespace:'mock'}));
   build.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:'export const invoke=(...args)=>globalThis.sheetInvoke(...args);',loader:'js'}));
 }}]});
-const {initializeSheets, saveSheetConfig, refreshSheets, useGoogleSheets} = await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
+const {initializeSheets, saveSheetConfig, refreshSheets, refreshAllSheets, removeSheetConnection, sheetConnections, useGoogleSheets} = await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
 
 test('bare legacy Benin numbers index the same contact and show multiple selected columns',async()=>{
  const headers=['Numéro','Nom','Profession'];
@@ -102,4 +102,37 @@ test('automatic retries wait longer after failures, pause on authorization error
   await refreshSheets(true);
   assert.equal(useGoogleSheets.getState().error,'');assert.equal(useGoogleSheets.getState().retryAt,null);assert.equal(useGoogleSheets.getState().failures,0);
  }finally{Date.now=originalNow;delete globalThis.sheetInvoke;}
+});
+
+const multiConfig=spreadsheet=>({spreadsheet,tab:'People',headerRow:1,phone:{heading:'Phone'},fields:[{id:'shared',label:'Value',column:{heading:'Value'},schedule:{kind:'manual'}}]});
+const multiResponse=args=>({valueRanges:args.ranges.length===1?[{values:[['Phone'],['Value']]}]:[{values:[['Phone','+12025550100']]},{values:[['Value',args.spreadsheetId]]},{values:[['Phone'],['Value']]}]});
+test('multiple named sheets keep identical field IDs and customer numbers isolated across refresh and reload',async()=>{
+ globalThis.sheetInvoke=async(command,args)=>command==='google_sheets_status'?{configured:true,email:'test@example.com'}:multiResponse(args);
+ try{
+  await saveSheetConfig(multiConfig('source-a'),'default','Main table');
+  await saveSheetConfig(multiConfig('source-b'),'sheet-b','Second table');
+  assert.equal(useGoogleSheets.getState().data.shared.values['+12025550100'][0],'source-a');
+  assert.equal(useGoogleSheets.getState().connections['sheet-b'].data.shared.values['+12025550100'][0],'source-b');
+  assert.deepEqual(sheetConnections().map(item=>item.name),['Main table','Second table']);
+  const fresh=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64')+'#reload-multiple');
+  await fresh.initializeSheets();assert.equal(fresh.sheetConnections().length,2);
+  assert.equal(fresh.useGoogleSheets.getState().connections['sheet-b'].data.shared.values['+12025550100'][0],'source-b');
+  let release,entered;const firstRead=new Promise(resolve=>{entered=resolve;});
+  globalThis.sheetInvoke=async(command,args)=>{if(args.spreadsheetId==='source-a'&&args.ranges.length===1){entered();await new Promise(resolve=>{release=resolve;});}return multiResponse(args);};
+  const a=refreshSheets(true);await firstRead;const b=refreshSheets(true,'sheet-b');release();await Promise.all([a,b]);
+  assert.equal(useGoogleSheets.getState().data.shared.values['+12025550100'][0],'source-a');
+  assert.equal(useGoogleSheets.getState().connections['sheet-b'].data.shared.values['+12025550100'][0],'source-b');
+  globalThis.sheetDiskFailure=true;await assert.rejects(removeSheetConnection('sheet-b'),/disk full/);assert.ok(useGoogleSheets.getState().connections['sheet-b']);delete globalThis.sheetDiskFailure;
+  await removeSheetConnection('sheet-b');assert.equal(sheetConnections().length,1);assert.equal(useGoogleSheets.getState().config.spreadsheet,'source-a');
+ }finally{delete globalThis.sheetInvoke;delete globalThis.sheetDiskFailure;}
+});
+test('a broken sheet does not block refreshing another sheet or replace its cache',async()=>{
+ globalThis.sheetInvoke=async(command,args)=>multiResponse(args);
+ try{
+  await saveSheetConfig(multiConfig('source-b'),'sheet-b','Second table');
+  globalThis.sheetInvoke=async(command,args)=>{if(args.spreadsheetId==='source-a')throw Error('offline');return multiResponse(args);};
+  await Promise.all([refreshSheets(true),refreshSheets(true,'sheet-b')]);
+  assert.match(useGoogleSheets.getState().error,/offline/);assert.equal(useGoogleSheets.getState().connections['sheet-b'].error,'');
+  assert.equal(useGoogleSheets.getState().connections['sheet-b'].data.shared.values['+12025550100'][0],'source-b');
+ }finally{delete globalThis.sheetInvoke;}
 });

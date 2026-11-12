@@ -4,7 +4,7 @@ export type AiOutreachRule = {
 };
 export type AiOutreachRun = {
   id: string; folderId: string; chatId: string; accountId: string; day: string; at: string;
-  status: "generating" | "draft" | "queued" | "sent" | "failed" | "cancelled";
+  status: "waiting" | "generating" | "draft" | "queued" | "sent" | "failed" | "cancelled";
   text?: string; error?: string; messageId?: string; basisAt: string; contextHash?: string;
   approved?: boolean;
   recipient?: string;
@@ -25,7 +25,7 @@ export function normalizeOutreachRuns(raw: unknown): AiOutreachRun[] {
   const seen = new Set<string>();
   return (Array.isArray(raw) ? raw : []).slice(-10_000).flatMap(value => {
     if (!value || !["id","folderId","chatId","accountId","day","at","basisAt"].every(key => typeof value[key] === "string" && value[key].length <= 200) ||
-        !value.id || seen.has(value.id) || !["generating","draft","queued","sent","failed","cancelled"].includes(value.status)) return [];
+        !value.id || seen.has(value.id) || !["waiting","generating","draft","queued","sent","failed","cancelled"].includes(value.status)) return [];
     seen.add(value.id);
     return [{id:value.id, folderId:value.folderId, chatId:value.chatId, accountId:value.accountId, day:value.day, at:value.at, basisAt:value.basisAt,
       status:value.status, text:typeof value.text === "string" ? value.text.slice(0,4000) : undefined,

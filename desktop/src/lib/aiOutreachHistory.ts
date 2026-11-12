@@ -10,7 +10,7 @@ export async function hydrateOutreachHistory(chatId:string){
   if(isDataRestoreActive())throw new Error("正在恢复数据，请稍后重新检查主动联系");
   const epoch=getDataRestoreGeneration();
   const state=useAppStore.getState();
-  retainMessageChats("ai-outreach",(state.settings.aiOutreachRuns||[]).filter(run=>["generating","draft","queued"].includes(run.status)).map(run=>run.chatId));
+  retainMessageChats("ai-outreach",[chatId,...(state.settings.aiOutreachRuns||[]).filter(run=>["generating","draft","queued"].includes(run.status)).map(run=>run.chatId)]);
   const chat=state.chats.find(chat=>chat.id===chatId),cached=loadedHistory.get(chatId);
   if(!chat?.hasMessageHistory||cached?.epoch===epoch&&Date.now()-cached.at<60_000)return;
   const page=await loadMessagesPage({chatId,limit:240});

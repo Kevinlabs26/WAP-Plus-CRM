@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   bridgeMessageMediaCacheId,
   selectMediaCacheEvictions,
+  cacheMediaUrls,
   cacheMediaUrl,
   cacheMediaBlob,
   readMediaCache,
@@ -54,6 +55,13 @@ test('cache writes are atomic on quota failure and ordinary clearing preserves s
   failKey='media:failed';await assert.rejects(cacheMediaUrl('failed',url,true),/quota/);
   assert.deepEqual(values.get('media-cache-index-v1'),{});assert.equal(values.has('media:failed'),false);
   failKey=undefined;await cacheMediaUrl('saved-photo',url,true);await cacheMediaUrl('chat-photo',url,true);
+  await cacheMediaUrls([
+    {messageId:'batch-photo',url},
+    {messageId:'batch-voice',url:'data:audio/ogg;base64,BBBB'},
+  ]);
+  assert.equal(values.get('media-cache-index-v1')['batch-photo'].chars,url.length);
+  assert.equal(values.get('media:batch-voice'),'data:audio/ogg;base64,BBBB');
+  await dropMediaCache('batch-photo');await dropMediaCache('batch-voice');
   const video=new Blob(['raw video bytes'],{type:'video/mp4'});
   const videoUrl=await cacheMediaBlob('video',video);
   assert.ok(values.get('media:video') instanceof Blob);

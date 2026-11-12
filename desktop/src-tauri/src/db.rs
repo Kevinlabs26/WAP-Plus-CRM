@@ -467,11 +467,12 @@ fn upsert_message_fts(
     body: &str,
     caption: &str,
     filename: &str,
+    replace: bool,
 ) {
-    if !fts_available(tx) {
-        return;
+    // FTS 的 id 未建索引；新消息和回执更新不能逐条扫描整份搜索历史。
+    if replace {
+        let _ = tx.execute("DELETE FROM messages_fts WHERE id = ?1", params![id]);
     }
-    let _ = tx.execute("DELETE FROM messages_fts WHERE id = ?1", params![id]);
     let _ = tx.execute(
         "INSERT INTO messages_fts(id, body, caption, filename) VALUES (?1, ?2, ?3, ?4)",
         params![id, body, caption, filename],
@@ -675,6 +676,7 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
     // messages：内存可能只有「最近 N 条」，绝不能 DELETE 快照外 id。
     // 用 content_hash 在 SQL 侧判断未变，禁止全表 SELECT json。
     if dirty.messages {
+        let has_fts = fts_available(&tx);
         for m in &snap.messages {
             let id = id_of(m).ok_or("message missing id")?;
             let chat_id = m.get("chatId").and_then(|x| x.as_str()).unwrap_or("");
@@ -704,6 +706,15 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
             }
             let j = serde_json::to_string(&message).map_err(|e| e.to_string())?;
             let hash = content_hash(&j);
+            let body = m.get("body").and_then(Value::as_str).unwrap_or("");
+            let caption = m.get("mediaCaption").and_then(Value::as_str).unwrap_or("");
+            let filename = m.get("mediaFileName").and_then(Value::as_str).unwrap_or("");
+            let previous_search: Option<bool> = if has_fts {
+                tx.query_row(
+                    "SELECT COALESCE(json_extract(json, '$.body'), '') = ?2 AND COALESCE(json_extract(json, '$.mediaCaption'), '') = ?3 AND COALESCE(json_extract(json, '$.mediaFileName'), '') = ?4 FROM messages WHERE id = ?1",
+                    params![id, body, caption, filename], |row| row.get(0),
+                ).optional().map_err(|e| e.to_string())?
+            } else { None };
             let n = tx
                 .execute(
                     r#"
@@ -724,13 +735,9 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
                 .map_err(|e| e.to_string())?;
             if n > 0 {
                 total_written += 1;
-                let body = m.get("body").and_then(|x| x.as_str()).unwrap_or("");
-                let caption = m.get("mediaCaption").and_then(|x| x.as_str()).unwrap_or("");
-                let filename = m
-                    .get("mediaFileName")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("");
-                upsert_message_fts(&tx, &id, body, caption, filename);
+                if has_fts && previous_search != Some(true) {
+                    upsert_message_fts(&tx, &id, body, caption, filename, previous_search.is_some());
+                }
             } else {
                 total_skipped += 1;
             }
@@ -2618,6 +2625,31 @@ mod tests {
         assert!(settings.get("customAiKey").is_none());
         assert!(settings.get("transcriptionApiKey").is_none());
         assert!(settings.get("bridgeToken").is_none());
+    }
+
+    #[test]
+    fn delivery_and_media_updates_preserve_search_rows_while_text_edits_replace_them() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mut first = json!({"id":"first", "chatId":"chat", "direction":"out", "body":"bonjour", "deliveryStatus":"sent"});
+        let save = |messages| save_snapshot(&conn, &AppSnapshot {
+            messages,
+            dirty: Some(PersistDirtyFlags { messages: true, ..Default::default() }),
+            ..Default::default()
+        }).unwrap();
+        save(vec![first.clone(), json!({"id":"second", "body":"salut"})]);
+        let row = || conn.query_row("SELECT rowid FROM messages_fts WHERE id='first'", [], |r| r.get::<_, i64>(0)).unwrap();
+        let before = row();
+        first["deliveryStatus"] = json!("read");
+        first["mediaUrl"] = json!("https://example.com/media");
+        save(vec![first.clone()]);
+        assert_eq!(row(), before, "non-text updates must not rebuild the search row");
+        first["body"] = json!("bonsoir");
+        first["mediaCaption"] = json!("invitation");
+        save(vec![first]);
+        assert_eq!(conn.query_row("SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'bonjour'", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(conn.query_row("SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'bonsoir OR invitation'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(conn.query_row("SELECT count(*) FROM messages_fts", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
     }
 
     #[test]

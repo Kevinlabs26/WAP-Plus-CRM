@@ -1,4 +1,5 @@
 import type { AutoReplyMode } from "@/lib/autoReplyScope";
+import { folderBackground, folderRowPadding } from "@/lib/folderAppearance";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -23,6 +24,8 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 import EmojiPicker, { EmojiStyle, Theme, type EmojiClickData } from "emoji-picker-react";
 import { useAppStore } from "@/store/appStore";
+import { useShallow } from "zustand/react/shallow";
+import { sheetConnections, useGoogleSheets } from "@/lib/googleSheets";
 
 type FolderHeaderRowProps = {
   folderId: string;
@@ -56,7 +59,7 @@ type FolderHeaderRowProps = {
   onCopyUnreplied?: () => void;
   onDelete: () => void;
 };
-type SubmenuKind = "reply" | "import" | "organize" | "appearance";
+type SubmenuKind = "reply" | "import" | "organize" | "appearance" | "sheet";
 
 export function FolderHeaderRow({
   folderId,
@@ -92,12 +95,18 @@ export function FolderHeaderRow({
 }: FolderHeaderRowProps) {
   const { t } = useI18n();
   const theme = useAppStore(s => s.settings.theme);
+  const defaultColor=useAppStore(s=>s.settings.folderDefaultColor);
+  const colorDepth=useAppStore(s=>s.settings.folderColorDepth);
+  const rowDensity=useAppStore(s=>s.settings.folderRowDensity);
+  const sheetBinding=useAppStore(state=>state.settings.chatFolders.find(folder=>folder.id===folderId)?.sheetConnectionId);
+  const sheetNames=useGoogleSheets(useShallow(state=>Object.fromEntries(sheetConnections(state).map(item=>[item.id,item.name]))));
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [submenu, setSubmenu] = useState<{ kind: SubmenuKind; left: number; top: number; focus: boolean } | null>(null);
   const replyTrigger = useRef<HTMLButtonElement>(null);
   const importTrigger = useRef<HTMLButtonElement>(null);
   const organizeTrigger = useRef<HTMLButtonElement>(null);
-  const submenuTriggers = { reply: replyTrigger, import: importTrigger, organize: organizeTrigger, appearance: organizeTrigger };
+  const sheetTrigger = useRef<HTMLButtonElement>(null);
+  const submenuTriggers = { reply: replyTrigger, import: importTrigger, organize: organizeTrigger, appearance: organizeTrigger, sheet:sheetTrigger };
   const submenuPopup = useRef<HTMLDivElement>(null);
   const menuPopup = useRef<HTMLDivElement>(null);
   const actionsTrigger = useRef<HTMLButtonElement>(null);
@@ -204,7 +213,7 @@ export function FolderHeaderRow({
           dropActive && "bg-brand/10 ring-1 ring-brand/40",
           folderDropActive && "bg-brand/15 ring-1 ring-brand/60"
         )}
-        style={color ? { backgroundColor: `${color}18` } : undefined}
+        style={{ backgroundColor: folderBackground(color||defaultColor,colorDepth),paddingTop:folderRowPadding(rowDensity),paddingBottom:folderRowPadding(rowDensity) }}
         onContextMenu={(event) => {
           event.preventDefault();
           openMenu(event.clientX, event.clientY);
@@ -314,6 +323,9 @@ export function FolderHeaderRow({
           {onAiPrompt && <button type="button" role="menuitem" className={itemClass} onClick={() => run(onAiPrompt)}>
             <Pencil className="h-3.5 w-3.5 text-brand" />{t("folderAi.action")}
           </button>}
+          <button ref={sheetTrigger} type="button" role="menuitem" className={itemClass} aria-haspopup="menu" aria-expanded={submenu?.kind==="sheet"} onMouseEnter={event=>openSubmenu("sheet",event.currentTarget)} onClick={event=>openSubmenu("sheet",event.currentTarget,true)} onKeyDown={event=>{if(event.key==="ArrowRight"){event.preventDefault();event.stopPropagation();openSubmenu("sheet",event.currentTarget,true);}}}>
+            <span className="flex-1">{t("sheets.bindFolder")}</span><ChevronRight className="h-3.5 w-3.5"/>
+          </button>
           {onBroadcast && <button type="button" role="menuitem" className={itemClass} onClick={() => run(onBroadcast)}>
             <Users className="h-3.5 w-3.5 text-brand" />{t("planQueue.folderBroadcast")}
           </button>}
@@ -360,7 +372,7 @@ export function FolderHeaderRow({
       )}
       {menu && submenu && createPortal(
         <div ref={submenuPopup} id={`folder-${submenu.kind}-${folderId}`} data-folder-action-menu={folderId} role="menu"
-          aria-label={submenu.kind === "reply" ? t("autoReplyScope.folderRuleFor", { name }) : t(submenu.kind === "import" ? "folder.importMenu" : "folder.organizeMenu")}
+          aria-label={submenu.kind === "reply" ? t("autoReplyScope.folderRuleFor", { name }) : t(submenu.kind==="sheet"?"sheets.bindFolder":submenu.kind === "import" ? "folder.importMenu" : "folder.organizeMenu")}
           className={`fixed z-[10000] ${submenu.kind === "appearance" ? "w-[22rem]" : "w-56"} max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/50`}
           style={{ left: submenu.left, top: submenu.top }} onMouseEnter={cancelClose} onMouseLeave={scheduleClose}
           onContextMenu={event => event.preventDefault()}
@@ -381,6 +393,9 @@ export function FolderHeaderRow({
             {t(mode === "inherit" ? "autoReplyScope.inheritDefault" : mode === "auto" ? "autoReplyScope.auto" : "autoReplyScope.manual")}
           </button>)}
           {submenu.kind === "reply" && <p className="border-t border-zinc-800 px-3 py-2 text-[11px] leading-4 text-zinc-500">{t("autoReplyScope.folderHint")}</p>}
+          {submenu.kind==="sheet"&&<>
+            {[["",t("sheets.inherit")],["none",t("sheets.noBinding")],...Object.entries(sheetNames)].map(([id,label])=><button key={id} type="button" role="menuitem" aria-current={(sheetBinding||"")===id?"true":undefined} className={itemClass} onClick={()=>run(()=>{const state=useAppStore.getState();state.updateSettings({chatFolders:state.settings.chatFolders.map(folder=>folder.id===folderId?{...folder,sheetConnectionId:id||undefined}:folder)});})}><Check className={cn("h-3.5 w-3.5 shrink-0 text-brand",(sheetBinding||"")!==id&&"invisible")}/><span className="truncate">{label}</span></button>)}
+          </>}
           {submenu.kind === "import" && <div>
           <button
             type="button"

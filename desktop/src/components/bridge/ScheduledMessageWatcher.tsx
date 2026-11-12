@@ -3,6 +3,7 @@ import { useAppStore } from "@/store/appStore";
 import type { Message } from "@/types/crm";
 import { scheduledMessageExpired } from "@/lib/scheduledMessageExpiry";
 import { translateCurrent } from "@/i18n";
+import { isAppLockActive } from "@/lib/appLockRuntime";
 
 const POLL_MS = 2_000;
 
@@ -20,7 +21,7 @@ export function ScheduledMessageWatcher() {
     let cancelled = false;
 
     const tick = () => {
-      if (cancelled || running.current) return;
+      if (cancelled || running.current || isAppLockActive()) return;
       running.current = true;
       try {
         const state = useAppStore.getState();

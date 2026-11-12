@@ -179,6 +179,7 @@ export interface AppState extends PersistSlice {
     accountId?: string;
     systemKind?: string;
     aiReplyContextHash?: string;
+    aiReplyInboundId?: string;
     deliveryStatus?: Message["deliveryStatus"];
     mediaType?: Message["mediaType"];
     mediaUrl?: Message["mediaUrl"];

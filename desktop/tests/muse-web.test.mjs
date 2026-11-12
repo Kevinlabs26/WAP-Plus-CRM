@@ -253,7 +253,7 @@ test('handoff context can accompany the full original prompt without truncating 
 });
 
 const root=fileURLToPath(new URL('../',import.meta.url));
-const bundled=await build({stdin:{contents:`export {generateSuggestions} from './src/lib/aiSuggest.ts';export {defaultSettings} from './src/store/settingsDefaults.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',alias:{'@':root+'src'},plugins:[{name:'muse-boundary',setup(b){
+const bundled=await build({stdin:{contents:`export {generateSuggestions} from './src/lib/aiSuggest.ts';export {extractChatSheetFields} from './src/lib/aiCustomerCard.ts';export {defaultSettings} from './src/store/settingsDefaults.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',alias:{'@':root+'src'},plugins:[{name:'muse-boundary',setup(b){
  b.onResolve({filter:/museWeb\.ts$/},()=>({path:'muse',namespace:'mock'}));b.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:'export const generateMuseWeb=(...args)=>globalThis.museTest(...args);'}));
 }}]});
 const ai=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text).toString('base64'));
@@ -265,6 +265,37 @@ test('Muse reuses configured prompts, context, JSON parsing and output constrain
  assert.match(context.profile,/Reply in French/);assert.doesNotMatch(prompt,/Reply in French/);assert.match(prompt,/Salut/);assert.match(prompt,/JSON array of exactly 1/);assert.match(prompt,/Do not use tools/);
  globalThis.museTest=async()=>{throw Error('Please sign in');};
  const failed=await ai.generateSuggestions({id:'test'},[],settings,{auto:true});assert.equal(failed.fallback,true);assert.deepEqual(failed.suggestions,[]);assert.match(failed.error,/sign in/);
+});
+
+test('Muse manual replies, automatic replies and outreach omit contact cards and isolate the current thread',async()=>{
+ const calls=[];globalThis.museTest=async(prompt,_signal,key,context)=>{calls.push({prompt,key,context});return '[{"text":"Bonjour"}]';};
+ const settings={...ai.defaultSettings,aiProvider:'muse',aiSystemPrompt:'Use French and offer tomorrow at 17:00. My name is Alexandre.',waAccounts:[{id:'a',label:'1: Alexandre'}]};
+ const contact={id:'c',accountId:'a',name:'Alice',phone:'+33612345678',tags:['PRIVATE TAG'],notes:'PRIVATE NOTE',aiSummary:'PRIVATE SUMMARY',company:'PRIVATE COMPANY'};
+ const first={id:'m1',chatId:'chat',accountId:'a',direction:'in',sentAt:'2026-11-12T10:00:00Z',body:'Alice +33612345678',mediaType:'audio',transcript:'Alice : rendez-vous demain à 17:00',quoted:{id:'q1',body:'Alice, téléphone +33612345678',senderName:'Bob'}};
+ const history=[first,{...first,id:'cross-chat',chatId:'elsewhere',body:'OTHER CHAT SECRET',transcript:undefined},
+  {...first,id:'cross-account',accountId:'b',body:'OTHER ACCOUNT SECRET',transcript:undefined}];
+ for(const opts of [{count:1},{auto:true,replyTo:first},{auto:true,outreach:'Invite Alice to tomorrow at 17:00'}])await ai.generateSuggestions(contact,history,settings,{...opts,accountId:'a',chatId:'chat'});
+ assert.equal(calls.length,3);
+ for(const {prompt,context} of calls){
+  assert.doesNotMatch(prompt+context.profile,/Alice|Alexandre|Bob|33612345678|PRIVATE|OTHER CHAT|OTHER ACCOUNT|Contact:|Phone:|Notes:|AI summary:/);
+  assert.match(prompt,/rendez-vous demain à 17:00/);assert.match(context.profile,/Use French and offer tomorrow at 17:00/);
+  assert.deepEqual(context.history.map(item=>item.id),['m1']);
+  assert.equal(prompt,context.prefix+context.history.map(item=>item.text).join('\n')+context.suffix);
+ }
+ const before=calls.length;
+ const failed=await ai.generateSuggestions(contact,history,settings,{chatId:'chat',accountId:'a',replyTo:history[1]});
+ assert.equal(failed.fallback,true);assert.equal(calls.length,before);
+});
+
+test('Muse spreadsheet extraction omits identity metadata, shared cards and unrelated conversations',async()=>{
+ let sent;globalThis.museTest=async prompt=>{sent=prompt;return '{"need":"tomorrow"}';};
+ const settings={...ai.defaultSettings,aiProvider:'muse'},contact={id:'c',name:'Alice',phone:'+33612345678',company:'SECRET COMPANY'};
+ const first={id:'m',chatId:'c',direction:'in',body:'Alice needs tomorrow at 17:00',sentAt:'2026-11-12T12:00:00Z'};
+ const messages=[first,{...first,id:'other',chatId:'other',body:'FOREIGN CHAT DATA'},
+  {...first,id:'card',body:'UNKNOWN CARD PERSON',contactCard:{displayName:'UNKNOWN CARD PERSON'}}];
+ const result=await ai.extractChatSheetFields(contact,messages,settings,[{id:'need',label:'Need'}],'');
+ assert.deepEqual(result,{need:'tomorrow'});assert.match(sent,/tomorrow at 17:00/);
+ assert.doesNotMatch(sent,/Alice|33612345678|SECRET COMPANY|FOREIGN CHAT DATA|UNKNOWN CARD PERSON/);
 });
 test('manual replies, auto replies and outreach share a stable customer key while accounts and customers stay separate',async()=>{
  const calls=[];globalThis.museTest=async(prompt,signal,key,context,priority)=>{calls.push({prompt,key,context,priority});return '[{"text":"Bonjour"}]';};
@@ -291,11 +322,36 @@ test('Muse supplies bounded structured history with exactly the same full contex
  assert.match(context.profile,/Complete profile stays intact/);assert.doesNotMatch(context.prefix,/Complete profile stays intact/);assert.match(context.suffix,/Runtime clock/);assert.doesNotMatch(prompt,/Unsent draft/);
 });
 
-const clientBuild=await build({stdin:{contents:`export * from './src/lib/museWeb.ts';export {getAiUsageSnapshot} from './src/lib/aiUsage.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',plugins:[{name:'native-boundary',setup(b){
+const clientBuild=await build({stdin:{contents:`export * from './src/lib/museWeb.ts';export {setMusePrivacyIdentityProvider} from './src/lib/museChatPrivacy.ts';export {getAiUsageSnapshot} from './src/lib/aiUsage.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',plugins:[{name:'native-boundary',setup(b){
  b.onResolve({filter:/bridge\.ts$/},()=>({path:'bridge',namespace:'native-mock'}));b.onResolve({filter:/^@tauri-apps\/api\/core$/},()=>({path:'tauri',namespace:'native-mock'}));
  b.onLoad({filter:/.*/,namespace:'native-mock'},args=>({contents:args.path==='bridge'?'export const isTauri=()=>true;':'export const invoke=(...args)=>globalThis.museNative(...args);'}));
 }}]});
 const client=await import('data:text/javascript;base64,'+Buffer.from(clientBuild.outputFiles[0].text).toString('base64'));
+client.setMusePrivacyIdentityProvider(()=>{
+ if(globalThis.musePrivacyFailure)throw Error('Privacy state unavailable');
+ const state=globalThis.musePrivacyState||{contacts:[],settings:{waAccounts:[]}};
+ return [...state.contacts,...state.settings.waAccounts];
+});
+
+test('native Muse submission redacts all locally known contacts and starts a new privacy-scoped thread',async()=>{
+ let submitted;globalThis.museNative=async(_cmd,args)=>{submitted=args;return{text:'Bonjour'};};
+ globalThis.musePrivacyState={contacts:[{name:'Bob Private',phone:'+243812345678'},{name:'Carol Private',phone:'+33600000000'}],settings:{waAccounts:[{userName:'Alexandre'}]}};
+ try{
+  const context={profile:'Alexandre uses French. Bob Private is only an example.',prefix:'Chat:\n',history:[{id:'local-id',text:'Bob Private: send +243812345678 to Carol Private'}],suffix:'\nAt 17:00'};
+  await client.generateMuseWeb(context.prefix+context.history[0].text+context.suffix,undefined,'old-thread',context);
+  assert.doesNotMatch(submitted.prompt+submitted.context.profile,/Bob Private|Carol Private|243812345678|Alexandre/);
+  assert.equal(submitted.prompt,submitted.context.prefix+submitted.context.history.map(item=>item.text).join('\n')+submitted.context.suffix);
+  assert.equal(submitted.conversationKey,JSON.stringify(['private-chat-v1','old-thread']));
+  await client.generateMuseWeb('Bob Private +243812345678',undefined,JSON.stringify(['sheet-extract','a','c']));
+  assert.doesNotMatch(submitted.prompt,/Bob Private|243812345678/);assert.match(submitted.conversationKey,/private-chat-v1/);
+ }finally{delete globalThis.musePrivacyState;}
+});
+
+test('a missing local privacy context fails closed before sending anything to Muse',async()=>{
+ let calls=0;globalThis.museNative=async()=>{calls++;return{text:'Unexpected'};};globalThis.musePrivacyFailure=true;
+ try{await assert.rejects(client.generateMuseWeb('text',undefined,'key',{profile:'',prefix:'',history:[{id:'m',text:'text'}],suffix:''}),/Privacy state unavailable/);assert.equal(calls,0);}
+ finally{delete globalThis.musePrivacyFailure;}
+});
 test('retrieving existing media invokes only the collect command',async()=>{
  const calls=[];globalThis.museNative=async(cmd)=>{calls.push(cmd);return{mimeType:'image/png',dataUrl:'data:image/png;base64,aW1hZ2U='};};
  assert.equal((await client.collectMuseWebMedia()).data,'aW1hZ2U=');assert.deepEqual(calls,['muse_web_collect_media']);
@@ -340,8 +396,8 @@ test('the native adapter serializes customers and aborts queued requests without
  const first=client.generateMuseWeb('first customer',undefined,'customer-a',context);await new Promise(r=>setImmediate(r));
  const controller=new AbortController();const second=client.generateMuseWeb('second customer',controller.signal);controller.abort();
  assert.equal(calls.filter(([cmd])=>cmd==='muse_web_generate').length,1);resolve('first reply');assert.equal(await first,'first reply');await assert.rejects(second,/abort/i);
- assert.equal(calls[0][1].conversationKey,'customer-a');
- assert.deepEqual(calls[0][1].context,context);
+ assert.equal(calls[0][1].conversationKey,JSON.stringify(['private-chat-v1','customer-a']));
+ assert.deepEqual(calls[0][1].context,{...context,profile:''});
  assert.equal(calls.filter(([cmd])=>cmd==='muse_web_generate').length,1);
 });
 test('cancelling an active adapter request is scoped and a late reply is never returned',async()=>{
@@ -360,4 +416,24 @@ test('handoff generations are counted separately with unknown tokens, including 
  row=client.getAiUsageSnapshot().buckets.find(row=>row.feature==='context');assert.equal(row.requests,2);assert.equal(row.failed,1);assert.equal(row.unknown,2);
  globalThis.museNative=async()=>({text:'Ordinary reply',error:null,summaryRequests:0,summaryFailed:false});
  assert.equal(await client.generateMuseWeb('No handoff'),'Ordinary reply');assert.equal(client.getAiUsageSnapshot().buckets.find(row=>row.feature==='context').requests,2);
+});
+test('account switching refuses an active generation and requires a verified new login before reuse',async()=>{
+ await new Promise(resolve=>setImmediate(resolve));
+ let finish;globalThis.museNative=async cmd=>cmd==='muse_web_generate'?await new Promise(resolve=>{finish=resolve;}):undefined;
+ const generation=client.generateMuseWeb('Active reply');await new Promise(resolve=>setImmediate(resolve));
+ await assert.rejects(client.switchMuseWebAccount(),/等待完成后切换账号/);
+ finish('Done');await generation;await new Promise(resolve=>setImmediate(resolve));
+ let ready=false;const commands=[];
+ globalThis.museNative=async cmd=>{commands.push(cmd);return cmd==='muse_web_status'?{ready,state:ready?'ready':'login',message:'Sign in'}:'New account reply';};
+ await client.switchMuseWebAccount();assert.deepEqual(commands,['muse_web_switch_account']);
+ await assert.rejects(client.generateMuseWeb('Must not send'),/登录新的 Muse 账号/);
+ await client.museWebStatus();await assert.rejects(client.generateMuseWeb('Still signed out'),/登录新的 Muse 账号/);
+ ready=true;await client.museWebStatus();assert.equal(await client.generateMuseWeb('New login'),'New account reply');
+});
+test('no generation can enter the queue while account switching is in progress',async()=>{
+ await new Promise(resolve=>setImmediate(resolve));
+ let finish;globalThis.museNative=async cmd=>cmd==='muse_web_switch_account'?await new Promise(resolve=>{finish=resolve;}):{ready:true,state:'ready'};
+ const switching=client.switchMuseWebAccount();await new Promise(resolve=>setImmediate(resolve));
+ await assert.rejects(client.generateMuseWeb('Do not submit'),/登录新的 Muse 账号/);
+ finish();await switching;await client.museWebStatus();
 });

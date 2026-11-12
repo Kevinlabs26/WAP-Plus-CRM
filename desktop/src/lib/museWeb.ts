@@ -1,6 +1,7 @@
 import { isTauri } from './bridge.ts';
 import { trackAiRequest } from './aiUsage.ts';
-import { enqueueMuseTask } from './museQueue.ts';
+import { enqueueMuseTask, museQueueSnapshot } from './museQueue.ts';
+import { createMuseChatRedactor, musePrivacyIdentities } from './museChatPrivacy.ts';
 
 export type MuseWebStatus = { opened:boolean; ready:boolean; state:string; message:string; mediaProtocol?:number;parallelMedia?:boolean };
 export type MuseWebContext = {profile:string;prefix:string;history:{id:string;text:string}[];suffix:string};
@@ -14,7 +15,19 @@ async function native<T>(command:string,args:Record<string,unknown>={}) {
   }
 }
 export const openMuseWeb=(media=false)=>native<void>('muse_web_open',{media});
-export const museWebStatus=(media=false)=>native<MuseWebStatus>('muse_web_status',{media});
+let switchingAccount=false,accountNeedsLogin=false;
+export async function museWebStatus(media=false):Promise<MuseWebStatus>{
+  const status=await native<MuseWebStatus>('muse_web_status',{media});
+  if(status.ready&&!switchingAccount)accountNeedsLogin=false;
+  return status;
+}
+export async function switchMuseWebAccount():Promise<void>{
+  const queue=museQueueSnapshot();
+  if(switchingAccount||queue.textRunning||queue.textWaiting||queue.mediaRunning||queue.mediaWaiting)throw Error('Muse 正在处理或排队，请等待完成后切换账号');
+  switchingAccount=true;accountNeedsLogin=true;
+  try{await native<void>('muse_web_switch_account');}finally{switchingAccount=false;}
+}
+function requireMuseAccount(){if(switchingAccount||accountNeedsLogin)throw Error('请先登录新的 Muse 账号，再点击“检查连接”');}
 export type MuseGeneratedMedia = { mimeType: "image/png"|"image/jpeg"|"image/webp"|"video/mp4"|"video/webm"; data: string };
 export type MuseWebOutput = { text?: string; media?: MuseGeneratedMedia };
 export type MuseReferenceImage = { mimeType: "image/jpeg"|"image/png"|"image/webp"; dataUrl: string };
@@ -24,11 +37,25 @@ function parseMedia(media:{mimeType:string;dataUrl:string}):MuseGeneratedMedia {
   return {mimeType:match[1] as MuseGeneratedMedia['mimeType'],data:match[2]!};
 }
 export function collectMuseWebMedia():Promise<MuseGeneratedMedia>{
+  requireMuseAccount();
   return enqueueMuseTask('media',async()=>parseMedia(await native<{mimeType:string;dataUrl:string}>('muse_web_collect_media')));
 }
-export function generateMuseWebOutput(prompt:string,signal?:AbortSignal,conversationKey?:string,context?:MuseWebContext,referenceImage?:MuseReferenceImage | MuseReferenceImage[],expectMedia=false,priority=0):Promise<MuseWebOutput> {
+export function generateMuseWebOutput(prompt:string,signal?:AbortSignal,conversationKey?:string,context?:MuseWebContext,referenceImage?:MuseReferenceImage | MuseReferenceImage[],expectMedia=false,priority=0,onStart?:()=>void):Promise<MuseWebOutput> {
+  requireMuseAccount();
   return enqueueMuseTask(expectMedia?'media':'text',async()=>{
     signal?.throwIfAborted();
+    onStart?.();
+    if(context || conversationKey?.startsWith('["sheet-extract",')){
+      const redact=createMuseChatRedactor(musePrivacyIdentities());
+      if(context){
+        if(prompt!==context.prefix+context.history.map(item=>item.text).join('\n')+context.suffix)throw Error('Muse 聊天上下文不一致，未发送');
+        context={...context,profile:redact(context.profile||''),prefix:redact(context.prefix),history:context.history.map(item=>({...item,text:redact(item.text)})),suffix:redact(context.suffix)};
+        prompt=context.prefix+context.history.map(item=>item.text).join('\n')+context.suffix;
+      }else prompt=redact(prompt);
+      // Older threads and handoff summaries may still contain unredacted personal data.
+      conversationKey=conversationKey?JSON.stringify(['private-chat-v1',conversationKey]):undefined;
+      signal?.throwIfAborted();
+    }
     if(expectMedia){
       const status=await museWebStatus(true);
       signal?.throwIfAborted();
@@ -58,8 +85,8 @@ export function generateMuseWebOutput(prompt:string,signal?:AbortSignal,conversa
     } finally {signal?.removeEventListener('abort',cancel);}
   },signal,priority);
 }
-export async function generateMuseWeb(prompt:string,signal?:AbortSignal,conversationKey?:string,context?:MuseWebContext,priority=0):Promise<string> {
-  const result=await generateMuseWebOutput(prompt,signal,conversationKey,context,undefined,false,priority);
+export async function generateMuseWeb(prompt:string,signal?:AbortSignal,conversationKey?:string,context?:MuseWebContext,priority=0,onStart?:()=>void):Promise<string> {
+  const result=await generateMuseWebOutput(prompt,signal,conversationKey,context,undefined,false,priority,onStart);
   if(!result.text)throw Error('Muse 只返回了媒体文件，当前操作需要文字回复');
   return result.text;
 }

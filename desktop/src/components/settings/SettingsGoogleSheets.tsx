@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import { Check, ExternalLink, Link2, RefreshCw, TableProperties } from "lucide-react";
+import { ExternalLink, Link2, RefreshCw, TableProperties } from "lucide-react";
 import { Button, SectionLabel } from "@/components/ui/primitives";
 import { useI18n } from "@/i18n";
 import { useAppStore } from "@/store/appStore";
 import { sheetErrorHint } from "@/lib/googleSheetErrors";
 import { spreadsheetId } from "@/lib/googleSheetApi";
 import { MAX_SHEET_DISPLAY_COLUMNS } from "@/lib/googleSheetMatch";
-import { cancelSheetsConnect, connectSheets, disconnectSheets, initializeSheets, letter, readSheet, refreshSheets, saveSheetConfig, sheetHeaders, useGoogleSheets, type SheetAction, type SheetField } from "@/lib/googleSheets";
+import { cancelSheetsConnect, connectSheets, disconnectSheets, initializeSheets, letter, readSheet, refreshSheets, saveSheetConfig, sheetHeaders, useGoogleSheets, sheetConnections, removeSheetConnection, DEFAULT_SHEET_ID, type SheetAction, type SheetField } from "@/lib/googleSheets";
 
 export interface SheetCloseGuard {
   dirty: boolean; busy: boolean; canSave: boolean;
@@ -14,7 +14,11 @@ export interface SheetCloseGuard {
 }
 export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChange?: (guard: SheetCloseGuard | null) => void } = {}) {
   const { t } = useI18n();
-  const state = useGoogleSheets();
+  const allState = useGoogleSheets();
+  const [connectionId,setConnectionId]=useState<string|null>(null);
+  const [name,setName]=useState("");
+  const connections=sheetConnections(allState),connection=connections.find(item=>item.id===connectionId);
+  const state={...allState,config:connection?.config||null,data:connection?.data||{},error:connection?connection.error:allState.error,pauseReason:connection?.pauseReason||null,retryAt:connection?.retryAt||null};
   const requestConfirm = useAppStore(s => s.requestConfirm);
   const [url, setUrl] = useState("");
   const [tabs, setTabs] = useState<string[]>([]);
@@ -28,6 +32,7 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
   const [busy, setBusy] = useState(false);
   const [draftReady, setDraftReady] = useState(false);
   useEffect(() => { void initializeSheets(); }, []);
+  useEffect(()=>{setConnectionId(null);setName("");},[allState.email]);
   useEffect(() => {
     setDraftReady(true);
     if (!state.config) {
@@ -39,15 +44,15 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
     setFields(state.config.fields);
     setActions({ ...(state.config.actions || {}), ...Object.fromEntries(state.config.fields.flatMap(field => field.action ? [["heading" in field.column ? field.column.heading : letter(field.column.position), field.action]] : [])) });
     setPhone("heading" in state.config.phone ? state.config.phone.heading : "");
-  }, [state.config]);
+  }, [state.config,connectionId]);
   const draft = { spreadsheet: spreadsheetId(url) || url.trim(), tab, headerRow: row, phone: { heading: phone }, fields, actions };
   const baseline = state.config ? { ...state.config, actions: state.config.actions || {} } : { spreadsheet: "", tab: "", headerRow: 1, phone: { heading: "" }, fields: [], actions: {} };
-  const dirty = draftReady && JSON.stringify(draft) !== JSON.stringify(baseline);
-  const canSave = !!spreadsheetId(url) && !!tab && Number.isInteger(row) && row >= 1 && row <= 1000 && !!phone && fields.length > 0 && fields.length <= MAX_SHEET_DISPLAY_COLUMNS && fields.every(field => !!field.label.trim() && (field.schedule.kind !== "interval" || (Number.isInteger(field.schedule.minutes) && field.schedule.minutes >= 1 && field.schedule.minutes <= 525600)) && (field.schedule.kind !== "daily" || /^([01]\d|2[0-3]):[0-5]\d$/.test(field.schedule.time)));
+  const dirty = connectionId!==null&&draftReady && (JSON.stringify(draft) !== JSON.stringify(baseline)||name.trim()!==(connection?.name||""));
+  const canSave = draftReady&&!!name.trim()&&!!spreadsheetId(url) && !!tab && Number.isInteger(row) && row >= 1 && row <= 1000 && !!phone && fields.length > 0 && fields.length <= MAX_SHEET_DISPLAY_COLUMNS && fields.every(field => !!field.label.trim() && (field.schedule.kind !== "interval" || (Number.isInteger(field.schedule.minutes) && field.schedule.minutes >= 1 && field.schedule.minutes <= 525600)) && (field.schedule.kind !== "daily" || /^([01]\d|2[0-3]):[0-5]\d$/.test(field.schedule.time)));
   async function saveDraft() {
-    if (!canSave || busy || state.busy) return false;
+    if (!canSave || !connectionId||!name.trim()||busy || state.busy) return false;
     setBusy(true); setError("");
-    try { await saveSheetConfig(draft); return true; }
+    try { await saveSheetConfig(draft,connectionId,name);setConnectionId(null);return true; }
     catch (error) { setError(String(error)); return false; }
     finally { setBusy(false); }
   }
@@ -55,7 +60,7 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
     if (!onCloseGuardChange) return;
     onCloseGuardChange({ dirty, busy: busy || state.busy, canSave, save: saveDraft });
     return () => { onCloseGuardChange(null); };
-  }, [onCloseGuardChange, dirty, busy, state.busy, canSave, url, tab, row, phone, fields]);
+  }, [onCloseGuardChange, dirty, busy, state.busy, canSave, url, tab, row, phone, fields,name,connectionId]);
   useEffect(() => {
     if (!dirty) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
@@ -75,16 +80,17 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
     if (confirmed) await run(disconnectSheets);
   }
   const unique = (header: string) => !!header && headers.filter(value => value === header).length === 1;
+  async function editConnection(id:string|null,label=""){
+    if(id===connectionId)return;
+    if(dirty&&!await requestConfirm({title:t("sheets.discardTitle"),description:t("sheets.discardHint"),confirmLabel:t("sheets.discard"),tone:"danger"}))return;
+    setDraftReady(false);setConnectionId(id);setName(label);setError("");
+  }
   return <div className="mx-auto max-w-3xl space-y-5">
-    <header>
+    <header className="flex items-center justify-between gap-2">
       <h3 className="flex items-center gap-2 text-lg font-semibold text-zinc-100"><TableProperties className="h-5 w-5 text-brand" />Google Sheets</h3>
-      <p className="mt-1 text-xs leading-5 text-zinc-500">{t("sheets.description")}</p>
-      <p role="status" className="mt-2 text-xs text-zinc-500">{t(busy ? "sheets.saving" : dirty ? "sheets.unsaved" : "sheets.explicitSave")}</p>
+      {state.email&&<Button size="sm" disabled={busy||state.busy} onClick={()=>void editConnection(connections.length?crypto.randomUUID():DEFAULT_SHEET_ID,t("sheets.newName",{count:connections.length+1}))}>{t("sheets.add")}</Button>}
     </header>
-    <ol aria-label={t("sheets.setup")} className="grid grid-cols-3 gap-2">
-      {[{ label: t("sheets.accountStep"), complete: !!state.email }, { label: t("sheets.sourceStep"), complete: !!state.config || !!headers.length }, { label: t("sheets.fieldsStep"), complete: !!state.config }].map((step, index) => <li key={step.label} className="flex items-center gap-2 px-1 py-2 text-xs text-zinc-500"><span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] ${step.complete ? "bg-brand/10 text-brand" : "bg-zinc-800 text-zinc-400"}`}>{step.complete ? <Check className="h-3 w-3" /> : index + 1}</span><span>{step.label}</span></li>)}
-    </ol>
-    <section className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+    <section className="space-y-2 border-b border-zinc-800 pb-3">
       <div className="flex items-center justify-between gap-3"><SectionLabel className="!mb-0">{t("sheets.accountStep")}</SectionLabel><span role="status" className={`rounded-full px-2 py-1 text-[10px] ${state.email ? "bg-brand/10 text-brand" : "bg-zinc-800 text-zinc-500"}`}>{state.email ? t("sheets.connected") : t("sheets.disconnected")}</span></div>
     {state.email ? <div className="flex flex-wrap items-center justify-between gap-3"><span className="min-w-0 break-all text-sm text-zinc-200">{state.email}</span><div className="flex items-center gap-2">{state.authorizing ? <Button variant="secondary" size="xs" onClick={() => void cancelSheetsConnect()}>{t("sheets.cancelAuthorization")}</Button> : <>{state.needsAccess && <Button variant="secondary" size="xs" disabled={busy || state.busy} onClick={() => void connectSheets()}>{t("sheets.authorizeActions")}</Button>}<Button variant="ghost" size="xs" disabled={busy || state.busy} onClick={() => void confirmDisconnect()}>{t("sheets.disconnect")}</Button></>}</div></div> : <>
       <p className="text-xs leading-5 text-zinc-500">{t("sheets.connectHint")}</p>
@@ -97,8 +103,12 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
     {(error || state.error) && <div role="alert" className="break-words rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-xs leading-5 text-red-400"><p>{t(sheetErrorHint(error || state.error))}</p><details className="mt-2 text-zinc-500"><summary className="cursor-pointer">{t("sheets.error.details")}</summary><p className="mt-1 whitespace-pre-wrap">{error || state.error}</p></details></div>}
     {state.pauseReason && <p role="status" className="text-xs text-amber-500">{t(state.pauseReason === "authorization" ? "sheets.retry.authorization" : "sheets.retry.configuration")}</p>}
     {state.retryAt && <p role="status" className="text-xs text-zinc-500">{t("sheets.retry.waiting", { time: new Date(state.retryAt).toLocaleTimeString() })}</p>}
-    {state.email && <>
-      {state.config && <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-brand/20 bg-brand/5 p-3"><p role="status" className="text-xs text-brand">{t("sheets.saved", { tab: state.config.tab, count: state.config.fields.length })}</p><Button size="xs" disabled={busy || state.busy} onClick={() => void refreshSheets(true)} className="gap-1.5"><RefreshCw className={`h-3 w-3 ${state.busy ? "animate-spin" : ""}`} />{t("sheets.refresh")}</Button></div>}
+    {state.email&&<div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead className="text-zinc-500"><tr>{(["name","tab","fields","status","operations"] as const).map(key=><th key={key} className="px-2 py-2 font-medium">{t(`sheets.table.${key}`)}</th>)}</tr></thead><tbody className="divide-y divide-zinc-800">{connections.map(item=><tr key={item.id} className={connectionId===item.id?"bg-brand/5":""}>
+      <td className="max-w-40 truncate px-2 py-3 font-medium" title={item.name}>{item.name}</td><td className="max-w-40 truncate px-2 py-3" title={item.config.tab}>{item.config.tab}</td><td className="px-2 py-3">{item.config.fields.length}</td><td className="px-2 py-3" title={item.error}>{t(item.error?"sheets.table.error":"sheets.table.ready")}</td>
+      <td className="px-2 py-2"><div className="flex gap-2"><Button size="xs" disabled={busy||state.busy} onClick={()=>void editConnection(item.id,item.name)}>{t("sheets.edit")}</Button><Button size="xs" disabled={busy||state.busy} onClick={()=>void refreshSheets(true,item.id)}>{t("sheets.refresh")}</Button><Button size="xs" disabled={busy||state.busy} onClick={()=>void run(async()=>{if(await requestConfirm({title:t("sheets.removeTitle",{name:item.name}),description:t("sheets.removeHint"),confirmLabel:t("common.delete"),tone:"danger"})){await removeSheetConnection(item.id);if(connectionId===item.id)setConnectionId(null);}})}>{t("common.delete")}</Button></div></td>
+    </tr>)}</tbody></table>{!connections.length&&<p className="py-4 text-xs text-zinc-500">{t("sheets.empty")}</p>}</div>}
+    {state.email && connectionId && <>
+      <div className="flex flex-wrap items-center gap-2"><input aria-label={t("sheets.table.name")} className="ui-control min-w-40 flex-1 px-3 py-2 text-sm" maxLength={120} value={name} onChange={event=>setName(event.target.value)} placeholder={t("sheets.table.name")}/><Button size="sm" variant="primary" disabled={busy||state.busy||!canSave||!name.trim()} onClick={()=>void saveDraft()}>{t("sheets.save")}</Button><Button size="sm" disabled={busy||state.busy} onClick={()=>void editConnection(null)}>{t("common.close")}</Button><span role="status" className="text-xs text-zinc-500">{t(busy?"sheets.saving":dirty?"sheets.unsaved":"sheets.explicitSave")}</span></div>
       <fieldset disabled={busy || state.busy} className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/35 p-4 disabled:opacity-60">
       <SectionLabel className="flex items-center gap-2"><Link2 className="h-3.5 w-3.5" />{t("sheets.sourceStep")}</SectionLabel>
       <label className="block text-xs">{t("sheets.url")}<input className="ui-control px-3 py-2 text-sm leading-5 font-normal mt-1 w-full" value={url} onChange={e => { setUrl(e.target.value); setHeaders([]); setTabs([]); setFields([]); setActions({}); }} placeholder="https://docs.google.com/spreadsheets/d/…" /></label>

@@ -8,12 +8,13 @@ import { updateScheduledPlan } from "@/lib/scheduledPlanActions";
 import { createScheduledPlanRunner } from "@/lib/scheduledPlanRunner";
 import { translateCurrent, type TranslationKey } from "@/i18n";
 import { isDataRestoreActive } from "@/store/restoreGuard";
+import { isAppLockActive } from "@/lib/appLockRuntime";
 
 export function ScheduledPlanWatcher() {
   useEffect(() => {
     const runner = createScheduledPlanRunner({
       plans: () => useAppStore.getState().settings.scheduledPlans || [],
-      ready: () => { const state = useAppStore.getState(); return state.hydrated && state.uiReady && !isDataRestoreActive(); },
+      ready: () => { const state = useAppStore.getState(); return state.hydrated && state.uiReady && !isDataRestoreActive() && !isAppLockActive(); },
       update: updateScheduledPlan,
       hasTurn: id => {const s=useAppStore.getState();return nextBatchTask(s.settings.scheduledPlans || [],s.broadcastCampaigns || [])===id;},
       availability: item => {

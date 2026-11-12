@@ -41,10 +41,13 @@ export function AiOutreachPreview({settings,folderIds,assumeRunning=false,auto=t
     {busy&&<p role="status" className="mt-2 text-zinc-500">{t("outreachPreview.checking",{count:checked})}</p>}
     {error&&<p role="alert" className="mt-2 text-amber-500">{error}</p>}
     {data&&<>
-      <p className="mt-2 text-brand">{t("outreachPreview.counts",{eligible:data.eligible+data.quotaWaiting,ready:data.readyNow,blocked:data.blocked-data.quotaWaiting,quota:data.quotaWaiting})}</p>
-      <p className="mt-1 text-zinc-500">{t("outreachPreview.snapshot",{time:format(data.checkedAt,displayZone)})}</p>
+      {!!data.rows.length&&<div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">{([
+        ["eligible",data.eligible+data.quotaWaiting],["ready",data.readyNow],["quota",data.quotaWaiting],["blocked",data.blocked-data.quotaWaiting],
+      ] as const).map(([label,count])=><div key={label} className="flex items-baseline gap-2"><strong className={`text-lg tabular-nums ${label==="ready"?"text-brand":""}`}>{count}</strong><span className="text-zinc-500">{t(`outreachPreview.stat.${label}`)}</span></div>)}</div>}
       {data.nextAt!==null&&<p className="mt-1">{t("outreachPreview.next",{time:`${format(data.nextAt,displayZone)} · ${displayZone}`})}</p>}
       {!data.rows.length&&<p className="mt-2 text-zinc-500">{t("outreachPreview.noMembers")}</p>}
+      <details className="mt-2"><summary className="cursor-pointer text-zinc-500">{t("outreachPreview.details")}</summary>
+      <p className="mt-2 text-zinc-500">{t("outreachPreview.snapshot",{time:format(data.checkedAt,displayZone)})}</p>
       {!!reasons.size&&<div className="mt-2 flex flex-wrap gap-1">{[...reasons].map(([code,count])=><button key={code} type="button" aria-pressed={reason===code} className={`rounded-full px-2 py-1 ${reason===code?"bg-brand/15 text-brand":"bg-zinc-800 text-zinc-500"}`} onClick={()=>setReason(reason===code?"":code)}>{t(`outreachReason.${code}`)} · {count}</button>)}</div>}
       {!!data.rows.length&&<details className="mt-2"><summary className="cursor-pointer text-zinc-500">{t("outreachPreview.people",{count:rows.length})}</summary>
         <div className="mt-2 max-h-72 divide-y divide-zinc-800/80 overflow-y-auto">{rows.slice(0,limit).map((row,index)=><div key={`${row.folderId}:${row.chatId}:${index}`} className="py-2">
@@ -56,6 +59,7 @@ export function AiOutreachPreview({settings,folderIds,assumeRunning=false,auto=t
         {rows.length>limit&&<Button size="xs" className="mt-2" onClick={()=>setLimit(limit+20)}>{t("aiTasks.more")}</Button>}
       </details>}
       <p className="mt-2 text-zinc-500">{t("outreachPreview.hint")}</p>
+      </details>
     </>}
     {onConfirm&&<Button className="mt-3" variant="primary" size="sm" disabled={busy||!data||!!error} onClick={onConfirm}>{t("outreachPreview.enable")}</Button>}
   </section>;

@@ -11,6 +11,7 @@ const mocks={
  '@/store/appStore':`export const useAppStore=selector=>selector(globalThis.outreachState);useAppStore.getState=()=>globalThis.outreachState;useAppStore.setState=patch=>globalThis.outreachPatch(patch);export const flushPersist=async()=>{if(globalThis.outreachDiskError)throw Error('disk full');globalThis.outreachCheckpoints.push(structuredClone({runs:outreachState.settings.aiOutreachRuns,messages:outreachState.messages}));};`,
  '@/lib/storage':'export const loadMessagesPage=async()=>({items:globalThis.outreachHistoryItems||[]});',
  '@/store/restoreGuard':'export const isDataRestoreActive=()=>false;export const getDataRestoreGeneration=()=>globalThis.outreachRestoreEpoch||0;',
+ './appLockRuntime':'export const isAppLockActive=()=>false;',
 };
 const result=await build({stdin:{contents:`export * from './src/lib/aiOutreach.ts';export * from './src/lib/aiOutreachAllocation.ts';export * from './src/lib/aiOutreachContext.ts';export * from './src/lib/aiOutreachRules.ts';export * from './src/lib/aiOutreachPreview.ts';export * from './src/lib/aiReplyStatus.ts';export {SendQueueWatcher} from './src/components/bridge/SendQueueWatcher.tsx';export {normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {buildSettingsSafe,parseBackupJson} from './src/lib/exportData.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',alias:{'@':root+'src'},plugins:[{name:'outreach-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
 let sequence=0;
@@ -35,6 +36,94 @@ async function fixture(mode='auto',trigger='new'){
  };
  return {api,get state(){return outreachState;},get calls(){return calls;},advance(ms){now+=ms;},get now(){return now;},gate(value){fetchGate=value;},fail(value){networkFailure=value;},close(){globalThis.outreachQueueCleanup?.();globalThis.outreachQueueCleanup=undefined;Date.now=original.now;globalThis.fetch=original.fetch;globalThis.window=original.window;api.stopAiOutreach();}};
 }
+
+function addQueuePeople(h,count=3){
+ for(let i=1;i<count;i++){
+  h.state.contacts.push({...h.state.contacts[0],id:`person-${i}`,phone:`+1202555010${i+1}`});
+  h.state.chats.push({...h.state.chats[0],id:`chat-${i}`,contactId:`person-${i}`});
+  h.state.settings.chatFolders[0].chatIds.push(`chat-${i}`);
+ }
+}
+
+test('eligible people are durably listed before generation, respecting quotas and FIFO on later ticks',async()=>{
+ const h=await fixture();try{
+  addQueuePeople(h,4);h.state.settings.chatFolders[0].aiOutreach.dailyLimit=3;
+  await h.api.tickAiOutreach();
+  assert.deepEqual(h.state.settings.aiOutreachRuns.map(run=>run.status),['queued','queued','waiting']);
+  assert.equal(h.calls,2);
+  assert.ok(outreachCheckpoints.some(checkpoint=>checkpoint.runs.length===3&&checkpoint.runs.every(run=>run.status==='waiting')));
+  assert.equal(h.api.normalizeLoadedSettings(h.state.settings).aiOutreachRuns.filter(run=>run.status==='waiting').length,1);
+  h.advance(30000);await h.api.tickAiOutreach();
+  assert.deepEqual(h.state.settings.aiOutreachRuns.map(run=>run.status),['queued','queued','queued']);
+  assert.equal(h.state.messages[2].chatId,'chat-2');assert.equal(h.calls,3);
+ }finally{h.close();}
+});
+
+test('waiting tasks survive pause and recheck messages and single-task cancellation before spending tokens',async()=>{
+ const h=await fixture();try{
+  addQueuePeople(h);await h.api.tickAiOutreach();
+  h.state.settings.aiOutreachPaused=true;h.advance(30000);await h.api.tickAiOutreach();
+  assert.equal(h.calls,1);assert.equal(h.state.settings.aiOutreachRuns[1].status,'waiting');
+  h.state.settings.aiOutreachPaused=false;
+  h.state.chats[1].updatedAt=new Date(h.now).toISOString();h.state.chats[1].lastMessage='Bonjour';h.state.chats[1].lastMessageDirection='in';
+  h.state.settings.aiOutreachRuns[2].status='cancelled';
+  h.advance(30000);await h.api.tickAiOutreach();
+  assert.equal(h.calls,1);assert.equal(h.state.settings.aiOutreachRuns[1].status,'cancelled');
+  assert.equal(h.state.settings.aiOutreachRuns.length,3);
+ }finally{h.close();}
+});
+
+test('deleting a pending outreach hides and cancels it while preserving deduplication across reload',async()=>{
+ const h=await fixture('draft');try{
+  await h.api.tickAiOutreach();const id=h.state.settings.aiOutreachRuns[0].id;
+  await h.api.stopOutreachTask(id,true);
+  assert.equal(h.state.settings.aiOutreachRuns[0].status,'cancelled');
+  assert.ok(h.api.normalizeLoadedSettings(h.state.settings).aiTaskDismissedIds.includes(`outreach:${id}`));
+  const backup=h.api.parseBackupJson({version:2,contacts:h.state.contacts,settingsSafe:h.api.buildSettingsSafe(h.state.settings)});
+  assert.ok(backup.settingsSafe.aiTaskDismissedIds.includes(`outreach:${id}`));
+  h.advance(30000);await h.api.tickAiOutreach();assert.equal(h.calls,1);assert.equal(h.state.settings.aiOutreachRuns.length,1);
+ }finally{h.close();}
+});
+test('deleting a just-delivered outreach record does not rewrite the successful message',async()=>{
+ const h=await fixture();try{
+  await h.api.tickAiOutreach();const run=h.state.settings.aiOutreachRuns[0];
+  h.state.updateMessageDelivery(run.messageId,{deliveryStatus:'sent'});
+  await h.api.stopOutreachTask(run.id,true);
+  assert.equal(h.state.messages[0].deliveryStatus,'sent');assert.equal(h.state.settings.aiOutreachRuns[0].status,'sent');
+ }finally{h.close();}
+});
+test('retrying a failed delivery reuses its message and rejects uncertain deliveries without another AI call',async()=>{
+ const h=await fixture();try{
+  await h.api.tickAiOutreach();const run=h.state.settings.aiOutreachRuns[0];
+  h.state.updateMessageDelivery(run.messageId,{deliveryStatus:'failed',nextAttemptAt:undefined});run.status='failed';
+  assert.equal(await h.api.retryAiOutreach(run.id),true);
+  assert.equal(h.calls,1);assert.equal(h.state.messages.length,1);assert.equal(h.state.messages[0].deliveryStatus,'queued');
+  h.state.updateMessageDelivery(run.messageId,{deliveryStatus:'failed',deliveryUncertain:true});h.state.settings.aiOutreachRuns[0].status='failed';
+  assert.equal(await h.api.retryAiOutreach(run.id),false);
+ }finally{h.close();}
+});
+
+test('deleting during generation cannot enqueue, revive or retry the hidden outreach task',async()=>{
+ const h=await fixture();let release;try{
+  h.gate(new Promise(resolve=>{release=resolve;}));
+  const running=h.api.tickAiOutreach();
+  while(!h.calls)await new Promise(resolve=>setImmediate(resolve));
+  const id=h.state.settings.aiOutreachRuns[0].id;
+  await h.api.stopOutreachTask(id,true);release();await running;
+  assert.equal(h.state.messages.length,0);assert.ok(h.state.settings.aiTaskDismissedIds.includes(`outreach:${id}`));
+  assert.equal(await h.api.retryAiOutreach(id),false);
+ }finally{release?.();h.close();}
+});
+
+test('the global AI pause preserves queued automatic replies without treating pause as a send failure',async()=>{
+ const h=await fixture();try{
+  h.state.settings.aiReplyMode='auto';h.state.settings.aiAutoReplyPaused=true;
+  const id=h.state.enqueueOutgoingMessage({chatId:'chat',contactId:'person',accountId:'a',phoneE164:'+12025550101',channelId:'baileys',body:'Bonjour',systemKind:'ai_auto_reply',deliveryStatus:'queued'});
+  h.api.SendQueueWatcher();await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(h.state.messages.find(message=>message.id===id).deliveryStatus,'queued');
+  assert.equal(outreachSent.length,0);
+ }finally{h.close();}
+});
 
 test('proactive generation uses the folder account, durably queues once and preserves the human draft',async()=>{
  const h=await fixture();try{

@@ -14,7 +14,7 @@ import { tryHandleBlocklistRoutes } from "./blocklistRoutes.mjs";
 import { tryHandleCatalogRoutes } from "./catalogRoutes.mjs";
 import { buildContactVcard } from "./contactVcard.mjs";
 import { downloadRemoteMedia } from "./remoteMedia.mjs";
-import { receiveVideoUpload } from "./videoUpload.mjs";
+import { MAX_VIDEO_BYTES, receiveVideoUpload } from "./videoUpload.mjs";
 
 export const MAX_AUDIO_FILE_BYTES = 16 * 1024 * 1024;
 
@@ -57,10 +57,18 @@ export function createBaileysRequestHandler(getD) {
           const realtimeAfter = Number(url.searchParams.get("realtimeAfter") || 0);
           if (!Number.isSafeInteger(realtimeAfter) || realtimeAfter < 0) return json(res, 400, { error: "Invalid realtime cursor" });
           if (ack <= d.sequence) await d.eventSpool.acknowledge(ack);
-          const batch = await d.eventSpool.read(after, d.events);
+          const limitRaw = Number(url.searchParams.get("limit") || 40);
+          if (!Number.isSafeInteger(limitRaw) || (limitRaw !== 0 && limitRaw < 40)) return json(res, 400, { error: "Invalid event limit" });
+          const limit = Math.min(200, limitRaw);
+          // Keep polling fresh messages and saved checkpoints while the UI drains its current history page.
+          const batch = limit ? await d.eventSpool.read(after, d.events, limit) : [];
           const cursor = batch.at(-1)?.seq ?? after;
+          const recentLimitRaw = Number(url.searchParams.get("recentLimit") || 200);
+          const recentLimit = Number.isSafeInteger(recentLimitRaw)
+            ? Math.min(1000, Math.max(200, recentLimitRaw))
+            : 200;
           const recentEvents = url.searchParams.get("recent") === "1" && d.eventSpool.readRecentMessages
-            ? await d.eventSpool.readRecentMessages(cursor) : [];
+            ? await d.eventSpool.readRecentMessages(cursor, recentLimit) : [];
           // Preview fresh live messages without advancing the ordered durable checkpoint.
           const realtimeEvents = url.searchParams.has("realtimeAfter") ? (d.events || []).filter(event =>
             event.seq > Math.max(cursor, realtimeAfter) && event.type === "messages.sync" &&
@@ -154,6 +162,7 @@ export function createBaileysRequestHandler(getD) {
           if (storage?.writeError || storage?.receivingPaused) {
             throw Object.assign(new Error(storage.warning || "同步存储不可用，请检查磁盘空间和写入权限"), { status: 503 });
           }
+          if (storage?.blocked && typeof d.deferFullHistorySync === "function") d.deferFullHistorySync();
           historyRequest = storage?.blocked
             ? { requested: false, deferred: true, warning: `已读取现有会话；完整历史同步暂缓。${storage.warning}` }
             : await d.requestFullHistorySync();
@@ -644,7 +653,7 @@ if (req.method === "POST" && url.pathname === "/restart") {
           );
         } else if (hasVideo || mediaType === "video") {
           const parsed = parseDataUrl(videoDataUrl);
-          if (!parsed?.buf?.length || parsed.mime !== "video/mp4" || parsed.buf.length > 24 * 1024 * 1024) return json(res,400,{error:"视频需为不超过24 MB的MP4文件；更大视频请先压缩"});
+          if (!parsed?.buf?.length || parsed.mime !== "video/mp4" || parsed.buf.length > MAX_VIDEO_BYTES) return json(res,400,{error:"视频需为不超过100 MB的MP4文件；更大视频请先压缩"});
           result = await d.socket.sendMessage(jid, { video: parsed.buf, mimetype: "video/mp4",
             jpegThumbnail: await safeVideoThumbnail(parsed.buf), ...(caption ? {caption} : {}) }, quotedOpt ? {quoted:quotedOpt} : undefined);
         } else if (hasGifUrl) {

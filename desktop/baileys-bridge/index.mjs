@@ -152,6 +152,8 @@ let connecting = false;
 let reconnectAttempts = 0;
 let lastDisconnectAt = 0;
 let lastFullHistoryRequestAt = 0;
+let deferredFullHistoryTimer;
+let deferredFullHistoryPending = false;
 let connectPromise = null;
 
 function createMemoryCache(ttlMs, maxEntries = 5000) {
@@ -189,7 +191,10 @@ const rawWaStore = createRawMediaStore(
 );
 
 async function requestFullHistorySync() {
-  if (eventSpool.health.blocked) throw Error(eventSpool.health.warning);
+  if (eventSpool.health.blocked) {
+    scheduleDeferredFullHistorySync();
+    throw Error(eventSpool.health.warning);
+  }
   if (connection !== "connected" || !socket) {
     throw new Error("WhatsApp 尚未连接");
   }
@@ -211,6 +216,9 @@ async function requestFullHistorySync() {
     },
   });
   lastFullHistoryRequestAt = now;
+  deferredFullHistoryPending = false;
+  clearTimeout(deferredFullHistoryTimer);
+  deferredFullHistoryTimer = undefined;
   push("history.sync_status", {
     status: "requested",
     explicit: true,
@@ -218,6 +226,29 @@ async function requestFullHistorySync() {
     source: "manual.full-history",
   });
   return { requested: true, requestId, peerMessageId };
+}
+
+function scheduleDeferredFullHistorySync(delayMs = 30_000) {
+  deferredFullHistoryPending = true;
+  if (deferredFullHistoryTimer) return;
+  deferredFullHistoryTimer = setTimeout(async () => {
+    deferredFullHistoryTimer = undefined;
+    if (!deferredFullHistoryPending) return;
+    const storage = eventSpool.health;
+    if (storage.blocked || connection !== "connected" || !socket) {
+      scheduleDeferredFullHistorySync();
+      return;
+    }
+    try {
+      const result = await requestFullHistorySync();
+      if (!result?.requested) {
+        scheduleDeferredFullHistorySync(Math.max(30_000, result?.cooldownMs || 0));
+      }
+    } catch {
+      scheduleDeferredFullHistorySync();
+    }
+  }, Math.max(1_000, delayMs));
+  deferredFullHistoryTimer.unref?.();
 }
 
 function push(type, payload) {
@@ -1482,6 +1513,7 @@ async function updatePrivacySettings(patch = {}) {
 }
 
 function statusPayload() {
+  const syncStorage = eventSpool.health;
   const socketUser = socket?.user || null;
   const credentialUser = authMe || null;
   const user = socketUser || credentialUser
@@ -1511,7 +1543,7 @@ function statusPayload() {
     presenceEventCount,
     lastPresenceDebug,
     eventCursor: sequence,
-    syncStorage: eventSpool.health,
+    syncStorage,
   };
 }
 
@@ -1613,6 +1645,7 @@ function getHttpDeps() {
     mediaToDataUrl,
     findStoredMessageByKey,
     upsertContact,
+    deferFullHistorySync: scheduleDeferredFullHistorySync,
     rawWaByMsgId,
     loadRawWaById: rawMediaStore.load,
     getRawWaByKey,

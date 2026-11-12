@@ -323,9 +323,18 @@ export const baileysStatus = async (accountId?: string | null) => {
   return status;
 };
 
-export const baileysEvents = async (after = 0, accountId?: string | null, acknowledged = 0, realtimeAfter = 0) => {
+export const baileysEvents = async (
+  after = 0,
+  accountId?: string | null,
+  acknowledged = 0,
+  realtimeAfter = 0,
+  opts?: { eventLimit?: number }
+) => {
+  const eventLimit = opts?.eventLimit === undefined
+    ? undefined
+    : opts.eventLimit === 0 ? 0 : Math.min(200, Math.max(40, Math.round(opts.eventLimit)));
   const result = await request<BaileysEventsResponse>(
-    `/events?after=${after}&ack=${acknowledged}&realtimeAfter=${realtimeAfter}${realtimeAfter === 0 ? "&recent=1" : ""}`,
+    `/events?after=${after}&ack=${acknowledged}&realtimeAfter=${realtimeAfter}${eventLimit !== undefined ? `&limit=${eventLimit}` : ""}${realtimeAfter === 0 ? "&recent=1&recentLimit=1000" : ""}`,
     undefined,
     accountId
   );

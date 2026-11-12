@@ -85,6 +85,7 @@ export function createMessageActionsSlice({
         accountPhoneE164: state.settings.waAccounts?.find(a => a.id === accountId)?.historyPhoneE164,
         systemKind: input.systemKind,
         aiReplyContextHash: input.aiReplyContextHash,
+        aiReplyInboundId: input.aiReplyInboundId,
       };
       set((state) => ({
         messages: [...state.messages, msg],
@@ -119,6 +120,19 @@ export function createMessageActionsSlice({
         persist(get);
       }
       get().recomputeStats();
+      const queuedAt = input.nextAttemptAt ? Date.parse(input.nextAttemptAt) : NaN;
+      if (
+        status === "queued" &&
+        (!input.nextAttemptAt || (Number.isFinite(queuedAt) && queuedAt <= Date.now())) &&
+        typeof window !== "undefined" &&
+        typeof window.dispatchEvent === "function"
+      ) {
+        queueMicrotask(() => {
+          if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+            window.dispatchEvent(new Event("wap:outgoing-queue-changed"));
+          }
+        });
+      }
       return id;
     },
 
@@ -176,6 +190,20 @@ export function createMessageActionsSlice({
       }
       if (next?.mediaUrl) void cacheMediaUrl(next.id, next.mediaUrl);
       scheduleStatsRecompute(get);
+      const nextAttemptAt = next?.nextAttemptAt ? Date.parse(next.nextAttemptAt) : NaN;
+      if (
+        next?.deliveryStatus === "queued" &&
+        (!next.nextAttemptAt || (Number.isFinite(nextAttemptAt) && nextAttemptAt <= Date.now())) &&
+        (prev?.deliveryStatus !== "queued" || prev.nextAttemptAt !== next.nextAttemptAt) &&
+        typeof window !== "undefined" &&
+        typeof window.dispatchEvent === "function"
+      ) {
+        queueMicrotask(() => {
+          if (typeof window !== "undefined" && typeof window.dispatchEvent === "function") {
+            window.dispatchEvent(new Event("wap:outgoing-queue-changed"));
+          }
+        });
+      }
     },
 
     deleteLocalMessage: (id) => {

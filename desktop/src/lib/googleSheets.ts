@@ -10,26 +10,37 @@ export interface SheetField { id: string; label: string; column: SheetColumn; sc
 export interface SheetConfig { spreadsheet: string; tab: string; headerRow: number; phone: SheetColumn; fields: SheetField[]; actions?: Record<string, SheetAction> }
 export interface SheetCell { value: string; row: number; links: string[]; formula?: boolean }
 interface FieldData { at: number; columnIndex?: number; values: Record<string, (SheetCell | string)[]> }
-interface SheetState { ready: boolean; configured: boolean; email: string | null; needsAccess: boolean; config: SheetConfig | null; data: Record<string, FieldData>; error: string; busy: boolean; authorizing: boolean; failures: number; retryAt: number | null; pauseReason: "authorization" | "configuration" | null }
+export const DEFAULT_SHEET_ID="default";
+export interface SheetConnection { id:string; name:string; config:SheetConfig; data:Record<string,FieldData>; error:string; failures:number; retryAt:number|null; pauseReason:"authorization"|"configuration"|null }
+interface SheetState { ready: boolean; configured: boolean; email: string | null; needsAccess: boolean; config: SheetConfig | null; data: Record<string, FieldData>; error: string; busy: boolean; authorizing: boolean; failures: number; retryAt: number | null; pauseReason: "authorization" | "configuration" | null; connections:Record<string,SheetConnection>; defaultName:string }
 const resetRetry = { failures: 0, retryAt: null, pauseReason: null } as const;
-export const useGoogleSheets = create<SheetState>(() => ({ ready: false, configured: false, email: null, needsAccess: false, config: null, data: {}, error: "", busy: false, authorizing: false, ...resetRetry }));
+export const useGoogleSheets = create<SheetState>(() => ({ ready: false, configured: false, email: null, needsAccess: false, config: null, data: {}, error: "", busy: false, authorizing: false, connections:{},defaultName:"", ...resetRetry }));
+export function sheetConnections(state=useGoogleSheets.getState()):SheetConnection[]{
+  return [...(state.config?[{id:DEFAULT_SHEET_ID,name:state.defaultName||state.config.tab,config:state.config,data:state.data,error:state.error,failures:state.failures,retryAt:state.retryAt,pauseReason:state.pauseReason}]:[]),...Object.values(state.connections||{})];
+}
+function updateConnection(id:string,patch:Partial<Omit<SheetConnection,"id"|"name">>){
+  if(id===DEFAULT_SHEET_ID)useGoogleSheets.setState(patch);
+  else useGoogleSheets.setState(state=>state.connections[id]?{connections:{...state.connections,[id]:{...state.connections[id],...patch}}}:{});
+}
 const KEY = "google-sheet-connection-v1";
 let task: Promise<void> | null = null;
 let configWrite: Promise<void> | null = null;
 let initialized: Promise<void> | null = null;
+const refreshes=new Map<string,Promise<void>>();
 export function initializeSheets() {
   return initialized ||= (async () => {
     if (!isTauri()) { useGoogleSheets.setState({ ready: true }); return; }
     try {
       const status = await invoke<{ configured: boolean; email: string | null; needsAccess: boolean }>("google_sheets_status");
-      const stored = await idbGet<{ email: string; config: SheetConfig; data: Record<string, FieldData> }>(KEY, true);
-      useGoogleSheets.setState({ ...status, ...(stored?.email === status.email ? { config: stored.config, data: stored.data } : {}), ready: true });
+      const stored = await idbGet<{ email: string; config: SheetConfig; data: Record<string, FieldData>; connections?:Record<string,SheetConnection>;defaultName?:string }>(KEY, true);
+      const connections=Object.fromEntries(Object.entries(stored?.connections||{}).filter(([id,entry])=>id!==DEFAULT_SHEET_ID&&/^[\w-]{1,120}$/.test(id)&&entry?.config?.spreadsheet&&Array.isArray(entry.config.fields)).map(([id,entry])=>[id,{...entry,id,name:String(entry.name||entry.config.tab).slice(0,120),data:entry.data||{},error:"",...resetRetry}]));
+      useGoogleSheets.setState({ ...status, ...(stored?.email === status.email ? { config: stored.config||null, data: stored.data||{},connections,defaultName:stored.defaultName||"" } : {}), ready: true });
     } catch (error) { useGoogleSheets.setState({ ready: true, error: String(error) }); }
   })();
 }
 async function persist() {
-  const { email, config, data } = useGoogleSheets.getState();
-  await idbSet(KEY, { email, config, data });
+  const { email, config, data, connections,defaultName } = useGoogleSheets.getState();
+  await idbSet(KEY, { email, config, data,connections,defaultName });
 }
 export async function connectSheets() {
   useGoogleSheets.setState({ busy: true, error: "" });
@@ -37,42 +48,54 @@ export async function connectSheets() {
     await invoke("google_sheets_prepare_connect");
     useGoogleSheets.setState({ authorizing: true });
     const status = await invoke<{ configured: boolean; email: string; needsAccess: boolean }>("google_sheets_connect");
-    if (status.email !== useGoogleSheets.getState().email) { await idbDel(KEY); useGoogleSheets.setState({ config: null, data: {} }); }
+    if (status.email !== useGoogleSheets.getState().email) { if(task)await task;await idbDel(KEY); useGoogleSheets.setState({ config: null, data: {},connections:{},defaultName:"" }); }
     useGoogleSheets.setState({ ...status, ...resetRetry });
   } catch (error) { const message = String(error); useGoogleSheets.setState({ error: message.includes("Google authorization was cancelled") ? "" : message }); }
   finally { useGoogleSheets.setState({ busy: false, authorizing: false }); }
 }
 export async function cancelSheetsConnect() { await invoke("google_sheets_cancel_connect"); }
 export async function disconnectSheets() {
-  if (configWrite) await configWrite;
-  if (task) await task;
+  while(configWrite||task){if(configWrite)await configWrite;if(task)await task;}
   await invoke("google_sheets_disconnect");
-  useGoogleSheets.setState({ email: null, needsAccess: false, config: null, data: {}, error: "", ...resetRetry });
+  useGoogleSheets.setState({ email: null, needsAccess: false, config: null, data: {},connections:{},defaultName:"", error: "", ...resetRetry });
   await idbDel(KEY);
 }
 export async function clearSheetConfig() {
-  if (configWrite) await configWrite;
-  if (task) await task;
+  while(configWrite||task){if(configWrite)await configWrite;if(task)await task;}
   await idbDel(KEY);
-  useGoogleSheets.setState({ config: null, data: {}, error: "", ...resetRetry });
+  useGoogleSheets.setState({ config: null, data: {},connections:{},defaultName:"", error: "", ...resetRetry });
 }
-export async function saveSheetConfig(config: SheetConfig) {
+export async function saveSheetConfig(config: SheetConfig,connectionId=DEFAULT_SHEET_ID,name?:string) {
+  if(!/^[\w-]{1,120}$/.test(connectionId))throw Error("Invalid sheet connection ID");
+  if(name!==undefined&&!name.trim())throw Error("Sheet name is required");
   if (config.fields.length > MAX_SHEET_DISPLAY_COLUMNS) throw new Error(`Invalid column selection: maximum ${MAX_SHEET_DISPLAY_COLUMNS} display columns`);
-  if (configWrite) await configWrite;
-  if (task) await task;
+  while(configWrite||task){if(configWrite)await configWrite;if(task)await task;}
   const previous = useGoogleSheets.getState();
-  const sameSource = previous.config?.spreadsheet === config.spreadsheet && previous.config?.tab === config.tab && previous.config?.headerRow === config.headerRow && JSON.stringify(previous.config?.phone) === JSON.stringify(config.phone);
+  const oldConnection=sheetConnections(previous).find(item=>item.id===connectionId);
+  const oldConfig=oldConnection?.config,oldData=oldConnection?.data||{};
+  const sameSource = oldConfig?.spreadsheet === config.spreadsheet && oldConfig?.tab === config.tab && oldConfig?.headerRow === config.headerRow && JSON.stringify(oldConfig?.phone) === JSON.stringify(config.phone);
   const data = Object.fromEntries(config.fields.flatMap(field => {
-    const old = previous.config?.fields.find(item => item.id === field.id);
-    return sameSource && old && JSON.stringify(old.column) === JSON.stringify(field.column) && old.action === field.action && previous.data[field.id]
-      ? [[field.id, previous.data[field.id]]] : [];
+    const old = oldConfig?.fields.find(item => item.id === field.id);
+    return sameSource && old && JSON.stringify(old.column) === JSON.stringify(field.column) && old.action === field.action && oldData[field.id]
+      ? [[field.id, oldData[field.id]]] : [];
   }));
   configWrite = (async () => {
-    await idbSet(KEY, { email: previous.email, config, data });
-    useGoogleSheets.setState({ config, data, error: "", ...resetRetry });
+    const connection:SheetConnection={id:connectionId,name:(name?.trim()||oldConnection?.name||config.tab).slice(0,120),config,data,error:"",...resetRetry};
+    const patch=connectionId===DEFAULT_SHEET_ID?{config,data,defaultName:connection.name,error:"",...resetRetry}:{connections:{...previous.connections,[connectionId]:connection}};
+    const next={...previous,...patch};
+    await idbSet(KEY,{email:next.email,config:next.config,data:next.data,connections:next.connections,defaultName:next.defaultName});
+    useGoogleSheets.setState(patch);
   })();
   try { await configWrite; } finally { configWrite = null; }
-  await refreshSheets(true);
+  await refreshSheets(true,connectionId);
+}
+export async function removeSheetConnection(id:string){
+  while(configWrite||task){if(configWrite)await configWrite;if(task)await task;}
+  const state=useGoogleSheets.getState(),connections={...state.connections};delete connections[id];
+  const patch=id===DEFAULT_SHEET_ID?{config:null,data:{},defaultName:"",error:"",...resetRetry}:{connections};
+  const next={...state,...patch};
+  configWrite=(async()=>{await idbSet(KEY,{email:next.email,config:next.config,data:next.data,connections:next.connections,defaultName:next.defaultName});useGoogleSheets.setState(patch);})();
+  try{await configWrite;}finally{configWrite=null;}
 }
 interface SheetResponse { properties?: { title?: string }; sheets?: { properties: { sheetId: number; title: string } }[]; valueRanges?: { values?: string[][] }[] }
 interface GridCell { formattedValue?: string; hyperlink?: string; userEnteredValue?: { formulaValue?: string }; textFormatRuns?: { format?: { link?: { uri?: string } } }[] }
@@ -139,16 +162,21 @@ export async function sheetHeaders(spreadsheet: string, tab: string, row: number
   const response = await readSheet(spreadsheet, [`${tabRange(tab)}!${row}:${row}`]);
   return (response.valueRanges?.[0]?.values || []).map(column => String(column[0] ?? ""));
 }
-export function refreshSheets(force = false): Promise<void> {
-  if (configWrite) return configWrite;
-  if (task) return task;
-  const { config, email, data, failures, retryAt, pauseReason } = useGoogleSheets.getState();
-  if (!config || !email) return Promise.resolve();
-  if (!force && (pauseReason || (retryAt && Date.now() < retryAt))) return Promise.resolve();
+export function refreshSheets(force = false,connectionId=DEFAULT_SHEET_ID): Promise<void> {
+  const queued=refreshes.get(connectionId);if(queued)return queued;
+  const previous=task,write=configWrite;
+  const current=(async()=>{if(write)await write;if(previous)await previous;await refreshConnection(force,connectionId);})().finally(()=>{refreshes.delete(connectionId);if(task===current)task=null;});
+  refreshes.set(connectionId,current);task=current;return current;
+}
+export async function refreshAllSheets(){for(const connection of sheetConnections())await refreshSheets(false,connection.id);}
+async function refreshConnection(force:boolean,connectionId:string):Promise<void>{
+  const state=useGoogleSheets.getState(),connection=sheetConnections(state).find(item=>item.id===connectionId);
+  if(!connection||!state.email)return;
+  const {config,data,failures,retryAt,pauseReason}=connection;
+  if (!force && (pauseReason || (retryAt && Date.now() < retryAt))) return;
   const fields = config.fields.filter(field => force || sheetRefreshDue(field.schedule, data[field.id]?.at || null, new Date()));
-  if (!fields.length) return Promise.resolve();
-  task = (async () => {
-    useGoogleSheets.setState({ busy: true, error: "" });
+  if (!fields.length) return;
+    useGoogleSheets.setState({ busy: true });updateConnection(connectionId,{error:""});
     try {
       const headers = config.headerRow ? await sheetHeaders(config.spreadsheet, config.tab, config.headerRow) : [];
       const indices = [config.phone, ...fields.map(field => field.column)].map(column => resolveSheetColumn(headers, column));
@@ -182,17 +210,15 @@ export function refreshSheets(force = false): Promise<void> {
         });
         next[field.id] = { at: Date.now(), ...(field.action ? { columnIndex: indices[fieldIndex + 1]! } : {}), values };
       });
-      useGoogleSheets.setState({ data: next });
+      updateConnection(connectionId,{data:next});
       await persist();
-      useGoogleSheets.setState(resetRetry);
+      updateConnection(connectionId,resetRetry);
     } catch (error) {
       const message = String(error), hint = sheetErrorHint(message);
       const count = failures + 1;
       const pauseReason = hint === "sheets.error.authorize" ? "authorization" : ["sheets.error.mapping", "sheets.error.forbidden", "sheets.error.notFound", "sheets.error.request", "sheets.error.storage", "sheets.error.build"].includes(hint) ? "configuration" : null;
       const delay = Math.min(30 * 60_000, (hint === "sheets.error.quota" ? 5 * 60_000 : 60_000) * 2 ** Math.min(count - 1, 5));
-      useGoogleSheets.setState({ error: message, failures: count, pauseReason, retryAt: pauseReason ? null : Date.now() + delay });
+      updateConnection(connectionId,{ error: message, failures: count, pauseReason, retryAt: pauseReason ? null : Date.now() + delay });
     }
     finally { useGoogleSheets.setState({ busy: false }); }
-  })().finally(() => { task = null; });
-  return task;
 }

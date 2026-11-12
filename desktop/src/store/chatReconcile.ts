@@ -100,9 +100,11 @@ export function backfillChatPreviewFromMessages(
     const body = lastBody.get(ch.id);
     const direction = lastDirection.get(ch.id);
     const needTime = !ch.updatedAt || at > ch.updatedAt;
-    const needBody =
-      body &&
-      (!(ch.lastMessage || "").trim() ||
+    // A non-empty preview can still be stale (e.g. live message arrived after
+    // the contact snapshot). Keep it aligned with the newest transcript row.
+    const needBody = body &&
+      (at >= (ch.updatedAt || "") && body !== ch.lastMessage ||
+        !(ch.lastMessage || "").trim() ||
         (ch.lastMessage || "").startsWith("["));
     const needDirection = direction && ch.lastMessageDirection !== direction;
     const pending = pendingByChat.get(ch.id);

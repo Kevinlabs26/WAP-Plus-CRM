@@ -117,11 +117,16 @@ export type SettingsSafeExport = {
   aiOutreachRuns: AppSettings["aiOutreachRuns"];
   aiOutreachPaused: boolean;
   aiOutreachExcludedRecipients: string[];
+  aiTaskDismissedIds: string[];
+  aiReplyTaskRecords: AppSettings["aiReplyTaskRecords"];
   translateService: AppSettings["translateService"];
   notifyFollowUpEnabled: boolean;
   notifyGroupMessagesEnabled: boolean;
   autoReadGroupMessages: boolean;
   chatBackground?: AppSettings["chatBackground"];
+  folderDefaultColor?: string;
+  folderColorDepth?: number;
+  folderRowDensity?: AppSettings["folderRowDensity"];
   blockSendWhenOverheated: boolean;
   sendPausedAccountIds: string[];
   rateJitterSec: number;
@@ -213,11 +218,16 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     aiOutreachRuns: settings.aiOutreachRuns || [],
     aiOutreachPaused: settings.aiOutreachPaused === true,
     aiOutreachExcludedRecipients: settings.aiOutreachExcludedRecipients || [],
+    aiTaskDismissedIds: settings.aiTaskDismissedIds || [],
+    aiReplyTaskRecords: settings.aiReplyTaskRecords || [],
     translateService: settings.translateService,
     notifyFollowUpEnabled: settings.notifyFollowUpEnabled !== false,
     notifyGroupMessagesEnabled: settings.notifyGroupMessagesEnabled === true,
     autoReadGroupMessages: settings.autoReadGroupMessages === true,
     chatBackground: settings.chatBackground,
+    folderDefaultColor: settings.folderDefaultColor,
+    folderColorDepth: settings.folderColorDepth,
+    folderRowDensity: settings.folderRowDensity,
     blockSendWhenOverheated: settings.blockSendWhenOverheated !== false,
     sendPausedAccountIds: settings.sendPausedAccountIds || [],
     rateJitterSec: settings.rateJitterSec ?? 2,
@@ -451,6 +461,7 @@ function sanitizeMessage(raw: unknown): Message | null {
     senderName: str(m.senderName, 200) || undefined,
     senderAvatarUrl: sanitizeMediaUrl(m.senderAvatarUrl) || undefined,
     systemKind: str(m.systemKind, 80) || undefined,
+    aiReplyInboundId: str(m.aiReplyInboundId, 200) || undefined,
     aiReplyContextHash: typeof m.aiReplyContextHash === "string" && /^[a-f0-9]{64}$/.test(m.aiReplyContextHash)
       ? m.aiReplyContextHash : undefined,
     systemAction: str(m.systemAction, 80) || undefined,
@@ -692,9 +703,9 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
     const allowed = [
       "quickReplies", "quickReplyCustomCategories", "quickReplyRemovedCategories", "quickReplyCategoryLabels", "quickReplyCategoryOrder", "quickReplyPinnedIds", "quickReplyRecentIds", "translateTargetLang", "myLang",
       "voiceInputLang", "aiTimeZone", "leadInbox", "chatFolders", "chatFolderClones", "aiPromptTemplates", "aiPlaybooks", "aiPlaybookPlans", "aiPlaybookOverviewId", "aiPlaybookBindings", "aiPlaybookMuseRoot", "imagePromptTemplates", "aiContextMode", "aiOutreachRuns", "aiOutreachPaused", "aiOutreachExcludedRecipients",
-      "scheduledMessages", "scheduledPlans", "waAccounts", "accountViewMode", "historySyncNote",
+      "aiReplyTaskRecords", "aiTaskDismissedIds", "scheduledMessages", "scheduledPlans", "waAccounts", "accountViewMode", "historySyncNote",
       "historySyncNoteByAccountId", "internalNotesByKey", "chatBackground",
-      "salesStageLabels", "salesStageOrder", "theme",
+      "salesStageLabels", "salesStageOrder", "theme", "folderDefaultColor", "folderColorDepth", "folderRowDensity",
     ];
     settingsSafe = Object.fromEntries(
       allowed.filter((key) => Object.hasOwn(settingsSafe!, key))

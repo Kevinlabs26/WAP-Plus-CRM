@@ -245,6 +245,7 @@ export interface Message {
   systemKind?: string;
   /** 自动回复生成上下文的 SHA-256；排队/重启后复核，不含聊天正文或密钥。 */
   aiReplyContextHash?: string;
+  aiReplyInboundId?: string;
   systemAction?: string;
   /** 被 @ 的成员 jid */
   mentionedJids?: string[];

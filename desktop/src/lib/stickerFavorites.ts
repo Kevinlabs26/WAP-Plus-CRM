@@ -16,6 +16,23 @@ export function normalizeStickerFavorites(value: unknown): string[] {
   ).slice(0, 24);
 }
 
+/** 收集本机已同步消息中的贴纸；官方贴纸包本身不会出现在消息数据里。 */
+export function mergeStickerFavoritesFromMessages(
+  current: string[],
+  messages: readonly { mediaType?: string; mediaUrl?: string }[],
+): string[] {
+  const discovered: string[] = [];
+  const seen = new Set(current);
+  for (let index = messages.length - 1; index >= 0 && discovered.length < 24; index--) {
+    const message = messages[index];
+    const sticker = message?.mediaType === "sticker" ? message.mediaUrl : undefined;
+    if (!sticker?.startsWith("data:image/webp;base64,") || seen.has(sticker)) continue;
+    seen.add(sticker);
+    discovered.push(sticker);
+  }
+  return normalizeStickerFavorites([...current, ...discovered]);
+}
+
 export async function loadStickerFavorites(): Promise<string[]> {
   return normalizeStickerFavorites(await idbGet<unknown>(KEY));
 }

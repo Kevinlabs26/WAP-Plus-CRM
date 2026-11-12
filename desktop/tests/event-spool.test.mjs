@@ -47,11 +47,27 @@ test('HTTP event pages are replayable until an explicit saved checkpoint and rej
   };
   let response=await get('after=0');assert.equal(response.status,200);assert.equal(response.body.cursor,40);
   assert.equal((await spool.read(0))[0].seq,1);
+  response=await get('after=0&limit=60');assert.equal(response.body.cursor,60);
   response=await get('after=40&ack=40');assert.equal(response.body.cursor,80);assert.equal((await spool.read(0))[0].seq,41);
   response=await get('after=80&ack=80');assert.equal(response.body.cursor,95);
   await get('after=95&ack=95');assert.deepEqual(await (await createEventSpool(dir,key)).read(0),[]);
   assert.equal((await get('after=-1')).status,400);assert.equal((await get('after=0&ack=NaN')).status,400);
+  assert.equal((await get('after=0&limit=20')).status,400);
  }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test('blocked history sync schedules a retry without dropping the backlog',async()=>{
+ let deferred=0,body,status;
+ const handler=createBaileysRequestHandler({
+  token:'test',port:0,accountId:'a',sequence:0,events:[],deletionEvents:[],
+  eventSpool:{health:{blocked:true,writeError:'',receivingPaused:false,warning:'同步缓存积压'},
+   acknowledge:async()=>{},read:async()=>[]},
+  deferFullHistorySync:()=>{deferred++;},requestFullHistorySync:async()=>({requested:true}),
+  snapshot:()=>({contacts:[],messages:[]}),statusPayload:()=>({protocolVersion:1,connection:'connected'})
+ });
+ await handler({method:'POST',url:'/sync?requestHistory=1',headers:{'x-wap-token':'test'}},
+  {setHeader(){},writeHead(code){status=code;},end(data){body=JSON.parse(data);}});
+ assert.equal(status,200);assert.equal(deferred,1);assert.equal(body.historyRequest.deferred,true);
 });
 
 test('fresh events are previewed ahead of backlog without skipping or pruning ordered events',async()=>{
@@ -71,6 +87,10 @@ test('fresh events are previewed ahead of backlog without skipping or pruning or
   const next=await get('after=40&ack=40&realtimeAfter=97');
   assert.equal(next.body.cursor,80);assert.deepEqual(next.body.realtimeEvents,[]);
   assert.equal((await spool.read(0))[0].seq,41);
+  const paused=await get('after=40&ack=40&realtimeAfter=0&limit=0');
+  assert.deepEqual(paused.body.events,[]);assert.equal(paused.body.cursor,40);
+  assert.deepEqual(paused.body.realtimeEvents.map(e=>e.seq),[97]);
+  assert.equal((await spool.read(0))[0].seq,41,'pausing replay cannot discard unprocessed history');
   const replay=await get('after=80&ack=80&realtimeAfter=98');
   assert.ok(replay.body.events.some(e=>e.seq===97),'the durable event must remain available for replay');
   assert.equal((await get('after=0&realtimeAfter=-1')).status,400);
@@ -86,13 +106,13 @@ test('startup reads recent persisted messages after restart without treating his
   await spool.flush();spool=await createEventSpool(dir,key);
   const handler=createBaileysRequestHandler({token:'test',port:0,sequence:101,events:[],eventSpool:spool,statusPayload:()=>({protocolVersion:1})});
   let body;
-  await handler({method:'GET',url:'/events?after=0&ack=0&realtimeAfter=0&recent=1',headers:{'x-wap-token':'test'}},{setHeader(){},writeHead(code){assert.equal(code,200);},end(data){body=JSON.parse(data);}});
+  await handler({method:'GET',url:'/events?after=0&ack=0&realtimeAfter=0&recent=1&recentLimit=260',headers:{'x-wap-token':'test'}},{setHeader(){},writeHead(code){assert.equal(code,200);},end(data){body=JSON.parse(data);}});
   assert.equal(body.cursor,40);
   assert.deepEqual(body.realtimeEvents,[]);
   assert.equal(body.recentEvents.length,1);
   assert.equal(body.recentEvents[0].payload.live,false);
-  assert.equal(body.recentEvents[0].payload.items.length,200);
-  assert.equal(body.recentEvents[0].payload.items[0].id,'m-50');
+  assert.equal(body.recentEvents[0].payload.items.length,250);
+  assert.equal(body.recentEvents[0].payload.items[0].id,'m-0');
   assert.equal((await spool.read(0))[0].seq,1,'recent preview must not erase earlier durable events');
   assert.equal((await spool.read(100))[0].payload.items.length,250,'normal replay must retain the complete event');
  }finally{rmSync(dir,{recursive:true,force:true});}

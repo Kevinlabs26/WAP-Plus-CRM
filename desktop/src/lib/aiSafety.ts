@@ -32,6 +32,7 @@ export type AutoReplyDecision =
       kind: "manual_takeover" | "outside_hours" | "risk";
       reason: string;
       takeoverKey?: string;
+      retryAt?: number;
     };
 
 type AutoReplyRiskCategory =
@@ -220,6 +221,7 @@ export function evaluateAutoReplyDecision(
       kind: "manual_takeover",
       reason: `检测到手动回复，暂停自动回复 ${policy.takeoverMinutes} 分钟`,
       takeoverKey: takeover.id || takeover.sentAt,
+      retryAt: Date.parse(takeover.sentAt) + takeoverWindowMs,
     };
   }
   const risk = getAutoReplyRisk(inbound.transcript || inbound.body || "");
@@ -231,7 +233,7 @@ export function evaluateAutoReplyDecision(
 
 /** 发送门闸和重试队列共享复核，防止排队期间自动模式或上下文改变。 */
 export function getAutoReplySendError(
-  settings: AutoReplyScopeSettings & { aiAutoReplyPolicy: unknown; aiAutoReplyPolicyByAccountId: unknown },
+  settings: AutoReplyScopeSettings & { aiAutoReplyPolicy: unknown; aiAutoReplyPolicyByAccountId: unknown; aiTaskDismissedIds?: string[] },
   messages: readonly (AutoReplySafetyMessage & { id: string; chatId: string; accountId?: string })[],
   reply: { id: string; chatId: string; body: string; sentAt: string; accountId?: string },
   inboundId?: string
@@ -241,6 +243,7 @@ export function getAutoReplySendError(
     .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
   const inbound = thread.filter((item) => item.direction === "in").at(-1);
   if (!inbound) return "待回复的入站消息尚未载入，请重新打开会话后生成";
+  if (settings.aiTaskDismissedIds?.some(id=>id===`reply:${reply.id}`||id===`runtime:${reply.chatId}:${inbound.id}`)) return "本次自动回复已停止";
   if (inboundId && inbound.id !== inboundId) return "对方又发来了新消息，请根据最新聊天重新生成";
   if (thread.some((item) => item.id !== reply.id && item.sentAt >= reply.sentAt &&
       (item.direction === "in" && !inboundId || item.direction === "out" && !item.systemKind))) return "生成后收到新消息或检测到手动回复，旧自动回复已停止";

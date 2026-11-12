@@ -11,11 +11,21 @@ import {
   getAutoReplyBlockReason,
   getAutoReplyOutputBlockReason,
   getRecentManualTakeover,
+  getAutoReplySendError,
   isWithinAutoReplyHours,
   latestMessagesPerChat,
   normalizeAutoReplyPolicy,
   resolveAutoReplyPolicy,
 } from "../src/lib/aiSafety.ts";
+
+test('deleted or stopped auto-replies remain blocked at the final send gate',()=>{
+ const now=new Date().toISOString();
+ const inbound={id:'in',chatId:'chat',direction:'in',body:'Bonjour',sentAt:now};
+ const reply={id:'out',chatId:'chat',direction:'out',systemKind:'ai_auto_reply',body:'Bonjour',sentAt:now};
+ const settings={aiReplyMode:'auto',aiAutoReplyPolicy:{},aiAutoReplyPolicyByAccountId:{}};
+ assert.equal(getAutoReplySendError(settings,[inbound,reply],reply,'in'),null);
+ for(const key of ['reply:out','runtime:chat:in'])assert.equal(getAutoReplySendError({...settings,aiTaskDismissedIds:[key]},[inbound,reply],reply,'in'),'本次自动回复已停止');
+});
 
 test("hasRealAiKey rejects mock / missing-key configs", () => {
   assert.equal(hasRealAiKey({ aiProvider: "mock" }), false);

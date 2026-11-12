@@ -1,5 +1,6 @@
 import { gateConfigFromRuntime, sendRuntimeFromSettings } from "@/channels";
 import { setSendGateConfigProvider } from "@/channels/sendGate";
+import { setMusePrivacyIdentityProvider } from "@/lib/museChatPrivacy";
 import { create } from "zustand";
 import type { AppState, AppSettings, SliceContext } from "./types";
 import { calcStats } from "./calcStats";
@@ -110,6 +111,18 @@ useAppStore.subscribe((state, prev) => {
   if (state.messages === prev.messages) return;
   const index = updateMessageIndex(state.messages, state.messagesByChatId);
   if (index !== state.messagesByChatId) useAppStore.setState({ messagesByChatId: index });
+});
+
+let privacyContacts: AppState['contacts']|undefined,privacyAccounts: AppSettings['waAccounts']|undefined;
+let privacyIdentities: (AppState['contacts'][number]|AppSettings['waAccounts'][number])[]=[];
+setMusePrivacyIdentityProvider(() => {
+  const state = useAppStore.getState();
+  if (!state.hydrated) throw Error("本机联系人尚未加载，未发送给 Muse");
+  if(privacyContacts!==state.contacts||privacyAccounts!==state.settings.waAccounts){
+    privacyContacts=state.contacts;privacyAccounts=state.settings.waAccounts;
+    privacyIdentities=[...state.contacts,...state.settings.waAccounts];
+  }
+  return privacyIdentities;
 });
 
 export { flushPersist } from "./persist";

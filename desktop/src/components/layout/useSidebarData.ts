@@ -64,10 +64,6 @@ export function useSidebarData({
   const uiLanguage = useAppStore((s) => s.settings.uiLanguage);
   const leadInbox = useAppStore((s) => s.settings.leadInbox);
   const messagesByChatId = useAppStore((s) => s.messagesByChatId);
-  const sidebarMessages = useMemo(
-    () => Object.values(messagesByChatId).flat(),
-    [messagesByChatId]
-  );
 
   const { accountViewMode, activeAccountId, liveBaileysAccountId, waAccounts, chatFoldersAll, chatFolderClones } =
     useAppStore(
@@ -204,7 +200,6 @@ export function useSidebarData({
         chats,
         contacts,
         contactById,
-        messages: sidebarMessages,
         query,
         showArchived,
         selfName,
@@ -218,6 +213,7 @@ export function useSidebarData({
             : viewMode,
         fallbackAccountId: filterFallback,
         liveAccountId: filterLive,
+        messagesByChatId,
       }),
     [
       chats,
@@ -231,7 +227,6 @@ export function useSidebarData({
       leadCandidates,
       leadInbox.accountScope,
       leadInbox.sort,
-      sidebarMessages,
       viewMode,
       filterFallback,
       filterLive,

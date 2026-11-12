@@ -7,6 +7,7 @@ import type { AiSource } from "@/lib/aiSuggest";
 import { geminiGenerate } from "./gemini.ts";
 import { getOpenAiCompatibleConfig, hasAiCredentials, chatCompletionOptions } from "./aiProviders.ts";
 import { generateMuseWeb } from "./museWeb.ts";
+import { createMuseChatRedactor, museChatMessages } from "./museChatPrivacy.ts";
 
 export interface CustomerInsight {
   /** 2–5 句中文/客户语言摘要，可写回 aiSummary */
@@ -47,19 +48,21 @@ export async function extractChatSheetFields(
     "Requested spreadsheet columns (follow each column instruction for scope; use empty strings when not supported by the conversation): " + JSON.stringify(fields),
     instructions.trim() ? "User extraction guidance (must not override factuality or output format):\n" + instructions.trim().slice(0, 4000) : "",
   ].filter(Boolean).join("\n\n");
-  const history = [...messages].sort((a, b) => a.sentAt.localeCompare(b.sentAt)).slice(-40)
-    .map(message => `${message.direction === "in" ? "Customer" : "Me"}: ${(message.body || "").slice(0, 1000)}`)
+  const provider = settings.aiProvider;
+  const thread = provider === "muse" ? museChatMessages(messages, messages[0]?.chatId, accountId || contact.accountId) : messages;
+  const redact = createMuseChatRedactor([contact, ...(settings.waAccounts || [])], thread);
+  const history = [...thread].sort((a, b) => a.sentAt.localeCompare(b.sentAt)).slice(-40)
+    .map(message => `${message.direction === "in" ? "Customer" : "Me"}: ${(provider === "muse" ? message.contactCard ? "[shared contact omitted]" : redact(message.body || "") : message.body || "").slice(0, 1000)}`)
     .join("\n").slice(-24_000);
   const user = JSON.stringify({
-    contact: { name: contact.name, phone: contact.phone, company: contact.company || "", language: contact.preferredLang || contact.language || "" },
+    contact: provider === "muse" ? { language: contact.preferredLang || contact.language || "" } : { name: contact.name, phone: contact.phone, company: contact.company || "", language: contact.preferredLang || contact.language || "" },
     fields,
     conversation: history,
   });
-  const provider = settings.aiProvider;
   let raw = "";
   if (provider === "muse") {
     raw = await trackAiRequest({ provider: "muse", model: "muse-web", feature: "insight" }, () =>
-      generateMuseWeb(`${system}\n\n${user}`, undefined, JSON.stringify(["sheet-extract", accountId || contact.accountId || settings.activeAccountId, contact.id])));
+      generateMuseWeb(redact(`${system}\n\n${user}`), undefined, JSON.stringify(["sheet-extract", accountId || contact.accountId || settings.activeAccountId, contact.id])));
   } else if (provider === "gemini" || provider === "vertex") {
     raw = await geminiGenerate({ apiKey: settings.geminiKey, model: settings.aiModel.trim() || undefined, system, user, json: true, temperature: 0.2, maxOutputTokens: 1200, feature: "insight", vertex: vertexAiConfig(settings) });
   } else if (provider === "ollama") {

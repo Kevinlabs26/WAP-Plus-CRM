@@ -31,6 +31,7 @@ import { flushPersist, primePersistBaseline } from "@/store/persist";
 import { setBaileysAccountIdResolver, setBaileysSessionResolver } from "@/lib/baileys";
 import { reconcileAccountLogin } from "@/lib/accountIdentity";
 import { getAppLockStatus, type AppLockStatus } from "@/lib/appLock";
+import { setAppLockActive } from "@/lib/appLockRuntime";
 import { isTauri } from "@/lib/bridge";
 import {
   getRecentMainThreadWork,
@@ -846,6 +847,11 @@ export default function App() {
     appLocked ||
     appLockMode !== null;
   const shellRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // Locking the UI also pauses outgoing automation; incoming sync can continue.
+    setAppLockActive(appLockBlocked);
+    return () => setAppLockActive(false);
+  }, [appLockBlocked]);
   useLayoutEffect(() => {
     if (shellRef.current) shellRef.current.inert = appLockBlocked;
   }, [appLockBlocked]);

@@ -120,6 +120,59 @@ test("sidebar preview uses the newest indexed message instead of stale chat prev
   assert.equal(result.lastBodyByChat.get("chat-1"), "new message");
 });
 
+test("sidebar preview ignores a newer message from another account", () => {
+  const result = mod.filterAndSortSidebarChats({
+    chats: [{
+      id: "chat-1",
+      contactId: "c1",
+      contactName: "Alice",
+      lastMessage: "account one",
+      updatedAt: "2026-08-15T12:00:00.000Z",
+      accountId: "wa-a",
+    }],
+    contacts: [{ id: "c1", name: "Alice", phone: "" }],
+    query: "",
+    showArchived: false,
+    selfName: "",
+    messages: [
+      { id: "m-a", chatId: "chat-1", body: "account one", sentAt: "2026-08-15T12:00:00.000Z", direction: "in", accountId: "wa-a" },
+      { id: "m-b", chatId: "chat-1", body: "account two", sentAt: "2026-08-15T12:01:00.000Z", direction: "in", accountId: "wa-b" },
+    ],
+  });
+
+  assert.equal(result.lastBodyByChat.get("chat-1"), "account one");
+});
+
+test("sidebar uses the same indexed conversation time as the open chat", () => {
+  const result = mod.filterAndSortSidebarChats({
+    chats: [{
+      id: "chat-1",
+      contactId: "c1",
+      contactName: "Katie",
+      lastMessage: "stale sidebar preview",
+      updatedAt: "2026-11-12T22:39:00.000Z",
+      accountId: "wa-a",
+    }],
+    contacts: [{ id: "c1", name: "Katie", phone: "", accountId: "wa-a" }],
+    messagesByChatId: {
+      "chat-1": [{
+        id: "m-1",
+        chatId: "chat-1",
+        body: "actual last message",
+        sentAt: "2026-11-12T20:07:00.000Z",
+        direction: "in",
+        accountId: "wa-a",
+      }],
+    },
+    query: "",
+    showArchived: false,
+    selfName: "",
+  });
+
+  assert.equal(result.lastBodyByChat.get("chat-1"), "actual last message");
+  assert.equal(result.lastMsgAtByChat.get("chat-1"), "2026-11-12T20:07:00.000Z");
+});
+
 test("unread chats sort ahead of read chats", () => {
   const result = mod.filterAndSortSidebarChats({
     chats: [

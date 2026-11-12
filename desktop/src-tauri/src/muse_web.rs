@@ -300,6 +300,16 @@ fn conversation_id(key: &str) -> Result<String, String> {
 fn thread_file(root: &Path, id: &str) -> PathBuf {
     root.join("muse-web-threads").join(format!("{id}.json"))
 }
+fn account_thread_root(root:&Path)->Result<PathBuf,String>{
+    match std::fs::read_to_string(root.join("muse-web-account-session")){
+        Ok(id)=>{
+            let id=uuid::Uuid::parse_str(id.trim()).map_err(|_|"Muse 账号会话记录无效，请重新切换账号")?;
+            Ok(root.join("muse-web-accounts").join(id.to_string()))
+        },
+        Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Ok(root.to_path_buf()),
+        Err(_)=>Err("无法读取 Muse 账号会话记录".into()),
+    }
+}
 fn load_thread(file: &Path) -> Result<ThreadRecord, String> {
     let raw = match std::fs::read(file) {
         Ok(raw) => raw,
@@ -473,6 +483,24 @@ fn muse_window(app: &tauri::AppHandle, visible: bool, media: bool) -> Result<Web
 #[tauri::command]
 pub async fn muse_web_open(app: tauri::AppHandle, media: Option<bool>) -> Result<(), String> {
     muse_window(&app, true, media.unwrap_or(false)).map(|_| ())
+}
+
+#[tauri::command]
+pub async fn muse_web_switch_account(app:tauri::AppHandle)->Result<(),String>{
+    let state=app.state::<MuseWebState>();
+    let _text=state.operation.try_lock().map_err(|_|"Muse 正在处理回复，请等待完成后切换账号")?;
+    let _media=state.media_operation.try_lock().map_err(|_|"Muse 正在处理图片，请等待完成后切换账号")?;
+    let window=muse_window(&app,true,false)?;
+    let root=app.path().app_local_data_dir().map_err(|error|error.to_string())?;
+    // Rotate before signing out so a partial failure cannot reuse the previous account's threads.
+    crate::atomic_file::write_atomic(&root.join("muse-web-account-session"),uuid::Uuid::new_v4().to_string().as_bytes()).map_err(|_|"无法保存 Muse 换号状态，未退出登录")?;
+    window.clear_all_browsing_data().map_err(|_|"无法退出 Muse 登录，请在 Muse 窗口手动退出后重新登录")?;
+    if let Some(media)=app.get_webview_window(MEDIA_LABEL){
+        media.clear_all_browsing_data().map_err(|_|"无法清理 Muse 图片窗口登录，请手动退出后重新登录")?;
+        media.navigate("https://muse.ai/".parse().unwrap()).map_err(|error|error.to_string())?;
+    }
+    window.navigate("https://muse.ai/".parse().unwrap()).map_err(|error|error.to_string())?;
+    Ok(())
 }
 
 fn connection_settled(
@@ -802,8 +830,8 @@ pub async fn muse_web_generate(
             .map(|id| {
                 app.path()
                     .app_local_data_dir()
-                    .map(|root| thread_file(&root, id))
                     .map_err(|e| e.to_string())
+                    .and_then(|root|account_thread_root(&root).map(|root|thread_file(&root,id)))
             })
             .transpose()?;
         let mut record = file
