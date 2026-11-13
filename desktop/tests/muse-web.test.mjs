@@ -240,8 +240,8 @@ test('saved threads require both the exact path and the customer marker before a
  }
  p.replaceThread();assert.equal(p.api.start('job-2','Hello','/thread/new-id',owner).state,'error');
 });
-test('manual drafts are preserved and navigating away from a bound thread stops the request',()=>{
- const draft=page();draft.field.value='Manual draft';assert.equal(draft.api.start('job-1','Hello').state,'error');assert.equal(draft.field.value,'Manual draft');assert.equal(draft.clicks,0);
+test('old text drafts are cleared before preparing and navigating away from a bound thread stops the request',()=>{
+ const draft=page();draft.field.value='Manual draft';assert.equal(draft.api.start('job-1','Hello').state,'preparing');assert.match(draft.field.value,/Hello/);assert.doesNotMatch(draft.field.value,/Manual draft/);assert.equal(draft.clicks,0);
  const p=page();p.api.start('job-1','Hello',null,'a'.repeat(64));p.api.poll('job-1');p.location.pathname='/thread/another';
  assert.equal(p.api.poll('job-1').state,'error');assert.equal(p.clicks,1);
 });

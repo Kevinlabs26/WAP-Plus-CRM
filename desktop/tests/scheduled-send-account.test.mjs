@@ -12,7 +12,7 @@ const result = await build({
   plugins: [{ name: "watcher-boundaries", setup(b) {
     b.onResolve({ filter: /^(react|@\/store\/appStore|@\/channels)$/ }, (a) => ({ path: a.path, namespace: "mock" }));
     b.onLoad({ filter: /.*/, namespace: "mock" }, (a) => ({ contents:
-      a.path === "react" ? "export const useRef = (current) => ({current}); export const useEffect = (effect) => { globalThis.__watcherCleanup = effect(); }; export const useCallback = (fn) => fn;" :
+      a.path === "react" ? "export default {};export const useRef = (current) => ({current}); export const useEffect = (effect) => { globalThis.__watcherCleanup = effect(); }; export const useCallback = (fn) => fn;" :
       a.path === "@/store/appStore" ? "export const useAppStore = {getState: () => globalThis.__watcherState};" :
       'export const normalizeChannelId = (id) => id; export const dispatchSendText = async (request, runtime) => { await globalThis.__beforeDispatch?.(); if (runtime?.canSend && !runtime.canSend()) return {ok:false,error:"automation_cancelled"}; globalThis.__sentRequests.push(request); await globalThis.__waitSend?.(request); return {ok:true}; };'
     }));
@@ -173,9 +173,9 @@ test('queued AI replies preserve matching context and block changed model, ident
   if(kind==='account')state.chats[0].accountId='wa-a';
   if(kind==='channel')state.settings.sendChannel='android_bridge';
   if(kind==='legacy')delete reply.aiReplyContextHash;
-  SendQueueWatcher();await waitForAiQueue(reply);
+  SendQueueWatcher();if(kind==='paused')await new Promise(resolve=>setImmediate(resolve));else await waitForAiQueue(reply);
   assert.equal(globalThis.__sentRequests.length,['unchanged','scoped-auto'].includes(kind)?1:0,kind);
-  assert.equal(reply.deliveryStatus,['unchanged','scoped-auto'].includes(kind)?'sent':'failed',kind);
+  assert.equal(reply.deliveryStatus,kind==='paused'?'queued':['unchanged','scoped-auto'].includes(kind)?'sent':'failed',kind);
  }
 });
 

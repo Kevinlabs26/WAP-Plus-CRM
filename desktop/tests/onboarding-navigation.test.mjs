@@ -124,7 +124,7 @@ test("broadcast has a direct navigation entry and supporting pages remain availa
     assert.equal(globalThis.starUrl, "https://github.com/Kevinlabs26/WAP-Plus-CRM");
     delete globalThis.starUrl;
     button(tree, "群发").props.onClick(); assert.deepEqual(ui.calls, [["nav", "broadcast"]]);
-    button(tree, "主动联系").props.onClick(); assert.deepEqual(ui.calls.at(-1), ["nav", "ai-outreach"]);
+    button(tree, "AI 任务").props.onClick(); assert.deepEqual(ui.calls.at(-1), ["nav", "ai-outreach"]);
     nodes(tree).find(node => node.props["aria-controls"] === "topbar-more-nav").props.onClick(); tree = ui.render(TopBar);
     for (const label of ["星标", "统计", "监测", "设备"]) assert.ok(button(tree, label), label);
     assert.equal(button(nodes(tree).find(node => node.props.id === "topbar-more-nav"), "点击 Star"), undefined);

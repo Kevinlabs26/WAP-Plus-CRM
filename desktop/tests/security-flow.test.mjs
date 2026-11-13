@@ -27,6 +27,7 @@ const built = await build({
   } }], alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) },
 });
 const { autoReplyInbound, scheduleAutoReplyInbound, stopAutoReplies, useAutoReplyRuntime, notifyInboundMessages, currentAutoReplyContext } = await import("data:text/javascript;base64," + Buffer.from(built.outputFiles[0].text+'\n//# sourceURL=security-flow.js').toString("base64"));
+test.afterEach(() => stopAutoReplies());
 function setup(chatId) {
   globalThis.sentFlow = [];
   globalThis.beforeAutoGate = undefined;

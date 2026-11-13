@@ -15,7 +15,7 @@ const mocks = {
   "./persist": "export const persist=(get,immediate)=>globalThis.stageSaves.push({contacts:get().contacts,settings:get().settings,immediate});export const scheduleStatsRecompute=()=>{};export const accountCreatedAtOf=()=>undefined;",
   "./exportDataActions": "export const exportBackup=()=>{};export const exportContactsCsv=()=>{};",
   "./restoreGuard": "export const deferDuringRestore=()=>false;export const isDataRestoreActive=()=>Boolean(globalThis.stageRestoring);",
-  "@/lib/mediaCache": "export const bridgeMessageMediaCacheId=(id,account)=>account+':'+id;export const cacheMediaUrl=async()=>{};export const dropMediaCache=async()=>{};",
+"@/lib/mediaCache": "export const cacheMediaUrls=async(items)=>{for(const item of items)await cacheMediaUrl(item.messageId,item.url);};export const bridgeMessageMediaCacheId=(id,account)=>account+':'+id;export const cacheMediaUrl=async()=>{};export const dropMediaCache=async()=>{};",
   "@/lib/composerActivity": "export const isComposerTypingBusy=()=>false;",
   "@/lib/syncDebug": "export const noteMainThreadWork=()=>{};export const syncLog=()=>{};export const isSyncDebugEnabled=()=>false;",
   "@/lib/aiAutoReply": "export const emitLiveInboundMessages=()=>{};",

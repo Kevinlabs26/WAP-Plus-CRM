@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const mocks={
- react:'export const useRef=current=>({current});export const useEffect=fn=>{globalThis.outreachQueueCleanup=fn();};',
+ react:'export default {};export const useRef=current=>({current});export const useEffect=fn=>{globalThis.outreachQueueCleanup=fn();};',
  '@/channels':'export const normalizeChannelId=id=>id;export const dispatchSendText=async(request,runtime)=>{if(globalThis.outreachBeforeTransport)await globalThis.outreachBeforeTransport();if(!runtime.canSend())return {ok:false,error:"automation_cancelled"};globalThis.outreachSent.push({request,gap:runtime.requiredMinGapSec});return {ok:true};};',
  '@/i18n':'export const translateCurrent=(key)=>key;',
  '@/store/appStore':`export const useAppStore=selector=>selector(globalThis.outreachState);useAppStore.getState=()=>globalThis.outreachState;useAppStore.setState=patch=>globalThis.outreachPatch(patch);export const flushPersist=async()=>{if(globalThis.outreachDiskError)throw Error('disk full');globalThis.outreachCheckpoints.push(structuredClone({runs:outreachState.settings.aiOutreachRuns,messages:outreachState.messages}));};`,
@@ -61,15 +61,15 @@ test('eligible people are durably listed before generation, respecting quotas an
 
 test('waiting tasks survive pause and recheck messages and single-task cancellation before spending tokens',async()=>{
  const h=await fixture();try{
-  addQueuePeople(h);await h.api.tickAiOutreach();
+  addQueuePeople(h,4);await h.api.tickAiOutreach();
   h.state.settings.aiOutreachPaused=true;h.advance(30000);await h.api.tickAiOutreach();
-  assert.equal(h.calls,1);assert.equal(h.state.settings.aiOutreachRuns[1].status,'waiting');
+  assert.equal(h.calls,2);assert.equal(h.state.settings.aiOutreachRuns[2].status,'waiting');
   h.state.settings.aiOutreachPaused=false;
-  h.state.chats[1].updatedAt=new Date(h.now).toISOString();h.state.chats[1].lastMessage='Bonjour';h.state.chats[1].lastMessageDirection='in';
-  h.state.settings.aiOutreachRuns[2].status='cancelled';
+  h.state.chats[2].updatedAt=new Date(h.now).toISOString();h.state.chats[2].lastMessage='Bonjour';h.state.chats[2].lastMessageDirection='in';
+  h.state.settings.aiOutreachRuns[3].status='cancelled';
   h.advance(30000);await h.api.tickAiOutreach();
-  assert.equal(h.calls,1);assert.equal(h.state.settings.aiOutreachRuns[1].status,'cancelled');
-  assert.equal(h.state.settings.aiOutreachRuns.length,3);
+  assert.equal(h.calls,2);assert.equal(h.state.settings.aiOutreachRuns[2].status,'cancelled');
+  assert.equal(h.state.settings.aiOutreachRuns.length,4);
  }finally{h.close();}
 });
 

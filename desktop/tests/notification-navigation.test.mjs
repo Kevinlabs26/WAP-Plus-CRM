@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const mocks = {
   "./persist": "export const persist = async () => {}; export const scheduleStatsRecompute = () => {};",
   "@/lib/storage": "export const registerChatMessageReplacements = () => {}; export const clearStoredRemoteMessages = async () => {}; export const deleteStoredMessagesByKeys = async () => {}; export const updateStoredMessageAcks = async () => {};",
-  "@/lib/mediaCache": "export const bridgeMessageMediaCacheId = (id, accountId) => accountId + ':' + id; export const cacheMediaUrl = async () => {};",
+"@/lib/mediaCache": "export const cacheMediaUrls=async(items)=>{for(const item of items)await cacheMediaUrl(item.messageId,item.url);};export const bridgeMessageMediaCacheId = (id, accountId) => accountId + ':' + id; export const cacheMediaUrl = async () => {};",
   "@/lib/composerActivity": "export const isComposerTypingBusy = () => false;",
   "@/lib/syncDebug": "export const noteMainThreadWork = () => {}; export const syncLog = () => {}; export const isSyncDebugEnabled = () => false;",
   "@/lib/aiAutoReply": "export const emitLiveInboundMessages = () => {};",
