@@ -20,12 +20,16 @@ type Props = {
   onRestoreAuto: () => void;
   onTranslate: () => void;
   onRestore: () => void;
+  /** 可选：把译文回译成原文语言，仅用于发送前检查。 */
+  backTranslation?: string | null;
+  backTranslating?: boolean;
+  onBackTranslate?: () => void;
   recording: boolean;
   recordSec: number;
 };
 
 /**
- * 输入区翻译栏：目标语言、翻译与还原。
+ * 输入区翻译栏：目标语言、翻译、回译检查与还原。
  */
 export function TranslateBar({
   compact = false,
@@ -39,6 +43,9 @@ export function TranslateBar({
   onRestoreAuto,
   onTranslate,
   onRestore,
+  backTranslation = null,
+  backTranslating = false,
+  onBackTranslate,
   recording,
   recordSec,
 }: Props) {
@@ -95,6 +102,18 @@ export function TranslateBar({
             ? t("translation.busy")
             : t("tooltip.translate")}
         </button>
+        {translateOriginal != null && onBackTranslate && !backTranslation && !backTranslating && (
+          <button
+            type="button"
+            disabled={translating}
+            onClick={onBackTranslate}
+            className="inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[11px] text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-200"
+            title={t("translation.showBack")}
+          >
+            <Languages className="h-3 w-3" />
+            {t("translation.showBack")}
+          </button>
+        )}
         {translateOriginal != null && (
           <button
             type="button"
@@ -106,6 +125,17 @@ export function TranslateBar({
             <Undo2 className="h-3 w-3" />
             {t("translation.restore")}
           </button>
+        )}
+        {(backTranslation != null || backTranslating) && translateOriginal != null && (
+          <span
+            className="min-w-0 flex-[1_1_240px] break-words text-[11px] leading-5 text-zinc-400"
+            aria-live="polite"
+          >
+            <span className="mr-1 text-zinc-500">{t("translation.backLabel")}:</span>
+            {backTranslating
+              ? t("translation.backBusy")
+              : backTranslation || t("translation.backUnavailable")}
+          </span>
         )}
       </div>
       {recording ? (

@@ -10,22 +10,33 @@ const end = source.indexOf('  const restoreTranslateOriginal =', start);
 assert.ok(start >= 0 && end > start);
 const create = new Function('translateDraftText', `
   let draft = 'same draft', translating = false, translateOriginal = null;
+  let focusCalls = 0;
   const translationRequestRef = { current: 0 };
+  const backTranslationRequestRef = { current: 0 };
+  const refocusComposerAfterTranslationRef = { current: false };
+  const textareaRef = { current: { focus: () => { focusCalls++; } } };
+  const requestAnimationFrame = callback => { callback(); return 0; };
+  const document = { body: {} };
+  document.activeElement = document.body;
   const writes = [], toasts = [];
   const recording = false, translateLang = 'fr';
   const readDraft = () => draft;
   const fullSettings = () => ({});
   const setTranslating = value => { translating = value; };
+  const setBackTranslating = () => {};
+  const setBackTranslation = () => {};
   const setTranslateOriginal = value => { translateOriginal = value; };
   const setDraftLocal = value => { draft = value; writes.push(value); };
   const flushDraftNow = value => writes.push(value);
   const pushToast = (...args) => toasts.push(args);
+  const runBackTranslation = () => {};
   const t = key => key, langShortLabel = code => code;
   ${source.slice(start, end)}
   return { run: handleTranslateDraft, writes, toasts,
+    runFromEnter() { refocusComposerAfterTranslationRef.current = true; return handleTranslateDraft(); },
     edit(value) { draft = value; translateOriginal = null; },
     switchChat() { translationRequestRef.current++; translating = false; translateOriginal = null; },
-    state: () => ({ draft, translating, translateOriginal }) };
+    state: () => ({ draft, translating, translateOriginal, focusCalls }) };
 `);
 
 function deferred() {
@@ -71,4 +82,10 @@ test('stale translation failure is silent; edits and failed service keep the dra
   assert.equal(failed.state().draft, 'same draft');
   assert.equal(failed.state().translateOriginal, null);
   assert.equal(failed.state().translating, false);
+});
+
+test('enter-triggered translation returns focus to the composer', async () => {
+  const ui = create(async () => ({ text: 'translated draft', targetLang: 'fr' }));
+  await ui.runFromEnter();
+  assert.equal(ui.state().focusCalls, 1);
 });

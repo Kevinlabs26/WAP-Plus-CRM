@@ -281,5 +281,12 @@ test("selected conversation rows expose current state and retain open/drag actio
     assert.ok(nodes(tree).some(n=>n.props["aria-label"]==="123 条未读消息"&&n.props.children==="99+"));
     const read=ChatSidebarRow({...props,active:false,chat:{...props.chat,unread:0}});
     assert.equal(nodes(read).some(n=>n.props["aria-current"]==="true"||n.props["aria-label"]==="0 条未读消息"),false);
+    const contact={tags:["VIP","重点","跟进"]};
+    globalThis.dragStore.settings.showContactTagsInChatList=false;
+    assert.equal(nodes(ChatSidebarRow({...props,contact})).some(n=>n.props.children==="VIP"),false);
+    globalThis.dragStore.settings.showContactTagsInChatList=true;
+    const tagged=ChatSidebarRow({...props,contact});
+    assert.ok(nodes(tagged).some(n=>n.props.children==="VIP"));
+    assert.ok(nodes(tagged).some(n=>n.props.title==="VIP · 重点 · 跟进"));
   }finally{ui.close();}
 });

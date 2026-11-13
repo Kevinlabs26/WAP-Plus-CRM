@@ -32,6 +32,7 @@ import {
   syncLog,
 } from "@/lib/syncDebug";
 import {
+  detectMessageLanguage,
   langShortLabel,
   resolveTargetLanguage,
   translateDraftText,
@@ -187,6 +188,7 @@ function ComposerInner({
   const settingsUi = useAppStore(
     useShallow((s) => ({
       translateTargetLang: s.settings.translateTargetLang,
+      enterTranslateSend: s.settings.enterTranslateSend,
       voiceInputLang: s.settings.voiceInputLang,
     }))
   );
@@ -197,6 +199,7 @@ function ComposerInner({
     ({
       ...useAppStore.getState().settings,
       translateTargetLang: settingsUi.translateTargetLang,
+      enterTranslateSend: settingsUi.enterTranslateSend,
       voiceInputLang: settingsUi.voiceInputLang,
     } as AppSettings);
   const fullSettings = (): AppSettings =>
@@ -227,8 +230,12 @@ function ComposerInner({
   );
   const { code: translateLang, source: translateLangSource } = translationTarget;
   const [translating, setTranslating] = useState(false);
+  const [backTranslation, setBackTranslation] = useState<string | null>(null);
+  const [backTranslating, setBackTranslating] = useState(false);
   // 会话切换或卸载使旧请求失效，即使另一个客户有相同草稿也不能回填。
   const translationRequestRef = useRef(0);
+  const backTranslationRequestRef = useRef(0);
+  const refocusComposerAfterTranslationRef = useRef(false);
   const mediaStageContextRef = useRef({ key: resetKey, version: 0 });
   if (mediaStageContextRef.current.key !== resetKey) {
     mediaStageContextRef.current = { key: resetKey, version: mediaStageContextRef.current.version + 1 };
@@ -592,7 +599,9 @@ function ComposerInner({
 
   useEffect(() => {
     translationRequestRef.current++;
+    backTranslationRequestRef.current++;
     setTranslating(false);
+    setBackTranslating(false);
     setAttachmentOpen(false);
     setEmojiOpen(false);
     setMentionOpen(false);
@@ -600,6 +609,7 @@ function ComposerInner({
     trackedMentionsRef.current = [];
     if (mentionTrackerRef) mentionTrackerRef.current = [];
     setTranslateOriginal(null);
+    setBackTranslation(null);
     resetVoiceInput();
     setDragOver(false);
     // 每个会话读取自己的草稿，避免未发送内容串到其它联系人。
@@ -638,7 +648,12 @@ function ComposerInner({
   }, [activeContact, settingsUi.translateTargetLang, settingsProp, lastInboundBody]);
 
   useEffect(() => {
-    if (!hasDraft) setTranslateOriginal(null);
+    if (!hasDraft) {
+      backTranslationRequestRef.current++;
+      setBackTranslating(false);
+      setTranslateOriginal(null);
+      setBackTranslation(null);
+    }
   }, [hasDraft]);
 
   useEffect(() => {
@@ -713,10 +728,37 @@ function ComposerInner({
     );
   };
 
+  const runBackTranslation = async (original: string, translated: string) => {
+    if (!original || !translated) return;
+    const request = ++backTranslationRequestRef.current;
+    const sourceLang = detectMessageLanguage(original) || fullSettings().myLang || "zh";
+    setBackTranslating(true);
+    try {
+      const res = await translateDraftText(translated, sourceLang, fullSettings());
+      if (request !== backTranslationRequestRef.current) return;
+      if (!res.text?.trim()) {
+        pushToast(res.error || t("runtime.translateFailed"), "error");
+        return;
+      }
+      if (readDraft().trim() !== translated) return;
+      setBackTranslation(res.text.trim());
+    } catch (e) {
+      if (request !== backTranslationRequestRef.current) return;
+      pushToast(e instanceof Error ? e.message : t("runtime.translateFailed"), "error");
+    } finally {
+      if (request === backTranslationRequestRef.current) setBackTranslating(false);
+    }
+  };
+
   const handleTranslateDraft = async () => {
+    const refocusComposer = refocusComposerAfterTranslationRef.current;
+    refocusComposerAfterTranslationRef.current = false;
     const src = readDraft().trim();
     if (!src || translating || recording) return;
     const request = ++translationRequestRef.current;
+    backTranslationRequestRef.current++;
+    setBackTranslating(false);
+    setBackTranslation(null);
     setTranslating(true);
     try {
       const base = translateOriginal ?? src;
@@ -733,22 +775,44 @@ function ComposerInner({
       }
       const next = res.text.trim();
       setTranslateOriginal(base);
+      setBackTranslation(null);
       setDraftLocal(next);
       flushDraftNow(next);
+      void runBackTranslation(base, next);
       pushToast(t("translation.done", { language: langShortLabel(res.targetLang) }), "success");
     } catch (e) {
       if (request !== translationRequestRef.current) return;
       pushToast(e instanceof Error ? e.message : t("runtime.translateFailed"), "error");
     } finally {
-      if (request === translationRequestRef.current) setTranslating(false);
+      if (request === translationRequestRef.current) {
+        setTranslating(false);
+        if (refocusComposer) {
+          requestAnimationFrame(() => {
+            const active = document.activeElement;
+            if (active === document.body || active === textareaRef.current) {
+              textareaRef.current?.focus({ preventScroll: true });
+            }
+          });
+        }
+      }
     }
+  };
+
+  const handleBackTranslate = async () => {
+    const original = translateOriginal;
+    const translated = readDraft().trim();
+    if (!original || !translated || backTranslating || translating) return;
+    void runBackTranslation(original, translated);
   };
 
   const restoreTranslateOriginal = () => {
     if (translateOriginal == null) return;
     setDraftLocal(translateOriginal);
     flushDraftNow(translateOriginal);
+    backTranslationRequestRef.current++;
     setTranslateOriginal(null);
+    setBackTranslation(null);
+    setBackTranslating(false);
     pushToast(t("runtime.restoredOriginal"), "info");
   };
 
@@ -1118,7 +1182,12 @@ function ComposerInner({
                 if (pendingMedia.length > 0) setMediaCaption(v);
                 scheduleTextareaResize();
                 updateHasDraft(v);
-                if (translateOriginal != null) setTranslateOriginal(null);
+                if (translateOriginal != null) {
+                  setTranslateOriginal(null);
+                  setBackTranslation(null);
+                  backTranslationRequestRef.current++;
+                  setBackTranslating(false);
+                }
                 if (
                   !composingRef.current &&
                   (activeContact?.isGroup ||
@@ -1290,6 +1359,19 @@ function ComposerInner({
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   if (inputLocked) return;
+                  const draft = readDraft().trim();
+                  const enterTranslateSend = fullSettings().enterTranslateSend === true;
+                  if (
+                    enterTranslateSend &&
+                    !editingId &&
+                    pendingMedia.length === 0 &&
+                    draft &&
+                    translateOriginal == null
+                  ) {
+                    refocusComposerAfterTranslationRef.current = true;
+                    void handleTranslateDraft();
+                    return;
+                  }
                   flushDraftNow(readDraft());
                   if (pendingMedia.length > 0) void sendPendingMedia();
                   else void onSend();
@@ -1492,6 +1574,9 @@ function ComposerInner({
           onRestoreAuto={() => handleTranslateLangChange("auto")}
           onTranslate={() => void handleTranslateDraft()}
           onRestore={restoreTranslateOriginal}
+          backTranslation={backTranslation}
+          backTranslating={backTranslating}
+          onBackTranslate={() => void handleBackTranslate()}
           recording={recording}
           recordSec={recordSec}
         />

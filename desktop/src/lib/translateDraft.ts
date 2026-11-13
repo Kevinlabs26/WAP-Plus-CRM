@@ -17,6 +17,7 @@ export type TranslateLangCode =
   | "pt"
   | "ru"
   | "ar"
+  | "sw"
   | "ja"
   | "ko"
   | "auto";
@@ -34,6 +35,7 @@ export const TRANSLATE_LANGS: {
   { code: "pt", label: "Português", native: "PT" },
   { code: "ru", label: "Русский", native: "RU" },
   { code: "ar", label: "العربية", native: "AR" },
+  { code: "sw", label: "Kiswahili", native: "SW" },
   { code: "ja", label: "日本語", native: "JA" },
   { code: "ko", label: "한국어", native: "KO" },
 ];
@@ -47,6 +49,7 @@ const LANG_NAME: Record<string, string> = {
   pt: "Portuguese",
   ru: "Russian",
   ar: "Arabic",
+  sw: "Swahili",
   ja: "Japanese",
   ko: "Korean",
 };

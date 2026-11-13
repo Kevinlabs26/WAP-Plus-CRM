@@ -53,6 +53,7 @@ import { ChatSidebarRow } from "./ChatSidebarRow";
 import { ContactSidebarList } from "./ContactSidebarList";
 import { ContactManagementPanel } from "./ContactManagementPanel";
 import { FolderHeaderRow } from "./FolderHeaderRow";
+import { FolderBatchActionDialog } from "./FolderBatchActionDialog";
 import { FolderAiPromptDialog } from "./FolderAiPromptDialog";
 import { ScheduledPlanDialog } from "@/components/chat/ScheduledPlanDialog";
 import { FolderGroupImportDialog } from "./FolderGroupImportDialog";
@@ -391,6 +392,10 @@ export function PhoneSidebar() {
   } | null>(null);
   const [pendingFolderAction, setPendingFolderAction] =
     useState<PendingFolderAction | null>(null);
+  const [folderBatchAction, setFolderBatchAction] = useState<{
+    folderId: string;
+    mode: "move" | "delete";
+  } | null>(null);
 
   useEffect(() => {
     if (!chatMenu) return;
@@ -1014,7 +1019,7 @@ export function PhoneSidebar() {
     });
   };
 
-  const performDeleteChat = async (chat: ChatPreview) => {
+  const performDeleteChat = async (chat: ChatPreview, notify = true): Promise<boolean> => {
     const contact = contacts.find((c) => c.id === chat.contactId);
     const target = chatTarget(contact, chat);
     let remoteOk = true;
@@ -1041,12 +1046,16 @@ export function PhoneSidebar() {
       if (selectedChatId === chat.id) {
         setSelectedChat(null);
       }
-      pushToast(
-        remoteOk ? "已删除会话" : `本地已删除（手机侧失败：${remoteErr}）`,
-        "info"
-      );
+      if (notify) {
+        pushToast(
+          remoteOk ? "已删除会话" : `本地已删除（手机侧失败：${remoteErr}）`,
+          "info"
+        );
+      }
+      return true;
     } catch (e) {
-      pushToast(e instanceof Error ? e.message : "删除失败", "error");
+      if (notify) pushToast(e instanceof Error ? e.message : "删除失败", "error");
+      return false;
     }
   };
 
@@ -1632,6 +1641,8 @@ export function PhoneSidebar() {
                           name: folder.name,
                         });
                       }}
+                      onBatchMove={() => setFolderBatchAction({ folderId: folder.id, mode: "move" })}
+                      onBatchDelete={() => setFolderBatchAction({ folderId: folder.id, mode: "delete" })}
                       onClearTree={() => {
                         void (async () => {
                           const settings = useAppStore.getState().settings;
@@ -1710,6 +1721,61 @@ export function PhoneSidebar() {
 
       {aiPromptFolderId && <FolderAiPromptDialog key={aiPromptFolderId} folderId={aiPromptFolderId} onClose={() => setAiPromptFolderId(null)} />}
       {scheduleTarget && <ScheduledPlanDialog {...scheduleTarget} onClose={() => setScheduleTarget(null)} />}
+      {folderBatchAction && (() => {
+        const folder = chatFolders.find(item => item.id === folderBatchAction.folderId);
+        if (!folder) return null;
+        const ids = [...new Set([
+          ...folder.chatIds,
+          ...chatFolderClones.filter(clone => clone.folderId === folder.id).map(clone => clone.sourceChatId),
+        ])];
+        const chatsById = new Map(chats.map(chat => [chat.id, chat]));
+        const folderChats = ids.map(id => chatsById.get(id)).filter((chat): chat is ChatPreview => Boolean(chat));
+        const targets = chatFolders
+          .filter(item => item.id !== folder.id)
+          .map(item => ({ id: item.id, name: item.name }));
+        return (
+          <FolderBatchActionDialog
+            mode={folderBatchAction.mode}
+            folderName={folder.name}
+            chats={folderChats}
+            folders={targets}
+            onClose={() => setFolderBatchAction(null)}
+            onConfirm={(chatIds, targetFolderId) => {
+              setFolderBatchAction(null);
+              if (folderBatchAction.mode === "move") {
+                chatIds.forEach(chatId => moveChatToFolder(chatId, targetFolderId));
+                pushToast(t("folder.batchMoved", {
+                  count: chatIds.length,
+                  name: targetFolderId ? chatFolders.find(item => item.id === targetFolderId)?.name || t("folder.ungrouped") : t("folder.ungrouped"),
+                }), "success");
+                return;
+              }
+              void (async () => {
+                const ok = await requestConfirm({
+                  title: t("folder.batchDeleteTitle", { name: folder.name }),
+                  description: t("folder.batchDeleteWarning"),
+                  confirmLabel: t("folder.batchDeleteConfirm", { count: chatIds.length }),
+                  cancelLabel: t("common.cancel"),
+                  tone: "danger",
+                });
+                if (!ok) return;
+                let deleted = 0;
+                let failed = 0;
+                for (const chatId of chatIds) {
+                  const chat = useAppStore.getState().chats.find(item => item.id === chatId);
+                  if (!chat) continue;
+                  if (await performDeleteChat(chat, false)) deleted += 1;
+                  else failed += 1;
+                }
+                pushToast(
+                  failed ? t("folder.batchDeleteFailed", { deleted, failed }) : t("folder.batchDeleted", { count: deleted }),
+                  failed ? "error" : "info"
+                );
+              })();
+            }}
+          />
+        );
+      })()}
       {groupFolderDialog && (() => {
         const folder = chatFolders.find((item) => item.id === groupFolderDialog.folderId);
         if (!folder) return null;

@@ -245,6 +245,8 @@ export interface SettingsShape {
   quickReplyPinnedIds: string[];
   quickReplyRecentIds: string[];
   translateTargetLang: string;
+  /** 回车两阶段：第一次翻译草稿，第二次发送译文。 */
+  enterTranslateSend: boolean;
   /** 我的语言（母语）：入站消息/语音翻译的译出目标（给自己看）。空 = 自动检测系统语言 */
   myLang: string;
   /**
@@ -332,6 +334,7 @@ export interface SettingsShape {
   folderDefaultColor?: string;
   folderColorDepth?: number;
   folderRowDensity?: "compact" | "standard" | "comfortable";
+  showContactTagsInChatList: boolean;
   /** FluentChat 桌面界面语言；不影响联系人、分类和聊天内容 */
   uiLanguage: "zh-CN" | "en" | "fr";
   /** 聊天背景：无 / 纯色 / 图片 / 内建图案 */
@@ -441,6 +444,7 @@ export const defaultSettings: SettingsShape = {
   quickReplyPinnedIds: [],
   quickReplyRecentIds: [],
   translateTargetLang: "en",
+  enterTranslateSend: false,
   myLang: "",
   voiceInputEngine: "auto",
   voiceInputLang: "",
@@ -477,6 +481,7 @@ export const defaultSettings: SettingsShape = {
   salesStageLabels: {},
   salesStageOrder: ["new", "contacted", "quoting", "won", "after_sales"],
   theme: "dark",
+  showContactTagsInChatList: false,
   uiLanguage: "zh-CN",
   chatBackground: { kind: "none" },
 };
@@ -622,11 +627,13 @@ export function normalizeLoadedSettings(
   merged.folderDefaultColor=typeof merged.folderDefaultColor==="string"&&/^#[0-9a-f]{6}$/i.test(merged.folderDefaultColor)?merged.folderDefaultColor:undefined;
   merged.folderColorDepth=typeof merged.folderColorDepth==="number"&&Number.isFinite(merged.folderColorDepth)?Math.min(40,Math.max(0,merged.folderColorDepth)):10;
   if(merged.folderRowDensity!=="compact"&&merged.folderRowDensity!=="comfortable")merged.folderRowDensity="standard";
+  merged.showContactTagsInChatList = merged.showContactTagsInChatList === true;
   merged.uiLanguage =
     merged.uiLanguage === "en" || merged.uiLanguage === "fr"
       ? merged.uiLanguage
       : "zh-CN";
   const tl = String(merged.translateTargetLang || "en").toLowerCase();  merged.translateTargetLang = tl || "en";
+  merged.enterTranslateSend = merged.enterTranslateSend === true;
   const ml = String(merged.myLang || "").trim().toLowerCase();  merged.myLang = ml;
   merged.aiTimeZone = validTimeZone(merged.aiTimeZone) || "";
   merged.voiceInputEngine =

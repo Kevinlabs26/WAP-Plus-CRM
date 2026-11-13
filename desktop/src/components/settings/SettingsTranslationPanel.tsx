@@ -1,5 +1,5 @@
 import { useAppStore } from "@/store/appStore";
-import { SectionLabel } from "@/components/ui/primitives";
+import { SectionLabel, Switch } from "@/components/ui/primitives";
 import { useI18n } from "@/i18n";
 import { AiServiceFields } from "./SettingsAiPanel";
 import { getTranslationSettings, translationSettingsPatch } from "@/lib/translationConfig";
@@ -47,6 +47,7 @@ export function SettingsTranslationPanel() {
               <option value="pt">Português</option>
               <option value="ru">Русский</option>
               <option value="ar">العربية</option>
+              <option value="sw">Kiswahili</option>
               <option value="ja">日本語</option>
               <option value="ko">한국어</option>
             </select>
@@ -75,9 +76,20 @@ export function SettingsTranslationPanel() {
             <option value="pt">Português</option>
             <option value="ru">Русский</option>
             <option value="ar">العربية</option>
+            <option value="sw">Kiswahili</option>
             <option value="ja">日本語</option>
             <option value="ko">한국어</option>
           </select>
+        </label>
+        <label className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-zinc-800/80 bg-zinc-900/30 px-3 py-2.5 text-xs text-zinc-300">
+          <span>
+            <span className="block text-zinc-200">{t("settingsMessaging.enterTranslateSend")}</span>
+            <span className="mt-0.5 block text-[11px] text-zinc-600">{t("settingsMessaging.enterTranslateSendHint")}</span>
+          </span>
+          <Switch
+            checked={settings.enterTranslateSend === true}
+            onChange={(event) => updateSettings({ enterTranslateSend: event.target.checked })}
+          />
         </label>
       </section>
   </div>;

@@ -57,6 +57,8 @@ type FolderHeaderRowProps = {
   onClear: () => void;
   onClearTree: () => void;
   onCopyUnreplied?: () => void;
+  onBatchMove: () => void;
+  onBatchDelete: () => void;
   onDelete: () => void;
 };
 type SubmenuKind = "reply" | "import" | "organize" | "appearance" | "sheet";
@@ -91,6 +93,8 @@ export function FolderHeaderRow({
   onClear,
   onClearTree,
   onCopyUnreplied,
+  onBatchMove,
+  onBatchDelete,
   onDelete,
 }: FolderHeaderRowProps) {
   const { t } = useI18n();
@@ -455,6 +459,12 @@ export function FolderHeaderRow({
           >
             <UserRoundX className="h-3.5 w-3.5 text-zinc-500" />
             {t("folder.clearMembers")}
+          </button>
+          <button type="button" role="menuitem" className={itemClass} onClick={() => run(onBatchMove)}>
+            <FolderPlus className="h-3.5 w-3.5 text-zinc-500" />{t("folder.batchMove")}
+          </button>
+          <button type="button" role="menuitem" className={`${itemClass} text-rose-300 hover:bg-rose-500/10`} onClick={() => run(onBatchDelete)}>
+            <Trash2 className="h-3.5 w-3.5" />{t("folder.batchDelete")}
           </button>
           <button type="button" role="menuitem" className={`${itemClass} text-rose-300 hover:bg-rose-500/10`} onClick={() => run(onClearTree)}>
             <Trash2 className="h-3.5 w-3.5" />{t("folder.clearTree")}

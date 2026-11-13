@@ -3,7 +3,7 @@ import { folderBackground, folderRowPadding } from "@/lib/folderAppearance";
 import { Check, Image as ImageIcon, Moon, Sun, X } from "lucide-react";
 import { useAppStore } from "@/store/appStore";
 import { getLocaleOptions, normalizeLocale, useI18n, type TranslationKey } from "@/i18n";
-import { SectionLabel, Button } from "@/components/ui/primitives";
+import { SectionLabel, Button, Switch } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
 import {
   CHAT_PATTERNS,
@@ -78,6 +78,7 @@ export function SettingsAppearancePanel() {
   const folderColor=useAppStore(s=>s.settings.folderDefaultColor);
   const folderDepth=useAppStore(s=>s.settings.folderColorDepth)??10;
   const folderDensity=useAppStore(s=>s.settings.folderRowDensity)??"standard";
+  const showContactTags=useAppStore(s=>s.settings.showContactTagsInChatList === true);
   const updateSettings = useAppStore((s) => s.updateSettings);
   const pushToast = useAppStore((s) => s.pushToast);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -141,6 +142,15 @@ export function SettingsAppearancePanel() {
       </section>
       </div>
       <div role="tabpanel" id="appearance-panel-interface" aria-labelledby="appearance-tab-interface" hidden={tab!=="interface"} className="space-y-6">
+      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+        <label className="flex items-center justify-between gap-3 text-xs text-zinc-300">
+          <span className="min-w-0">
+            <span className="block text-zinc-200">{t("appearance.contactTagsInChatList")}</span>
+            <span className="mt-0.5 block text-[11px] text-zinc-600">{t("appearance.contactTagsInChatListDesc")}</span>
+          </span>
+          <Switch checked={showContactTags} onChange={event => updateSettings({ showContactTagsInChatList: event.target.checked })} />
+        </label>
+      </section>
       <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">

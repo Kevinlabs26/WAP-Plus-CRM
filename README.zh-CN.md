@@ -7,12 +7,6 @@
 <h1>WAP Plus CRM</h1>
 <p>WhatsApp 销售 CRM：默认使用内嵌 Baileys 收发消息，也支持 Android Bridge 作为备用通道。</p>
 </td>
-<td align="right" valign="top">
-<strong>支持赞助</strong><br /><br />
-<a href="https://buymeacoffee.com/kevinlabs26"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-FFDD00?style=for-the-badge&amp;logo=buymeacoffee&amp;logoColor=000000" alt="Buy Me a Coffee" /></a><br />
-<a href="https://ko-fi.com/kevinlabs"><img src="https://img.shields.io/badge/Ko--fi-13C3FF?style=for-the-badge&amp;logo=ko-fi&amp;logoColor=ffffff" alt="Ko-fi" /></a><br />
-<a href="https://kevinlabs.lemonsqueezy.com/checkout/buy/7b60b363-50b5-4233-a982-91a0611eccd6"><img src="https://img.shields.io/badge/Lemon%20Squeezy-FFC233?style=for-the-badge&amp;logo=lemonsqueezy&amp;logoColor=000000" alt="Lemon Squeezy" /></a>
-</td>
 </tr>
 </table>
 

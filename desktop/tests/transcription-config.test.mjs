@@ -13,7 +13,7 @@ const mocks={
   react:'export const useState=v=>[typeof v==="function"?v():v,()=>{}];export const useRef=v=>({current:v});export const useEffect=()=>{};export const useCallback=f=>f;',
   'react/jsx-runtime':'export const jsx=(type,props,key)=>({type,props,key});export const jsxs=jsx;export const Fragment="fragment";',
   '@/store/appStore':'export const useAppStore=f=>f(globalThis.speechState);useAppStore.getState=()=>globalThis.speechState;',
-  '@/components/ui/primitives':'export const Input="input",SectionLabel="h4";',
+  '@/components/ui/primitives':'export const Input="input",SectionLabel="h4",Switch="switch";',
   '@/i18n':'export const useI18n=()=>({t:(key,params)=>globalThis.speechTranslate(key,params)});',
   './localSpeech':'export const findReadyLocalModel=async()=>globalThis.speechLocal?{name:"local"}:null;export const localTranscribe=async()=>"local transcript";',
   '@/lib/mediaBlob':'export const mediaUrlToBlob=async()=>new Blob(["audio"],{type:"audio/ogg"});',

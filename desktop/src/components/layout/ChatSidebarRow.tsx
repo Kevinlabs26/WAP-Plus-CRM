@@ -98,6 +98,8 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
 }: ChatSidebarRowProps) {
   const { t } = useI18n();
   const c = contact;
+  const showContactTags = useAppStore(s => s.settings.showContactTagsInChatList === true);
+  const contactTags = showContactTags ? (c?.tags || []).filter(Boolean) : [];
   const label = useMemo(
     () =>
       displayContactLabel(
@@ -210,14 +212,22 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex w-full items-center justify-between gap-1.5">
-            <span className={cn("flex min-w-0 items-center gap-1 truncate text-[14px] text-zinc-100", active || chat.unread > 0 ? "font-semibold" : "font-medium")}>
+            <span className={cn("flex min-w-0 flex-1 items-center gap-1 truncate text-[14px] text-zinc-100", active || chat.unread > 0 ? "font-semibold" : "font-medium")}>
               {chat.pinned && (
                 <Pin className="h-3 w-3 shrink-0 text-brand" />
               )}
               {cloneId && (
                 <Copy className="h-3 w-3 shrink-0 text-zinc-500" />
               )}
-              <span className="truncate">{label}</span>
+              <span className="min-w-0 flex-1 truncate">{label}</span>
+              {contactTags.length > 0 && (
+                <span className="flex min-w-0 shrink items-center gap-0.5" title={contactTags.join(" · ")}>
+                  {contactTags.slice(0, 2).map(tag => (
+                    <span key={tag} className="max-w-20 truncate rounded bg-brand/10 px-1 py-0.5 text-[9px] font-normal leading-none text-brand">{tag}</span>
+                  ))}
+                  {contactTags.length > 2 && <span className="shrink-0 text-[9px] font-normal text-zinc-500">+{contactTags.length - 2}</span>}
+                </span>
+              )}
               {accountCount && accountCount > 1 ? (
                 <span className="shrink-0 rounded bg-zinc-800 px-1 py-0.5 text-[9px] font-normal text-zinc-400">
                   {t("sidebar.accountCount", { count: accountCount })}

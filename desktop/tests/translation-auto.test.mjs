@@ -3,7 +3,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { build, transform } from "esbuild";
-import { resolveTargetLang, resolveTargetLanguage } from "../src/lib/translateDraft.ts";
+import { langShortLabel, resolveTargetLang, resolveTargetLanguage, TRANSLATE_LANGS } from "../src/lib/translateDraft.ts";
 
 const settings = { translateTargetLang: "en" };
 const inbound = "你好，请问产品的价格是多少？";
@@ -21,9 +21,27 @@ test("target language retains existing priority and reports its actual source", 
   }
 });
 
+test("Swahili is a valid translation target", () => {
+  assert.deepEqual(TRANSLATE_LANGS.find((language) => language.code === "sw"), {
+    code: "sw", label: "Kiswahili", native: "SW",
+  });
+  assert.equal(langShortLabel("sw"), "SW");
+  assert.deepEqual(resolveTargetLanguage(undefined, { translateTargetLang: "sw" }, ""), {
+    code: "sw", source: "default",
+  });
+});
+
 // Run the actual Composer handler; service and draft writes throw if it ever
 // tries to translate, send, or replace text while changing a preference.
 const composerSource = readFileSync(new URL("../src/components/chat/Composer.tsx", import.meta.url), "utf8");
+test("enter translation workflow is opt-in and keeps attachments on the normal send path", () => {
+  assert.match(composerSource, /enterTranslateSend/);
+  assert.match(composerSource, /pendingMedia\.length === 0/);
+  assert.match(composerSource, /translateOriginal == null/);
+  assert.match(composerSource, /handleBackTranslate/);
+  assert.match(composerSource, /detectMessageLanguage\(original\)/);
+  assert.match(composerSource, /void runBackTranslation\(base, next\)/);
+});
 const start = composerSource.indexOf("  const handleTranslateLangChange =");
 const end = composerSource.indexOf("  const handleTranslateDraft =", start);
 assert.ok(start >= 0 && end > start);
@@ -123,7 +141,7 @@ function elements(node) {
 
 test("translation bar keeps source in tooltip and moves automatic selection into the language dropdown", () => {
   const calls=[];
-  const props={visible:true,hasDraft:true,translateOriginal:null,translating:false,translateLang:'fr',onTranslateLangChange:v=>calls.push(v),onRestoreAuto:()=>calls.push('auto'),onTranslate(){},onRestore(){},recording:false,recordSec:0};
+  const props={visible:true,hasDraft:true,translateOriginal:null,translating:false,translateLang:'fr',onTranslateLangChange:v=>calls.push(v),onRestoreAuto:()=>calls.push('auto'),onTranslate(){},onRestore(){},onBackTranslate(){},recording:false,recordSec:0};
   for(const source of ['preferred','country','message','default']){
     const tree=elements(TranslateBar({...props,source})),label='translation.source'+source[0].toUpperCase()+source.slice(1);
     assert.ok(!tree.some(n=>n.type==='span'&&n.props.children===label));
@@ -139,14 +157,17 @@ test("translation bar keeps source in tooltip and moves automatic selection into
 });
 
 test('compact translation tools preserve translate, undo and recording behavior without permanent shortcut text',()=>{
- let translated=0,restored=0;
- const props={visible:true,hasDraft:true,translateOriginal:null,translating:false,translateLang:'fr',source:'country',onTranslateLangChange(){},onRestoreAuto(){},onTranslate:()=>translated++,onRestore:()=>restored++,recording:false,recordSec:0};
+ let translated=0,restored=0,backTranslated=0;
+ const props={visible:true,hasDraft:true,translateOriginal:null,translating:false,translateLang:'fr',source:'country',onTranslateLangChange(){},onRestoreAuto(){},onTranslate:()=>translated++,onRestore:()=>restored++,onBackTranslate:()=>backTranslated++,recording:false,recordSec:0};
  let tree=elements(TranslateBar(props));
  const action=tree.find(n=>n.type==='button');assert.match(action.props.title,/Ctrl\+Shift\+T/);action.props.onClick();assert.equal(translated,1);
  assert.equal(tree.filter(n=>n.type==='button').length,1);
  tree=elements(TranslateBar({...props,translateOriginal:'Original',recording:true,recordSec:12}));
+ tree.find(n=>n.type==='button'&&n.props.title==='translation.showBack').props.onClick();assert.equal(backTranslated,1);
  tree.find(n=>n.type==='button'&&n.props.title==='tooltip.restoreOriginal').props.onClick();assert.equal(restored,1);
  assert.ok(tree.some(n=>n.type==='span'&&Array.isArray(n.props.children)&&n.props.children[0]===12));
  assert.ok(!tree.some(n=>n.props.children==='translation.shortcuts'));
+ const withBack=elements(TranslateBar({...props,translateOriginal:'Original',backTranslation:'Original text'}));
+ assert.ok(withBack.some(n=>n.type==='span'&&Array.isArray(n.props.children)&&n.props.children.includes('translation.backLabel')));
  assert.equal(TranslateBar({...props,visible:false}),null);
 });

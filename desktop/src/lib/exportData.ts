@@ -71,6 +71,7 @@ export type SettingsSafeExport = {
   quickReplyPinnedIds: string[];
   quickReplyRecentIds: string[];
   translateTargetLang: string;
+  enterTranslateSend: boolean;
   myLang: string;
   aiTimeZone: string;
   voiceInputEngine: AppSettings["voiceInputEngine"];
@@ -127,6 +128,7 @@ export type SettingsSafeExport = {
   folderDefaultColor?: string;
   folderColorDepth?: number;
   folderRowDensity?: AppSettings["folderRowDensity"];
+  showContactTagsInChatList: boolean;
   blockSendWhenOverheated: boolean;
   sendPausedAccountIds: string[];
   rateJitterSec: number;
@@ -174,6 +176,7 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     quickReplyPinnedIds: settings.quickReplyPinnedIds || [],
     quickReplyRecentIds: settings.quickReplyRecentIds || [],
     translateTargetLang: settings.translateTargetLang,
+    enterTranslateSend: settings.enterTranslateSend === true,
     myLang: settings.myLang,
     aiTimeZone: settings.aiTimeZone || "",
     voiceInputEngine: settings.voiceInputEngine,
@@ -228,6 +231,7 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     folderDefaultColor: settings.folderDefaultColor,
     folderColorDepth: settings.folderColorDepth,
     folderRowDensity: settings.folderRowDensity,
+    showContactTagsInChatList: settings.showContactTagsInChatList === true,
     blockSendWhenOverheated: settings.blockSendWhenOverheated !== false,
     sendPausedAccountIds: settings.sendPausedAccountIds || [],
     rateJitterSec: settings.rateJitterSec ?? 2,
@@ -701,11 +705,11 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
   // 只恢复客户数据与界面偏好；端点、密钥、自动发送及保护策略沿用本机。
   if (settingsSafe) {
     const allowed = [
-      "quickReplies", "quickReplyCustomCategories", "quickReplyRemovedCategories", "quickReplyCategoryLabels", "quickReplyCategoryOrder", "quickReplyPinnedIds", "quickReplyRecentIds", "translateTargetLang", "myLang",
+      "quickReplies", "quickReplyCustomCategories", "quickReplyRemovedCategories", "quickReplyCategoryLabels", "quickReplyCategoryOrder", "quickReplyPinnedIds", "quickReplyRecentIds", "translateTargetLang", "enterTranslateSend", "myLang",
       "voiceInputLang", "aiTimeZone", "leadInbox", "chatFolders", "chatFolderClones", "aiPromptTemplates", "aiPlaybooks", "aiPlaybookPlans", "aiPlaybookOverviewId", "aiPlaybookBindings", "aiPlaybookMuseRoot", "imagePromptTemplates", "aiContextMode", "aiOutreachRuns", "aiOutreachPaused", "aiOutreachExcludedRecipients",
       "aiReplyTaskRecords", "aiTaskDismissedIds", "scheduledMessages", "scheduledPlans", "waAccounts", "accountViewMode", "historySyncNote",
       "historySyncNoteByAccountId", "internalNotesByKey", "chatBackground",
-      "salesStageLabels", "salesStageOrder", "theme", "folderDefaultColor", "folderColorDepth", "folderRowDensity",
+      "salesStageLabels", "salesStageOrder", "theme", "folderDefaultColor", "folderColorDepth", "folderRowDensity", "showContactTagsInChatList",
     ];
     settingsSafe = Object.fromEntries(
       allowed.filter((key) => Object.hasOwn(settingsSafe!, key))
