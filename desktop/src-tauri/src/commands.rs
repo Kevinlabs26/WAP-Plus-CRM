@@ -660,6 +660,19 @@ pub fn bridge_drain_events(state: State<'_, BridgeState>) -> Vec<serde_json::Val
 }
 
 #[tauri::command]
+pub fn bridge_attach_event_listener(
+    state: State<'_, BridgeState>,
+    generation: u64,
+) -> crate::bridge::BridgeEventDrain {
+    state.attach_event_listener(generation)
+}
+
+#[tauri::command]
+pub fn bridge_detach_event_listener(state: State<'_, BridgeState>, generation: u64) {
+    state.detach_event_listener(generation);
+}
+
+#[tauri::command]
 pub fn bridge_send_raw(
     state: State<'_, BridgeState>,
     envelope: serde_json::Value,

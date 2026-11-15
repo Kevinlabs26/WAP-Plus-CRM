@@ -683,6 +683,26 @@ export function CrmAiPanel() {
                 {t("contact.aiSummaryUpdated", { time: new Date(contact.aiInsightAt).toLocaleString() })}
               </time>}
             </section>
+            <section className="border-t border-zinc-800/80 pt-2.5">
+              <label className="block text-[11px] font-medium text-zinc-400">
+                {t("contact.aiChatInstructions")}
+                <textarea
+                  value={contact.aiChatInstructions ?? ""}
+                  onChange={(event) =>
+                    updateContact(contact.id, {
+                      aiChatInstructions: event.target.value || undefined,
+                    })
+                  }
+                  rows={3}
+                  maxLength={4000}
+                  placeholder={t("contact.aiChatInstructionsPlaceholder")}
+                  className="ui-control mt-1 w-full resize-y px-2.5 py-2 text-[11px] leading-4"
+                />
+              </label>
+              <p className="mt-1 text-[10px] leading-4 text-zinc-600">
+                {t("contact.aiChatInstructionsHint")}
+              </p>
+            </section>
             <section className="space-y-2 border-t border-zinc-800/80 pt-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-[11px] font-medium text-zinc-400">{t("contact.aiReport")}</span>

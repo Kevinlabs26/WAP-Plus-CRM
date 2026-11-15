@@ -73,9 +73,9 @@ export function cleanHydratedMessages(rawMessages: Message[]) {
   return mergeMessagesByTime([], messages);
 }
 
-/** 请求可能已到达 WhatsApp；重启后不能把结果未知的消息自动再发一次。 */
+/** 任何待确认的出站请求都可能已到达 WhatsApp；重启后不能自动重发。 */
 export function recoverInterruptedMessage(message: Message): Message {
-  if (message.direction !== "out" || message.deliveryStatus !== "pending" || message.systemKind) {
+  if (message.direction !== "out" || message.deliveryStatus !== "pending") {
     return message;
   }
   return {

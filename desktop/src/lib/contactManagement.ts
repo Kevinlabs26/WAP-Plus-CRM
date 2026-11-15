@@ -15,7 +15,10 @@ export function contactCopiesForAccount(selected: Contact[], existing: Contact[]
     if (!phone || !saved.has(phone) || known.has(phone)) continue;
     known.add(phone);
     copies.push({ name: contact.name.trim() || phone, phone, accountId, stage: contact.stage,
-      tags: [...contact.tags], notes: contact.notes, company: contact.company,
+      tags: [...contact.tags],
+      notes: contact.notes,
+      aiChatInstructions: contact.aiChatInstructions,
+      company: contact.company,
       preferredLang: contact.preferredLang, timeZone: contact.timeZone, source: "account-save",
       channelAddress: `${phone.slice(1)}@s.whatsapp.net` });
   }

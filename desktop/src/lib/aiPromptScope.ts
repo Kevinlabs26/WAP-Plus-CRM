@@ -78,12 +78,26 @@ function resolveBaseReplyProfile(settings: PromptSettings, accountId?: string, c
   return { ...defaultProfile(settings, id), primaryFolderIds };
 }
 
-export function resolveAiReplyProfile(settings: PromptSettings, accountId?: string, chatId?: string, museAccountId?: string): AiReplyProfile {
+export function resolveAiReplyProfile(
+  settings: PromptSettings,
+  accountId?: string,
+  chatId?: string,
+  museAccountId?: string,
+  contactInstructions?: string
+): AiReplyProfile {
   const profile = resolveBaseReplyProfile(settings, accountId, chatId);
   if (profile.error) return profile;
   const playbook = resolvePlaybook(settings, accountId, chatId, museAccountId);
   if (playbook.error) return {...profile, prompt: '', error: playbook.error};
-  const prompt = [profile.prompt, playbook.prompt].filter(Boolean).join('\n\n');
+  const instructions = contactInstructions?.trim();
+  if (instructions && instructions.length > 4000) return {...profile, prompt: '', error: '联系人 AI 补充说明超过 4000 字符，请精简后重试'};
+  const prompt = [
+    profile.prompt,
+    playbook.prompt,
+    instructions && `<contact_specific_instructions>\n${instructions}\n</contact_specific_instructions>`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   return prompt.length > MAX_EFFECTIVE_PROMPT_CHARS
-    ? {...profile, prompt: '', error: '合并 Playbook 后超过 24000 字符，请精简后重试'} : {...profile, prompt, readMuseFiles: playbook.readMuseFiles, musePlaybookPaths:playbook.musePaths, museMaterials:playbook.museMaterials};
+    ? {...profile, prompt: '', error: '合并提示词和联系人补充说明后超过 24000 字符，请精简后重试'} : {...profile, prompt, readMuseFiles: playbook.readMuseFiles, musePlaybookPaths:playbook.musePaths, museMaterials:playbook.museMaterials};
 }

@@ -372,6 +372,7 @@ function sanitizeContact(raw: unknown): Contact | null {
     tags,
     stage,
     notes: str(c.notes, 8000) || undefined,
+    aiChatInstructions: str(c.aiChatInstructions, 4000) || undefined,
     aiSummary: str(c.aiSummary, 4000) || undefined,
     aiIntent: str(c.aiIntent, 800) || undefined,
     aiNextStep: str(c.aiNextStep, 800) || undefined,
@@ -814,6 +815,7 @@ export function contactsToCsv(contacts: Contact[]): string {
     "accountId",
     "nextFollowUpAt",
     "notes",
+    "aiChatInstructions",
   ];
   const rows = contacts.map((c) =>
     [
@@ -830,6 +832,7 @@ export function contactsToCsv(contacts: Contact[]): string {
       c.accountId ?? "",
       c.nextFollowUpAt ?? "",
       c.notes ?? "",
+      c.aiChatInstructions ?? "",
     ]
       .map((x, index) => escapeCsvCell(String(x), index === 2))
       .join(",")

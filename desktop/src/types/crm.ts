@@ -42,6 +42,8 @@ export interface Contact {
   tags: string[];
   stage: SalesStage;
   notes?: string;
+  /** 联系人专属 AI 回复补充说明 */
+  aiChatInstructions?: string;
   /** 客户卡长摘要（可 AI 生成后手改） */
   aiSummary?: string;
   /** 一句话意向 / 卡点（客户卡） */

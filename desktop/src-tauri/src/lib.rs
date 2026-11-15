@@ -193,6 +193,8 @@ pub fn run() {
             commands::bridge_connect,
             commands::bridge_disconnect,
             commands::bridge_drain_events,
+            commands::bridge_attach_event_listener,
+            commands::bridge_detach_event_listener,
             commands::bridge_send_raw,
             commands::save_phone_contact,
             commands::save_phone_contacts,

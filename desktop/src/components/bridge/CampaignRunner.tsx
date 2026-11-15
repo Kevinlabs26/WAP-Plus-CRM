@@ -19,6 +19,7 @@ import { gatedMediaSend, MediaGateBlockedError } from "@/channels/mediaGate";
 import { baileysSendVoice } from "@/lib/baileys";
 import { nextBatchTask } from "@/lib/scheduledPlans";
 import { broadcastItemMedia } from "@/lib/broadcastCampaign";
+import { translateCurrent } from "@/i18n";
 
 type CampaignSendResult = {
   ok: boolean;
@@ -180,6 +181,23 @@ export function CampaignRunner() {
       try {
         const state = useAppStore.getState();
         if (!state.hydrated || !state.uiReady) return;
+
+        const interrupted = state.broadcastCampaigns.flatMap(campaign =>
+          campaign.items.filter(item => item.status === "sending").map(item => ({ campaign, item }))
+        );
+        if (interrupted.length) {
+          const error = translateCurrent("broadcast.run.interruptedUnknown");
+          for (const { campaign, item } of interrupted) {
+            if (item.messageId) state.updateMessageDelivery(item.messageId, {
+              deliveryStatus: "failed", deliveryUncertain: true, retryCount: 5,
+              nextAttemptAt: undefined, lastError: error,
+            });
+            state.patchBroadcastItem(campaign.id, item.id, { status: "failed", error });
+            if (campaign.status === "running") state.pauseBroadcastCampaign(campaign.id);
+          }
+          await flushPersist(() => useAppStore.getState());
+          return;
+        }
 
         const campaign = (state.broadcastCampaigns || []).find(
           (c) => c.status === "running"

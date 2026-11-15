@@ -36,6 +36,12 @@ export type BridgeEvent = {
   payload?: ProtocolPayload;
 };
 
+export type BridgeEventDrain = {
+  events: BridgeEvent[];
+  dropped_events: number;
+  active: boolean;
+};
+
 export async function bridgeInvoke<T = unknown>(
   cmd: string,
   args?: Record<string, unknown>
@@ -92,6 +98,19 @@ export async function getBridgeStatus(): Promise<BridgeStatus> {
 export async function drainBridgeEvents(): Promise<BridgeEvent[]> {
   const result = await bridgeInvoke<BridgeEvent[]>("bridge_drain_events");
   return Array.isArray(result) ? result : [];
+}
+
+export async function attachBridgeEventListener(generation: number): Promise<BridgeEventDrain> {
+  const result = await bridgeInvoke<BridgeEventDrain>("bridge_attach_event_listener", { generation });
+  return {
+    events: Array.isArray(result?.events) ? result.events : [],
+    dropped_events: Number.isFinite(result?.dropped_events) ? result.dropped_events : 0,
+    active: result?.active === true,
+  };
+}
+
+export async function detachBridgeEventListener(generation: number): Promise<void> {
+  await bridgeInvoke("bridge_detach_event_listener", { generation });
 }
 
 export async function adbForward(port: number): Promise<string> {

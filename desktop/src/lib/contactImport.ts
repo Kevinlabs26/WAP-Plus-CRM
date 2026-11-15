@@ -23,6 +23,7 @@ export type ImportContactInput = {
   stage?: string;
   tags?: string[];
   notes?: string;
+  aiChatInstructions?: string;
   nextFollowUpAt?: string;
   accountId?: string;
 };
@@ -106,6 +107,10 @@ const HEADER_ALIASES: Record<string, keyof ImportContactInput> = {
   notes: "notes",
   备注: "notes",
   说明: "notes",
+  aiChatInstructions: "aiChatInstructions",
+  "AI chat instructions": "aiChatInstructions",
+  AI聊天补充说明: "aiChatInstructions",
+  AI补充提示词: "aiChatInstructions",
   nextFollowUpAt: "nextFollowUpAt",
   下次跟进: "nextFollowUpAt",
   跟进时间: "nextFollowUpAt",
@@ -219,6 +224,7 @@ function normalizeRow(
     source: fields.source || undefined,
     owner: fields.owner || undefined,
     notes: fields.notes || undefined,
+    aiChatInstructions: fields.aiChatInstructions?.slice(0, 4000) || undefined,
     nextFollowUpAt: fields.nextFollowUpAt || undefined,
     accountId: fields.accountId || undefined,
   };

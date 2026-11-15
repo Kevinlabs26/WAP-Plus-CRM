@@ -254,8 +254,9 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         );
     }
 
-    // v4: FTS5 全文检索（若编译的 SQLite 无 FTS5 则跳过，搜索走旧 LIKE）
-    if schema_version < 4 {
+    // v6: 重建派生搜索索引，修复旧版本曾吞掉写入错误而留下的不完整索引。
+    // 若编译的 SQLite 无 FTS5 则跳过，搜索走 LIKE。
+    if schema_version < 6 {
         let fts_ok = conn
             .execute_batch(
                 r#"
@@ -270,20 +271,30 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             )
             .is_ok();
         if fts_ok {
-            // 一次性从现有 messages 重建（可能较慢，但只升级时跑一次）
-            let _ = conn.execute_batch(
-                r#"
-                DELETE FROM messages_fts;
-                INSERT INTO messages_fts(id, body, caption, filename)
-                SELECT
-                  id,
-                  coalesce(json_extract(json, '$.body'), ''),
-                  coalesce(json_extract(json, '$.mediaCaption'), ''),
-                  coalesce(json_extract(json, '$.mediaFileName'), '')
-                FROM messages;
-                "#,
-            );
-            tracing::info!("sqlite migrate → v4 (messages_fts built)");
+            // 一次性从现有 messages 重建；失败时移除索引，让搜索明确走 LIKE。
+            let rebuilt = (|| -> rusqlite::Result<()> {
+                let tx = conn.unchecked_transaction()?;
+                tx.execute_batch(
+                    r#"
+                    DELETE FROM messages_fts;
+                    INSERT INTO messages_fts(id, body, caption, filename)
+                    SELECT
+                      id,
+                      coalesce(json_extract(json, '$.body'), ''),
+                      coalesce(json_extract(json, '$.mediaCaption'), ''),
+                      coalesce(json_extract(json, '$.mediaFileName'), '')
+                    FROM messages;
+                    "#,
+                )?;
+                tx.commit()
+            })();
+            if let Err(error) = rebuilt {
+                conn.execute_batch("DROP TABLE IF EXISTS messages_fts;")
+                    .map_err(|e| e.to_string())?;
+                tracing::warn!(%error, "sqlite FTS5 rebuild failed; search keeps LIKE fallback");
+            } else {
+                tracing::info!("sqlite migrate → v6 (messages_fts rebuilt)");
+            }
         } else {
             tracing::warn!("sqlite FTS5 unavailable; search keeps LIKE fallback");
         }
@@ -468,15 +479,18 @@ fn upsert_message_fts(
     caption: &str,
     filename: &str,
     replace: bool,
-) {
+) -> Result<(), String> {
     // FTS 的 id 未建索引；新消息和回执更新不能逐条扫描整份搜索历史。
     if replace {
-        let _ = tx.execute("DELETE FROM messages_fts WHERE id = ?1", params![id]);
+        tx.execute("DELETE FROM messages_fts WHERE id = ?1", params![id])
+            .map_err(|e| e.to_string())?;
     }
-    let _ = tx.execute(
+    tx.execute(
         "INSERT INTO messages_fts(id, body, caption, filename) VALUES (?1, ?2, ?3, ?4)",
         params![id, body, caption, filename],
-    );
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn id_of(v: &Value) -> Option<String> {
@@ -514,7 +528,7 @@ pub(crate) fn read_json_text(row: &rusqlite::Row<'_>, index: usize) -> rusqlite:
     }
 }
 
-const ACK_MESSAGE_ROWS_SQL: &str = "SELECT id, json FROM messages WHERE (id = ?1 OR json_extract(json, '$.waMessageId') = ?1 OR json_extract(json, '$.waKey.id') = ?1) AND COALESCE(json_extract(json, '$.accountId'), json_extract(json, '$.deviceId'), '') = ?2";
+const ACK_MESSAGE_ROWS_SQL: &str = "SELECT id, json FROM messages WHERE (id = ?1 OR json_extract(json, '$.waMessageId') = ?1 OR json_extract(json, '$.waKey.id') = ?1) AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), json_extract(json, '$.deviceId'), '') = ?2";
 
 pub fn update_message_acks(
     conn: &Connection,
@@ -676,7 +690,7 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
     // messages：内存可能只有「最近 N 条」，绝不能 DELETE 快照外 id。
     // 用 content_hash 在 SQL 侧判断未变，禁止全表 SELECT json。
     if dirty.messages {
-        let has_fts = fts_available(&tx);
+        let mut has_fts = fts_available(&tx);
         for m in &snap.messages {
             let id = id_of(m).ok_or("message missing id")?;
             let chat_id = m.get("chatId").and_then(|x| x.as_str()).unwrap_or("");
@@ -736,7 +750,19 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
             if n > 0 {
                 total_written += 1;
                 if has_fts && previous_search != Some(true) {
-                    upsert_message_fts(&tx, &id, body, caption, filename, previous_search.is_some());
+                    if let Err(error) = upsert_message_fts(
+                        &tx,
+                        &id,
+                        body,
+                        caption,
+                        filename,
+                        previous_search.is_some(),
+                    ) {
+                        tx.execute_batch("DROP TABLE messages_fts;")
+                            .map_err(|e| e.to_string())?;
+                        has_fts = false;
+                        tracing::warn!(%error, "sqlite FTS5 write failed; search keeps LIKE fallback");
+                    }
                 }
             } else {
                 total_skipped += 1;
@@ -1099,7 +1125,7 @@ pub fn search_messages(conn: &Connection, query: &str, limit: i64) -> Result<Vec
     let lim = limit.clamp(1, 80);
 
     // 优先 FTS5（大库）；不可用则 LIKE 回退
-    if fts_available(conn) {
+    if fts_available(conn) && !query_has_cjk(q_raw) {
         // FTS5 查询：转义 " 并包一层短语/前缀宽松匹配
         let safe = q_raw.replace('"', "\"\"");
         let match_q = format!("\"{}\"", safe);
@@ -1133,11 +1159,7 @@ pub fn search_messages(conn: &Connection, query: &str, limit: i64) -> Result<Vec
                         }
                     }
                 }
-                if ok && (!out.is_empty() || !query_has_cjk(q_raw)) {
-                    // 命中即返回；但 CJK 查询零命中时不能把「空」当答案——
-                    // FTS5 默认 unicode61 分词会把整段中文并成一个 token，
-                    // 短语查询基本必落空。此时必须回退 LIKE 子串匹配。
-                    // 非 CJK 查询保持原快速路径。
+                if ok {
                     return Ok(out);
                 }
             }

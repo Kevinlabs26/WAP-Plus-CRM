@@ -77,7 +77,13 @@ export function getSuggestionContextKey(
   opts?: { auto?: boolean; count?: 1 | 3; replyTo?: Message; chatId?: string; outreach?: string }
 ): string {
   const chatId = opts?.chatId || opts?.replyTo?.chatId || recent[0]?.chatId;
-  const profile = resolveAiReplyProfile(settings, accountId || contact?.accountId, chatId);
+  const profile = resolveAiReplyProfile(
+    settings,
+    accountId || contact?.accountId,
+    chatId,
+    undefined,
+    contact?.aiChatInstructions
+  );
   const prompt = profile.prompt;
   return JSON.stringify([
     contact?.id || "", chatId || "", profile.folderId || "", profile.primaryFolderIds, profile.error,resolveAiReplyConstraints(settings,accountId||contact?.accountId,chatId),
@@ -110,13 +116,15 @@ export async function generateSuggestions(
   let profile = resolveAiReplyProfile(
     settings,
     opts?.accountId || contact?.accountId,
-    opts?.chatId || opts?.replyTo?.chatId || recent[0]?.chatId
+    opts?.chatId || opts?.replyTo?.chatId || recent[0]?.chatId,
+    undefined,
+    contact?.aiChatInstructions
   );
   if(provider==="muse"&&profile.readMuseFiles){
     try{
       await shareMusePlaybooks(profile.musePlaybookPaths||[],opts?.signal);
       settings=useAppStore.getState().settings;
-      profile=resolveAiReplyProfile(settings,opts?.accountId||contact?.accountId,opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId);
+      profile=resolveAiReplyProfile(settings,opts?.accountId||contact?.accountId,opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId,undefined,contact?.aiChatInstructions);
     }catch(error){
       return {suggestions:[],source:"muse",fallback:true,error:error instanceof Error?error.message:String(error)};
     }
@@ -132,7 +140,7 @@ export async function generateSuggestions(
         await trainMuseAccountPlaybooks(museAccountId,materials,opts?.signal);
       }
       settings=useAppStore.getState().settings;
-      profile=resolveAiReplyProfile(settings,opts?.accountId||contact?.accountId,opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId,workspaceMode?museAccountId:undefined);
+      profile=resolveAiReplyProfile(settings,opts?.accountId||contact?.accountId,opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId,workspaceMode?museAccountId:undefined,contact?.aiChatInstructions);
     }catch(error){
       return {suggestions:[],source:"muse",fallback:true,error:error instanceof Error?error.message:String(error)};
     }

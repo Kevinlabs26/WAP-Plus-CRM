@@ -134,6 +134,7 @@ export function ContactImportModal({ open, onClose, accountId }: Props) {
           stage: (input.stage || "new") as import("@/types/crm").SalesStage,
           tags: input.tags || [],
           notes: input.notes,
+          aiChatInstructions: input.aiChatInstructions,
           company: input.company,
           country: input.country,
           source: input.source || t("contactImport.source"),

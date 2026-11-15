@@ -15,6 +15,22 @@ pub use crate::protocol::make_envelope;
 /// 前端 `listen` 的事件名
 pub const BRIDGE_EVENT: &str = "bridge://event";
 pub const BRIDGE_STATUS_EVENT: &str = "bridge://status";
+const MAX_BUFFERED_BRIDGE_EVENTS: usize = 1000;
+
+#[derive(Default)]
+struct BufferedBridgeEvents {
+    queue: VecDeque<serde_json::Value>,
+    dropped_events: u64,
+    listener_generation: u64,
+    active_generation: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BridgeEventDrain {
+    pub events: Vec<serde_json::Value>,
+    pub dropped_events: u64,
+    pub active: bool,
+}
 
 fn read_bounded_line<R: BufRead>(
     reader: &mut R,
@@ -73,7 +89,7 @@ pub struct BridgeState {
     socket: Mutex<Option<LiveSocket>>,
     lifecycle: Mutex<()>,
     pending: Arc<Mutex<HashMap<String, mpsc::Sender<serde_json::Value>>>>,
-    events: Arc<Mutex<VecDeque<serde_json::Value>>>,
+    events: Arc<Mutex<BufferedBridgeEvents>>,
     alive: Arc<AtomicBool>,
     /// setup 后注入，用于向 WebView 推送事件
     #[cfg(not(test))]
@@ -87,7 +103,7 @@ impl Default for BridgeState {
             socket: Mutex::new(None),
             lifecycle: Mutex::new(()),
             pending: Arc::new(Mutex::new(HashMap::new())),
-            events: Arc::new(Mutex::new(VecDeque::new())),
+            events: Arc::new(Mutex::new(BufferedBridgeEvents::default())),
             alive: Arc::new(AtomicBool::new(false)),
             #[cfg(not(test))]
             app: Mutex::new(None),
@@ -119,13 +135,42 @@ impl BridgeState {
         self.emit_raw(BRIDGE_STATUS_EVENT, &snap);
     }
 
-    fn push_event_queue(events: &Mutex<VecDeque<serde_json::Value>>, value: serde_json::Value) {
-        if let Ok(mut queue) = events.lock() {
-            // ponytail: bounded inbox; move to durable event storage if bursts exceed 1000.
-            if queue.len() == 1000 {
-                queue.pop_front();
+    fn push_event_queue(events: &Mutex<BufferedBridgeEvents>, value: serde_json::Value) {
+        if let Ok(mut buffer) = events.lock() {
+            if buffer.active_generation.is_some() {
+                return;
             }
-            queue.push_back(value.clone());
+            if buffer.queue.len() >= MAX_BUFFERED_BRIDGE_EVENTS {
+                buffer.queue.pop_front();
+                buffer.dropped_events = buffer.dropped_events.saturating_add(1);
+            }
+            buffer.queue.push_back(value);
+        }
+    }
+
+    pub fn attach_event_listener(&self, generation: u64) -> BridgeEventDrain {
+        let mut buffer = self.events.lock().unwrap_or_else(|error| error.into_inner());
+        if generation <= buffer.listener_generation {
+            return BridgeEventDrain {
+                events: Vec::new(),
+                dropped_events: 0,
+                active: false,
+            };
+        }
+        buffer.listener_generation = generation;
+        buffer.active_generation = Some(generation);
+        BridgeEventDrain {
+            events: buffer.queue.drain(..).collect(),
+            dropped_events: std::mem::take(&mut buffer.dropped_events),
+            active: true,
+        }
+    }
+
+    pub fn detach_event_listener(&self, generation: u64) {
+        let mut buffer = self.events.lock().unwrap_or_else(|error| error.into_inner());
+        if generation >= buffer.listener_generation {
+            buffer.listener_generation = generation;
+            buffer.active_generation = None;
         }
     }
 
@@ -498,7 +543,7 @@ impl BridgeState {
     pub fn drain_events(&self) -> Vec<serde_json::Value> {
         self.events
             .lock()
-            .map(|mut events| events.drain(..).collect())
+            .map(|mut buffer| buffer.queue.drain(..).collect())
             .unwrap_or_default()
     }
 }

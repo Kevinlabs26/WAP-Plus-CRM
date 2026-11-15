@@ -115,6 +115,7 @@ export function ensureIngestContact(
         avatarUrl: keep.avatarUrl || drop.avatarUrl,
         tags: Array.from(new Set([...(keep.tags || []), ...(drop.tags || [])])),
         notes: keep.notes || drop.notes,
+        aiChatInstructions: keep.aiChatInstructions || drop.aiChatInstructions,
         aiSummary: keep.aiSummary || drop.aiSummary,
         aiIntent: keep.aiIntent || drop.aiIntent,
         aiNextStep: keep.aiNextStep || drop.aiNextStep,

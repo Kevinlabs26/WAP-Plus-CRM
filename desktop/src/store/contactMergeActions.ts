@@ -35,6 +35,9 @@ export function createContactMergeActions({
         source: keep.source || drops.find((d) => d.source)?.source,
         owner: keep.owner || drops.find((d) => d.owner)?.owner,
         notes: keep.notes || drops.find((d) => d.notes)?.notes,
+        aiChatInstructions:
+          keep.aiChatInstructions ||
+          drops.find((d) => d.aiChatInstructions)?.aiChatInstructions,
         aiSummary:
           keep.aiSummary || drops.find((d) => d.aiSummary)?.aiSummary,
         aiIntent: keep.aiIntent || drops.find((d) => d.aiIntent)?.aiIntent,

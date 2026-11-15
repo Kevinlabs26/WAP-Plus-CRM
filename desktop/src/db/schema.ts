@@ -33,6 +33,7 @@ export const contacts = sqliteTable("contacts", {
   tags: text("tags").default("[]"),
   stage: text("stage").notNull().default("new"),
   notes: text("notes"),
+  aiChatInstructions: text("ai_chat_instructions"),
   aiSummary: text("ai_summary"),
   /** 永久绑定手机 — 核心壁垒 */
   boundPhoneId: text("bound_phone_id").references(() => phones.id),
