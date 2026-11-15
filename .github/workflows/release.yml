@@ -46,6 +46,7 @@ jobs:
 
       - name: Run tests and frontend build
         run: npm run check
+        timeout-minutes: 10
 
       - name: Run Rust tests
         run: cargo test --locked --lib --tests --manifest-path desktop/src-tauri/Cargo.toml
