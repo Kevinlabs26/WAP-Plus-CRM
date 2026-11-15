@@ -108,8 +108,8 @@ test('the settings page separates speech fields; changing text presets leaves sp
   const ui=fixture({aiProvider:'custom',customAiKey:'text-key',customAiBaseUrl:'https://text.invalid/v1',customAiModel:'text-model',transcriptionProvider:'custom',transcriptionApiKey:'speech-key',transcriptionBaseUrl:'https://speech.invalid/v1',transcriptionModel:'speech-model'});
   try {
     let tree=[ui.render(),mod.SettingsSpeechPanel()];assert.ok(text(tree).includes('语音转文字'));assert.ok(nodes(tree).some(node=>node.type==='select'&&node.props.value==='custom'));assert.ok(!text(tree).includes('共用的模型服务'));
-    const before=mod.resolveTranscriptionConfig(speechState.settings);field(tree,'常用预设').props.onChange({target:{value:'deepseek'}});assert.deepEqual(mod.resolveTranscriptionConfig(speechState.settings),before);
-    field(tree,'语音转写模型').props.onChange({target:{value:'audio-updated'}});assert.equal(speechState.settings.customAiModel,'deepseek-chat');assert.equal(speechState.settings.transcriptionModel,'audio-updated');
+    const before=mod.resolveTranscriptionConfig(speechState.settings);field(tree,'常用预设').props.onChange({target:{value:'openrouter'}});assert.deepEqual(mod.resolveTranscriptionConfig(speechState.settings),before);
+    field(tree,'语音转写模型').props.onChange({target:{value:'audio-updated'}});assert.equal(speechState.settings.customAiModel,'openai/gpt-4o-mini');assert.equal(speechState.settings.transcriptionModel,'audio-updated');
     const secret=field(tree,'语音服务 API Key');assert.equal(secret.props.type,'password');
     secret.props.onChange({target:{value:'separate-key'}});await new Promise(resolve=>setImmediate(resolve));assert.equal(speechSaves.at(-1).transcriptionApiKey,'separate-key');assert.equal(speechState.settings.customAiKey,'text-key');
     field(tree,'语音服务提供商').props.onChange({target:{value:'groq'}});tree=mod.SettingsSpeechPanel();assert.equal(speechState.settings.transcriptionApiKey,'');assert.equal(speechState.settings.transcriptionModel,'whisper-large-v3-turbo');assert.equal(field(tree,'语音服务 Base URL').props.value,'https://api.groq.com/openai/v1');await new Promise(resolve=>setImmediate(resolve));

@@ -2,14 +2,19 @@ import type { AppSettings } from "@/store/types";
 import { getOpenAiCompatibleConfig } from "./aiProviders.ts";
 import { GEMINI_DEFAULT_MODEL } from "./gemini.ts";
 import { isChatModel } from "./modelCapabilities.ts";
+import { isRetiredAiEndpoint, isRetiredAiModel } from "./retiredAiServices.ts";
 
 export type TranslationProvider = AppSettings["aiProvider"];
 export const GROQ_TRANSLATION_MODEL = "openai/gpt-oss-20b";
-const PROVIDERS = ["mock", "openai", "groq", "deepseek", "qwen", "zhipu", "openrouter", "gemini", "vertex", "ollama", "custom"];
+const PROVIDERS = ["mock", "openai", "groq", "openrouter", "gemini", "vertex", "ollama", "custom"];
 
 export function resolveTranslationConfig(settings: Partial<AppSettings>) {
   const legacy = settings.translationProvider === undefined;
   const requested = legacy ? settings.aiProvider ?? "groq" : settings.translationProvider;
+  if (!PROVIDERS.includes(String(requested)) || isRetiredAiEndpoint(legacy ? requested === "custom" ? settings.customAiBaseUrl : requested === "ollama" ? settings.ollamaUrl : "" : settings.translationBaseUrl)
+      || isRetiredAiModel(legacy ? settings.aiProvider === "custom" ? settings.customAiModel : settings.aiModel : settings.translationModel)) {
+    return { provider: "mock" as const, model: "", apiKey: "", baseUrl: "" };
+  }
   const provider = (PROVIDERS.includes(String(requested)) ? requested : "mock") as TranslationProvider;
   const defaults = getOpenAiCompatibleConfig({ aiProvider: provider });
   const previous = getOpenAiCompatibleConfig(settings);
@@ -28,7 +33,7 @@ export function getTranslationSettings(settings: AppSettings): AppSettings {
   const config = resolveTranslationConfig(settings);
   return { ...settings, aiProvider: config.provider, aiModel: config.model,
     openaiKey: config.apiKey, groqKey: config.apiKey, geminiKey: config.apiKey,
-    deepseekKey: config.apiKey, qwenKey: config.apiKey, zhipuKey: config.apiKey, openrouterKey: config.apiKey,
+    openrouterKey: config.apiKey,
     customAiKey: config.apiKey, customAiModel: config.model, customAiBaseUrl: config.baseUrl, ollamaUrl: config.baseUrl };
 }
 
@@ -38,7 +43,7 @@ export function translationSettingsPatch(patch: Partial<AppSettings>): Partial<A
     const defaults = resolveTranslationConfig({ translationProvider: patch.aiProvider });
     Object.assign(result, { translationProvider: defaults.provider, translationBaseUrl: defaults.baseUrl, translationModel: "", translationApiKey: "" });
   }
-  for (const key of ["openaiKey", "groqKey", "geminiKey", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey"] as const) {
+  for (const key of ["openaiKey", "groqKey", "geminiKey", "openrouterKey", "customAiKey"] as const) {
     if (patch[key] !== undefined) result.translationApiKey = patch[key];
   }
   if (patch.aiModel !== undefined) result.translationModel = patch.aiModel;

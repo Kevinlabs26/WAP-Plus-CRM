@@ -1701,7 +1701,7 @@ export default {
   "crmPanel.regenerate": "Regenerate",
   "crmPanel.generateReply": "Generate reply",
   "crmPanel.noAi": "No AI API configured",
-  "crmPanel.noAiHint": "Configure a model service (OpenAI / Groq / Gemini / Ollama / custom) to generate reply suggestions here. Paid Groq or DeepSeek can also be used.",
+  "crmPanel.noAiHint": "Configure a model service (OpenAI / Groq / Gemini / Ollama / custom) to generate reply suggestions here.",
   "crmPanel.configureApi": "Configure API",
   "crmPanel.fillInput": "Fill",
   "crmPanel.fillOriginal": "Use original",

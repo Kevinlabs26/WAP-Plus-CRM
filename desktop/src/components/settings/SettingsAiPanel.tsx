@@ -54,9 +54,6 @@ export function AiServiceFields({ settings, updateSettings, showMockHint = true,
               <option value="mock">{t("settingsAi.provider.mock")}</option>
               <option value="openai">OpenAI</option>
               <option value="groq">Groq</option>
-              <option value="deepseek">DeepSeek</option>
-              <option value="qwen">Qwen</option>
-              <option value="zhipu">Zhipu GLM</option>
               <option value="openrouter">OpenRouter</option>
               <option value="gemini">Gemini</option>
               <option value="vertex">Gemini · Vertex AI</option>
@@ -76,15 +73,6 @@ export function AiServiceFields({ settings, updateSettings, showMockHint = true,
           )}
           {settings.aiProvider === "groq" && (
             <SecretInput full label="Groq API Key" value={settings.groqKey} placeholder="gsk_…" onChange={(value) => updateSettings({ groqKey: value })} />
-          )}
-          {settings.aiProvider === "deepseek" && (
-            <SecretInput full label="DeepSeek API Key" value={settings.deepseekKey} placeholder="sk-…" onChange={(value) => updateSettings({ deepseekKey: value })} />
-          )}
-          {settings.aiProvider === "qwen" && (
-            <SecretInput full label="Qwen API Key" value={settings.qwenKey} placeholder="sk-…" onChange={(value) => updateSettings({ qwenKey: value })} />
-          )}
-          {settings.aiProvider === "zhipu" && (
-            <SecretInput full label="Zhipu GLM API Key" value={settings.zhipuKey} placeholder="…" onChange={(value) => updateSettings({ zhipuKey: value })} />
           )}
           {settings.aiProvider === "openrouter" && (
             <SecretInput full label="OpenRouter API Key" value={settings.openrouterKey} placeholder="sk-or-v1-…" onChange={(value) => updateSettings({ openrouterKey: value })} />
@@ -118,12 +106,12 @@ export function AiServiceFields({ settings, updateSettings, showMockHint = true,
               </label>
               <label className="block text-2xs text-zinc-500">
                 Base URL
-                <Input value={settings.customAiBaseUrl} onChange={(event) => updateSettings({ customAiBaseUrl: event.target.value })} className="mt-1" placeholder="https://api.deepseek.com/v1" />
+                <Input value={settings.customAiBaseUrl} onChange={(event) => updateSettings({ customAiBaseUrl: event.target.value })} className="mt-1" placeholder="https://api.openai.com/v1" />
               </label>
               <SecretInput label="API Key" value={settings.customAiKey} placeholder="sk-…" onChange={(value) => updateSettings({ customAiKey: value })} />
               <label className="block text-2xs text-zinc-500">
                 {t("settingsAi.chatModel")}
-                <Input value={settings.customAiModel} onChange={(event) => updateSettings({ customAiModel: event.target.value })} className="mt-1" placeholder="deepseek-chat" />
+                <Input value={settings.customAiModel} onChange={(event) => updateSettings({ customAiModel: event.target.value })} className="mt-1" placeholder="gpt-4o-mini" />
               </label>
             </>
           )}
@@ -136,9 +124,6 @@ export function AiServiceFields({ settings, updateSettings, showMockHint = true,
 
           {(settings.aiProvider === "openai" ||
             settings.aiProvider === "groq" ||
-            settings.aiProvider === "deepseek" ||
-            settings.aiProvider === "qwen" ||
-            settings.aiProvider === "zhipu" ||
             settings.aiProvider === "openrouter" ||
             settings.aiProvider === "gemini" ||
             settings.aiProvider === "ollama") && (
@@ -286,35 +271,10 @@ const CUSTOM_PRESETS: Record<
   string,
   { label: string; baseUrl: string; model: string }
 > = {
-  deepseek: {
-    label: "DeepSeek",
-    baseUrl: "https://api.deepseek.com/v1",
-    model: "deepseek-chat",
-  },
-  moonshot: {
-    label: "Kimi / Moonshot",
-    baseUrl: "https://api.moonshot.cn/v1",
-    model: "moonshot-v1-8k",
-  },
-  qwen: {
-    label: "Qwen (Alibaba)",
-    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    model: "qwen-plus",
-  },
-  zhipu: {
-    label: "Zhipu GLM",
-    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-    model: "glm-4-flash",
-  },
   openrouter: {
     label: "OpenRouter",
     baseUrl: "https://openrouter.ai/api/v1",
     model: "openai/gpt-4o-mini",
-  },
-  siliconflow: {
-    label: "SiliconFlow",
-    baseUrl: "https://api.siliconflow.cn/v1",
-    model: "deepseek-ai/DeepSeek-V3",
   },
   custom: {
     label: "Custom OpenAI-compatible endpoint",

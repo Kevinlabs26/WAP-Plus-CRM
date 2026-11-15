@@ -1,11 +1,9 @@
 import type { AppSettings } from "@/store/types";
+import { isRetiredAiEndpoint, isRetiredAiModel } from "./retiredAiServices.ts";
 
 export type OpenAiCompatibleProvider =
   | "openai"
   | "groq"
-  | "deepseek"
-  | "qwen"
-  | "zhipu"
   | "openrouter"
   | "custom";
 
@@ -31,6 +29,7 @@ export function chatCompletionOptions(provider:string,model:string,temperature:n
 export function getOpenAiCompatibleConfig(
   settings: Partial<AppSettings>
 ): OpenAiCompatibleConfig | null {
+  if (isRetiredAiModel(settings.aiProvider === "custom" ? settings.customAiModel : settings.aiModel)) return null;
   switch (settings.aiProvider) {
     case "openai":
       return {
@@ -46,27 +45,6 @@ export function getOpenAiCompatibleConfig(
         model: (settings.aiModel || "").trim() || "llama-3.3-70b-versatile",
         label: "Groq",
       };
-    case "deepseek":
-      return {
-        baseUrl: "https://api.deepseek.com/v1",
-        apiKey: settings.deepseekKey || "",
-        model: (settings.aiModel || "").trim() || "deepseek-chat",
-        label: "DeepSeek",
-      };
-    case "qwen":
-      return {
-        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        apiKey: settings.qwenKey || "",
-        model: (settings.aiModel || "").trim() || "qwen-plus",
-        label: "通义千问",
-      };
-    case "zhipu":
-      return {
-        baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-        apiKey: settings.zhipuKey || "",
-        model: (settings.aiModel || "").trim() || "glm-4-flash",
-        label: "智谱 GLM",
-      };
     case "openrouter":
       return {
         baseUrl: "https://openrouter.ai/api/v1",
@@ -75,6 +53,7 @@ export function getOpenAiCompatibleConfig(
         label: "OpenRouter",
       };
     case "custom":
+      if (isRetiredAiEndpoint(settings.customAiBaseUrl)) return null;
       return {
         baseUrl: settings.customAiBaseUrl || "",
         apiKey: settings.customAiKey || "",
@@ -88,9 +67,10 @@ export function getOpenAiCompatibleConfig(
 
 export function hasAiCredentials(settings: AppSettings): boolean {
   if(settings.aiProvider==="muse")return true; // The native adapter checks the browser session on every request.
+  if (isRetiredAiModel(settings.aiProvider === "custom" ? settings.customAiModel : settings.aiModel)) return false;
   if(settings.aiProvider==="vertex")return !!settings.vertexCredentialId&&!!settings.vertexProjectId&&!!settings.vertexLocation&&!!settings.aiModel?.trim();
   if (settings.aiProvider === "gemini") return !!settings.geminiKey?.trim();
-  if (settings.aiProvider === "ollama") return !!settings.ollamaUrl?.trim();
+  if (settings.aiProvider === "ollama") return !!settings.ollamaUrl?.trim() && !isRetiredAiEndpoint(settings.ollamaUrl);
   const config = getOpenAiCompatibleConfig(settings);
   return !!config?.apiKey?.trim() &&
     (settings.aiProvider !== "custom" || !!config.baseUrl?.trim());

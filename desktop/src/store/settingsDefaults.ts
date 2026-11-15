@@ -1,5 +1,6 @@
 import { normalizePlaybookPlans, normalizePlaybookSchedule, type PlaybookPlan, type PlaybookSchedule } from '@/lib/playbookPlans';
 import { autoReplyDelayRange } from "@/lib/autoReplyDelay";
+import { stripRetiredAiSettings } from "@/lib/retiredAiServices";
 import { normalizeAiReplyTaskRecords, type AiReplyTaskRecord } from "@/lib/aiTaskRecords";
 import type { AutoReplyMode } from "@/lib/autoReplyScope";
 import { normalizePlaybooks, normalizePlaybookBindings, type AiPlaybook } from "@/lib/aiPlaybooks";
@@ -159,9 +160,6 @@ export interface SettingsShape {
   vertexProjectId:string;
   vertexLocation:string;
   vertexCredentialId:string;
-  deepseekKey: string;
-  qwenKey: string;
-  zhipuKey: string;
   openrouterKey: string;
   ollamaUrl: string;
   bridgeHost: string;
@@ -171,16 +169,13 @@ export interface SettingsShape {
     | "mock"
     | "openai"
     | "groq"
-    | "deepseek"
-    | "qwen"
-    | "zhipu"
     | "openrouter"
     | "gemini"
     | "vertex"
     | "muse"
     | "ollama"
     | "custom";
-  /** 自定义 OpenAI 兼容提供商 Base URL（如 https://api.deepseek.com/v1） */
+  /** 自定义 OpenAI 兼容提供商 Base URL */
   customAiBaseUrl: string;
   /** 自定义 OpenAI 兼容提供商 API Key */
   customAiKey: string;
@@ -409,9 +404,6 @@ export const defaultSettings: SettingsShape = {
   vertexProjectId:"",
   vertexLocation:"global",
   vertexCredentialId:"",
-  deepseekKey: "",
-  qwenKey: "",
-  zhipuKey: "",
   openrouterKey: "",
   ollamaUrl: "http://127.0.0.1:11434",
   bridgeHost: "127.0.0.1",
@@ -583,6 +575,7 @@ export function normalizeLoadedSettings(
   delete src.wahaBaseUrl;
   delete src.wahaApiKey;
   delete src.wahaSession;
+  stripRetiredAiSettings(src);
   const merged: SettingsShape = {
     ...defaultSettings,
     ...(src as Partial<SettingsShape>),

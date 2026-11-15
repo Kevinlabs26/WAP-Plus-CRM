@@ -1701,7 +1701,7 @@ export default {
   "crmPanel.regenerate": "Régénérer",
   "crmPanel.generateReply": "Générer une réponse",
   "crmPanel.noAi": "Aucune API IA configurée",
-  "crmPanel.noAiHint": "Configurez un service de modèle (OpenAI / Groq / Gemini / Ollama / personnalisé) pour générer des suggestions ici. Groq payant ou DeepSeek sont aussi disponibles.",
+  "crmPanel.noAiHint": "Configurez un service de modèle (OpenAI / Groq / Gemini / Ollama / personnalisé) pour générer des suggestions ici.",
   "crmPanel.configureApi": "Configurer l’API",
   "crmPanel.fillInput": "Remplir",
   "crmPanel.fillOriginal": "Insérer l’original",

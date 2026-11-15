@@ -60,7 +60,7 @@ test("hasRealAiKey accepts configured real providers", () => {
   assert.equal(
     hasRealAiKey({
       aiProvider: "custom",
-      customAiBaseUrl: "https://api.deepseek.com/v1",
+      customAiBaseUrl: "https://api.openai.com/v1",
       customAiKey: "sk-x",
     }),
     true

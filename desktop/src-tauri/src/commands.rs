@@ -135,12 +135,6 @@ pub struct SecureSecrets {
     #[serde(default)]
     pub gemini_key: String,
     #[serde(default)]
-    pub deepseek_key: String,
-    #[serde(default)]
-    pub qwen_key: String,
-    #[serde(default)]
-    pub zhipu_key: String,
-    #[serde(default)]
     pub openrouter_key: String,
     #[serde(default)]
     pub custom_ai_key: String,

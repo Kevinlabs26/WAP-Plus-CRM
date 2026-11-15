@@ -1,3 +1,5 @@
+import { isRetiredAiModel } from "./retiredAiServices.ts";
+
 export type ModelPurpose = "chat" | "transcription";
 
 export function isTranscriptionModel(model: string): boolean {
@@ -6,5 +8,5 @@ export function isTranscriptionModel(model: string): boolean {
 
 // The compatible /models API often mixes tasks; unknown custom IDs remain available.
 export function isChatModel(model: string): boolean {
-  return !isTranscriptionModel(model) && !/(?:^|\/)(?:tts-|playai-tts|orpheus|text-embedding-|embedding|dall-e-|imagen|.*prompt-guard|.*safeguard)|-tts(?:-|$)|moderation/i.test(model);
+  return !isRetiredAiModel(model) && !isTranscriptionModel(model) && !/(?:^|\/)(?:tts-|playai-tts|orpheus|text-embedding-|embedding|dall-e-|imagen|.*prompt-guard|.*safeguard)|-tts(?:-|$)|moderation/i.test(model);
 }

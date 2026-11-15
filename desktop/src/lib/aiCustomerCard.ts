@@ -378,15 +378,9 @@ export async function generateCustomerInsight(
               ? "未配置 Groq API Key"
               : provider === "gemini"
                 ? "未配置 Gemini API Key"
-                : provider === "deepseek"
-                  ? "未配置 DeepSeek API Key"
-                  : provider === "qwen"
-                    ? "未配置通义千问 API Key"
-                    : provider === "zhipu"
-                      ? "未配置智谱 API Key"
-                      : provider === "openrouter"
-                        ? "未配置 OpenRouter API Key"
-                : "未配置 AI"
+                : provider === "openrouter"
+                  ? "未配置 OpenRouter API Key"
+                  : "未配置 AI"
           : undefined,
     };
   }

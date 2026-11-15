@@ -1701,7 +1701,7 @@ export default {
   "crmPanel.regenerate": "重生成",
   "crmPanel.generateReply": "生成回复",
   "crmPanel.noAi": "还没配置 AI API",
-  "crmPanel.noAiHint": "配置一个模型服务（OpenAI / Groq / Gemini / Ollama / 自定义）后，在此生成回复建议。可以选免费的 Groq 或 DeepSeek。",
+  "crmPanel.noAiHint": "配置一个模型服务（OpenAI / Groq / Gemini / Ollama / 自定义）后，在此生成回复建议。",
   "crmPanel.configureApi": "去配置 API",
   "crmPanel.fillInput": "填入",
   "crmPanel.fillOriginal": "填入原文",

@@ -1,5 +1,6 @@
 import type { SettingsShape } from "@/store/settingsDefaults";
 import { GEMINI_DEFAULT_MODEL } from "./gemini.ts";
+import { isRetiredAiEndpoint, isRetiredAiModel } from "./retiredAiServices.ts";
 
 export type TranscriptionProvider = "none" | "openai" | "groq" | "gemini" | "custom";
 export const TRANSCRIPTION_DEFAULTS = {
@@ -24,6 +25,7 @@ export function resolveTranscriptionConfig(settings: Partial<SettingsShape>) {
     ? provider === "custom" ? settings.customWhisperModel : provider === "gemini" ? settings.aiModel : defaults.model
     : settings.transcriptionModel;
   const baseUrl = legacy ? provider === "custom" ? settings.customAiBaseUrl : defaults.baseUrl : settings.transcriptionBaseUrl;
+  if (isRetiredAiEndpoint(baseUrl) || isRetiredAiModel(model)) return { provider: "none" as const, apiKey: "", model: "", baseUrl: "" };
   return { provider, apiKey: String(apiKey || "").trim(), model: String(model || defaults.model).trim(),
     baseUrl: String(baseUrl || defaults.baseUrl).trim().replace(/\/+$/, "") };
 }

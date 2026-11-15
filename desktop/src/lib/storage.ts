@@ -484,9 +484,6 @@ export type SecureSecrets = {
   openaiKey: string;
   groqKey: string;
   geminiKey: string;
-  deepseekKey: string;
-  qwenKey: string;
-  zhipuKey: string;
   openrouterKey: string;
   customAiKey: string;
   transcriptionApiKey: string;
@@ -501,9 +498,6 @@ export async function loadSecureSecrets(): Promise<SecureSecrets | null> {
     openai_key?: string;
     groq_key?: string;
     gemini_key?: string;
-    deepseek_key?: string;
-    qwen_key?: string;
-    zhipu_key?: string;
     openrouter_key?: string;
     custom_ai_key?: string;
     transcription_api_key?: string;
@@ -515,9 +509,6 @@ export async function loadSecureSecrets(): Promise<SecureSecrets | null> {
         openaiKey: secrets.openai_key || "",
         groqKey: secrets.groq_key || "",
         geminiKey: secrets.gemini_key || "",
-        deepseekKey: secrets.deepseek_key || "",
-        qwenKey: secrets.qwen_key || "",
-        zhipuKey: secrets.zhipu_key || "",
         openrouterKey: secrets.openrouter_key || "",
         customAiKey: secrets.custom_ai_key || "",
         transcriptionApiKey: secrets.transcription_api_key || "",
@@ -535,9 +526,6 @@ export async function saveSecureSecrets(
       openai_key: secrets.openaiKey,
       groq_key: secrets.groqKey,
       gemini_key: secrets.geminiKey,
-      deepseek_key: secrets.deepseekKey,
-      qwen_key: secrets.qwenKey,
-      zhipu_key: secrets.zhipuKey,
       openrouter_key: secrets.openrouterKey,
       custom_ai_key: secrets.customAiKey,
       transcription_api_key: secrets.transcriptionApiKey,

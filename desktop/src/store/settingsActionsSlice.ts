@@ -3,6 +3,7 @@ import {
   saveSecureSecrets,
 } from "@/lib/storage";
 import { calcStats } from "./calcStats";
+import { stripRetiredAiSettings } from "@/lib/retiredAiServices";
 import { importPhonesToFolder } from "./importPhonesToFolder";
 import {
   exportBackup as exportBackupAction,
@@ -43,7 +44,6 @@ export function createSettingsActionsSlice({
     const next = get().settings;
     const snapshot = {
       openaiKey: next.openaiKey, groqKey: next.groqKey, geminiKey: next.geminiKey,
-      deepseekKey: next.deepseekKey, qwenKey: next.qwenKey, zhipuKey: next.zhipuKey,
       openrouterKey: next.openrouterKey, customAiKey: next.customAiKey,
       transcriptionApiKey: next.transcriptionApiKey, translationApiKey: next.translationApiKey, bridgeToken: next.bridgeToken,
     };
@@ -121,6 +121,7 @@ export function createSettingsActionsSlice({
           }
         }
         if (!changed) return state;
+        stripRetiredAiSettings(next);
         if (patch.quickReplies !== undefined || patch.quickReplyPinnedIds !== undefined) {
           next.quickReplyPinnedIds = normalizeQuickReplyIds(next.quickReplyPinnedIds, next.quickReplies, MAX_QUICK_REPLIES);
         }
@@ -138,8 +139,8 @@ export function createSettingsActionsSlice({
         };
       });
       const secretPatch = patch.openaiKey !== undefined || patch.groqKey !== undefined ||
-        patch.geminiKey !== undefined || patch.deepseekKey !== undefined || patch.qwenKey !== undefined ||
-        patch.zhipuKey !== undefined || patch.openrouterKey !== undefined || patch.customAiKey !== undefined ||
+        patch.geminiKey !== undefined ||
+        patch.openrouterKey !== undefined || patch.customAiKey !== undefined ||
         patch.transcriptionApiKey !== undefined || patch.translationApiKey !== undefined || patch.bridgeToken !== undefined;
       if (getStorageEngine() === "sqlite" && secretPatch && (changed || get().secretSaveStatus === "failed")) {
         void saveCurrentSecrets();

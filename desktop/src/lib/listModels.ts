@@ -44,8 +44,8 @@ async function listAllProviderModels(provider: AppSettings["aiProvider"], settin
         const config = getOpenAiCompatibleConfig(settings);
         if (!config?.baseUrl || !config.apiKey) return [];
         // baseUrl 是 OpenAI 兼容根（…/v1、…/v4），必须拼上 /models；
-        // 直接请求根路径会 404，导致 DeepSeek/通义/智谱/OpenRouter/自定义
-        // 五类 provider 的「获取模型列表」必然失败。
+        // 直接请求根路径会 404，兼容服务需要 /models
+        // 不将根路径当成模型列表地址。
         const base = config.baseUrl.replace(/\/+$/, "");
         const url = /\/models$/.test(base) ? base : `${base}/models`;
         return listOpenAiCompatible(url, config.apiKey, config.label);

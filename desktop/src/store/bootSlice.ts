@@ -73,9 +73,6 @@ export function createBootSlice({
         (legacySecrets?.openaiKey ||
           legacySecrets?.groqKey ||
           legacySecrets?.geminiKey ||
-          legacySecrets?.deepseekKey ||
-          legacySecrets?.qwenKey ||
-          legacySecrets?.zhipuKey ||
           legacySecrets?.openrouterKey ||
           legacySecrets?.customAiKey ||
           legacySecrets?.transcriptionApiKey ||
@@ -86,9 +83,6 @@ export function createBootSlice({
           openaiKey: legacySecrets.openaiKey || "",
           groqKey: legacySecrets.groqKey || "",
           geminiKey: legacySecrets.geminiKey || "",
-          deepseekKey: legacySecrets.deepseekKey || "",
-          qwenKey: legacySecrets.qwenKey || "",
-          zhipuKey: legacySecrets.zhipuKey || "",
           openrouterKey: legacySecrets.openrouterKey || "",
           customAiKey: legacySecrets.customAiKey || "",
           transcriptionApiKey: legacySecrets.transcriptionApiKey || "",
@@ -101,9 +95,6 @@ export function createBootSlice({
             openaiKey: legacySecrets.openaiKey || "",
             groqKey: legacySecrets.groqKey || "",
             geminiKey: legacySecrets.geminiKey || "",
-            deepseekKey: legacySecrets.deepseekKey || "",
-            qwenKey: legacySecrets.qwenKey || "",
-            zhipuKey: legacySecrets.zhipuKey || "",
             openrouterKey: legacySecrets.openrouterKey || "",
             customAiKey: legacySecrets.customAiKey || "",
             transcriptionApiKey: legacySecrets.transcriptionApiKey || "",
@@ -510,9 +501,6 @@ export function createBootSlice({
           openaiKey: currentSettings.openaiKey,
           groqKey: currentSettings.groqKey,
           geminiKey: currentSettings.geminiKey,
-          deepseekKey: currentSettings.deepseekKey,
-          qwenKey: currentSettings.qwenKey,
-          zhipuKey: currentSettings.zhipuKey,
           openrouterKey: currentSettings.openrouterKey,
           customAiKey: currentSettings.customAiKey,
           transcriptionApiKey: currentSettings.transcriptionApiKey,

@@ -22,9 +22,6 @@ export type AiSource =
   | "mock"
   | "openai"
   | "groq"
-  | "deepseek"
-  | "qwen"
-  | "zhipu"
   | "openrouter"
   | "gemini"
   | "vertex"
@@ -186,19 +183,13 @@ export async function generateSuggestions(
           ? "未配置 OpenAI API Key"
           : provider === "groq"
             ? "未配置 Groq API Key"
-          : provider === "gemini"
-            ? "未配置 Gemini API Key"
-          : provider === "vertex"
-            ? "请导入 Vertex 服务账号，并填写项目、区域和模型"
-            : provider === "deepseek"
-              ? "未配置 DeepSeek API Key"
-              : provider === "qwen"
-                ? "未配置通义千问 API Key"
-                : provider === "zhipu"
-                  ? "未配置智谱 API Key"
-                  : provider === "openrouter"
-                    ? "未配置 OpenRouter API Key"
-                    : "未配置 AI",
+            : provider === "gemini"
+              ? "未配置 Gemini API Key"
+              : provider === "vertex"
+                ? "请导入 Vertex 服务账号，并填写项目、区域和模型"
+                : provider === "openrouter"
+                  ? "未配置 OpenRouter API Key"
+                  : "未配置 AI",
     };
   }
 
