@@ -112,7 +112,7 @@ export function CustomerNoteEditor({
   return (
     <section
       className={cn(
-        "rounded-xl border border-zinc-800 bg-zinc-900/30",
+        "rounded-lg border border-zinc-800 bg-zinc-900/30",
         compact ? "p-2.5" : "p-3",
         className
       )}

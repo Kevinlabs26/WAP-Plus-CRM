@@ -8,7 +8,7 @@ export function PlaybookScheduleFields({value,onChange}:{value?:PlaybookSchedule
  const settings=useAppStore(s=>s.settings),{t}=useI18n();const [now,setNow]=useState(Date.now);
  useEffect(()=>{if(!value)return;const timer=window.setInterval(()=>setNow(Date.now()),30000);return()=>window.clearInterval(timer);},[value]);
  const plans=settings.aiPlaybookPlans||[],status=value?scheduledPlaybook(plans,value,now):undefined;
- return <section className="mt-3 rounded-lg border border-zinc-800 p-3 text-xs space-y-2">
+ return <section className="mt-3 space-y-2 border-t border-zinc-800 pt-3 text-xs">
   <label className="flex justify-between items-center">{t('plan.enable')}<input type="checkbox" checked={!!value} onChange={e=>{const zone=settings.aiTimeZone||Intl.DateTimeFormat().resolvedOptions().timeZone;onChange(e.target.checked?{planId:'',startDate:outreachClock(zone).day,timeZone:zone,switchTime:'09:00'}:undefined);}}/></label>
   {value&&<div className="space-y-2">
    <p className="text-zinc-500">{t('plan.folderHint')}</p>

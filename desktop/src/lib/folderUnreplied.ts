@@ -2,6 +2,7 @@ import type { ChatPreview, Contact, Message } from "../types/crm";
 import type { SettingsShape } from "../store/settingsDefaults";
 import { normalizePastedPhone } from "./pastedContacts";
 import { normalizeIngestPhone } from "../store/bridgeIngestHelpers";
+import { LEAD_INBOX_FOLDER_ID } from "../store/settingsDefaults";
 
 export type FolderPhoneCandidate = { phone: string; chats: { id: string; accountId: string }[] };
 type FolderState = { chats: ChatPreview[]; contacts: Contact[]; settings: SettingsShape };
@@ -12,6 +13,10 @@ export function folderPhoneCandidates(state: FolderState, folderId: string): Fol
   if (!folder) throw new Error("folderMissing");
   const account = folder.scope?.type === "all" ? null : folder.scope?.accountId || state.settings.liveBaileysAccountId || state.settings.activeAccountId;
   const members = new Set([...folder.chatIds, ...state.settings.chatFolderClones.filter(clone => clone.folderId === folderId).map(clone => clone.sourceChatId)]);
+  if (folderId === LEAD_INBOX_FOLDER_ID) {
+    for (const chatId of state.settings.leadInbox.collectedChatIds) members.add(chatId);
+    for (const chatId of state.settings.leadInbox.dismissedChatIds) members.delete(chatId);
+  }
   const contacts = new Map(state.contacts.map(contact => [contact.id, contact]));
   const privateChats = state.chats.flatMap(chat => {
     const contact = contacts.get(chat.contactId);

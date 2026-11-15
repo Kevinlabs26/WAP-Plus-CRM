@@ -1,7 +1,8 @@
 import { AI_OUTPUT_TRUNCATED, readAiJson } from "./aiResponse.ts";
 import { trackAiRequest } from "./aiUsage.ts";
 import { vertexAiConfig } from "./vertexAi.ts";
-import { generateMuseWeb } from "./museWeb.ts";
+import { generateMuseWeb, museWebAccounts, nextMuseAutoReplyAccount, readyMuseAutoReplyAccounts } from "./museWeb.ts";
+import { useAppStore } from "@/store/appStore";
 import type { Contact, Message } from "@/types/crm";
 import type { AppSettings } from "@/store/appStore";
 import { geminiGenerate } from "./gemini.ts";
@@ -11,6 +12,7 @@ import { resolveAiReplyProfile, MAX_EFFECTIVE_PROMPT_CHARS } from "./aiPromptSco
 import { buildAiTimeContext, resolveAiTimeZones } from "./aiTimeContext.ts";
 import { resolveAiReplyConstraints, getAiOutputConstraintError } from "./aiReplyConstraints.ts";
 import { createMuseChatRedactor, museChatMessages } from "./museChatPrivacy.ts";
+import { forgetMuseAccountPlaybookCopies, shareMusePlaybooks, trainMuseAccountPlaybooks } from "./musePlaybookSync.ts";
 
 export interface SuggestResult {
   id: string;
@@ -105,11 +107,36 @@ export async function generateSuggestions(
   const lastIn = [...sorted].reverse().find((m) => m.direction === "in");
   const cue = lastIn?.body ?? "";
   const provider = settings.aiProvider;
-  const profile = resolveAiReplyProfile(
+  let profile = resolveAiReplyProfile(
     settings,
     opts?.accountId || contact?.accountId,
     opts?.chatId || opts?.replyTo?.chatId || recent[0]?.chatId
   );
+  if(provider==="muse"&&profile.readMuseFiles){
+    try{
+      await shareMusePlaybooks(profile.musePlaybookPaths||[],opts?.signal);
+      settings=useAppStore.getState().settings;
+      profile=resolveAiReplyProfile(settings,opts?.accountId||contact?.accountId,opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId);
+    }catch(error){
+      return {suggestions:[],source:"muse",fallback:true,error:error instanceof Error?error.message:String(error)};
+    }
+  }
+  let museAccountId:string|undefined;
+  if(provider==="muse"){
+    try{
+      const workspaceMode=settings.aiPlaybookMuseMode!=="shared";
+      museAccountId=opts?.auto?await nextMuseAutoReplyAccount():(await museWebAccounts()).selectedId;
+      if(workspaceMode&&profile.museMaterials?.length){
+        const materials=profile.museMaterials;
+        for(const accountId of await readyMuseAutoReplyAccounts())if(accountId!==museAccountId)void trainMuseAccountPlaybooks(accountId,materials).catch(()=>undefined);
+        await trainMuseAccountPlaybooks(museAccountId,materials,opts?.signal);
+      }
+      settings=useAppStore.getState().settings;
+      profile=resolveAiReplyProfile(settings,opts?.accountId||contact?.accountId,opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId,workspaceMode?museAccountId:undefined);
+    }catch(error){
+      return {suggestions:[],source:"muse",fallback:true,error:error instanceof Error?error.message:String(error)};
+    }
+  }
   if (profile.error) return {suggestions:[],source:"mock",fallback:true,error:profile.error};
   const prompt = profile.prompt;
   const chatId=opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId,accountId=opts?.accountId||contact?.accountId;
@@ -174,7 +201,14 @@ export async function generateSuggestions(
         const system=buildSystemPrompt(undefined,effectiveSettings,opts?.auto,opts?.replyTo,opts?.count,false);
         const privateMessage=(message:Message):Message=>({...message,body:message.contactCard?"[shared contact omitted]":redact(message.body),transcript:message.transcript?redact(message.transcript):undefined,mediaCaption:message.mediaCaption?redact(message.mediaCaption):undefined,quoted:message.quoted?{...message.quoted,body:redact(message.quoted.body)}:undefined});
         const user=buildUserContext(undefined,thread.map(privateMessage),opts?.auto,opts?.replyTo?privateMessage(opts.replyTo):undefined,buildAiTimeContext(contact,effectiveSettings),{count:opts?.count,outreach:opts?.outreach,compact:settings.aiContextMode==="compact",minimal:true});
-        const context={profile:redact(effectivePrompt),history:user.history.map(item=>({...item,text:redact(item.text)})),prefix:redact(`Draft the requested WhatsApp reply as text only. Do not use tools, browse, contact anyone, or execute tasks. Use only the provided conversation; do not use other threads or saved memories. Personal identifiers have been omitted: use a generic greeting, never infer identities or include omission markers in the reply. Follow the current user profile and latest reply instructions together; the latest profile replaces older profiles, and latest reply instructions replace earlier turn rules. The latest conversation_data contains authoritative WhatsApp facts, either a recent snapshot or an explicitly marked incremental update; earlier generated replies are drafts, not evidence of messages actually sent.\n\n<reply_instructions>\n${system}\n</reply_instructions>\n\n<conversation_data>\n${user.prefix}`),suffix:redact(`${user.suffix}\n</conversation_data>`)};
+        const museTools = profile.readMuseFiles
+          ? "You may use Muse workspace file tools only to read the exact user-selected Playbook paths listed in the current profile. If the same revision was already read and is still available in this same Muse account and customer conversation, reuse it without reopening or repeating its contents. Read again only for a changed revision or a new conversation thread; never reuse across accounts or customers. Do not read any other workspace files. Do not browse external sites, contact anyone, or execute commands."
+          : "Do not use tools, browse, contact anyone, or execute tasks.";
+        const redactKeepingPaths=(value:string)=>{
+          const pathBlock=profile.readMuseFiles?/<read_only_muse_workspace_files>[\s\S]*?<\/read_only_muse_workspace_files>/.exec(value)?.[0]:undefined;
+          return pathBlock?redact(value.replace(pathBlock,"__MUSE_WORKSPACE_PATHS__")).replace("__MUSE_WORKSPACE_PATHS__",pathBlock):redact(value);
+        };
+        const context={profile:redactKeepingPaths(effectivePrompt),history:user.history.map(item=>({...item,text:redact(item.text)})),prefix:redactKeepingPaths(`Draft the requested WhatsApp reply as text only. ${museTools} Use only the provided conversation; do not use other threads or saved memories. Personal identifiers have been omitted: use a generic greeting, never infer identities or include omission markers in the reply. Follow the current user profile and latest reply instructions together; the latest profile replaces older profiles, and latest reply instructions replace earlier turn rules. The latest conversation_data contains authoritative WhatsApp facts, either a recent snapshot or an explicitly marked incremental update; earlier generated replies are drafts, not evidence of messages actually sent.\n\n<reply_instructions>\n${system}\n</reply_instructions>\n\n<conversation_data>\n${user.prefix}`),suffix:redact(`${user.suffix}\n</conversation_data>`)};
         const {museSidebarData}=await import('./museSidebarData.ts');
         const {sheetConnections}=await import('./googleSheets.ts');
         const sidebar=museSidebarData(prompt,settings,chatId||'',contact?.phone||'',sheetConnections());
@@ -184,7 +218,11 @@ export async function generateSuggestions(
         const customerId=contact?.id||chatId;
         const conversationKey=customerId?JSON.stringify(['whatsapp-reply-sidebar-v1',accountId||settings.activeAccountId,customerId,sidebarVersion]):undefined;
         opts?.onMuseQueue?.(false);
-        const raw=await generateMuseWeb(musePrompt,opts?.signal,conversationKey,context,opts?.outreach?0:opts?.auto?1:2,()=>opts?.onMuseQueue?.(true));
+        const raw=await generateMuseWeb(musePrompt,opts?.signal,conversationKey,context,opts?.outreach?0:opts?.auto?1:2,()=>opts?.onMuseQueue?.(true),museAccountId);
+        if(raw.includes('PLAYBOOK_SOURCE_UNAVAILABLE')){
+          if(museAccountId)await forgetMuseAccountPlaybookCopies(museAccountId,profile.museMaterials?.map(item=>item.id)||[]);
+          throw Error('所选 Muse Workspace 文件无法读取（404），已清除该副本记录，下次会自动重新训练');
+        }
         return parseSuggestionsJson(raw,"Muse",opts?.auto||opts?.replyTo||opts?.count===1?1:3);
       });
       return finish(suggestions,"muse");
@@ -241,7 +279,9 @@ export async function generateSuggestions(
     if (opts?.signal?.aborted) throw e;
     const msg = e instanceof SyntaxError ? "AI 返回的回复格式不完整或无效，请重新生成"
       : e instanceof Error ? e.message : String(e);
-    const retryable = !/\b(?:400|401|403|404|422)\b/.test(msg) && /\b(?:408|429|5\d\d)\b|fetch|network|timeout|timed out|网络|超时|空响应/i.test(msg);
+    const permanent = /\b(?:400|401|403|404|422)\b/.test(msg);
+    const retryable = !permanent && (/\b(?:408|429|5\d\d)\b|fetch|network|timeout|timed out|网络|超时|空响应/i.test(msg) ||
+      provider === "muse" && (e instanceof SyntaxError || /登录|连接|排队|稍后|暂时|超时|未返回|没有返回|网页已关闭|网页响应格式无效|桌面通信中断|额度|配额|quota|busy|无法打开|无法读取|未就绪|尚未结束|输入框不可用|页面已切换或刷新|发送按钮尚未就绪/i.test(msg)));
     return {
       suggestions: [],
       source: "mock",

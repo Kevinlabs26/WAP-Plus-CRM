@@ -218,10 +218,10 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
 
 
       {importOpen && (
-        <section className={`space-y-3 ${importOnly ? "border-b border-zinc-800 pb-3" : "rounded-xl border border-zinc-800 p-4"}`}>
+        <section className={`space-y-3 ${importOnly ? "border-b border-zinc-800 pb-3" : "rounded-lg border border-zinc-800 p-4"}`}>
           {!importOnly && <SectionLabel>{t("quickLibrary.import")}</SectionLabel>}
           <p className="text-2xs text-zinc-500">{t("quickLibrary.sheetSyncHint")}</p>
-          <div className={`grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] ${importOnly ? "" : "rounded-lg border border-zinc-800 p-3"}`}>
+          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
             <label className="text-xs text-zinc-500">{t("quickLibrary.sheetUrl")}
               <Input
                 className="mt-1"
@@ -243,7 +243,7 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
               : <Button size="sm" className="self-end" disabled={!sheets.ready || !sheets.configured || sheets.busy} onClick={() => void connectSheets()}>{sheets.email ? t("sheets.authorizeActions") : t("sheets.connect")}</Button>}
           </div>
           {sheetTabs.length > 0 && (
-            <div className={`space-y-2 ${importOnly ? "border-t border-zinc-800/80 pt-3" : "rounded-lg border border-zinc-800 bg-zinc-900/40 p-3"}`}>
+            <div className="space-y-2 border-t border-zinc-800/80 pt-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-medium text-zinc-300">
                   {t("quickLibrary.selectTabs")} ({selectedSheetTabs.size}/{sheetTabs.length})
@@ -351,7 +351,7 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
           )}
           {sheetError && <p role="alert" className="text-xs text-red-400">{sheetError}</p>}
           {sheets.error && <p role="alert" className="text-xs text-red-400">{t(sheetErrorHint(sheets.error))}</p>}
-          <details className={importOnly ? "border-t border-zinc-800 pt-3" : "rounded-lg border border-zinc-800 p-3"}>
+          <details className="border-t border-zinc-800 pt-3">
           <summary className="cursor-pointer text-xs text-zinc-500">{t("quickLibrary.pasteInstead")}</summary>
           <p className="my-2 text-xs text-zinc-500">{t("quickLibrary.importHint")}</p>
           <Textarea rows={5} maxLength={3_000_000} value={importText} aria-label={t("quickLibrary.import")}
@@ -373,7 +373,7 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
           </details>
         </section>
       )}
-      {!importOnly && <><section className="flex flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/35 lg:flex-row" style={{ "--quick-category-width": `${categoryWidth}px` } as React.CSSProperties}>
+      {!importOnly && <><section className="flex flex-col overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/35 lg:flex-row" style={{ "--quick-category-width": `${categoryWidth}px` } as React.CSSProperties}>
         <nav aria-label={t("settingsQuickReplies.category")} title={t("quickLibrary.categoryRightClickHint")} className="w-full space-y-1 border-b border-zinc-800 p-3 lg:max-h-[720px] lg:w-[var(--quick-category-width)] lg:shrink-0 lg:overflow-y-auto lg:border-b-0">
           <div className="flex items-center justify-between gap-1">
             <SectionLabel>{t("settingsQuickReplies.category")}</SectionLabel>
@@ -526,12 +526,12 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
               </select>
             </label>
             </div><div className="grid gap-3 lg:grid-cols-2">
-            <label className="block space-y-1 text-xs text-zinc-500"><span>{t("settingsQuickReplies.originalContent")} · {editing.body.length} / 2000</span>
-              <Textarea rows={4} maxLength={2000} value={editing.body} aria-label={t("settingsQuickReplies.content")} placeholder={t("settingsQuickReplies.contentPlaceholder")}
+            <label className="block space-y-1 text-xs text-zinc-500"><span>{t("settingsQuickReplies.originalContent")} · {editing.body.length}</span>
+              <Textarea rows={4} value={editing.body} aria-label={t("settingsQuickReplies.content")} placeholder={t("settingsQuickReplies.contentPlaceholder")}
                 className="resize-y" onChange={event => updateReply(editing.id, { body: event.target.value })} />
             </label>
-            <label className="block space-y-1 text-xs text-zinc-500"><span>{t("settingsQuickReplies.translation")} · {(editing.translation || "").length} / 2000</span>
-              <Textarea rows={4} maxLength={2000} value={editing.translation || ""} aria-label={t("settingsQuickReplies.translation")} placeholder={t("settingsQuickReplies.translationPlaceholder")}
+            <label className="block space-y-1 text-xs text-zinc-500"><span>{t("settingsQuickReplies.translation")} · {(editing.translation || "").length}</span>
+              <Textarea rows={4} value={editing.translation || ""} aria-label={t("settingsQuickReplies.translation")} placeholder={t("settingsQuickReplies.translationPlaceholder")}
                 className="resize-y" onChange={event => updateReply(editing.id, { translation: event.target.value })} />
             </label>
             </div>
@@ -963,7 +963,7 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
       await importReplies(false, preview, sourceByKey);
     } catch (error) {
       const message = String(error);
-      setSheetError(message.includes("contentTooLong") ? t("quickLibrary.sheetCellTooLong") : message.includes("limit") ? t("quickLibrary.importError") : message.includes("empty") ? t("quickLibrary.sheetEmpty") : t(sheetErrorHint(message)));
+      setSheetError(message.includes("limit") ? t("quickLibrary.importError") : message.includes("empty") ? t("quickLibrary.sheetEmpty") : t(sheetErrorHint(message)));
     } finally {
       setSheetBusy(false);
     }

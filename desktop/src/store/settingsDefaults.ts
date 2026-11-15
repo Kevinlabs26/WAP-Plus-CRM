@@ -35,8 +35,15 @@ export interface SettingsQuickReply {
   };
 }
 
+export interface AiReportTemplate {
+  id: string;
+  name: string;
+  body: string;
+}
+
 import type { AccountViewMode, FolderScope, WaAccount } from "@/types/account";
 import type { ScheduledMessage, SalesStage } from "@/types/crm";
+import { BROADCAST_MAX_THEMES, BROADCAST_MAX_VARIANTS, type BroadcastMedia, type BroadcastMediaMode, type BroadcastTheme } from "@/types/broadcast";
 import {
   ensureAccounts,
   ensureActiveAccountId,
@@ -64,6 +71,8 @@ import {
 export interface SettingsChatFolder {
   id: string;
   name: string;
+  /** Built-in lead folder stays at the top and cannot be deleted. */
+  systemType?: "leadInbox";
   icon?: string;
   color?: string;
   /** 可选父分组，支持多层嵌套。 */
@@ -103,6 +112,7 @@ export interface SettingsChatFolderClone {
 export type LeadInboxDateGrouping = "none" | "day" | "week" | "month";
 export type LeadInboxAccountScope = "view" | "all" | "selected";
 export type LeadInboxSort = "first_contact" | "last_message" | "unread";
+export const LEAD_INBOX_FOLDER_ID = "__lead_inbox__";
 
 /** 主动联系智能夹子：成员按全部账号最早真实往来识别，账号范围仅影响显示。 */
 export interface LeadInboxSettings {
@@ -121,6 +131,8 @@ export interface LeadInboxSettings {
   captureSince: string;
   /** 用户从智能夹子中手动移除的会话；不删除原会话和消息。 */
   dismissedChatIds: string[];
+  /** 已纳入主动联系文件夹的会话；关闭收集后保留现有成员。 */
+  collectedChatIds: string[];
 }
 
 export function createDefaultLeadInboxSettings(): LeadInboxSettings {
@@ -136,6 +148,7 @@ export function createDefaultLeadInboxSettings(): LeadInboxSettings {
     removeAfterReply: false,
     captureSince: "",
     dismissedChatIds: [],
+    collectedChatIds: [],
   };
 }
 
@@ -192,6 +205,9 @@ export interface SettingsShape {
    */
   aiReplyMode: "semi" | "auto";
   aiAutoReplyPaused: boolean;
+  aiAutoFollowUpEnabled: boolean;
+  aiAutoFollowUpEnabledAt: number;
+  aiAutoFollowUpDelaysMinutes: number[];
   aiAutoReplyModeByChatId: Record<string, AutoReplyMode>;
   /** 自动回复防刷屏：同一会话两次自动回复的最小间隔（毫秒） */
   aiAutoReplyIntervalMs: number;
@@ -207,15 +223,24 @@ export interface SettingsShape {
   /** WhatsApp 账号级身份覆盖；空值或无条目时继承 aiSystemPrompt */
   aiSystemPromptByAccountId: Record<string, string>;
   aiPromptTemplates: AiPromptTemplate[];
+  aiReportTemplates: AiReportTemplate[];
   aiPlaybooks: AiPlaybook[];
   aiPlaybookPlans: PlaybookPlan[];
   aiPlaybookOverviewId: string;
   aiPlaybookBindings: Record<string, string>;
   aiPlaybookMuseRoot: string;
+  aiPlaybookMuseFolder: string;
+  aiPlaybookMuseAccountId: string;
+  aiPlaybookMuseMode: "shared" | "workspace";
+  aiPlaybookMuseWorkspaceLinked: boolean;
   aiPlaybookAutoSync: boolean;
   aiPlaybookMuseSyncedAt: number;
   aiPlaybookMuseAttemptAt: number;
   aiPlaybookMuseError: string;
+  /** Per-Muse-account identity source; syncing updates only the account's SOUL file. */
+  museIdentityModeByAccountId: Record<string, "follow-primary" | "independent">;
+  museIdentitySyncByAccountId: Record<string, { primaryId: string; sha256: string; syncedAt: number }>;
+  broadcastThemes: BroadcastTheme[];
   imagePromptTemplates: AiPromptTemplate[];
   aiContextMode: "compact" | "full";
   aiOutreachRuns: AiOutreachRun[];
@@ -245,7 +270,15 @@ export interface SettingsShape {
   quickReplyPinnedIds: string[];
   quickReplyRecentIds: string[];
   translateTargetLang: string;
-  /** 回车两阶段：第一次翻译草稿，第二次发送译文。 */
+  /** 自动根据联系人资料和最近入站消息判断对方语言。 */
+  autoDetectContactLanguage: boolean;
+  /** 自动翻译当前会话中最近加载的入站文字消息。 */
+  incomingTranslateEnabled: boolean;
+  /** 翻译草稿后自动回译，便于发送前检查。 */
+  backTranslate: boolean;
+  /** 是否显示输入框表情面板。 */
+  emojiEnabled: boolean;
+  /** 输入停顿后自动翻译草稿；兼容旧设置键名。 */
   enterTranslateSend: boolean;
   /** 我的语言（母语）：入站消息/语音翻译的译出目标（给自己看）。空 = 自动检测系统语言 */
   myLang: string;
@@ -401,6 +434,9 @@ export const defaultSettings: SettingsShape = {
   aiModel: "",
   aiReplyMode: "semi",
   aiAutoReplyPaused: false,
+  aiAutoFollowUpEnabled: false,
+  aiAutoFollowUpEnabledAt: 0,
+  aiAutoFollowUpDelaysMinutes: [],
   aiAutoReplyModeByChatId: {},
   aiAutoReplyIntervalMs: 30000,
   aiAutoReplyDelayMinMs: 20000,
@@ -411,15 +447,23 @@ export const defaultSettings: SettingsShape = {
   aiSystemPrompt: "",
   aiSystemPromptByAccountId: {},
   aiPromptTemplates: [],
+  aiReportTemplates: [],
   aiPlaybooks: [],
   aiPlaybookPlans: [],
   aiPlaybookOverviewId: "",
   aiPlaybookBindings: {},
   aiPlaybookMuseRoot: "",
+  aiPlaybookMuseFolder: "",
+  aiPlaybookMuseAccountId: "",
+  aiPlaybookMuseMode: "workspace",
+  aiPlaybookMuseWorkspaceLinked: false,
   aiPlaybookAutoSync: false,
   aiPlaybookMuseSyncedAt: 0,
   aiPlaybookMuseAttemptAt: 0,
   aiPlaybookMuseError: "",
+  museIdentityModeByAccountId: {},
+  museIdentitySyncByAccountId: {},
+  broadcastThemes: [],
   imagePromptTemplates: [],
   aiContextMode: "full",
   aiOutreachRuns: [],
@@ -444,12 +488,24 @@ export const defaultSettings: SettingsShape = {
   quickReplyPinnedIds: [],
   quickReplyRecentIds: [],
   translateTargetLang: "en",
-  enterTranslateSend: false,
+  autoDetectContactLanguage: true,
+  incomingTranslateEnabled: false,
+  backTranslate: true,
+  emojiEnabled: true,
+  enterTranslateSend: true,
   myLang: "",
   voiceInputEngine: "auto",
   voiceInputLang: "",
   leadInbox: createDefaultLeadInboxSettings(),
-  chatFolders: [],
+  chatFolders: [{
+    id: LEAD_INBOX_FOLDER_ID,
+    name: "主动联系",
+    sort: -1_000_000_000,
+    collapsed: false,
+    chatIds: [],
+    scope: { type: "all" },
+    systemType: "leadInbox",
+  }],
   chatFolderClones: [],
   // 不预置「主账号」；登录/添加后再有槽
   waAccounts: [],
@@ -485,6 +541,39 @@ export const defaultSettings: SettingsShape = {
   uiLanguage: "zh-CN",
   chatBackground: { kind: "none" },
 };
+
+function normalizeBroadcastThemes(value: unknown): BroadcastTheme[] {
+  const themes: BroadcastTheme[] = [];
+  for (const raw of Array.isArray(value) ? value : []) {
+    if (!raw || typeof raw !== "object" || themes.length >= BROADCAST_MAX_THEMES) continue;
+    const item = raw as Partial<BroadcastTheme>;
+    const id = typeof item.id === "string" ? item.id.trim().slice(0, 120) : "";
+    const name = typeof item.name === "string" ? item.name.trim().slice(0, 80) : "";
+    if (!id || !name || themes.some(theme => theme.id === id) || !Array.isArray(item.variants)) continue;
+    const ids = new Set<string>();
+    const variants = item.variants.slice(0, BROADCAST_MAX_VARIANTS).flatMap(rawVariant => {
+      if (!rawVariant || typeof rawVariant !== "object") return [];
+      const variant = rawVariant as Partial<BroadcastTheme["variants"][number]>;
+      const versionId = typeof variant.id === "string" ? variant.id.trim().slice(0, 120) : "";
+      if (!versionId || ids.has(versionId) || typeof variant.template !== "string" || variant.template.length > 2000) return [];
+      ids.add(versionId);
+      const media: BroadcastMedia[] = (Array.isArray(variant.media) ? variant.media : []).slice(0, 10).flatMap(rawMedia => {
+        if (!rawMedia || typeof rawMedia !== "object") return [];
+        const entry = rawMedia as Partial<BroadcastMedia>;
+        const mediaId = typeof entry.id === "string" ? entry.id.trim().slice(0, 120) : "";
+        if (!mediaId || !["image", "video", "audio", "document"].includes(entry.kind || "")) return [];
+        const kind = entry.kind as BroadcastMedia["kind"];
+        return [{ id: mediaId, kind, mime: typeof entry.mime === "string" ? entry.mime.slice(0, 120) : "application/octet-stream",
+          ...(typeof entry.fileName === "string" ? { fileName: entry.fileName.slice(0, 240) } : {}),
+          ...(kind === "audio" && entry.voiceNote === true ? { voiceNote: true } : {}) }];
+      });
+      const mediaMode: BroadcastMediaMode = variant.mediaMode === "random" || variant.mediaMode === "roundrobin" ? variant.mediaMode : "single";
+      return [{ id: versionId, template: variant.template, media, mediaMode }];
+    });
+    if (variants.length >= 2) themes.push({ id, name, variants });
+  }
+  return themes;
+}
 
 export function normalizeLoadedSettings(
   raw: Partial<SettingsShape> | undefined
@@ -555,8 +644,8 @@ export function normalizeLoadedSettings(
     merged.quickReplies = merged.quickReplies
       .map((r, i) => {
         const title = String(r?.title || "").slice(0, 40);
-        const body = String(r?.body || "").slice(0, 2000);
-        const translation = String(r?.translation || "").slice(0, 2000);
+        const body = String(r?.body || "");
+        const translation = String(r?.translation || "");
         const rawMedia =
           r?.media && typeof r.media === "object"
             ? (r.media as Record<string, unknown>)
@@ -598,7 +687,7 @@ export function normalizeLoadedSettings(
         const originalColumn = Number(rawLink?.originalColumn);
         const translationColumn = Number(rawLink?.translationColumn);
         const sheetLink = rawLink && /^[a-zA-Z0-9_-]{1,200}$/.test(spreadsheetId) && tab.trim() && tab.length <= 200 && !/[\u0000-\u001f]/.test(tab) && Number.isInteger(row) && row >= 0 && row <= 10_000_000 && Number.isInteger(originalColumn) && originalColumn >= 0 && originalColumn <= 18_277 && Number.isInteger(translationColumn) && translationColumn >= 0 && translationColumn <= 18_277 && originalColumn !== translationColumn
-          ? { spreadsheetId, tab, row, originalColumn, translationColumn, titleSnapshot: String(rawLink.titleSnapshot ?? title).slice(0, 40), originalSnapshot: String(rawLink.originalSnapshot || "").slice(0, 2000), translationSnapshot: String(rawLink.translationSnapshot || "").slice(0, 2000), syncPending: rawLink.syncPending === true || undefined, syncError: String(rawLink.syncError || "").slice(0, 200) || undefined }
+          ? { spreadsheetId, tab, row, originalColumn, translationColumn, titleSnapshot: String(rawLink.titleSnapshot ?? title).slice(0, 40), originalSnapshot: String(rawLink.originalSnapshot || ""), translationSnapshot: String(rawLink.translationSnapshot || ""), syncPending: rawLink.syncPending === true || undefined, syncError: String(rawLink.syncError || "").slice(0, 200) || undefined }
           : undefined;
         return {
           id: String(r?.id || `qr-${i}`),
@@ -633,6 +722,10 @@ export function normalizeLoadedSettings(
       ? merged.uiLanguage
       : "zh-CN";
   const tl = String(merged.translateTargetLang || "en").toLowerCase();  merged.translateTargetLang = tl || "en";
+  merged.autoDetectContactLanguage = merged.autoDetectContactLanguage !== false;
+  merged.incomingTranslateEnabled = merged.incomingTranslateEnabled === true;
+  merged.backTranslate = merged.backTranslate !== false;
+  merged.emojiEnabled = merged.emojiEnabled !== false;
   merged.enterTranslateSend = merged.enterTranslateSend === true;
   const ml = String(merged.myLang || "").trim().toLowerCase();  merged.myLang = ml;
   merged.aiTimeZone = validTimeZone(merged.aiTimeZone) || "";
@@ -677,6 +770,9 @@ export function normalizeLoadedSettings(
                 .filter(Boolean)
             ),
           ].slice(0, 20_000)
+        : [],
+      collectedChatIds: Array.isArray(raw.collectedChatIds)
+        ? [...new Set(raw.collectedChatIds.map((id) => String(id || "").trim()).filter(Boolean))].slice(-20_000)
         : [],
     };
   }
@@ -740,16 +836,61 @@ export function normalizeLoadedSettings(
     ? [...new Set(merged.aiAutoReplyManualChatIds.map((id) => String(id || "").trim()).filter(Boolean))]
     : [];
   merged.aiAutoReplyPaused = merged.aiAutoReplyPaused === true;
+  merged.aiAutoFollowUpDelaysMinutes = Array.isArray(merged.aiAutoFollowUpDelaysMinutes)
+    ? merged.aiAutoFollowUpDelaysMinutes.slice(0, 10).map(value =>
+        Number.isFinite(value) ? Math.max(0, Math.min(43_200, Math.round(value))) : 0)
+    : [];
+  merged.aiAutoFollowUpEnabledAt = Number.isFinite(merged.aiAutoFollowUpEnabledAt) && merged.aiAutoFollowUpEnabledAt > 0
+    ? merged.aiAutoFollowUpEnabledAt : 0;
+  merged.aiAutoFollowUpEnabled = merged.aiAutoFollowUpEnabled === true &&
+    merged.aiAutoFollowUpEnabledAt > 0 && merged.aiAutoFollowUpDelaysMinutes.length > 0 &&
+    merged.aiAutoFollowUpDelaysMinutes.every(value => value > 0);
   merged.aiPromptTemplates = normalizePromptTemplates(merged.aiPromptTemplates);
+  merged.aiReportTemplates = Array.isArray(merged.aiReportTemplates)
+    ? merged.aiReportTemplates.reduce<AiReportTemplate[]>((items, value) => {
+        if (!value || typeof value !== "object") return items;
+        const item = value as Partial<AiReportTemplate>;
+        const id = typeof item.id === "string" ? item.id.trim().slice(0, 120) : "";
+        const name = typeof item.name === "string" ? item.name.trim().slice(0, 120) : "";
+        const body = typeof item.body === "string" ? item.body.slice(0, 12000) : "";
+        if (id && name && body.trim() && !items.some(existing => existing.id === id) && items.length < 50) items.push({ id, name, body });
+        return items;
+      }, [])
+    : [];
   merged.aiPlaybookPlans = normalizePlaybookPlans(merged.aiPlaybookPlans);
   merged.aiPlaybooks = normalizePlaybooks(merged.aiPlaybooks);
   merged.aiPlaybookOverviewId = typeof merged.aiPlaybookOverviewId === "string" ? merged.aiPlaybookOverviewId.slice(0,120) : "";
   merged.aiPlaybookBindings = normalizePlaybookBindings(merged.aiPlaybookBindings);
   merged.aiPlaybookMuseRoot = typeof merged.aiPlaybookMuseRoot === "string" && merged.aiPlaybookMuseRoot.length <= 500 ? merged.aiPlaybookMuseRoot : "";
+  merged.aiPlaybookMuseFolder = typeof merged.aiPlaybookMuseFolder === "string" && merged.aiPlaybookMuseFolder.length <= 500 ? merged.aiPlaybookMuseFolder : "";
+  merged.aiPlaybookMuseAccountId = typeof merged.aiPlaybookMuseAccountId === "string" && merged.aiPlaybookMuseAccountId.length <= 120 ? merged.aiPlaybookMuseAccountId : "";
+  merged.aiPlaybookMuseMode = merged.aiPlaybookMuseMode === "shared" ? "shared" : "workspace";
+  merged.aiPlaybookMuseWorkspaceLinked = merged.aiPlaybookMuseWorkspaceLinked === true;
   merged.aiPlaybookAutoSync = merged.aiPlaybookAutoSync === true;
   merged.aiPlaybookMuseSyncedAt = Number.isFinite(merged.aiPlaybookMuseSyncedAt) && merged.aiPlaybookMuseSyncedAt > 0 ? merged.aiPlaybookMuseSyncedAt : 0;
   merged.aiPlaybookMuseAttemptAt = Number.isFinite(merged.aiPlaybookMuseAttemptAt) && merged.aiPlaybookMuseAttemptAt > 0 ? merged.aiPlaybookMuseAttemptAt : 0;
   merged.aiPlaybookMuseError = typeof merged.aiPlaybookMuseError === "string" ? merged.aiPlaybookMuseError.slice(0,400) : "";
+  {
+    const rawModes = merged.museIdentityModeByAccountId && typeof merged.museIdentityModeByAccountId === "object" ? merged.museIdentityModeByAccountId : {};
+    const modes: SettingsShape["museIdentityModeByAccountId"] = {};
+    for (const [rawId, mode] of Object.entries(rawModes).slice(0, 12)) {
+      const id = rawId.trim().slice(0, 120);
+      if (id && (mode === "follow-primary" || mode === "independent")) modes[id] = mode;
+    }
+    merged.museIdentityModeByAccountId = modes;
+    const rawSyncs = merged.museIdentitySyncByAccountId && typeof merged.museIdentitySyncByAccountId === "object" ? merged.museIdentitySyncByAccountId : {};
+    const syncs: SettingsShape["museIdentitySyncByAccountId"] = {};
+    for (const [rawId, value] of Object.entries(rawSyncs).slice(0, 12)) {
+      const id = rawId.trim().slice(0, 120);
+      if (!id || !value || typeof value !== "object") continue;
+      const record = value as Partial<SettingsShape["museIdentitySyncByAccountId"][string]>;
+      if (typeof record.primaryId === "string" && record.primaryId.length <= 120 && typeof record.sha256 === "string" && /^[a-f0-9]{64}$/.test(record.sha256) && Number.isFinite(record.syncedAt) && Number(record.syncedAt) > 0) {
+        syncs[id] = { primaryId: record.primaryId, sha256: record.sha256, syncedAt: Number(record.syncedAt) };
+      }
+    }
+    merged.museIdentitySyncByAccountId = syncs;
+  }
+  merged.broadcastThemes = normalizeBroadcastThemes(merged.broadcastThemes);
   merged.imagePromptTemplates = normalizePromptTemplates(merged.imagePromptTemplates).map(item => ({ ...item, prompt: item.prompt.slice(0, 4000) }));
   merged.aiContextMode = merged.aiContextMode === "compact" ? "compact" : "full";
   merged.aiOutreachRuns = normalizeOutreachRuns(merged.aiOutreachRuns);
@@ -1013,17 +1154,30 @@ export function normalizeLoadedSettings(
     DEFAULT_ACCOUNT_ID;
 
   // 规范化分组：同一 scope 内主归属互斥；分身不指向主组内同一 chat
-  const rawFolders = Array.isArray(merged.chatFolders)
+  const storedFolders = Array.isArray(merged.chatFolders)
     ? merged.chatFolders
     : [];
+  const storedLeadFolder = storedFolders.find((folder) => folder?.id === LEAD_INBOX_FOLDER_ID);
+  const rawFolders = [
+    storedLeadFolder || {
+      id: LEAD_INBOX_FOLDER_ID,
+      name: "主动联系",
+      sort: -1_000_000_000,
+      chatIds: [],
+      scope: { type: "all" },
+      systemType: "leadInbox",
+    },
+    ...storedFolders.filter((folder) => folder?.id !== LEAD_INBOX_FOLDER_ID),
+  ];
   const seenPrimaryByScope = new Map<string, Set<string>>();
   merged.chatFolders = rawFolders
     .map((f, i) => {
       const id = String(f?.id || `folder-${i}`);
-      const name = String(f?.name || "未命名分组").slice(0, 40);
+      const isLeadFolder = id === LEAD_INBOX_FOLDER_ID;
+      const name = String(f?.name || (isLeadFolder ? "主动联系" : "未命名分组")).slice(0, 40);
       const sort = Number.isFinite(Number(f?.sort)) ? Number(f.sort) : i;
       const scope: FolderScope =
-        f?.scope?.type === "all"
+        isLeadFolder || f?.scope?.type === "all"
           ? { type: "all" }
           : {
               type: "account",
@@ -1049,9 +1203,10 @@ export function normalizeLoadedSettings(
       return {
         id,
         name,
+        ...(isLeadFolder ? { systemType: "leadInbox" as const } : {}),
         ...(typeof f?.icon === "string" && /^[\p{Emoji_Presentation}\p{Extended_Pictographic}]$/u.test(f.icon) ? { icon: f.icon } : {}),
         ...(typeof f?.color === "string" && /^#[0-9a-f]{6}$/i.test(f.color) ? { color: f.color } : {}),
-        ...(typeof f?.parentId === "string" && f.parentId
+        ...(!isLeadFolder && typeof f?.parentId === "string" && f.parentId
           ? { parentId: f.parentId }
           : {}),
         sort,
@@ -1071,7 +1226,7 @@ export function normalizeLoadedSettings(
         scope,
       };
     })
-    .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, "zh"));
+    .sort((a, b) => (a.systemType === "leadInbox" ? -1 : b.systemType === "leadInbox" ? 1 : a.sort - b.sort || a.name.localeCompare(b.name, "zh")));
 
   const folderIds = new Set(merged.chatFolders.map((f) => f.id));
   const primaryByChat = new Map<string, string>();

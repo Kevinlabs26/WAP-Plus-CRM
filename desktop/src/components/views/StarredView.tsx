@@ -170,7 +170,7 @@ export function StarredView() {
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         <div className="mx-auto w-full max-w-7xl">
           {filtered.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900/30 px-4 py-10 text-center">
+          <div className="rounded-lg border border-dashed border-zinc-800 bg-zinc-900/30 px-4 py-10 text-center">
             <Star className="mx-auto h-8 w-8 text-zinc-600" />
             <div className="mt-3 text-[13px] font-medium text-zinc-300">
               {starred.length === 0 ? t("starred.empty") : t("starred.noMatch")}
@@ -215,7 +215,7 @@ export function StarredView() {
               {filtered.map((m) => (
                 <li
                   key={m.id}
-                  className="flex items-start gap-3 rounded-xl border border-zinc-800/90 bg-zinc-900/40 p-3 transition-colors hover:border-zinc-700 hover:bg-zinc-900/60"
+                  className="flex items-start gap-3 rounded-lg border border-zinc-800/90 bg-zinc-900/40 p-3 transition-colors hover:border-zinc-700 hover:bg-zinc-900/60"
                 >
                   <span className="mt-0.5 shrink-0 text-amber-400" title={t("starred.starred")}>
                     <Star className="h-4 w-4 fill-amber-400" />

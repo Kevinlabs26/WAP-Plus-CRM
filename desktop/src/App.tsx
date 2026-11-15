@@ -90,6 +90,11 @@ const SettingsModal = lazy(() =>
     default: m.SettingsModal,
   }))
 );
+const ImageGenerationTaskHost = lazy(() =>
+  import("@/components/chat/ImageGenerationTaskHost").then((m) => ({
+    default: m.ImageGenerationTaskHost,
+  }))
+);
 const BaileysLoginModal = lazy(() =>
   import("@/components/settings/BaileysLoginModal").then((m) => ({
     default: m.BaileysLoginModal,
@@ -492,7 +497,7 @@ function DeferredModals({ interactive }: { interactive: boolean }) {
   const setCommandOpen = useAppStore((s) => s.setCommandOpen);
 
   useEffect(() => {
-    if (!interactive) return;
+    if (!interactive || settingsOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
@@ -501,14 +506,13 @@ function DeferredModals({ interactive }: { interactive: boolean }) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [interactive, setCommandOpen]);
+  }, [interactive, settingsOpen, setCommandOpen]);
 
-  if (!interactive || (!settingsOpen && !baileysLoginOpen && !commandOpen)) {
+  if (!interactive || settingsOpen || (!baileysLoginOpen && !commandOpen)) {
     return null;
   }
   return (
     <Suspense fallback={null}>
-      {settingsOpen ? <SettingsModal /> : null}
       {baileysLoginOpen ? <BaileysLoginModal /> : null}
       {commandOpen ? <CommandPalette /> : null}
     </Suspense>
@@ -582,6 +586,7 @@ export default function App() {
   }, []);
   const { t } = useI18n();
   const activeNav = useAppStore((s) => s.activeNav);
+  const settingsOpen = useAppStore((s) => s.settingsOpen);
   const hydrate = useAppStore((s) => s.hydrate);
   const hydrated = useAppStore((s) => s.hydrated);
   const setUiReady = useAppStore((s) => s.setUiReady);
@@ -853,8 +858,8 @@ export default function App() {
     return () => setAppLockActive(false);
   }, [appLockBlocked]);
   useLayoutEffect(() => {
-    if (shellRef.current) shellRef.current.inert = appLockBlocked;
-  }, [appLockBlocked]);
+    if (shellRef.current) shellRef.current.inert = appLockBlocked || settingsOpen;
+  }, [appLockBlocked, settingsOpen]);
   const openLock = () => {
     if (appLockStatus?.configured) {
       setAppLocked(true);
@@ -883,11 +888,10 @@ export default function App() {
       {showShell && (
         <div
           ref={shellRef}
-          className={
+          className={settingsOpen ? "hidden" :
             "relative flex h-screen min-h-0 flex-col overflow-hidden bg-zinc-950 text-zinc-100 " +
-            (showSplash || appLockBlocked ? "pointer-events-none select-none" : "")
-          }
-          aria-hidden={showSplash || appLockBlocked || undefined}
+            (showSplash || appLockBlocked ? "pointer-events-none select-none" : "")}
+          aria-hidden={showSplash || appLockBlocked || settingsOpen || undefined}
         >
           <TopBar
             showDonation={showDonation}
@@ -895,14 +899,13 @@ export default function App() {
             appLockConfigured={Boolean(appLockStatus?.configured)}
             onLock={openLock}
             onManageLock={manageLock}
+            onDisableLock={() => setAppLockMode("disable")}
           />
           {activeNav !== "today" && activeNav !== "ai-outreach" && <StatsBar />}
           <div className="flex min-h-0 flex-1 overflow-hidden">
             <NavBody interactive={interactive} />
           </div>
           <VoicePlaybackHost />
-          <ConfirmHost />
-          <ToastHost />
           <CloudUploadStatus />
           <DeferredModals interactive={interactive} />
           <Suspense fallback={null}>
@@ -911,6 +914,21 @@ export default function App() {
           <DeferredWatchers interactive={interactive} />
         </div>
       )}
+
+      {showShell && <ConfirmHost />}
+
+      {showShell && settingsOpen && (
+        <Suspense fallback={null}>
+          <SettingsModal />
+        </Suspense>
+      )}
+
+      {showShell && !appLockBlocked && <>
+        <ToastHost />
+        <Suspense fallback={null}>
+          <ImageGenerationTaskHost />
+        </Suspense>
+      </>}
 
       {bootFatal && (
         <div
@@ -960,6 +978,11 @@ export default function App() {
             setAppLockMode(null);
           }}
           onChanged={() => setAppLockMode(null)}
+          onDisabled={() => {
+            setAppLockStatus((current) => current ? { ...current, configured: false } : current);
+            setAppLocked(false);
+            setAppLockMode(null);
+          }}
         />
       )}
 

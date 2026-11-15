@@ -8,7 +8,7 @@ const mocks = {
   '@/store/appStore':'export const useAppStore=selector=>{const value=selector(globalThis.playbookState);if(!Object.is(value,selector(globalThis.playbookState)))throw Error("Unstable store snapshot");return value;};useAppStore.getState=()=>globalThis.playbookState;',
   '@/i18n':'export const useI18n=()=>({t:(key,params)=>key+(params?JSON.stringify(params):"")});',
   '@/components/ui/primitives':'export const Button="button",Input="input",Textarea="textarea";',
-  '@/lib/musePlaybookSync':'export const syncMusePlaybooks=async()=>0;',
+  '@/lib/musePlaybookSync':'export const syncMusePlaybooks=async root=>{globalThis.playbookSyncRoot=root;return 0;};export const discoverMusePlaybookSources=async()=>globalThis.playbookSources||[];',
   '@/lib/museWeb':'export const openMuseWeb=async()=>{};',
 };
 const src=fileURLToPath(new URL('../src',import.meta.url));
@@ -23,7 +23,7 @@ function fixture(){
   return {render(Component=PlaybookLibrary){cursor=0;return nodes(Component());}};
 }
 
-test('library imports actual filenames and selectable content, with no preset stages',async()=>{
+test('library imports actual filenames for selection without exposing content editing',async()=>{
   const ui=fixture();
   assert.equal(nodes(PlaybookSelect({value:'',onChange(){}})).filter(node=>node.type==='option').length,2,'only inherit and off exist before import');
   const input=ui.render().find(node=>node.type==='input'&&node.props.type==='file');
@@ -33,13 +33,32 @@ test('library imports actual filenames and selectable content, with no preset st
   assert.equal(playbookState.settings.aiPlaybooks.length,1);
   assert.equal(playbookState.settings.aiPlaybooks[0].name,'My custom stage');
   assert.ok(nodes(PlaybookSelect({value:'',onChange(){}})).some(node=>node.type==='option'&&JSON.stringify(node.props.children).includes('My custom stage')));
-  tree.find(node=>node.type==='textarea').props.onChange({target:{value:'Reviewed concise rules'}});
-  assert.equal(playbookState.settings.aiPlaybooks[0].summary,'Real stage rules','editing does not commit until save');
-  tree=ui.render();tree.find(node=>node.type==='button'&&node.props.children==='dialog.save').props.onClick();
-  assert.equal(playbookState.settings.aiPlaybooks[0].summary,'Reviewed concise rules');
-  const id=playbookState.settings.aiPlaybooks[0].id;
-  playbookState.settings.aiPlaybookBindings['["a","chat"]']=id;
-  assert.equal(ui.render().find(node=>node.type==='button'&&node.props.children==='common.delete').props.disabled,true);
+  assert.equal(tree.some(node=>node.type==='textarea'),false);
+  assert.equal(tree.some(node=>node.type==='input'&&node.props.type!=='file'),false);
+  assert.equal(tree.some(node=>node.type==='button'&&['dialog.save','common.delete'].includes(node.props.children)),false);
+});
+
+test('long local Markdown requires Muse sync when summaries can no longer be edited here',async()=>{
+  const ui=fixture();
+  const input=ui.render().find(node=>node.type==='input'&&node.props.type==='file');
+  input.props.onChange({target:{files:[{name:'Long stage.md',size:6001,text:async()=> 'x'.repeat(6001)}],value:'file'}});
+  await settle();
+  assert.equal(playbookState.settings.aiPlaybooks.length,0);
+  assert.ok(ui.render().some(node=>node.props.role==='alert'&&node.props.children==='playbook.localTooLong'));
+});
+
+test('Muse Playbook paths are discovered first and the selected folder is the one imported',async()=>{
+  const ui=fixture(),root='/workspace/解决观念/playbooks';
+  globalThis.playbookSources=[{name:'解决观念',root}];
+  try{
+    let tree=ui.render();
+    tree.find(node=>node.type==='button'&&node.props.children==='playbook.findSources').props.onClick();
+    await settle();tree=ui.render();
+    assert.ok(tree.some(node=>node.type==='select'&&nodes(node).some(option=>option.type==='option'&&option.props.value===root)));
+    tree.find(node=>node.type==='button'&&node.props.children==='playbook.importMuseSource').props.onClick();
+    await settle();
+    assert.equal(playbookSyncRoot,root);
+  }finally{delete globalThis.playbookSources;delete globalThis.playbookSyncRoot;}
 });
 
 test('customer picker saves only the current account conversation, and inherit clears the override',()=>{
@@ -69,9 +88,7 @@ test('removed Muse files disappear from binding and overview choices, while old 
  assert.equal(opts.find(n=>n.props.value==='old').props.disabled,true);
  assert.ok(opts.some(n=>n.props.value==='current'));
  assert.equal(playbookState.settings.aiPlaybookOverviewId,'old','never silently change an existing binding');
- const editor=ui.render().filter(n=>n.type==='select')[1];
- assert.ok(!nodes(editor).some(n=>n.type==='option'&&n.props.value==='old'));
- assert.ok(nodes(editor).some(n=>n.type==='option'&&n.props.value==='current'));
+ assert.equal(ui.render().filter(n=>n.type==='select').length,2,'overview and conversation-plan selectors remain available');
  assert.equal(playbookState.settings.aiPlaybooks.length,2,'hiding expired entries does not destroy cached data');
 });
 

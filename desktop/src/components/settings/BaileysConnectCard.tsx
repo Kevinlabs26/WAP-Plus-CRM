@@ -873,7 +873,7 @@ function ProfileEditModal({
       }}
     >
       <div
-        className="w-[min(92vw,26rem)] overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl"
+        className="w-[min(92vw,26rem)] overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl"
         role="dialog"
         aria-modal="true"
       >

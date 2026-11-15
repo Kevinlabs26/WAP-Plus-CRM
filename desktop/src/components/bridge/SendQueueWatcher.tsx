@@ -12,12 +12,14 @@ import {
   resolveWaSendAccountId,
 } from "@/lib/accountConnection";
 import { getAutoReplySendError, canSendAutoReply } from "@/lib/aiSafety";
+import { canSendAiAutoFollowUp } from "@/lib/aiAutoReply";
 import { currentAutoReplyContext, inspectAutoReplyContext, hashAiReplyContext } from "@/lib/aiReplyContext";
 import { currentOutreachContext, isOutreachPaused } from "@/lib/aiOutreachContext";
 import { hydrateOutreachHistory } from "@/lib/aiOutreachHistory";
 import { translateCurrent } from "@/i18n";
 import { scheduledMessageExpired } from "@/lib/scheduledMessageExpiry";
 import { isAppLockActive } from "@/lib/appLockRuntime";
+import { refreshAiConversationSummary } from "@/lib/aiConversationSummary";
 
 const MAX_AUTO_RETRIES = 5;
 
@@ -110,8 +112,9 @@ export function SendQueueWatcher() {
         let verified = false;
         let verificationError = proactive ? "主动联系的规则、轮次或聊天内容已变化，请重新生成" : inspectAutoReplyContext(state,msg).error;
         if(!proactive&&!verificationError)verificationError=getAutoReplySendError(settings,state.messages,msg,msg.aiReplyInboundId)||"";
+        if(!proactive&&msg.aiAutoFollowUpStep&&!canSendAiAutoFollowUp(settings,state.messages,msg))verificationError ||= "自动跟进已取消或当前聊天状态已变化";
         if(!msg.aiReplyContextHash)verificationError="此消息缺少生成校验记录，不能重试旧回复，请重新生成";
-        if (aiContextKey && msg.aiReplyContextHash && (proactive||canSendAutoReply(settings, state.messages, msg,msg.aiReplyInboundId))) {
+        if (aiContextKey && msg.aiReplyContextHash && (proactive||canSendAutoReply(settings, state.messages, msg,msg.aiReplyInboundId)&&canSendAiAutoFollowUp(settings,state.messages,msg))) {
           try { verified = await hashAiReplyContext(aiContextKey) === msg.aiReplyContextHash; }
           catch { verificationError="本机无法执行摘要校验，请重启应用后重新生成"; }
         }
@@ -206,7 +209,8 @@ export function SendQueueWatcher() {
                 (!task || (task.status === "queued" && !scheduledMessageExpired(task))) &&
                 (!proactive||currentOutreachContext(latest,message)===aiContextKey) &&
                 (msg.systemKind !== "ai_auto_reply" || (currentAutoReplyContext(latest, message) === aiContextKey &&
-                  canSendAutoReply(latest.settings, latest.messages, message,message.aiReplyInboundId)));
+                  canSendAutoReply(latest.settings, latest.messages, message,message.aiReplyInboundId) &&
+                  canSendAiAutoFollowUp(latest.settings, latest.messages, message)));
             },
             rateLimitEnabled: settings.rateLimitEnabled !== false,
             rateLimits: {
@@ -237,6 +241,10 @@ export function SendQueueWatcher() {
             nextAttemptAt: undefined,
             ...(waId ? { waMessageId: waId } : {}),
           });
+          if (msg.systemKind === "ai_auto_reply" && msg.aiAutoFollowUpRootId && result.status !== "local") {
+            useAppStore.getState().patchMessage(msg.id, { aiAutoFollowUpSentAt: Date.now() });
+          }
+          if (msg.systemKind === "ai_auto_reply" && result.status !== "local") void refreshAiConversationSummary(msg.id);
           return;
         }
 

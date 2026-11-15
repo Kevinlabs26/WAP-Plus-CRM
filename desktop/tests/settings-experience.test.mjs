@@ -7,9 +7,11 @@ import zh from "../src/i18n/locales/zh-CN.ts";
 const panels = ["Connection", "Messaging", "Ai", "Translation", "AutoReply", "QuickReplies", "Data", "Blocklist", "Appearance", "Speech", "Notifications", "ScheduledMessages", "Update", "CloudImages"];
 const mocks = {
   "./SettingsGoogleSheets": "export const SettingsGoogleSheets=()=>null;",
+  "./AiUsagePanel": "export const AiUsagePanel=()=>null;",
+  "./PlaybookLibrary": "export const PlaybookLibrary=()=>null;",
   react: "export const memo=fn=>fn; export const useState=initial=>globalThis.settingsHookState?globalThis.settingsHookState(initial):[typeof initial==='function'?initial():initial,()=>{}]; export const useRef=value=>globalThis.settingsHookRef?globalThis.settingsHookRef(value):({current:null}); export const useEffect=fn=>globalThis.settingsEffects.push(fn);",
   "react/jsx-runtime": "export const jsx=(type,props,key)=>({type,props,key}); export const jsxs=jsx;",
-  "lucide-react": "export const AudioLines=()=>null, CloudUpload=AudioLines, Bell=AudioLines, TableProperties=AudioLines, Bot=AudioLines, Clock3=AudioLines, Database=AudioLines, Info=AudioLines, MessageSquareText=AudioLines, Palette=AudioLines, Radio=AudioLines, ShieldBan=AudioLines, Workflow=AudioLines, X=AudioLines, Zap=AudioLines, Activity=AudioLines, AlertTriangle=AudioLines, CheckCircle2=AudioLines, Flame=AudioLines;",
+  "lucide-react": "export const AudioLines=()=>null, CloudUpload=AudioLines, Bell=AudioLines, TableProperties=AudioLines, Bot=AudioLines, Clock3=AudioLines, Database=AudioLines, Info=AudioLines, MessageSquareText=AudioLines, Palette=AudioLines, Radio=AudioLines, ShieldBan=AudioLines, Workflow=AudioLines, X=AudioLines, Zap=AudioLines, Activity=AudioLines, BookOpen=AudioLines, AlertTriangle=AudioLines, CheckCircle2=AudioLines, Flame=AudioLines;",
   "@/store/appStore": "export const useAppStore=selector=>selector(globalThis.settingsState);",
   "@/i18n": "export const useI18n=()=>({t:globalThis.settingsTranslate});",
   ...Object.fromEntries(panels.map(name => [`./Settings${name}Panel`, `export const Settings${name}Panel=()=>null;`])),
@@ -80,6 +82,55 @@ test("Google Sheets has its own settings category and opens its dedicated panel"
     categories[0].props.onClick();
     assert.deepEqual(selected, ["google-sheets"]);
     assert.ok(all.some(node => node.props.active === true && node.props.Panel?.name === "SettingsGoogleSheets"));
+  } finally {
+    for (const key of ["settingsTranslate", "settingsEffects", "settingsState"]) delete globalThis[key];
+  }
+});
+
+test("AI auto-reply and usage are nested under Reply AI, with usage on its own panel", () => {
+  const selected = [];
+  globalThis.settingsTranslate = translate;
+  globalThis.settingsEffects = [];
+  globalThis.settingsState = { settingsOpen: true, settingsCategory: "ai-usage", setSettingsCategory: value => selected.push(value) };
+  try {
+    const all = nodes(SettingsModal());
+    const nested = all.filter(node => node.type === "div" && node.props.className === "ml-4 border-l border-zinc-800 pl-2");
+    assert.ok(nested.some(node => text(node) === zh["settings.autoReply"]));
+    assert.ok(nested.some(node => text(node) === zh["aiUsage.title"]));
+    const usage = all.find(node => node.type === "button" && text(node) === zh["aiUsage.title"]);
+    assert.equal(usage.props["aria-current"], "page");
+    usage.props.onClick();
+    assert.deepEqual(selected, ["ai-usage"]);
+    assert.ok(all.some(node => node.props.active === true && node.props.Panel?.name === "AiUsagePanel"));
+  } finally {
+    for (const key of ["settingsTranslate", "settingsEffects", "settingsState"]) delete globalThis[key];
+  }
+});
+
+test("Muse Playbook has a conditional submenu, and an unavailable saved category redirects to AI services", () => {
+  const selected = [];
+  globalThis.settingsTranslate = translate;
+  globalThis.settingsEffects = [];
+  globalThis.settingsState = { settingsOpen: true, settingsCategory: "ai", settings: { aiProvider: "openai" }, setSettingsCategory: value => selected.push(value) };
+  try {
+    let all = nodes(SettingsModal());
+    assert.equal(all.some(node => node.type === "button" && text(node) === zh["playbook.library"]), false);
+
+    settingsState.settings.aiProvider = "muse";
+    all = nodes(SettingsModal());
+    const playbook = all.find(node => node.type === "button" && text(node) === zh["playbook.library"]);
+    assert.ok(playbook);
+    assert.ok(all.some(node => node.type === "div" && node.props.className === "ml-4 border-l border-zinc-800 pl-2" && text(node) === zh["playbook.library"]));
+    playbook.props.onClick();
+    assert.deepEqual(selected, ["playbook"]);
+
+    selected.length = 0;
+    settingsState.settingsCategory = "playbook";
+    settingsState.settings.aiProvider = "openai";
+    all = nodes(SettingsModal());
+    assert.equal(all.some(node => node.type === "button" && text(node) === zh["playbook.library"]), false);
+    settingsEffects.at(-1)();
+    assert.deepEqual(selected, ["ai"]);
   } finally {
     for (const key of ["settingsTranslate", "settingsEffects", "settingsState"]) delete globalThis[key];
   }

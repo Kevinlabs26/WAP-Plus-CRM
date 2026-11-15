@@ -188,7 +188,7 @@ export function ContactImportModal({ open, onClose, accountId }: Props) {
       className="fixed inset-0 z-[210] flex items-center justify-center bg-black/70 p-4 backdrop-blur-[2px]"
       onMouseDown={(event) => event.target === event.currentTarget && !importing && onClose()}
     >
-      <div className="flex h-[min(88vh,820px)] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl shadow-black/60">
+      <div className="flex h-[min(88vh,820px)] w-full max-w-6xl flex-col overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl shadow-black/60">
         <header className="flex items-center gap-3 border-b border-zinc-800 px-5 py-4">
           <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand/15 text-brand">
             <FileSpreadsheet className="h-5 w-5" />
@@ -238,7 +238,7 @@ export function ContactImportModal({ open, onClose, accountId }: Props) {
 
             <div className="mt-4">
               {tab === "file" ? (
-                <div className="rounded-xl border border-dashed border-zinc-700 bg-zinc-950/35 p-5 text-center">
+                <div className="rounded-lg border border-dashed border-zinc-700 bg-zinc-950/35 p-5 text-center">
                   <input
                     ref={fileRef}
                     type="file"
@@ -382,7 +382,7 @@ export function ContactImportModal({ open, onClose, accountId }: Props) {
                 <p className="mt-1 text-[11px] text-zinc-600">{t("contactImport.previewHint")}</p>
               </div>
             ) : (
-              <div className="mt-3 min-h-0 flex-1 overflow-auto rounded-xl border border-zinc-800 bg-zinc-950/45">
+              <div className="mt-3 min-h-0 flex-1 overflow-auto rounded-lg border border-zinc-800 bg-zinc-950/45">
                 <table className="w-full min-w-[650px] border-collapse text-left text-[11px]">
                   <thead className="sticky top-0 z-10 bg-zinc-900 text-zinc-500 shadow-[0_1px_0_#27272a]">
                     <tr>

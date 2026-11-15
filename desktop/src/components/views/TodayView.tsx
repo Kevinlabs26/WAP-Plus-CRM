@@ -133,8 +133,8 @@ export function TodayView() {
   const liveConnection = useAppStore((s) => s.baileysUi.connection);
   const scopedAccounts = waAccounts.filter((a) => !scopeId || a.id === scopeId);
   const connectedCount = scopedAccounts.filter((a) => isWaAccountConnected(waAccounts, a.id, liveAccountId, liveConnection)).length;
-  const connected = sendChannel === "android_bridge" ? bridgeConnected
-    : connectedCount > 0 || (!scopeId && scopedAccounts.length === 0 && liveConnection === "connected");
+  const connected = connectedCount > 0 || (sendChannel === "android_bridge" && bridgeConnected)
+    || (!scopeId && scopedAccounts.length === 0 && liveConnection === "connected");
 
   const contactById = useMemo(() => {
     const m = new Map<string, Contact>();
@@ -431,7 +431,7 @@ export function TodayView() {
           </div>
 
           {emptyAll && activeQueue !== "plan" ? (
-            <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-zinc-800/80 bg-zinc-900/30 px-6 py-16 text-center">
+            <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-zinc-800/80 bg-zinc-900/30 px-6 py-16 text-center">
               {connected ? <CheckCircle2 className="h-8 w-8 text-emerald-500/80" /> : <Radio className="h-8 w-8 text-zinc-400" />}
               <div className="text-[14px] font-medium text-zinc-200">
                 {t(connected ? "today.emptyTitle" : "today.connectTitle")}
@@ -454,7 +454,7 @@ export function TodayView() {
           ) : null}
 
           {!emptyAll && activeQueue !== "all" && activeQueue !== "plan" && activeQueueCount === 0 ? (
-            <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900/30 px-6 py-10 text-center">
+            <div className="rounded-lg border border-dashed border-zinc-800 bg-zinc-900/30 px-6 py-10 text-center">
               <div className="text-[13px] font-medium text-zinc-300">{t("today.queueEmpty")}</div>
               <Button
                 variant="ghost"

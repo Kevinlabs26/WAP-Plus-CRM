@@ -55,20 +55,21 @@ test('bad rows and calling codes block results; unavailable drafts still allow e
  }finally{ui.close();}
 });
 
-test('composer appends links without sending, preserves long drafts and blocks insertion while editing or attaching',async()=>{
+test('composer appends links without sending, preserves long drafts and keeps attachments',async()=>{
  const source=readFileSync(new URL('../src/components/chat/Composer.tsx',import.meta.url),'utf8');
  const start=source.indexOf('{linksOpen && createPortal('),end=source.indexOf('\n      {vcfOpen &&',start);
  const markup=source.slice(start+1,end).trim().slice(0,-1);
- const code=await transform(`function render(scope){const {element,linksOpen,createPortal,ContactLinksDialog,resetKey,sendAccountId,setLinksOpen,textareaRef,sending,recording,inputLocked,editingId,pendingMedia,mediaSendingIndex,readDraft,MAX_CHAT_DRAFT_LENGTH,pushToast,t,flushDraftNow,applyDraftToDom,setTranslateOriginal,document}=scope;return ${markup};}`,{loader:'tsx',jsxFactory:'element'});
+ const code=await transform(`function render(scope){const {element,linksOpen,createPortal,ContactLinksDialog,resetKey,sendAccountId,setLinksOpen,textareaRef,sending,recording,inputLocked,editingId,pendingMedia,mediaSendingIndex,readDraft,MAX_CHAT_DRAFT_LENGTH,pushToast,t,flushDraftNow,applyDraftToDom,setMediaCaption,setTranslateOriginal,document}=scope;return ${markup};}`,{loader:'tsx',jsxFactory:'element'});
  const render=new Function(code.code+';return render;')();
- let draft='Original message',dom=draft,toast='',translation='before',closed=false;
- const scope={element:(type,props)=>({type,props}),linksOpen:true,createPortal:v=>v,ContactLinksDialog:'dialog',resetKey:'chat-a',sendAccountId:'account-a',setLinksOpen:v=>closed=!v,textareaRef:{current:null},sending:false,recording:false,inputLocked:false,editingId:null,pendingMedia:[],mediaSendingIndex:-1,readDraft:()=>draft,MAX_CHAT_DRAFT_LENGTH,pushToast:v=>toast=v,t:k=>k,flushDraftNow:v=>draft=v,applyDraftToDom:v=>dom=v,setTranslateOriginal:v=>translation=v,document:{body:{}}};
+ let draft='Original message',dom=draft,caption='',toast='',translation='before',closed=false;
+ const scope={element:(type,props)=>({type,props}),linksOpen:true,createPortal:v=>v,ContactLinksDialog:'dialog',resetKey:'chat-a',sendAccountId:'account-a',setLinksOpen:v=>closed=!v,textareaRef:{current:null},sending:false,recording:false,inputLocked:false,editingId:null,pendingMedia:[],mediaSendingIndex:-1,readDraft:()=>draft,MAX_CHAT_DRAFT_LENGTH,pushToast:v=>toast=v,t:k=>k,flushDraftNow:v=>draft=v,applyDraftToDom:v=>dom=v,setMediaCaption:v=>caption=v,setTranslateOriginal:v=>translation=v,document:{body:{}}};
  let modal=render(scope);assert.equal(modal.props.key,'chat-a:account-a');assert.equal(modal.props.onInsert('Name\nhttps://wa.me/12025550101'),true);
  assert.equal(draft,'Original message\n\nName\nhttps://wa.me/12025550101');assert.equal(dom,draft);assert.equal(translation,null);
  draft='x'.repeat(MAX_CHAT_DRAFT_LENGTH);dom=draft;assert.equal(render(scope).props.onInsert('Name\nlink'),false);assert.equal(draft,dom);assert.equal(toast,'links.longDraft');
- for(const busy of [{sending:true},{recording:true},{inputLocked:true},{editingId:'message'},{pendingMedia:[{}]},{mediaSendingIndex:0}]){
+ for(const busy of [{sending:true},{recording:true},{inputLocked:true},{editingId:'message'},{mediaSendingIndex:0}]){
   modal=render({...scope,...busy});assert.equal(modal.props.canInsert,false);assert.equal(modal.props.onInsert('text'),false);assert.equal(draft,dom);
  }
+ draft='Original message';dom=draft;caption='';modal=render({...scope,pendingMedia:[{}]});assert.equal(modal.props.canInsert,true);assert.equal(modal.props.onInsert('text'),true);assert.equal(caption,draft);
  modal.props.onClose();assert.equal(closed,true);
  assert.match(source,/setLinksOpen\(false\);.*\[resetKey, sendAccountId\]/);
 });

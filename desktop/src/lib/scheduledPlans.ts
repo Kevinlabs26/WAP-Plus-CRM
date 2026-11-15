@@ -72,7 +72,7 @@ export function scheduledMediaBytes(media: SettingsQuickReply["media"]): number 
   return match[1].length / 4 * 3 - (match[1].endsWith("==") ? 2 : match[1].endsWith("=") ? 1 : 0);
 }
 
-type TargetState = { chats: ChatPreview[]; contacts: Contact[]; messages?: Message[]; settings: Pick<SettingsShape, "waAccounts" | "liveBaileysAccountId" | "activeAccountId" | "chatFolders" | "chatFolderClones"> };
+type TargetState = { chats: ChatPreview[]; contacts: Contact[]; messages?: Message[]; settings: Pick<SettingsShape, "waAccounts" | "liveBaileysAccountId" | "activeAccountId" | "chatFolders" | "chatFolderClones" | "leadInbox"> };
 
 export function lastContactedAccounts(chats: ChatPreview[], contacts: Contact[], messages: Message[]) {
   const contactsById = new Map(contacts.map(contact => [contact.id, contact]));
@@ -137,9 +137,13 @@ export function scheduledFolderChatIds(settings: TargetState["settings"], folder
       }
     }
   }
+  const collected = root.systemType === "leadInbox"
+    ? settings.leadInbox.collectedChatIds.filter(id => !settings.leadInbox.dismissedChatIds.includes(id))
+    : [];
   return [...new Set([
     ...settings.chatFolders.filter(folder => ids.has(folder.id)).flatMap(folder => folder.chatIds),
     ...settings.chatFolderClones.filter(clone => ids.has(clone.folderId)).map(clone => clone.sourceChatId),
+    ...collected,
   ])];
 }
 

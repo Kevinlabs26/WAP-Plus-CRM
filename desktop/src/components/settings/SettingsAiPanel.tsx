@@ -12,10 +12,8 @@ import { useI18n } from "@/i18n";
 import { TimeZoneSelect } from "@/components/ui/TimeZoneSelect";
 import { systemTimeZone } from "@/lib/timeZone";
 import { isChatModel, type ModelPurpose } from "@/lib/modelCapabilities";
-import { AiUsagePanel } from "./AiUsagePanel";
 import { VertexAiFields } from "./VertexAiFields";
 import { MuseWebFields } from "./MuseWebFields";
-import { PlaybookLibrary } from "./PlaybookLibrary";
 
 export function SettingsAiPanel() {
   const { t } = useI18n();
@@ -29,7 +27,7 @@ export function SettingsAiPanel() {
         <p className="mt-1 text-[11px] text-zinc-500">{t("settingsAi.description")}</p>
       </header>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <SectionLabel>{t("settingsAi.modelService")}</SectionLabel>
         <AiServiceFields settings={settings} updateSettings={updateSettings} />
         {settings.aiProvider!=="muse"&&<p className="mt-3 text-2xs text-zinc-600">{t("settingsAi.keyHint")}</p>}
@@ -38,8 +36,6 @@ export function SettingsAiPanel() {
             label={t("settingsAi.myTimeZone")} automatic={t("settingsAi.computerTimeZone", { zone: systemTimeZone() || "UTC" })} />
         </div>
       </section>
-      <PlaybookLibrary/>
-      <AiUsagePanel/>
     </div>
   );
 }

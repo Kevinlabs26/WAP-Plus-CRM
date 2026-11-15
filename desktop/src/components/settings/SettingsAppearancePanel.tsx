@@ -142,7 +142,7 @@ export function SettingsAppearancePanel() {
       </section>
       </div>
       <div role="tabpanel" id="appearance-panel-interface" aria-labelledby="appearance-tab-interface" hidden={tab!=="interface"} className="space-y-6">
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <label className="flex items-center justify-between gap-3 text-xs text-zinc-300">
           <span className="min-w-0">
             <span className="block text-zinc-200">{t("appearance.contactTagsInChatList")}</span>
@@ -151,7 +151,7 @@ export function SettingsAppearancePanel() {
           <Switch checked={showContactTags} onChange={event => updateSettings({ showContactTagsInChatList: event.target.checked })} />
         </label>
       </section>
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <SectionLabel className="!mb-0">{t("appearance.language")}</SectionLabel>
@@ -170,14 +170,14 @@ export function SettingsAppearancePanel() {
         </div>
       </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <SectionLabel>{t("appearance.theme")}</SectionLabel>
         <div className="mt-3 grid grid-cols-2 gap-3.5">
           <button
             type="button"
             onClick={() => updateSettings({ theme: "dark" })}
             className={cn(
-              "group relative flex flex-col items-stretch gap-3 rounded-xl border p-3.5 text-left transition-all",
+              "group relative flex flex-col items-stretch gap-3 rounded-lg border p-3.5 text-left transition-all",
               theme === "dark"
                 ? "border-brand/70 bg-zinc-900/90 ring-2 ring-brand/20 shadow-md"
                 : "border-zinc-800 bg-zinc-900/30 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900/60"
@@ -221,7 +221,7 @@ export function SettingsAppearancePanel() {
             type="button"
             onClick={() => updateSettings({ theme: "light" })}
             className={cn(
-              "group relative flex flex-col items-stretch gap-3 rounded-xl border p-3.5 text-left transition-all",
+              "group relative flex flex-col items-stretch gap-3 rounded-lg border p-3.5 text-left transition-all",
               theme === "light"
                 ? "border-brand/70 bg-zinc-900/90 ring-2 ring-brand/20 shadow-md"
                 : "border-zinc-800 bg-zinc-900/30 text-zinc-400 hover:border-zinc-700 hover:bg-zinc-900/60"
@@ -265,7 +265,7 @@ export function SettingsAppearancePanel() {
 
       </div>
       <div role="tabpanel" id="appearance-panel-background" aria-labelledby="appearance-tab-background" hidden={tab!=="background"}>
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">
             <SectionLabel className="!mb-0">{t("appearance.chatBackground")}</SectionLabel>

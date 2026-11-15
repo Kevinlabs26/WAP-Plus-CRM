@@ -187,13 +187,13 @@ export function BroadcastMediaPicker(props: {
       />
 
       {pending.length > 0 && (
-        <div className="mt-2 space-y-1.5">
+        <div className="mt-2 divide-y divide-zinc-800/80">
           {pending.map((item) => {
             const Icon = KIND_ICON[item.kind];
             return (
               <div
                 key={item.id}
-                className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/40 px-2 py-1.5"
+                className="flex items-center gap-2 py-2.5"
               >
                 {item.kind === "image" && item.dataUrl ? (
                   <img

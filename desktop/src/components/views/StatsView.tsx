@@ -277,7 +277,7 @@ export function StatsView() {
               key={c.label}
               type="button"
               onClick={c.onClick}
-              className="rounded-xl border border-zinc-800/90 bg-zinc-900/40 p-3.5 text-left transition-colors hover:border-zinc-700 hover:bg-zinc-900"
+              className="rounded-lg border border-zinc-800/90 bg-zinc-900/40 p-3.5 text-left transition-colors hover:border-zinc-700 hover:bg-zinc-900"
             >
               <div className="break-words text-2xs text-zinc-500">{c.label}</div>
               <div
@@ -341,7 +341,7 @@ export function StatsView() {
           <p className="mb-2 text-2xs text-zinc-600">
             {scopeHint} · {t("stats.trendHint")}
           </p>
-          <div className="rounded-xl border border-zinc-800/90 bg-zinc-900/30 p-4">
+          <div className="rounded-lg border border-zinc-800/90 bg-zinc-900/30 p-4">
             {trend7d.length === 0 ? (
               <p className="text-[12px] text-zinc-500">
                 {t("stats.loading")}
@@ -463,7 +463,7 @@ export function StatsView() {
         {scope === "all" && (
           <div className="mt-8">
             <SectionLabel>{t("stats.byAccount")}</SectionLabel>
-            <div className="overflow-hidden rounded-xl border border-zinc-800/90 bg-zinc-900/30">
+            <div className="overflow-hidden rounded-lg border border-zinc-800/90 bg-zinc-900/30">
               {accountRows.length === 0 ? (
                 <p className="p-4 text-[12px] text-zinc-500">
                   {t("stats.noAccounts")}
@@ -542,7 +542,7 @@ export function StatsView() {
             {t("stats.stageDistribution")}
             {scope !== "all" ? t("stats.stageScope") : ""}
           </SectionLabel>
-          <div className="space-y-2.5 rounded-xl border border-zinc-800/90 bg-zinc-900/30 p-4">
+          <div className="space-y-2.5 rounded-lg border border-zinc-800/90 bg-zinc-900/30 p-4">
             {stageDistribution.map(({ id, label, count: n }) => {
               const pct = Math.round((n / funnelTotal) * 100);
               return (

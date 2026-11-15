@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { useAppStore } from "@/store/appStore";
 import { useShallow } from "zustand/react/shallow";
-import { displayContactLabel, stripWhatsAppFormatting } from "@/lib/utils";
+import { contactTagColorClass, displayContactLabel, stripWhatsAppFormatting } from "@/lib/utils";
 import { Avatar } from "@/components/ui/Avatar";
 import { Badge, ListRow } from "@/components/ui/primitives";
 import { Ticks } from "@/components/chat/Ticks";
@@ -60,6 +60,9 @@ export type ChatSidebarRowProps = {
   accountShort?: string;
   accountLabel?: string;
   accountCount?: number;
+  selectable?: boolean;
+  selected?: boolean;
+  selectionDisabled?: boolean;
   dataAccountId?: string;
   cloneId?: string;
   isDragging?: boolean;
@@ -69,6 +72,7 @@ export type ChatSidebarRowProps = {
     chatId: string,
     memberChatIds?: string[]
   ) => void;
+  onToggleSelected?: (chatIds: string[]) => void;
   memberChatIds?: string[];
   onDragStart?: (e: React.PointerEvent, chatId: string, memberChatIds?: string[]) => void;
 };
@@ -89,17 +93,23 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
   accountShort,
   accountLabel,
   accountCount,
+  selectable = false,
+  selected = false,
+  selectionDisabled = false,
   memberChatIds,
   cloneId,
   isDragging,
   onOpen,
   onOpenMenu,
+  onToggleSelected,
   onDragStart,
 }: ChatSidebarRowProps) {
   const { t } = useI18n();
   const c = contact;
   const showContactTags = useAppStore(s => s.settings.showContactTagsInChatList === true);
+  const labelsByAccountId = useAppStore(s => s.baileysUi.labelsByAccountId);
   const contactTags = showContactTags ? (c?.tags || []).filter(Boolean) : [];
+  const whatsappLabels = labelsByAccountId[chat.accountId || c?.accountId || ""] || [];
   const label = useMemo(
     () =>
       displayContactLabel(
@@ -167,30 +177,51 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
   return (
     <li
       className={cn(
-        "group/chat relative list-none",
+        "group/chat relative flex list-none items-center gap-1.5",
         isDragging && "opacity-45",
-        cloneId
-          ? "cursor-default select-none"
-          : "cursor-grab select-none active:cursor-grabbing"
+        selectable
+          ? "cursor-pointer select-none"
+          : cloneId
+            ? "cursor-default select-none"
+            : "cursor-grab select-none active:cursor-grabbing"
       )}
       title={
-        cloneId
-          ? t("tooltip.cloneNoDrag")
-          : accountCount && accountCount > 1
-            ? t("tooltip.accountCountDrag", { count: accountCount })
-            : t("tooltip.dragMove")
+        selectable
+          ? undefined
+          : cloneId
+            ? t("tooltip.cloneNoDrag")
+            : accountCount && accountCount > 1
+              ? t("tooltip.accountCountDrag", { count: accountCount })
+              : t("tooltip.dragMove")
       }
       onPointerDown={(e) => {
-        if (cloneId) return;
+        if (selectable || cloneId) return;
         onDragStart?.(e, chat.id, memberChatIds);
       }}
     >
+      {selectable && (
+        <input
+          type="checkbox"
+          checked={selected}
+          aria-label={label}
+          disabled={selectionDisabled}
+          className="ml-1 h-4 w-4 shrink-0 accent-[var(--brand)]"
+          onClick={(event) => event.stopPropagation()}
+          onChange={() => onToggleSelected?.(memberChatIds?.length ? memberChatIds : [chat.id])}
+        />
+      )}
       <ListRow
         active={active}
         aria-current={active ? "true" : undefined}
-        onClick={() => onOpen(chat.contactId, chat.id)}
-        onContextMenu={(e) => onOpenMenu(e, chat.id, memberChatIds)}
-        className={cn("!items-center gap-2.5 !py-2 !pr-0", active && "bg-brand/15 ring-1 ring-inset ring-brand/30")}
+        onClick={() => {
+          if (selectable) {
+            if (!selectionDisabled) onToggleSelected?.(memberChatIds?.length ? memberChatIds : [chat.id]);
+            return;
+          }
+          onOpen(chat.contactId, chat.id);
+        }}
+        onContextMenu={(e) => { if (!selectable) onOpenMenu(e, chat.id, memberChatIds); }}
+        className={cn("min-w-0 flex-1 !items-center gap-2.5 !py-2 !pr-0", active && "bg-brand/15 ring-1 ring-inset ring-brand/30", selected && "bg-brand/10 ring-1 ring-inset ring-brand/30")}
       >
         <div className="relative shrink-0" onContextMenu={event=>{if(c&&!chat.localOnly)openAvatarCloudMenu(event,c,chat.accountId||chat.phoneId);}}>
           <Avatar
@@ -220,14 +251,6 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
                 <Copy className="h-3 w-3 shrink-0 text-zinc-500" />
               )}
               <span className="min-w-0 flex-1 truncate">{label}</span>
-              {contactTags.length > 0 && (
-                <span className="flex min-w-0 shrink items-center gap-0.5" title={contactTags.join(" · ")}>
-                  {contactTags.slice(0, 2).map(tag => (
-                    <span key={tag} className="max-w-20 truncate rounded bg-brand/10 px-1 py-0.5 text-[9px] font-normal leading-none text-brand">{tag}</span>
-                  ))}
-                  {contactTags.length > 2 && <span className="shrink-0 text-[9px] font-normal text-zinc-500">+{contactTags.length - 2}</span>}
-                </span>
-              )}
               {accountCount && accountCount > 1 ? (
                 <span className="shrink-0 rounded bg-zinc-800 px-1 py-0.5 text-[9px] font-normal text-zinc-400">
                   {t("sidebar.accountCount", { count: accountCount })}
@@ -261,7 +284,7 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
                   <span title={t("inbox.unread", { count: chat.unread })} aria-label={t("inbox.unread", { count: chat.unread })}>{chat.unread > 99 ? "99+" : chat.unread}</span>
                 </Badge>
               )}
-              <span
+              {!selectable && <span
                 role="button"
                 tabIndex={0}
                 title={t("tooltip.conversationActions")}
@@ -281,9 +304,17 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
                 }}
               >
                 <MoreVertical className="h-3.5 w-3.5" />
-              </span>
+              </span>}
             </div>
           </div>
+          {contactTags.length > 0 && (
+            <div className="mt-1 flex min-w-0 items-center gap-0.5 overflow-hidden" title={contactTags.join(" · ")}>
+              {contactTags.slice(0, 2).map(tag => (
+                <span key={tag} className={cn("max-w-20 truncate rounded border px-1 py-0.5 text-[9px] font-normal leading-none", contactTagColorClass(tag, whatsappLabels.find(label => label.name === tag)?.color))}>{tag}</span>
+              ))}
+              {contactTags.length > 2 && <span className="shrink-0 text-[9px] font-normal text-zinc-500">+{contactTags.length - 2}</span>}
+            </div>
+          )}
         </div>
       </ListRow>
     </li>

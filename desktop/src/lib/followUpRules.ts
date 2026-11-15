@@ -4,8 +4,7 @@
 
 export type FollowUpRuleId =
   | "inbound_no_reply"
-  | "outbound_no_answer"
-  | "quoting_stale";
+  | "outbound_no_answer";
 
 export type FollowUpRule = {
   id: FollowUpRuleId;
@@ -20,7 +19,6 @@ export type FollowUpRule = {
   /**
    * inbound_no_reply: 最后一条是客户来信且超时未再出站
    * outbound_no_answer: 最后一条是我方出站且超时无回
-   * quoting_stale: 报价中阶段，任意方向最后消息超时
    */
   kind: FollowUpRuleId;
 };
@@ -42,14 +40,6 @@ export const DEFAULT_FOLLOW_UP_RULES: FollowUpRule[] = [
     excludeStages: ["won", "after_sales", "new"],
     noteTemplate: "自动：发出后超 {hours}h 客户未回复",
     kind: "outbound_no_answer",
-  },
-  {
-    id: "quoting_stale",
-    title: "报价沉默",
-    afterHours: 48,
-    excludeStages: ["won", "after_sales", "new", "contacted"],
-    noteTemplate: "自动：报价阶段超 {hours}h 无新消息",
-    kind: "quoting_stale",
   },
 ];
 
@@ -82,9 +72,6 @@ export function ruleMatches(
   }
   if (rule.kind === "outbound_no_answer") {
     return tip.lastDirection === "out";
-  }
-  if (rule.kind === "quoting_stale") {
-    return tip.stage === "quoting";
   }
   return false;
 }

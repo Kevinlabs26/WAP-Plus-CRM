@@ -32,8 +32,8 @@ import {
   syncLog,
 } from "@/lib/syncDebug";
 import {
-  detectMessageLanguage,
   langShortLabel,
+  resolveMyLang,
   resolveTargetLanguage,
   translateDraftText,
   type TargetLanguage,
@@ -189,6 +189,8 @@ function ComposerInner({
     useShallow((s) => ({
       translateTargetLang: s.settings.translateTargetLang,
       enterTranslateSend: s.settings.enterTranslateSend,
+      backTranslate: s.settings.backTranslate,
+      emojiEnabled: s.settings.emojiEnabled,
       voiceInputLang: s.settings.voiceInputLang,
     }))
   );
@@ -200,6 +202,8 @@ function ComposerInner({
       ...useAppStore.getState().settings,
       translateTargetLang: settingsUi.translateTargetLang,
       enterTranslateSend: settingsUi.enterTranslateSend,
+      backTranslate: settingsUi.backTranslate,
+      emojiEnabled: settingsUi.emojiEnabled,
       voiceInputLang: settingsUi.voiceInputLang,
     } as AppSettings);
   const fullSettings = (): AppSettings =>
@@ -222,6 +226,7 @@ function ComposerInner({
   const [mentionIdx, setMentionIdx] = useState(0);
   const [mentionQuery, setMentionQuery] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const sendDraftOverrideRef = useRef<string | null>(null);
   const trackedMentionsRef = useRef<
     { token: string; jid: string; everyone?: boolean }[]
   >([]);
@@ -230,12 +235,14 @@ function ComposerInner({
   );
   const { code: translateLang, source: translateLangSource } = translationTarget;
   const [translating, setTranslating] = useState(false);
+  const translatingRef = useRef(false);
   const [backTranslation, setBackTranslation] = useState<string | null>(null);
   const [backTranslating, setBackTranslating] = useState(false);
   // 会话切换或卸载使旧请求失效，即使另一个客户有相同草稿也不能回填。
   const translationRequestRef = useRef(0);
   const backTranslationRequestRef = useRef(0);
   const refocusComposerAfterTranslationRef = useRef(false);
+  const pendingSendAfterTranslationRef = useRef(false);
   const mediaStageContextRef = useRef({ key: resetKey, version: 0 });
   if (mediaStageContextRef.current.key !== resetKey) {
     mediaStageContextRef.current = { key: resetKey, version: mediaStageContextRef.current.version + 1 };
@@ -243,6 +250,7 @@ function ComposerInner({
   const [translateOriginal, setTranslateOriginal] = useState<string | null>(
     null
   );
+  const [translatedDraft, setTranslatedDraft] = useState<string | null>(null);
   /**
    * 非受控草稿：按键只写 textarea DOM + ref，不 setState。
    * 仅在「空 ↔ 非空」边界更新 hasDraft，用来切换发送/语音按钮与翻译条。
@@ -253,6 +261,7 @@ function ComposerInner({
   const hasDraftRef = useRef(Boolean(initialDraft.trim()));
   const composingRef = useRef(false);
   const mentionTimerRef = useRef<number | null>(null);
+  const autoTranslateTimerRef = useRef<number | null>(null);
   const resizeTimerRef = useRef<number | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -374,7 +383,7 @@ function ComposerInner({
     updateHasDraft(text);
   };
 
-  if (draftReaderRef) draftReaderRef.current = readDraft;
+  if (draftReaderRef) draftReaderRef.current = () => sendDraftOverrideRef.current ?? readDraft();
 
   const flushDraftNow = (text: string) => {
     cancelDraftSave();
@@ -601,6 +610,9 @@ function ComposerInner({
     translationRequestRef.current++;
     backTranslationRequestRef.current++;
     setTranslating(false);
+    translatingRef.current = false;
+    pendingSendAfterTranslationRef.current = false;
+    sendDraftOverrideRef.current = null;
     setBackTranslating(false);
     setAttachmentOpen(false);
     setEmojiOpen(false);
@@ -609,6 +621,7 @@ function ComposerInner({
     trackedMentionsRef.current = [];
     if (mentionTrackerRef) mentionTrackerRef.current = [];
     setTranslateOriginal(null);
+    setTranslatedDraft(null);
     setBackTranslation(null);
     resetVoiceInput();
     setDragOver(false);
@@ -652,6 +665,7 @@ function ComposerInner({
       backTranslationRequestRef.current++;
       setBackTranslating(false);
       setTranslateOriginal(null);
+      setTranslatedDraft(null);
       setBackTranslation(null);
     }
   }, [hasDraft]);
@@ -672,6 +686,9 @@ function ComposerInner({
       if (mentionTimerRef.current != null) {
         window.clearTimeout(mentionTimerRef.current);
       }
+      if (autoTranslateTimerRef.current != null) {
+        window.clearTimeout(autoTranslateTimerRef.current);
+      }
       if (resizeTimerRef.current != null) {
         window.clearTimeout(resizeTimerRef.current);
       }
@@ -689,6 +706,10 @@ function ComposerInner({
     document.addEventListener("pointerdown", closeOnOutsideClick);
     return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
   }, [emojiOpen]);
+
+  useEffect(() => {
+    if (settings.emojiEnabled === false) setEmojiOpen(false);
+  }, [settings.emojiEnabled]);
 
   useEffect(() => {
     if (!voiceLanguageOpen) return;
@@ -731,16 +752,16 @@ function ComposerInner({
   const runBackTranslation = async (original: string, translated: string) => {
     if (!original || !translated) return;
     const request = ++backTranslationRequestRef.current;
-    const sourceLang = detectMessageLanguage(original) || fullSettings().myLang || "zh";
+    const targetLang = resolveMyLang(fullSettings());
     setBackTranslating(true);
     try {
-      const res = await translateDraftText(translated, sourceLang, fullSettings());
+      const res = await translateDraftText(translated, targetLang, fullSettings());
       if (request !== backTranslationRequestRef.current) return;
       if (!res.text?.trim()) {
         pushToast(res.error || t("runtime.translateFailed"), "error");
         return;
       }
-      if (readDraft().trim() !== translated) return;
+      if (readDraft().trim() !== original) return;
       setBackTranslation(res.text.trim());
     } catch (e) {
       if (request !== backTranslationRequestRef.current) return;
@@ -754,11 +775,12 @@ function ComposerInner({
     const refocusComposer = refocusComposerAfterTranslationRef.current;
     refocusComposerAfterTranslationRef.current = false;
     const src = readDraft().trim();
-    if (!src || translating || recording) return;
+    if (!src || translatingRef.current || recording) return;
     const request = ++translationRequestRef.current;
     backTranslationRequestRef.current++;
     setBackTranslating(false);
     setBackTranslation(null);
+    translatingRef.current = true;
     setTranslating(true);
     try {
       const base = translateOriginal ?? src;
@@ -775,16 +797,20 @@ function ComposerInner({
       }
       const next = res.text.trim();
       setTranslateOriginal(base);
+      setTranslatedDraft(next);
       setBackTranslation(null);
-      setDraftLocal(next);
-      flushDraftNow(next);
-      void runBackTranslation(base, next);
+      if (pendingSendAfterTranslationRef.current) {
+        pendingSendAfterTranslationRef.current = false;
+        sendDraftValue(next, true);
+      }
+      if (fullSettings().backTranslate !== false) void runBackTranslation(base, next);
       pushToast(t("translation.done", { language: langShortLabel(res.targetLang) }), "success");
     } catch (e) {
       if (request !== translationRequestRef.current) return;
       pushToast(e instanceof Error ? e.message : t("runtime.translateFailed"), "error");
     } finally {
       if (request === translationRequestRef.current) {
+        translatingRef.current = false;
         setTranslating(false);
         if (refocusComposer) {
           requestAnimationFrame(() => {
@@ -800,20 +826,74 @@ function ComposerInner({
 
   const handleBackTranslate = async () => {
     const original = translateOriginal;
-    const translated = readDraft().trim();
+    const translated = translatedDraft;
     if (!original || !translated || backTranslating || translating) return;
     void runBackTranslation(original, translated);
   };
 
   const restoreTranslateOriginal = () => {
-    if (translateOriginal == null) return;
-    setDraftLocal(translateOriginal);
-    flushDraftNow(translateOriginal);
+    if (translatedDraft == null && translateOriginal == null) return;
     backTranslationRequestRef.current++;
     setTranslateOriginal(null);
+    setTranslatedDraft(null);
     setBackTranslation(null);
     setBackTranslating(false);
     pushToast(t("runtime.restoredOriginal"), "info");
+  };
+
+  const scheduleAutoTranslate = (value: string) => {
+    if (autoTranslateTimerRef.current != null) {
+      window.clearTimeout(autoTranslateTimerRef.current);
+      autoTranslateTimerRef.current = null;
+    }
+    if (
+      fullSettings().enterTranslateSend !== true ||
+      inputLocked ||
+      recording ||
+      editingId ||
+      pendingMedia.length > 0 ||
+      translatingRef.current ||
+      composingRef.current ||
+      !value.trim()
+    ) return;
+    autoTranslateTimerRef.current = window.setTimeout(() => {
+      autoTranslateTimerRef.current = null;
+      void handleTranslateDraft();
+    }, 1_400);
+  };
+
+  const sendDraftValue = (value: string, useOverride = false) => {
+    if (inputLocked) return;
+    if (useOverride) sendDraftOverrideRef.current = value;
+    flushDraftNow(value);
+    const result = pendingMedia.length > 0 ? sendPendingMedia() : onSend();
+    if (useOverride) {
+      void Promise.resolve(result).finally(() => {
+        if (sendDraftOverrideRef.current === value) sendDraftOverrideRef.current = null;
+      });
+    }
+  };
+
+  const sendCurrentDraft = () => {
+    if (inputLocked) return;
+    if (translatingRef.current) {
+      pendingSendAfterTranslationRef.current = true;
+      return;
+    }
+    if (
+      autoTranslateTimerRef.current != null &&
+      fullSettings().enterTranslateSend === true &&
+      !editingId &&
+      pendingMedia.length === 0 &&
+      readDraft().trim()
+    ) {
+      window.clearTimeout(autoTranslateTimerRef.current);
+      autoTranslateTimerRef.current = null;
+      pendingSendAfterTranslationRef.current = true;
+      void handleTranslateDraft();
+      return;
+    }
+    sendDraftValue(translatedDraft ?? readDraft(), translatedDraft != null);
   };
 
   const mentionCandidates: MentionCandidate[] = useMemo(
@@ -918,14 +998,15 @@ function ComposerInner({
     >
       {linksOpen && createPortal(<ContactLinksDialog key={`${resetKey}:${sendAccountId}`}
         onClose={() => { setLinksOpen(false); textareaRef.current?.focus({ preventScroll: true }); }}
-        canInsert={!sending && !recording && !inputLocked && !editingId && pendingMedia.length === 0 && mediaSendingIndex < 0}
+        canInsert={!sending && !recording && !inputLocked && !editingId && mediaSendingIndex < 0}
         onInsert={text => {
-          if (sending || recording || inputLocked || editingId || pendingMedia.length || mediaSendingIndex >= 0) return false;
+          if (sending || recording || inputLocked || editingId || mediaSendingIndex >= 0) return false;
           const current = readDraft();
           const next = current.trim() ? `${current}\n\n${text}` : text;
           if (next.length > MAX_CHAT_DRAFT_LENGTH) { pushToast(t("links.longDraft"), "error"); return false; }
           flushDraftNow(next);
           applyDraftToDom(next);
+          if (pendingMedia.length > 0) setMediaCaption(next);
           setTranslateOriginal(null);
           return true;
         }} />, document.body)}
@@ -1182,8 +1263,16 @@ function ComposerInner({
                 if (pendingMedia.length > 0) setMediaCaption(v);
                 scheduleTextareaResize();
                 updateHasDraft(v);
-                if (translateOriginal != null) {
+                if (translatingRef.current) {
+                  translationRequestRef.current++;
+                  translatingRef.current = false;
+                  pendingSendAfterTranslationRef.current = false;
+                  setTranslating(false);
+                }
+                scheduleAutoTranslate(v);
+                if (translateOriginal != null || translatedDraft != null) {
                   setTranslateOriginal(null);
+                  setTranslatedDraft(null);
                   setBackTranslation(null);
                   backTranslationRequestRef.current++;
                   setBackTranslating(false);
@@ -1242,6 +1331,7 @@ function ComposerInner({
                   );
                 }
                 scheduleComposing();
+                scheduleAutoTranslate(v);
               }}
               onSelect={(e) => {
                 if (
@@ -1358,23 +1448,7 @@ function ComposerInner({
                 }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
-                  if (inputLocked) return;
-                  const draft = readDraft().trim();
-                  const enterTranslateSend = fullSettings().enterTranslateSend === true;
-                  if (
-                    enterTranslateSend &&
-                    !editingId &&
-                    pendingMedia.length === 0 &&
-                    draft &&
-                    translateOriginal == null
-                  ) {
-                    refocusComposerAfterTranslationRef.current = true;
-                    void handleTranslateDraft();
-                    return;
-                  }
-                  flushDraftNow(readDraft());
-                  if (pendingMedia.length > 0) void sendPendingMedia();
-                  else void onSend();
+                  sendCurrentDraft();
                 }
               }}
               rows={1}
@@ -1391,13 +1465,13 @@ function ComposerInner({
                         ? t("composer.groupPlaceholder")
                         : t("composer.placeholder")
               }
-              disabled={inputLocked || recording || translating}
+              disabled={inputLocked || recording}
               className="!min-h-9 max-h-36 w-full resize-none overflow-y-auto border-0 bg-transparent px-2 py-2 text-[13px] shadow-none outline-none ring-0 focus:border-0 focus:outline-none focus:ring-0 focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-60"
             />
           </div>
 
           <div className="flex shrink-0 items-center gap-1 pb-0.5">
-            <div ref={emojiPanelRef} className="relative">
+            {settings.emojiEnabled !== false && <div ref={emojiPanelRef} className="relative">
               <button
                 type="button"
                 title={t("tooltip.emoji")}
@@ -1449,17 +1523,14 @@ function ComposerInner({
                   />
                 </Suspense>
               )}
-            </div>
+            </div>}
             <SendVoiceToggle
               hasDraft={hasDraft || pendingMedia.length > 0}
               sending={sending || mediaSendingIndex >= 0}
               disabled={inputLocked}
               isBaileys={isBaileys}
               onSend={() => {
-                if (inputLocked) return;
-                flushDraftNow(readDraft());
-                if (pendingMedia.length > 0) void sendPendingMedia();
-                else void onSend();
+                    sendCurrentDraft();
               }}
               onBeginVoice={() => void onBeginVoice()}
             />
@@ -1561,18 +1632,25 @@ function ComposerInner({
 
         <TranslateBar
           visible={
-            (hasDraft || translateOriginal != null) &&
+            (hasDraft || translateOriginal != null || translatedDraft != null) &&
             !recording &&
             !editingId
           }
           hasDraft={hasDraft}
           translateOriginal={translateOriginal}
+          translatedDraft={translatedDraft}
           translating={translating}
           translateLang={translateLang}
           source={translateLangSource}
           onTranslateLangChange={handleTranslateLangChange}
           onRestoreAuto={() => handleTranslateLangChange("auto")}
           onTranslate={() => void handleTranslateDraft()}
+              onTranslatedDraftChange={(value) => {
+                setTranslatedDraft(value);
+                backTranslationRequestRef.current++;
+                setBackTranslation(null);
+                setBackTranslating(false);
+              }}
           onRestore={restoreTranslateOriginal}
           backTranslation={backTranslation}
           backTranslating={backTranslating}

@@ -233,7 +233,7 @@ export function UpdateWatcher() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="update-prompt-title"
-        className="relative flex max-h-[min(90dvh,42rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface)] text-[var(--app-text)] shadow-2xl"
+        className="relative flex max-h-[min(90dvh,42rem)] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-surface)] text-[var(--app-text)] shadow-2xl"
       >
         {!installing && (
           <button
@@ -258,7 +258,7 @@ export function UpdateWatcher() {
             </div>
           </div>
 
-          <div className="mt-5 grid grid-cols-[1fr_auto_1fr] items-center gap-3 rounded-xl bg-[var(--app-surface-2)] p-3 text-sm">
+          <div className="mt-5 grid grid-cols-[1fr_auto_1fr] items-center gap-3 rounded-lg bg-[var(--app-surface-2)] p-3 text-sm">
             <div className="min-w-0">
               <div className="text-xs text-zinc-500">{t("updates.currentVersion")}</div>
               <div className="mt-1 truncate font-medium">v{update.currentVersion || t("updates.unknown")}</div>
@@ -272,7 +272,7 @@ export function UpdateWatcher() {
 
           <div className="mt-4">
             <h3 className="mb-2 text-sm font-medium">{t("updates.releaseNotes")}</h3>
-            <div className="max-h-44 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-[var(--app-border)] bg-[var(--app-surface-2)] px-3.5 py-3 text-[13px] leading-5 text-zinc-500">
+            <div className="max-h-44 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-[var(--app-border)] bg-[var(--app-surface-2)] px-3.5 py-3 text-[13px] leading-5 text-zinc-500">
               {notes || t("updates.noReleaseNotes")}
             </div>
           </div>

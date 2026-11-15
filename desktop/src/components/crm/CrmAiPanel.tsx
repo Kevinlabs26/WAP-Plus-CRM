@@ -11,22 +11,27 @@ import {
   ShoppingCart,
   Sparkles,
   TableProperties,
+  X,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import { useAppStore } from "@/store/appStore";
-import { cn, displayContactLabel, displayPhone, resolveSendTarget } from "@/lib/utils";
+import { cn, contactTagColorClass, displayContactLabel, displayPhone, resolveSendTarget } from "@/lib/utils";
 import {
   baileysCreateLabel,
   baileysLabels,
   baileysSetChatLabel,
 } from "@/lib/baileys";
 import { generateSuggestions, getSuggestionContextKey, hasRealAiKey, type GenerateSuggestionsResult } from "@/lib/aiSuggest";
+import { generateContactConversationSummary, getAiConversationSummaryStatus, subscribeAiConversationSummary } from "@/lib/aiConversationSummary";
+import { generateContactReport, type ContactReportProgress } from "@/lib/aiContactReport";
 import { createSuggestionCache, isManualSuggestionContext, SUGGESTION_MAX_AGE_MS } from "@/lib/aiSuggestionCache";
 import { resolveAiReplyProfile } from "@/lib/aiPromptScope";
 import { PlaybookBinding } from "./PlaybookBinding";
 import type { Message, WhatsAppLabel } from "@/types/crm";
+import type { AiReportTemplate } from "@/store/settingsDefaults";
 import { ContactAvatar } from "./ContactAvatar";
-import { GoogleSheetInfo } from "./GoogleSheetInfo";
+import { GoogleSheetInfo, GoogleSheetPrimaryTag } from "./GoogleSheetInfo";
 import { ContactLocalTime } from "./ContactLocalTime";
 import { Button, SectionLabel } from "@/components/ui/primitives";
 import { ContactTagsNotesEditor } from "./ContactTagsNotesEditor";
@@ -34,7 +39,6 @@ import { PersonMultiAccountPanel } from "./PersonMultiAccountPanel";
 import { CommonGroupsPanel } from "./CommonGroupsPanel";
 import { WhatsAppLabelMenu } from "@/components/chat/WhatsAppLabelMenu";
 import { workflowForStage } from "@/lib/contactWorkflow";
-import { SalesStageField } from "./SalesStageField";
 import { filterMessagesForAccount } from "@/lib/personThreads";
 import { isWaAccountConnected, resolveWaSendAccountId } from "@/lib/accountConnection";
 import { formatAccountDisplay } from "@/lib/accountLabels";
@@ -89,7 +93,6 @@ export function CrmAiPanel() {
   const settings = useAppStore((state) => state.settings);
   const baileysUi = useAppStore((state) => state.baileysUi);
   const applyAiSuggestion = useAppStore((state) => state.applyAiSuggestion);
-  const updateContact = useAppStore((state) => state.updateContact);
   const toggleFollowUp = useAppStore((state) => state.toggleFollowUp);
   const scheduleTomorrowFollowUp = useAppStore(
     (state) => state.scheduleTomorrowFollowUp
@@ -105,6 +108,9 @@ export function CrmAiPanel() {
   const setCrmPanelCollapsed = useAppStore((s) => s.setCrmPanelCollapsed);
   const panelTab = useAppStore((s) => s.crmPanelTab);
   const setPanelTab = useAppStore((s) => s.setCrmPanelTab);
+  const updateContact = useAppStore((s) => s.updateContact);
+  const updateSettings = useAppStore((s) => s.updateSettings);
+  const requestConfirm = useAppStore((s) => s.requestConfirm);
   const setCollapsed = setCrmPanelCollapsed;
   // 未选会话：收起右侧，中间欢迎区更宽（对齐官方空白主区）
   useLayoutEffect(() => {
@@ -121,6 +127,12 @@ export function CrmAiPanel() {
   const [aiSource, setAiSource] = useState<string>(settings.aiProvider);
   const [aiError, setAiError] = useState("");
   const [sheetExtractOpen, setSheetExtractOpen] = useState(false);
+  const [reportTemplateId, setReportTemplateId] = useState("");
+  const [reportTemplateDraft, setReportTemplateDraft] = useState<AiReportTemplate | null>(null);
+  const [reportText, setReportText] = useState("");
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportProgress, setReportProgress] = useState<ContactReportProgress | null>(null);
+  const [reportError, setReportError] = useState("");
   const [readingLanguage, setReadingLanguage] = useState("");
   const [readingTarget, setReadingTarget] = useState<string | null>(null);
   const [suggestionExpansion,setSuggestionExpansion]=useState<{key:string;open:boolean}|null>(null);
@@ -129,6 +141,20 @@ export function CrmAiPanel() {
   const visibleSuggestionExpiry = useRef<{ key: string; expiresAt: number } | null>(null);
 
   const contact = contacts.find((item) => item.id === selectedContactId);
+  const reportTemplates = settings.aiReportTemplates || [];
+  const selectedReportTemplate = reportTemplates.find(item => item.id === reportTemplateId);
+  useEffect(() => {
+    setReportText(contact?.aiReport || "");
+    setReportError("");
+    setReportTemplateDraft(null);
+    setReportTemplateId(contact?.aiReportTemplateId && reportTemplates.some(item => item.id === contact.aiReportTemplateId)
+      ? contact.aiReportTemplateId : reportTemplates[0]?.id || "");
+  }, [selectedContactId]);
+  useEffect(() => {
+    if (!reportTemplates.some(item => item.id === reportTemplateId)) setReportTemplateId(reportTemplates[0]?.id || "");
+  }, [reportTemplates, reportTemplateId]);
+  const summaryStatus = useSyncExternalStore(subscribeAiConversationSummary,
+    () => getAiConversationSummaryStatus(selectedContactId || ""), () => null);
   const threadAccountId =
     selectedThreadAccount?.chatId === selectedChatId
       ? selectedThreadAccount.accountId
@@ -307,6 +333,69 @@ export function CrmAiPanel() {
     setAiError("");
     useAppStore.setState({ aiSuggestions: [] });
   }, [selectedChatId, selectedContactId]);
+
+  const cancelAi = () => {
+    generation.current++;
+    suggestionCache.cancelPending(suggestionKey);
+    setLoading(false);
+    setAiError("");
+  };
+
+  const generateSummaryNow = () => {
+    if (!contact) return;
+    void generateContactConversationSummary(contact.id, selectedChatId || undefined);
+  };
+
+  function startReportTemplateEdit(template?: AiReportTemplate) {
+    setReportTemplateDraft(template ? { ...template } : { id: "", name: "", body: "" });
+  }
+
+  function saveReportTemplate() {
+    if (!reportTemplateDraft?.name.trim() || !reportTemplateDraft.body.trim()) return;
+    const id = reportTemplateDraft.id || crypto.randomUUID();
+    const nextTemplate = { id, name: reportTemplateDraft.name.trim(), body: reportTemplateDraft.body.trim() };
+    const exists = reportTemplates.some(item => item.id === id);
+    if (!exists && reportTemplates.length >= 50) return;
+    updateSettings({ aiReportTemplates: exists
+      ? reportTemplates.map(item => item.id === id ? nextTemplate : item)
+      : [...reportTemplates, nextTemplate] });
+    setReportTemplateId(id);
+    setReportTemplateDraft(null);
+  }
+
+  async function deleteReportTemplate(template: AiReportTemplate) {
+    if (!await requestConfirm({ title: t("contact.aiReportDeleteTitle", { name: template.name }), description: t("contact.aiReportDeleteHint"),
+      confirmLabel: t("common.delete"), cancelLabel: t("common.cancel"), tone: "danger" })) return;
+    const next = reportTemplates.filter(item => item.id !== template.id);
+    updateSettings({ aiReportTemplates: next });
+    if (reportTemplateId === template.id) setReportTemplateId(next[0]?.id || "");
+    if (reportTemplateDraft?.id === template.id) setReportTemplateDraft({ id: "", name: "", body: "" });
+  }
+
+  async function generateReportNow() {
+    if (!contact || !selectedReportTemplate || reportBusy) return;
+    const contactId = contact.id, template = selectedReportTemplate, controller = new AbortController();
+    setReportBusy(true); setReportError(""); setReportProgress({ stage: "analyzing", completed: 0, total: 0 });
+    try {
+      const report = await generateContactReport(contactId, template, controller.signal, setReportProgress);
+      if (useAppStore.getState().selectedContactId === contactId) setReportText(report);
+    } catch (error) {
+      setReportError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setReportBusy(false); setReportProgress(null);
+    }
+  }
+
+  function saveReportNow() {
+    if (!contact || !reportText.trim()) return;
+    updateContact(contact.id, { aiReport: reportText, aiReportAt: new Date().toISOString() });
+  }
+
+  async function copyReportNow() {
+    if (!reportText.trim()) return;
+    try { await navigator.clipboard.writeText(reportText); pushToast(t("contact.aiReportCopied"), "success"); }
+    catch { pushToast(t("contact.aiReportCopyFailed"), "error"); }
+  }
 
   const refreshAi = async () => {
     if (!contact) return pushToast("\u8bf7\u5148\u9009\u62e9\u4f1a\u8bdd", "info");
@@ -573,11 +662,70 @@ export function CrmAiPanel() {
               </div>
             )}
 
-            <SalesStageField value={contact.stage} onChange={stage => updateContact(contact.id, { stage })} />
+            <section className="border-t border-zinc-800/80 pt-2.5">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="text-[11px] font-medium text-zinc-400">{t("crmPanel.conversationSummary")}</span>
+                <Button variant="ghost" size="xs" className="shrink-0 gap-1 !px-1.5" disabled={summaryStatus?.state === "generating"}
+                  aria-label={t(summaryStatus?.state === "generating" ? "contact.aiSummaryGenerating" : contact.aiSummary?.trim() ? "contact.aiSummaryRefresh" : "contact.aiSummaryGenerate")}
+                  title={t(summaryStatus?.state === "generating" ? "contact.aiSummaryGenerating" : contact.aiSummary?.trim() ? "contact.aiSummaryRefresh" : "contact.aiSummaryGenerate")}
+                  onClick={() => void generateSummaryNow()}>
+                  {summaryStatus?.state === "generating" ? <><Loader2 className="h-3 w-3 animate-spin" />{t("contact.aiSummaryGenerating")}</>
+                    : t(contact.aiSummary?.trim() ? "contact.aiSummaryRefresh" : "contact.aiSummaryGenerate")}
+                </Button>
+              </div>
+              {contact.aiSummary?.trim()
+                ? <p className="max-h-36 overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-4 text-zinc-300">{contact.aiSummary}</p>
+                : <p className="text-[11px] leading-4 text-zinc-600">{t("contact.aiSummaryAutoHint")}</p>}
+              {summaryStatus?.state === "failed"&&<p role="alert" className="mt-1 text-[10px] text-rose-400">
+                {t(summaryStatus.error === "no_history" ? "contact.aiSummaryNoHistory" : "contact.aiSummaryFailed")}
+              </p>}
+              {contact.aiInsightAt&&<time className="mt-1 block text-[10px] text-zinc-600" dateTime={contact.aiInsightAt}>
+                {t("contact.aiSummaryUpdated", { time: new Date(contact.aiInsightAt).toLocaleString() })}
+              </time>}
+            </section>
+            <section className="space-y-2 border-t border-zinc-800/80 pt-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[11px] font-medium text-zinc-400">{t("contact.aiReport")}</span>
+                <Button variant="ghost" size="xs" disabled={reportBusy} onClick={() => setReportTemplateDraft(current => current ? null : { id: "", name: "", body: "" })}>
+                  {t(reportTemplateDraft ? "contact.aiReportCloseTemplates" : reportTemplates.length ? "contact.aiReportManageTemplates" : "contact.aiReportNewTemplate")}
+                </Button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <select aria-label={t("contact.aiReportTemplate")} className="ui-control min-w-0 flex-1 px-2 py-1.5 text-[11px]" value={reportTemplateId}
+                  onChange={event => setReportTemplateId(event.target.value)} disabled={!reportTemplates.length || reportBusy}>
+                  {!reportTemplates.length && <option value="">{t("contact.aiReportNoTemplates")}</option>}
+                  {reportTemplates.map(template => <option key={template.id} value={template.id}>{template.name}</option>)}
+                </select>
+                <Button variant="secondary" size="xs" disabled={!selectedReportTemplate || reportBusy} onClick={() => void generateReportNow()}>
+                  {reportBusy ? <><Loader2 className="h-3 w-3 animate-spin" />{t("contact.aiReportGenerating")}</> : t("contact.aiReportGenerate")}
+                </Button>
+              </div>
+              {reportBusy && reportProgress && <p role="status" className="text-[10px] text-zinc-500">
+                {reportProgress.stage === "analyzing"
+                  ? reportProgress.total ? t("contact.aiReportAnalyzing", { done: reportProgress.completed, total: reportProgress.total }) : t("contact.aiReportStarting")
+                  : reportProgress.stage === "compressing"
+                    ? t("contact.aiReportCompressing", { done: reportProgress.completed, total: reportProgress.total })
+                    : t("contact.aiReportWriting")}
+              </p>}
+              {reportError && <p role="alert" className="text-[10px] text-rose-400">
+                {reportError === "no_history" || reportError === "no_text_history" ? t("contact.aiReportNoHistory")
+                  : reportError === "ai_unconfigured" ? t("contact.aiReportNeedsAi")
+                    : reportError === "report_stale" ? t("contact.aiReportStale") : t("contact.aiReportFailed")}
+              </p>}
+              {reportText && <>
+                <textarea aria-label={t("contact.aiReportResult")} disabled={reportBusy} className="ui-control min-h-32 w-full resize-y whitespace-pre-wrap px-2.5 py-2 text-[11px] leading-4" rows={7}
+                  value={reportText} onChange={event => setReportText(event.target.value)} />
+                {contact.aiReportAt && <time className="block text-[10px] text-zinc-600" dateTime={contact.aiReportAt}>{t("contact.aiReportUpdated", { time: new Date(contact.aiReportAt).toLocaleString() })}</time>}
+                <div className="flex gap-2">
+                  <Button variant="secondary" size="xs" disabled={reportBusy || reportText === (contact.aiReport || "")} onClick={saveReportNow}>{t("contact.aiReportSave")}</Button>
+                  <Button variant="secondary" size="xs" onClick={() => void copyReportNow()}>{t("contact.aiReportCopy")}</Button>
+                </div>
+              </>}
+            </section>
             {selectedChatId && <PlaybookBinding accountId={aiAccountId} chatId={selectedChatId}/>}
 
             {activeOrder && contact.stage !== "won" && contact.stage !== "after_sales" && (
-              <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-2.5">
+              <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-2.5">
                 <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-amber-200">
                   <ShoppingCart className="h-3.5 w-3.5" />
                   {t("crmPanel.pendingOrder")}
@@ -601,7 +749,7 @@ export function CrmAiPanel() {
               </div>
             )}
 
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-2.5">
+            <div className="border-t border-zinc-800/80 pt-2.5">
               <div className="mb-1 flex items-center justify-between text-2xs text-zinc-500">
                 <span>{t("crmPanel.followUpPlan")}</span>
                 {openFollowUps[0] && (
@@ -821,7 +969,7 @@ export function CrmAiPanel() {
               </div>
             </details>
 
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-2.5">
+            <div className="border-t border-zinc-800/80 pt-2.5">
               <div className="mb-2 flex items-center justify-between gap-2">
                 <SectionLabel className="!mb-0">{t("crmPanel.tags")}</SectionLabel>
                 <div className="flex items-center gap-1.5">
@@ -843,30 +991,28 @@ export function CrmAiPanel() {
                   </button>
                 </div>
               </div>
-              {tagsOpen ? (
-                <ContactTagsNotesEditor contact={contact} compact mode="tags" />
-              ) : (
-                <div className="flex min-h-[2rem] flex-wrap content-start gap-1">
-                  {contact.tags.length ? (
-                    contact.tags.slice(0, 10).map((tag) => (
-                      <span
-                        key={tag}
-                        className="rounded-full bg-brand/10 px-2 py-0.5 text-[10px] text-brand"
-                      >
-                        {tag}
-                      </span>
-                    ))
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setTagsOpen(true)}
-                      className="text-[10px] text-zinc-600 hover:text-brand"
+              <div className="flex min-h-[2rem] flex-wrap content-start gap-1">
+                <GoogleSheetPrimaryTag contact={contact} chatId={selectedChatId} />
+                {!tagsOpen && (contact.tags.length ? (
+                  contact.tags.slice(0, 10).map((tag) => (
+                    <span
+                      key={tag}
+                      className={cn("rounded-full border px-2 py-0.5 text-[10px]", contactTagColorClass(tag, whatsappLabels.find(label => label.name === tag)?.color))}
                     >
-                      {t("crmPanel.noTags")}
-                    </button>
-                  )}
-                </div>
-              )}
+                      {tag}
+                    </span>
+                  ))
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setTagsOpen(true)}
+                    className="text-[10px] text-zinc-600 hover:text-brand"
+                  >
+                    {t("crmPanel.noTags")}
+                  </button>
+                ))}
+              </div>
+              {tagsOpen && <ContactTagsNotesEditor contact={contact} compact mode="tags" />}
             </div>
 
           </div>
@@ -880,6 +1026,7 @@ export function CrmAiPanel() {
             <ChevronDown className={cn("h-3 w-3 text-zinc-500 transition-transform",suggestionsOpen&&"rotate-180")} />
           </button>
           {loading&&<span role="status" className="flex shrink-0 items-center gap-1 text-[10px] text-zinc-500"><Loader2 className="h-3 w-3 animate-spin" />{t("crmPanel.generating")}</span>}
+          {loading&&<Button variant="ghost" size="xs" className="shrink-0 !px-1.5" aria-label={t("common.cancel")} title={t("common.cancel")} onClick={cancelAi}><X className="h-3 w-3" /></Button>}
           {aiReady?<Button variant="ghost" size="xs" className="shrink-0 gap-1 !px-1.5" aria-label={loading?t("crmPanel.generating"):aiSuggestions.length?t("crmPanel.regenerate"):t("crmPanel.generateReply")} disabled={loading} onClick={()=>void refreshAi()}>
             {!loading&&<RefreshCw className="h-3 w-3" />}{t(aiSuggestions.length?"crmPanel.regenerate":"crmPanel.generateReply")}
           </Button>:<Button variant="ghost" size="xs" onClick={()=>setSettingsOpen(true,"ai")}>{t("crmPanel.configureApi")}</Button>}
@@ -958,6 +1105,54 @@ export function CrmAiPanel() {
         </section>
       )}
       {sheetExtractOpen&&contact&&<AiSheetExtractDialog contact={contact} messages={thread} accountId={aiAccountId} settings={settings} onClose={()=>setSheetExtractOpen(false)} onWritten={()=>pushToast("已写入 Google 表格","success")} />}
+      {reportTemplateDraft && createPortal(
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm" onPointerDown={() => setReportTemplateDraft(null)}>
+          <section role="dialog" aria-modal="true" aria-label={t("contact.aiReportTemplates")}
+            className="flex max-h-[90dvh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 text-zinc-100 shadow-2xl"
+            onPointerDown={event => event.stopPropagation()}
+            onKeyDown={event => {
+              if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setReportTemplateDraft(null); }
+              if (event.key !== "Tab") return;
+              const controls = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),textarea:not(:disabled)')].filter(item => item.getClientRects().length);
+              const first = controls[0], last = controls.at(-1);
+              if (!event.currentTarget.contains(document.activeElement) || (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
+                event.preventDefault(); (event.shiftKey ? last : first)?.focus();
+              }
+            }}>
+            <header className="flex shrink-0 items-start justify-between gap-3 border-b border-zinc-800 px-5 py-4">
+              <div><h2 className="text-base font-semibold">{t("contact.aiReportTemplates")}</h2><p className="mt-1 text-xs text-zinc-500">{t("contact.aiReportTemplateHint")}</p></div>
+              <button type="button" aria-label={t("common.close")} onClick={() => setReportTemplateDraft(null)} className="rounded-md p-1 text-zinc-400 hover:bg-zinc-800"><X className="h-4 w-4" /></button>
+            </header>
+            <div className="grid min-h-0 gap-4 overflow-y-auto p-5 md:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2"><span className="text-xs font-medium text-zinc-300">{t("contact.aiReportTemplates")}</span>
+                  <Button variant="secondary" size="xs" disabled={reportTemplates.length >= 50} onClick={() => startReportTemplateEdit()}>{t("contact.aiReportNewTemplate")}</Button></div>
+                {reportTemplates.map(template => <div key={template.id} className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 ${reportTemplateDraft.id === template.id ? "border-brand/40 bg-brand/10" : "border-zinc-800"}`}>
+                  <span className="min-w-0 flex-1 truncate text-xs">{template.name}</span>
+                  <Button variant="ghost" size="xs" onClick={() => startReportTemplateEdit(template)}>{t("contact.aiReportEditTemplate")}</Button>
+                  <Button variant="ghost" size="xs" onClick={() => void deleteReportTemplate(template)}>{t("common.delete")}</Button>
+                </div>)}
+                {!reportTemplates.length && <p className="rounded-lg border border-dashed border-zinc-700 p-3 text-xs text-zinc-500">{t("contact.aiReportNoTemplates")}</p>}
+              </div>
+              <div className="space-y-3 md:border-l md:border-zinc-800 md:pl-4">
+                <label className="block text-xs text-zinc-400">{t("contact.aiReportTemplateName")}
+                  <input autoFocus className="ui-control mt-1 w-full px-3 py-2 text-sm" maxLength={120} value={reportTemplateDraft.name}
+                    onChange={event => setReportTemplateDraft(current => current && { ...current, name: event.target.value })} />
+                </label>
+                <label className="block text-xs text-zinc-400">{t("contact.aiReportTemplateBody")}
+                  <textarea className="ui-control mt-1 min-h-48 w-full resize-y px-3 py-2 text-sm leading-5" rows={8} maxLength={12000}
+                    placeholder={t("contact.aiReportTemplatePlaceholder")} value={reportTemplateDraft.body}
+                    onChange={event => setReportTemplateDraft(current => current && { ...current, body: event.target.value })} />
+                </label>
+                <div className="flex justify-end gap-2">
+                  <Button variant="secondary" onClick={() => setReportTemplateDraft(null)}>{t("common.cancel")}</Button>
+                  <Button variant="primary" disabled={!reportTemplateDraft.name.trim() || !reportTemplateDraft.body.trim() || reportTemplateDraft.body.length > 12000 || (!reportTemplateDraft.id && reportTemplates.length >= 50)} onClick={saveReportTemplate}>{t("contact.aiReportTemplateSave")}</Button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>, document.body
+      )}
     </aside>
   );
 }

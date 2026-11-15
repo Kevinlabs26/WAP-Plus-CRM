@@ -38,7 +38,7 @@ export function AndroidBridgePanel({
 }: Props) {
   const { t } = useI18n();
   return (
-    <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-3.5">
+    <div className="rounded-lg border border-zinc-800/80 bg-zinc-900/40 p-3.5">
       <div className="text-[12px] font-medium text-zinc-300">{t("androidBridge.connectTitle")}</div>
       <p className="mt-0.5 text-[11px] text-zinc-600">
         {t("androidBridge.description")}
@@ -83,11 +83,11 @@ export function AndroidBridgePanel({
         </Button>
       </div>
 
-      <details className="mt-3 rounded-lg border border-zinc-800/70">
-        <summary className="cursor-pointer select-none px-2.5 py-1.5 text-2xs text-zinc-500 hover:text-zinc-300">
+      <details className="mt-3 border-t border-zinc-800/70 pt-3">
+        <summary className="cursor-pointer select-none text-2xs text-zinc-500 hover:text-zinc-300">
           {t("androidBridge.advanced")}
         </summary>
-        <div className="space-y-2 border-t border-zinc-800/70 p-2.5">
+        <div className="mt-2 space-y-2">
           <div className="flex flex-wrap gap-1.5">
             <Button
               variant="secondary"

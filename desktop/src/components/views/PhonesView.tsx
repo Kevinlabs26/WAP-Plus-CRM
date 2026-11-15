@@ -661,7 +661,7 @@ export function PhonesView() {
 
       <div className="mx-auto w-full max-w-3xl space-y-4 p-4">
         {sendChannel === "android_bridge" && deviceTab === "web" && (
-          <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-100/85">
+          <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-100/85">
             {t("phonesBridge.channelWarning")}
             <button
               type="button"
@@ -675,7 +675,7 @@ export function PhonesView() {
 
         {/* 二级：主路径扫码 · 真机为备用 */}
         <div
-          className="inline-flex rounded-xl border border-zinc-800 bg-zinc-900/50 p-1"
+          className="inline-flex rounded-md border border-zinc-800 bg-zinc-900/50 p-1"
           role="tablist"
         >
           <button
@@ -767,7 +767,7 @@ export function PhonesView() {
 
             {accounts.length === 0 ? (
               <div className="space-y-3">
-                <div className="rounded-2xl border border-dashed border-zinc-800 bg-zinc-900/20 px-4 py-6 text-center">
+                <div className="rounded-lg border border-dashed border-zinc-800 bg-zinc-900/20 px-4 py-6 text-center">
                   <p className="text-[13px] font-medium text-zinc-300">
                     {t("phones.noAccountSlots")}
                   </p>
@@ -885,7 +885,7 @@ export function PhonesView() {
                       type="button"
                       onClick={() => setSelectedPhone(p.id)}
                       className={cn(
-                        "rounded-2xl border p-3.5 text-left transition-colors",
+                        "rounded-lg border p-3.5 text-left transition-colors",
                         selectedPhoneId === p.id
                           ? "border-brand/40 bg-brand/10"
                           : "border-zinc-800/90 bg-zinc-900/50 hover:border-zinc-700"
@@ -940,7 +940,7 @@ export function PhonesView() {
                 })}
               </div>
             ) : (
-              <div className="rounded-2xl border border-dashed border-zinc-800 bg-zinc-900/20 px-4 py-8 text-center">
+              <div className="rounded-lg border border-dashed border-zinc-800 bg-zinc-900/20 px-4 py-8 text-center">
                 <Smartphone className="mx-auto h-8 w-8 text-zinc-600" />
                 <p className="mt-2 text-[12px] text-zinc-400">
                   {t("phonesBridge.noDevices")}
@@ -985,7 +985,7 @@ function AccountRole({
   note: string;
 }) {
   return (
-    <div className="min-w-0 rounded-xl border border-zinc-800/90 bg-zinc-900/35 px-3 py-2.5">
+    <div className="min-w-0 rounded-lg border border-zinc-800/90 bg-zinc-900/35 px-3 py-2.5">
       <div className="text-2xs text-zinc-600">{label}</div>
       <div className="mt-0.5 truncate text-[12px] font-medium text-zinc-200">
         {value}

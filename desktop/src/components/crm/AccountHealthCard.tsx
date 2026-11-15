@@ -65,7 +65,7 @@ export function AccountHealthCard({
   return (
     <div
       className={cn(
-        "rounded-xl border px-3 py-2.5",
+        "rounded-lg border px-3 py-2.5",
         meta.border,
         meta.bg
       )}

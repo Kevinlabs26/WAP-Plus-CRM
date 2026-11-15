@@ -37,7 +37,7 @@ export function BaileysLoginModal() {
       }}
     >
       <div
-        className="max-h-[86vh] w-full max-w-[30rem] overflow-y-auto rounded-2xl border border-zinc-700/90 bg-zinc-900 shadow-2xl"
+        className="max-h-[86vh] w-full max-w-[30rem] overflow-y-auto rounded-xl border border-zinc-700/90 bg-zinc-900 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

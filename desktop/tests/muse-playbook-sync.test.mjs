@@ -13,37 +13,42 @@ const mocks={
 };
 const bundle=await build({entryPoints:[fileURLToPath(new URL('../src/lib/musePlaybookSync.ts',import.meta.url))],bundle:true,write:false,format:'esm',platform:'node',alias:{'@':src},plugins:[{name:'muse-sync-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
 const {parsePlaybookManifest,parsePlaybookSummaries,mergeMusePlaybooks,syncMusePlaybooks,shouldAutoSyncPlaybooks}=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
-const source=(name,role='stage',hash='a')=>({path:`/workspace/playbooks/${name}.md`,name,sha256:hash.repeat(64),role});
-const manifest=(files)=>({root:'/workspace/playbooks',files});
+const source=(name,role='stage',hash='a')=>({path:`/workspace/${name}.md`,name,sha256:hash.repeat(64),role});
+const manifest=(files)=>({root:'/workspace',files});
 const summaries=files=>({files:files.map(file=>({path:file.path,sha256:file.sha256,summary:`Real concise rules for ${file.name}`}))});
 const local={id:'local',name:'Local',sourceName:'local.md',content:'Local full source',summary:'Local rules'};
 function fixture(outputs=[]){
   globalThis.pbSyncStatus={ready:true}; globalThis.pbSyncEpoch=0;globalThis.pbSyncRestoring=false;
   const calls=[];
-  globalThis.pbSyncState={settings:{aiPlaybooks:[{...local}],aiPlaybookMuseRoot:'',aiPlaybookOverviewId:'',aiPlaybookMuseSyncedAt:42},updateSettings(patch){this.settings={...this.settings,...patch};}};
+  globalThis.pbSyncState={settings:{aiPlaybooks:[{...local}],aiPlaybookMuseRoot:'',aiPlaybookMuseWorkspaceLinked:false,aiPlaybookOverviewId:'',aiPlaybookMuseSyncedAt:42},updateSettings(patch){this.settings={...this.settings,...patch};}};
   globalThis.pbSyncRequest=async(...args)=>{calls.push(args);const output=outputs.shift();if(output instanceof Error)throw output;if(typeof output==='function')return output();return JSON.stringify(output);};
   return {calls,outputs};
 }
 
-test('workspace manifests reject unsafe paths, duplicate files, invalid revisions and source changes',()=>{
+test('workspace manifests include Playbooks in different projects and reject unsafe paths or invalid revisions',()=>{
   const file=source('stage');
   assert.equal(parsePlaybookManifest(JSON.stringify(manifest([file]))).files[0].path,file.path);
-  for(const invalid of [manifest([]),manifest([file,file]),manifest([{...file,path:'/workspace/playbooks/../secret.md'}]),manifest([{...file,path:'/other/file.md'}]),manifest([{...file,sha256:'fake'}]),manifest([source('one','overview'),source('two','overview')])])assert.throws(()=>parsePlaybookManifest(JSON.stringify(invalid)));
-  assert.throws(()=>parsePlaybookManifest(JSON.stringify(manifest([file])),'/different/root'));
+  const crossProject=manifest([{...file,path:'/workspace/解决观念/overview.md',role:'overview'},{...source('stage-two'),path:'/workspace/prompt-split-alexandre/playbooks/stage-two.md'}]);
+  assert.equal(parsePlaybookManifest(JSON.stringify(crossProject)).files.length,2);
+  for(const invalid of [manifest([]),manifest([file,file]),manifest([{...file,path:'/workspace/../secret.md'}]),manifest([{...file,path:'/other/file.md'}]),manifest([{...file,sha256:'fake'}])])assert.throws(()=>parsePlaybookManifest(JSON.stringify(invalid)));
+  assert.throws(()=>parsePlaybookManifest(JSON.stringify(manifest([file])),'/different/workspace'));
   assert.throws(()=>parsePlaybookSummaries(JSON.stringify({files:[{path:file.path,sha256:'b'.repeat(64),summary:'wrong version'}]}),[file]));
   assert.throws(()=>parsePlaybookSummaries(JSON.stringify({files:[{path:file.path,sha256:file.sha256,summary:''}]}),[file]));
 });
 
-test('first sync reads actual file metadata then changed concise contents; unchanged files need no regeneration',async()=>{
+test('first sync discovers the whole workspace, then imports actual files and updates only changed summaries',async()=>{
   const files=[source('actual-overview','overview'),source('arbitrary-title')];
   const ui=fixture([manifest(files),summaries(files)]);
   assert.equal(await syncMusePlaybooks(),2);
   assert.equal(ui.calls.length,2);
   assert.match(ui.calls[0][0],/Read-only workspace file retrieval/);
+  assert.match(ui.calls[0][0],/all project folders/);
   assert.doesNotMatch(ui.calls[0][0],/Local full source|Local rules/);
   assert.equal(ui.calls[0][2],undefined,'sync has no customer conversation binding');
   assert.equal(ui.calls[0][4],-1,'reply tasks have queue priority');
   const books=pbSyncState.settings.aiPlaybooks;
+  assert.equal(pbSyncState.settings.aiPlaybookMuseRoot,'/workspace');
+  assert.equal(pbSyncState.settings.aiPlaybookMuseWorkspaceLinked,true);
   const remote=books.find(book=>book.musePath===files[1].path);
   assert.equal(remote.name,'arbitrary-title');assert.equal(remote.content,'');
   assert.equal(pbSyncState.settings.aiPlaybookOverviewId,books.find(book=>book.musePath===files[0].path).id);
@@ -54,11 +59,22 @@ test('first sync reads actual file metadata then changed concise contents; uncha
   assert.equal(pbSyncState.settings.aiPlaybooks.find(book=>book.id==='local').content,'Local full source');
 });
 
+test('legacy project-level roots are replaced by a workspace-wide rescan',async()=>{
+  const file={...source('welcome'),path:'/workspace/解决观念/welcome.md'};
+  const ui=fixture([manifest([file]),summaries([file])]);
+  pbSyncState.settings.aiPlaybookMuseRoot='/workspace/prompt-split-alexandre/playbooks';
+  assert.equal(await syncMusePlaybooks(''),1);
+  assert.equal(pbSyncState.settings.aiPlaybookMuseRoot,'/workspace');
+  assert.equal(pbSyncState.settings.aiPlaybookMuseWorkspaceLinked,true);
+  assert.match(ui.calls[0][0],/Locate the current Muse workspace root/);
+  assert.doesNotMatch(ui.calls[0][0],/Use ONLY this already linked Muse workspace root/);
+});
+
 test('failed later batches and unknown submissions never partially replace the successful cache',async()=>{
   const files=Array.from({length:7},(_,i)=>source(`stage-${i}`));
   const ui=fixture([manifest(files),summaries(files.slice(0,6)),new Error('request outcome unknown')]);
   const before=JSON.stringify(pbSyncState.settings.aiPlaybooks);
-  await assert.rejects(()=>syncMusePlaybooks(),/unknown/);
+  await assert.rejects(()=>syncMusePlaybooks('/workspace/playbooks'),/unknown/);
   assert.equal(ui.calls.length,3);assert.equal(JSON.stringify(pbSyncState.settings.aiPlaybooks),before);
   assert.equal(pbSyncState.settings.aiPlaybookMuseSyncedAt,42);
   assert.match(pbSyncState.settings.aiPlaybookMuseError,/unknown/);
@@ -95,11 +111,13 @@ test('remote missing files remain cached but block their old bindings; unrelated
   assert.match(resolvePlaybook({aiPlaybooks:books,aiPlaybookBindings:{'["account","chat"]':removedId}},'account','chat').error,/同步清单/);
 });
 
-test('automatic checks require a linked source, explicit enablement, visible ready UI, idle text queue and hourly spacing',()=>{
-  const config={aiPlaybookAutoSync:true,aiPlaybookMuseRoot:'/workspace/playbooks',aiPlaybookMuseAttemptAt:1000};
+test('automatic checks require Muse, a linked source, explicit enablement, visible ready UI, idle text queue and hourly spacing',()=>{
+  const config={aiProvider:'muse',aiPlaybookMuseWorkspaceLinked:true,aiPlaybookAutoSync:true,aiPlaybookMuseRoot:'/workspace',aiPlaybookMuseAttemptAt:1000};
   assert.equal(shouldAutoSyncPlaybooks(config,3_601_001,true,true,true),true);
   assert.equal(shouldAutoSyncPlaybooks(config,2000,true,true,true),false);
   for(const args of [[false,true,true],[true,false,true],[true,true,false]])assert.equal(shouldAutoSyncPlaybooks(config,4_000_000,...args),false);
   assert.equal(shouldAutoSyncPlaybooks({...config,aiPlaybookAutoSync:false},4_000_000,true,true,true),false);
+  assert.equal(shouldAutoSyncPlaybooks({...config,aiProvider:'openai'},4_000_000,true,true,true),false);
+  assert.equal(shouldAutoSyncPlaybooks({...config,aiPlaybookMuseWorkspaceLinked:false},4_000_000,true,true,true),false);
   assert.equal(shouldAutoSyncPlaybooks({...config,aiPlaybookMuseRoot:''},4_000_000,true,true,true),false);
 });

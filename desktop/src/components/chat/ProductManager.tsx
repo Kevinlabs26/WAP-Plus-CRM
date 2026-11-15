@@ -149,7 +149,7 @@ export function ProductManager({ products, loading, accountId, onClose, onRefres
 
   return (
     <div className="fixed inset-0 z-[71] flex items-center justify-center bg-black/65 p-4 backdrop-blur-[2px]">
-      <section className="flex max-h-[84vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl">
+      <section className="flex max-h-[84vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl">
         <header className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
           <h2 className="text-[13px] font-semibold text-zinc-100">{t("catalog.manageTitle")}</h2>
           <button type="button" onClick={onClose} disabled={busy} className="rounded-lg p-2 text-zinc-400 hover:bg-zinc-800 disabled:opacity-40" aria-label={t("tooltip.closePicker")}>
@@ -206,7 +206,7 @@ export function ProductManager({ products, loading, accountId, onClose, onRefres
               {loading ? <div className="flex h-48 items-center justify-center"><Loader2 className="h-4 w-4 animate-spin text-zinc-500" /></div> : products.length ? (
                 <div className="space-y-2">
                   {products.map((product) => (
-                    <div key={product.id} className="flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-950/50 p-2.5">
+                    <div key={product.id} className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950/50 p-2.5">
                       <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-zinc-800">{imageFor(product)}</div>
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-[12px] font-medium text-zinc-100">{product.name}</div>

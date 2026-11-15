@@ -36,12 +36,14 @@ export function TopBar({
   appLockConfigured = false,
   onLock,
   onManageLock,
+  onDisableLock,
 }: {
   showDonation?: boolean;
   appLockSupported?: boolean;
   appLockConfigured?: boolean;
   onLock?: () => void;
   onManageLock?: () => void;
+  onDisableLock?: () => void;
 } = {}) {
   const [donateOpen, setDonateOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -350,6 +352,13 @@ export function TopBar({
             >
               {appLockConfigured ? t("appLock.changePassword") : t("appLock.setPassword")}
             </button>
+            {appLockConfigured && <button
+              type="button"
+              onClick={() => { setLockMenuOpen(false); onDisableLock?.(); }}
+              className="w-full rounded px-3 py-2 text-left text-xs text-rose-400 hover:bg-[var(--app-surface-2)]"
+            >
+              {t("appLock.disablePassword")}
+            </button>}
           </div>}
         </div>}
         <Button

@@ -1,7 +1,6 @@
 import {PlaybookScheduleFields} from '@/components/settings/PlaybookScheduleFields';
 import {scheduledPlaybook} from '@/lib/playbookPlans';
-import { FirstContactAllocation } from '@/components/settings/FirstContactAllocation';
-import { allocateFirstContacts } from '@/lib/aiOutreachAllocation';
+import { X } from "lucide-react";
 import { useState } from "react";
 import { useAppStore, flushPersist } from "@/store/appStore";
 import { useI18n } from "@/i18n";
@@ -34,7 +33,7 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
     const latest=recipient&&lastContactedAccounts(chats,contacts,state.messages||[]).get(recipientKey("",recipient));
     return latest||(state.selectedThreadAccount?.chatId===chat?.id?state.selectedThreadAccount?.accountId:undefined)||chat?.accountId||contact?.accountId||settings.liveBaileysAccountId||settings.activeAccountId;
   });
-  const [outreach,setOutreach]=useState(normalizeOutreachRule(folder?.aiOutreach||{mode:"auto",timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone,trigger:"both"}));
+  const [outreach,setOutreach]=useState(normalizeOutreachRule(folder?.aiOutreach||{mode:"auto",timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}));
   const [maxChars,setMaxChars]=useState(folder?.aiReplyMaxChars?.toString()||"");
   const [forbidden,setForbidden]=useState(folder?.aiReplyForbiddenTerms?.join("\n")||"");
   if (!folder) return null;
@@ -48,17 +47,16 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
   const forbiddenTerms=forbidden.split(/[\n,，]/).map(term=>term.trim()).filter(Boolean);
   const draftSettings:typeof settings={...settings,chatFolders:settings.chatFolders.map(item=>item.id===folderId?{...item,
     aiPromptMode:mode==="custom"?"replace":mode as "append"|"inherit",aiSystemPrompt:custom?draft:undefined,aiPromptTemplateId:custom?templateId||undefined:undefined,
-    aiReplyMaxChars:maxChars?Number(maxChars):undefined,aiReplyForbiddenTerms:forbiddenTerms,...(outreach.firstContactQuotas?{scope:{type:'all' as const}}:{}),aiPlaybookId:playbookId||undefined,aiPlaybookSchedule:schedule,aiOutreach:outreach}:item)};
+    aiReplyMaxChars:maxChars?Number(maxChars):undefined,aiReplyForbiddenTerms:forbiddenTerms,aiPlaybookId:playbookId||undefined,aiPlaybookSchedule:schedule,aiOutreach:outreach}:item)};
   const preview=resolveFolderAiProfile(draftSettings,folderId,accountId);
   const limits=resolveAiReplyConstraints(draftSettings,accountId,undefined,folderId);
   const invalid=!!(schedule&&scheduledPlaybook(settings.aiPlaybookPlans||[],schedule).error)||custom&&!draft.trim()&&!templateId||!!preview.error||forbiddenTerms.length>50||forbiddenTerms.some(term=>term.length>100)||!!maxChars&&(!Number.isInteger(Number(maxChars))||Number(maxChars)<20||Number(maxChars)>2000);
   const save = (immediate = false) => {
     if (invalid || immediate && (!outreach.enabled || outreach.paused || settings.aiAutoReplyPaused || settings.aiOutreachPaused)) return;
     const current = useAppStore.getState();
-    const savedOutreach=outreach.firstContactQuotas?{...outreach,firstContactAssignments:allocateFirstContacts(current,current.settings.chatFolders.find(f=>f.id===folderId)?.chatIds||[],outreach.firstContactQuotas,outreach.firstContactAssignments).assignments}:outreach;
     current.updateSettings({ chatFolders: current.settings.chatFolders.map(item => item.id === folderId
       ? { ...item, aiSystemPrompt: custom ? draft.trim().slice(0, 6000) : undefined,
-        aiPromptMode:mode==="custom"?"replace":mode as "append"|"inherit",aiPromptTemplateId:custom?templateId||undefined:undefined,aiPlaybookId:playbookId||undefined,aiPlaybookSchedule:schedule,...(outreach.firstContactQuotas?{scope:{type:'all' as const}}:{}),aiOutreach:immediate?{...savedOutreach,runNowAt:Date.now()}:savedOutreach,...(hideReplyMode?{}:{autoReplyMode:replyMode==="inherit"?undefined:replyMode}),
+        aiPromptMode:mode==="custom"?"replace":mode as "append"|"inherit",aiPromptTemplateId:custom?templateId||undefined:undefined,aiPlaybookId:playbookId||undefined,aiPlaybookSchedule:schedule,aiOutreach:immediate?{...outreach,runNowAt:Date.now()}:outreach,...(hideReplyMode?{}:{autoReplyMode:replyMode==="inherit"?undefined:replyMode}),
         aiReplyMaxChars:maxChars?Number(maxChars):undefined,aiReplyForbiddenTerms:forbiddenTerms } : item) });
     if (immediate) {
       void flushPersist(useAppStore.getState).then(()=>{
@@ -70,7 +68,8 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
   return (
     <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/65 p-4 backdrop-blur-[2px]" onClick={onClose}>
       <div role="dialog" aria-modal="true" aria-labelledby="folder-ai-title"
-        className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-2xl border border-zinc-700 bg-zinc-900 p-5 shadow-2xl"
+        className="flex min-h-0 w-full flex-col overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl"
+        style={{ width: "min(94vw, 1152px)", height: "min(88vh, 820px)" }}
         onClick={event => event.stopPropagation()} onKeyDown={event => {
           if (event.key === "Escape") { event.stopPropagation(); onClose(); }
           if (event.key === "Tab") {
@@ -80,9 +79,17 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
             if (target) { event.preventDefault(); target.focus(); }
           }
         }}>
-        <h3 id="folder-ai-title" className="text-sm font-semibold text-zinc-100">{t("folderAi.title", { name: folder.name })}</h3>
-        {settings.aiAutoReplyPaused&&<p role="status" className="mt-2 text-xs text-amber-500">{t("aiChat.paused")}</p>}
-        <label className="mt-4 block text-xs text-zinc-300">
+        <header className="flex h-14 shrink-0 items-center justify-between border-b border-zinc-800 px-6">
+          <h3 id="folder-ai-title" className="text-[17px] font-semibold leading-none text-zinc-100">{t("folderAi.title", { name: folder.name })}</h3>
+          <button type="button" className="ui-btn-ghost h-9 w-9 !px-0" onClick={onClose} title={t("settings.close")} aria-label={t("settings.close")}>
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto p-6">
+          <div className="mx-auto w-full max-w-5xl space-y-4">
+        {settings.aiAutoReplyPaused&&<p role="status" className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-500">{t("aiChat.paused")}</p>}
+        <div className="grid gap-4 md:grid-cols-2">
+        <label className={`block text-xs text-zinc-300 ${hideReplyMode ? "md:col-span-2" : ""}`}>
           {t("folderAi.mode")}
           <select autoFocus className="ui-control mt-1 w-full px-3 py-2" value={mode}
             onChange={event => setMode(event.target.value)}>
@@ -91,55 +98,63 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
             <option value="custom">{t("folderAi.custom")}</option>
           </select>
         </label>
-        {!hideReplyMode&&<div className="mt-3 flex items-center justify-between gap-2 text-xs">
+        {!hideReplyMode&&<div className="flex items-center justify-between gap-2 rounded-lg border border-zinc-800 p-3 text-xs">
           <span>{t("aiFolder.defaultReply")}</span>
           <div className="flex gap-1">{(["inherit","auto","manual"] as const).map(value=><button key={value} type="button" aria-pressed={replyMode===value} onClick={()=>setReplyMode(value)}
             className={`rounded-full px-3 py-1.5 ${replyMode===value?"bg-brand/15 text-brand":"bg-zinc-800 text-zinc-400"}`}>{t(value==="inherit"?"crmPanel.inheritShort":value==="auto"?"multi.replyMode.auto":"multi.replyMode.manual")}</button>)}</div>
         </div>}
-        <label className="mt-4 block text-xs text-zinc-300">{t("aiLibrary.choose")}
+        <label className={`block text-xs text-zinc-300 ${variesByAccount ? "" : "md:col-span-2"}`}>{t("aiLibrary.choose")}
           <select className="ui-control mt-1 w-full px-2 py-2" aria-label={t("aiLibrary.choose")} value={custom?templateId:""} onChange={event=>{setTemplateId(event.target.value);if(event.target.value&&mode==="inherit")setMode("append");}}>
             <option value="">{t("aiLibrary.none")}</option>{settings.aiPromptTemplates?.map(template=><option key={template.id} value={template.id}>{template.name}</option>)}
           </select>
         </label>
-        {custom ? <label className="mt-4 block text-xs text-zinc-300">
-          {t("folderAi.prompt")}
-          <Textarea className="mt-1 min-h-48" rows={8} maxLength={6000} value={draft}
-            placeholder={t("folderAi.placeholder")} onChange={event => setDraft(event.target.value)} />
-          <span className="mt-1 block text-right text-zinc-500">{draft.length}/6000</span>
-        </label> : <div className="mt-4 rounded-lg border border-zinc-800 p-3 text-xs text-zinc-400">
+        {variesByAccount&&<label className="block text-xs text-zinc-300">
+          {t("aiLibrary.previewAccount")}
+          <select title={t("aiLibrary.previewOnly")} value={previewAccount} onChange={event=>setPreviewAccount(event.target.value)} className="ui-control mt-1 w-full px-2 py-2 text-xs">
+            <option value="">{t("aiLibrary.followChat",{account:settings.waAccounts?.find(account=>account.id===followingAccount)?.label||followingAccount||"—"})}</option>
+            {settings.waAccounts?.map(account=><option key={account.id} value={account.id}>{account.label}: {account.userName||account.phoneE164}</option>)}
+          </select>
+        </label>}
+        {!custom&&<div className="flex items-center rounded-lg border border-zinc-800 bg-zinc-950/20 px-3 py-2 text-xs text-zinc-400 md:col-span-2">
           <p>{variesByAccount ? t("folderAi.perAccount") : t("folderAi.effective", {
             source: t(`folderAi.source.${inherited.source}`, { name: inherited.folderName || "" }),
           })}</p>
         </div>}
-        {variesByAccount&&<select aria-label={t("aiLibrary.previewAccount")} title={t("aiLibrary.previewOnly")} value={previewAccount} onChange={event=>setPreviewAccount(event.target.value)} className="ui-control mt-3 w-full px-2 py-2 text-xs">
-          <option value="">{t("aiLibrary.followChat",{account:settings.waAccounts?.find(account=>account.id===followingAccount)?.label||followingAccount||"—"})}</option>
-          {settings.waAccounts?.map(account=><option key={account.id} value={account.id}>{account.label}: {account.userName||account.phoneE164}</option>)}
-        </select>}
-        <fieldset disabled={!!schedule} className="mt-3 disabled:opacity-50"><PlaybookSelect value={playbookId} onChange={setPlaybookId}/></fieldset>
+        </div>
+        {custom&&<label className="block text-xs text-zinc-300">
+          {t("folderAi.prompt")}
+          <Textarea className="mt-1 min-h-48" rows={8} maxLength={6000} value={draft}
+            placeholder={t("folderAi.placeholder")} onChange={event => setDraft(event.target.value)} />
+          <span className="mt-1 block text-right text-zinc-500">{draft.length}/6000</span>
+        </label>}
+        <fieldset disabled={!!schedule} className="disabled:opacity-50"><PlaybookSelect value={playbookId} onChange={setPlaybookId}/></fieldset>
         <PlaybookScheduleFields value={schedule} onChange={setSchedule}/>
-        <FirstContactAllocation folderId={folderId} value={outreach} onChange={setOutreach}/>
         <AiOutreachControls value={outreach} onChange={setOutreach}/>
-        {outreach.enabled&&<div className="mt-3 space-y-2">
+        {outreach.enabled&&<div className="space-y-2">
           {settings.aiAutoReplyPaused&&<p role="status" className="text-xs text-amber-500">{t("aiChat.paused")}</p>}
           {settings.aiOutreachPaused&&<p role="status" className="text-xs text-amber-500">{t("aiOutreach.masterPaused")}</p>}
           <button type="button" disabled={invalid||!!outreach.paused||settings.aiAutoReplyPaused||settings.aiOutreachPaused} onClick={()=>save(true)} className="rounded-lg bg-brand px-3 py-2 text-xs text-[var(--brand-foreground)] disabled:opacity-40">{t("aiOutreach.saveRunNow")}</button>
         </div>}
         {outreach.enabled&&<AiOutreachPreview settings={draftSettings} folderIds={[folderId]} assumeRunning={settings.aiOutreachPaused}/>}
-        <details className="mt-3 text-xs"><summary className="cursor-pointer">{t("folderAi.basePreview")}</summary>
+        <div className="grid gap-4 xl:grid-cols-2">
+        <details className="text-xs"><summary className="cursor-pointer">{t("folderAi.basePreview")}</summary>
           <p className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap text-zinc-400">{preview.error||preview.prompt||t("folderAi.source.default")}</p>
         </details>
-        <details className="mt-3 rounded-lg border border-zinc-800 p-3 text-xs"><summary className="cursor-pointer">{t("folderAi.otherLimits")}</summary>
+        <details className="rounded-lg border border-zinc-800 p-3 text-xs"><summary className="cursor-pointer">{t("folderAi.otherLimits")}</summary>
           <p className="mt-2 text-2xs text-zinc-500">{t("aiConstraints.hint")}</p>
           <label className="mt-2 block">{t("aiConstraints.max")}<input type="number" min={20} max={2000} value={maxChars} onChange={event=>setMaxChars(event.target.value)} className="ui-control mt-1 w-full px-2 py-2" /></label>
           <label className="mt-2 block">{t("aiConstraints.forbidden")}<Textarea rows={3} maxLength={5000} value={forbidden} onChange={event=>setForbidden(event.target.value)}/></label>
           <p className="mt-2 text-2xs text-zinc-500">{t("aiConstraints.effective",{max:limits.maxChars||"—",terms:limits.forbiddenTerms.join("、")||"—"})}</p>
         </details>
+        </div>
         {preview.error&&<p role="alert" className="mt-3 text-xs text-rose-400">{preview.error}</p>}
-        <div className="mt-5 flex justify-end gap-2">
+          </div>
+        </div>
+        <footer className="flex shrink-0 justify-end gap-2 border-t border-zinc-800 px-6 py-3">
           <button type="button" className="rounded-lg px-3 py-2 text-xs text-zinc-400 hover:bg-zinc-800" onClick={onClose}>{t("dialog.cancel")}</button>
           <button type="button" className="rounded-lg bg-brand px-3 py-2 text-xs text-[var(--brand-foreground)] disabled:opacity-40"
             disabled={invalid} onClick={()=>save()}>{t("dialog.save")}</button>
-        </div>
+        </footer>
       </div>
     </div>
   );

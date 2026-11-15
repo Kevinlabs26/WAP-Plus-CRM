@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useAppStore, flushPersist } from "@/store/appStore";
 import { useAutoReplyRuntime, type AutoReplyRuntime } from "@/lib/autoReplyRuntime";
-import { retryAutoReplyTask, stopAutoReplyTask, stopChatAutoReply } from "@/lib/aiAutoReply";
+import { getPendingAiAutoFollowUps, retryAutoReplyTask, stopAutoReplyTask, stopChatAutoReply } from "@/lib/aiAutoReply";
 import type { AiReplyTaskRecord } from "@/lib/aiTaskRecords";
 import type { Message } from "@/types/crm";
 import { Avatar } from "@/components/ui/Avatar";
@@ -9,8 +9,8 @@ import { Button } from "@/components/ui/primitives";
 import { useI18n } from "@/i18n";
 import { resolveAutoReplyScope } from "@/lib/autoReplyScope";
 
-type Row={id:string;chatId:string;accountId?:string;task?:AutoReplyRuntime;record?:AiReplyTaskRecord;message?:Message};
-const pending=(row:Row)=>!!row.task&&row.task.phase!=="human"||!!row.message&&(["pending","queued"].includes(row.message.deliveryStatus||"")||!!row.message.nextAttemptAt);
+type Row={id:string;chatId:string;accountId?:string;task?:AutoReplyRuntime;record?:AiReplyTaskRecord;message?:Message;followUp?:{step:number;dueAt:number;inboundId:string}};
+const pending=(row:Row)=>!!row.followUp||!!row.task&&row.task.phase!=="human"||!!row.message&&(["pending","queued"].includes(row.message.deliveryStatus||"")||!!row.message.nextAttemptAt);
 const human=(row:Row)=>row.task?.phase==="human"||!row.task&&!row.message&&row.record?.phase==="human";
 const failed=(row:Row)=>row.message?.deliveryStatus==="failed"||!row.task&&!row.message&&!!row.record&&!["ended","human"].includes(row.record.phase);
 
@@ -35,6 +35,10 @@ export function AiAutoReplyTasks(){
   for(const message of messages)if(message.systemKind==="ai_auto_reply"&&!representedMessages.has(message.id)){
     const id=message.aiReplyInboundId?`runtime:${message.chatId}:${message.aiReplyInboundId}`:`reply:${message.id}`;
     allRows.set(id,{...allRows.get(id),id,chatId:message.chatId,accountId:message.accountId,message});
+  }
+  if(!showHistory)for(const task of getPendingAiAutoFollowUps()){
+    const id=`followup:${task.chatId}:${task.inboundId}`;
+    allRows.set(id,{id,chatId:task.chatId,accountId:task.accountId,message:task.message,followUp:{step:task.step,dueAt:task.dueAt,inboundId:task.inboundId}});
   }
   const rows=[...allRows.values()].filter(row=>{
     const chat=chatsById.get(row.chatId),contact=chat&&contactsById.get(chat.contactId);
@@ -78,16 +82,22 @@ export function AiAutoReplyTasks(){
     {!rows.length&&<p className="py-3 text-sm text-zinc-500">{t("aiOutreach.empty")}</p>}
     {rows.slice(0,limit).map(row=>{
       const chat=chatsById.get(row.chatId),contact=chat&&contactsById.get(chat.contactId),name=contact?.name||chat?.contactName||contact?.phone||row.chatId;
+      const activityAt=row.record?.at||row.message?.sentAt;
       const interrupted=!row.task&&!!row.record&&!row.message&&!["ended","human"].includes(row.record.phase);
-      const status=t(settings.aiAutoReplyPaused&&pending(row)?"aiTasks.allPaused":row.message?.deliveryUncertain?"aiChat.uncertain":row.task?`aiChat.${row.task.phase}`:row.message?(failed(row)?"aiOutreach.status.failed":pending(row)?"aiOutreach.status.queued":"aiOutreach.status.sent"):interrupted?"aiTasks.interrupted":row.record?.phase==="human"?"aiChat.human":"aiTasks.ended");
-      return <article key={row.id} className="rounded-xl border border-zinc-800 p-3 text-xs">
-        <div className="flex justify-between gap-3"><button type="button" className="flex min-w-0 items-center gap-2 text-left" onClick={()=>{const state=useAppStore.getState();state.setSelectedChat(row.chatId,row.accountId);state.goToChats("all");}}>
-          <Avatar name={name} seed={contact?.phone||row.chatId} src={contact?.avatarUrl||contact?.avatarFullUrl}/><span className="min-w-0"><strong className="block truncate">{name}</strong><span className="block truncate text-zinc-500">{contact?.phone} · {settings.waAccounts.find(account=>account.id===row.accountId)?.label||row.accountId}</span></span>
-        </button><span role="status" className="shrink-0">{status}</span></div>
-        {(row.task?.reason||row.message?.lastError||row.record?.reason)&&<p className="mt-2 text-amber-500">{row.task?.reason||row.message?.lastError||row.record?.reason}</p>}
-        {row.task?.retryAt&&!settings.aiAutoReplyPaused&&<p className="mt-1 text-zinc-500">{new Date(row.task.retryAt).toLocaleTimeString()}</p>}
-        {row.message?.body&&<details className="mt-2"><summary className="cursor-pointer text-zinc-500">{t("aiTasks.message")}</summary><p className="mt-2 whitespace-pre-wrap">{row.message.body}</p></details>}
-        <div className="mt-2 flex flex-wrap gap-2">
+      const status=t(settings.aiAutoReplyPaused&&pending(row)?"aiTasks.allPaused":row.followUp?"settingsAutoReply.followUpPending":row.message?.deliveryUncertain?"aiChat.uncertain":row.task?`aiChat.${row.task.phase}`:row.message?(failed(row)?"aiOutreach.status.failed":pending(row)?"aiOutreach.status.queued":"aiOutreach.status.sent"):interrupted?"aiTasks.interrupted":row.record?.phase==="human"?"aiChat.human":"aiTasks.ended",row.followUp?{step:row.followUp.step}:undefined);
+      return <article key={row.id} className="grid gap-x-3 gap-y-1.5 rounded-lg border border-zinc-800 p-2.5 text-xs sm:grid-cols-[minmax(0,1fr)_auto]">
+        <button type="button" className="flex min-w-0 items-center gap-2 text-left" onClick={()=>{const state=useAppStore.getState();state.setSelectedChat(row.chatId,row.accountId);state.goToChats("all");}}>
+          <Avatar name={name} seed={contact?.phone||row.chatId} src={contact?.avatarUrl||contact?.avatarFullUrl} size="sm"/><span className="min-w-0"><strong className="block truncate">{name}</strong><span className="block truncate text-zinc-500">{contact?.phone} · {settings.waAccounts.find(account=>account.id===row.accountId)?.label||row.accountId}</span></span>
+        </button>
+        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+          <span role="status" className={`rounded-full px-2 py-0.5 ${failed(row)?"bg-rose-500/10 text-rose-400":pending(row)?"bg-amber-500/10 text-amber-400":human(row)?"bg-sky-500/10 text-sky-400":"bg-zinc-800 text-zinc-400"}`}>{status}</span>
+          {activityAt&&<time dateTime={activityAt} className="text-zinc-500">{new Date(activityAt).toLocaleString()}</time>}
+        </div>
+        {(row.task?.reason||row.message?.lastError||row.record?.reason)&&<p className="text-amber-500 sm:col-span-2">{row.task?.reason||row.message?.lastError||row.record?.reason}</p>}
+        {row.followUp&&<p className="text-zinc-500 sm:col-span-2">{t("settingsAutoReply.followUpDue",{step:row.followUp.step,time:new Date(row.followUp.dueAt).toLocaleString()})}</p>}
+        {row.task?.retryAt&&!settings.aiAutoReplyPaused&&<p className="text-zinc-500 sm:col-span-2">{new Date(row.task.retryAt).toLocaleTimeString()}</p>}
+        {row.message?.body&&<details className="sm:col-span-2"><summary className="cursor-pointer text-zinc-500">{t("aiTasks.message")}</summary><p className="mt-2 whitespace-pre-wrap">{row.message.body}</p></details>}
+        <div className="flex flex-wrap gap-2 border-t border-zinc-800/70 pt-2 sm:col-span-2">
           {pending(row)&&<Button size="xs" disabled={!!busy} onClick={()=>void act(row,"stop")}>{t("aiTasks.stopOnce")}</Button>}
           {row.message?.deliveryStatus==="failed"&&!row.message.deliveryUncertain&&<Button size="xs" disabled={!!busy||settings.aiAutoReplyPaused} onClick={()=>void act(row,"retry")}>{t("aiTasks.retrySend")}</Button>}
           {(failed(row)||human(row))&&!row.message?.deliveryUncertain&&<Button size="xs" disabled={!!busy||settings.aiAutoReplyPaused} onClick={()=>void act(row,"regenerate")}>{t(human(row)?"outreachPreview.refresh":"aiOutreach.retry")}</Button>}

@@ -5,6 +5,7 @@ import {
   type FolderDisplayChat,
 } from "./folderChatDisplay";
 import { phoneIdentity } from "../../features/multiWindow/identity.ts";
+import { LEAD_INBOX_FOLDER_ID } from "@/store/settingsDefaults";
 
 export type SidebarVirtItem =
   | { kind: "hint"; id: string; text: string }
@@ -45,6 +46,7 @@ export type SidebarVirtItem =
       chatIds: string[];
       total: number;
       collapsed: boolean;
+      depth: number;
     }
   | {
       kind: "ungrouped_header";
@@ -174,6 +176,7 @@ export function buildSidebarItems({
         chatIds,
         total: grouped.length,
         collapsed,
+        depth: 0,
       });
       if (!collapsed) {
         for (const item of grouped) {
@@ -234,6 +237,18 @@ export function buildSidebarItems({
         allAccountDisplayByChatId.set(chatId, item);
       }
     }
+    const leadDateChats = filteredChats.filter((chat) => leadDateGroupByChatId?.has(chat.id));
+    const leadDateDisplayChats = isAllAccountsView && leadMergeAccounts
+      ? collapseAllAccountFolderChats(leadDateChats, contactById)
+      : leadDateChats.map((chat) => ({ chat, accountCount: 1, memberChatIds: [chat.id] }));
+    const leadDateBlocks = new Map<string, { label: string; chats: FolderDisplayChat[] }>();
+    for (const item of leadDateDisplayChats) {
+      const group = leadDateGroupByChatId?.get(item.chat.id);
+      if (!group) continue;
+      const block = leadDateBlocks.get(group.id) || { label: group.label, chats: [] };
+      block.chats.push(item);
+      leadDateBlocks.set(group.id, block);
+    }
     // 同一自然人在“全部账号”只保留一个主归属；分身仍可显式复制。
     const claimedAllAccountChats = new Set<FolderDisplayChat>();
     const allAccountFolderChats = new Map<string, FolderDisplayChat[]>();
@@ -251,6 +266,10 @@ export function buildSidebarItems({
     }
     const folderedAllAccountChats = new Set(claimedAllAccountChats);
     const folderMemberIds = new Set(primarySet);
+    for (const item of leadDateDisplayChats) {
+      for (const chatId of item.memberChatIds) folderMemberIds.add(chatId);
+      folderedAllAccountChats.add(item);
+    }
     for (const clone of chatFolderClones) {
       if (!folderById.has(clone.folderId)) continue;
       folderMemberIds.add(clone.sourceChatId);
@@ -287,12 +306,14 @@ export function buildSidebarItems({
         .filter((chat): chat is ChatPreview => !!chat);
       ownFolderStats.set(folder.id, {
         containsSelected: primaryDisplayChats.some((item) => item.memberChatIds.includes(selectedChatId || "")) ||
-          cloneChats.some((chat) => chat.id === selectedChatId),
-        total: primaryDisplayChats.length + cloneChats.length,
+          cloneChats.some((chat) => chat.id === selectedChatId) ||
+          (folder.id === LEAD_INBOX_FOLDER_ID && leadDateDisplayChats.some((item) => item.memberChatIds.includes(selectedChatId || ""))),
+        total: primaryDisplayChats.length + cloneChats.length + (folder.id === LEAD_INBOX_FOLDER_ID ? leadDateDisplayChats.length : 0),
         // 按显示的会话计数，同一会话有多条未读消息也只计一次。
         unread:
           primaryDisplayChats.filter((item) => (item.chat.unread || 0) > 0).length +
-          cloneChats.filter((chat) => (chat.unread || 0) > 0).length,
+          cloneChats.filter((chat) => (chat.unread || 0) > 0).length +
+          (folder.id === LEAD_INBOX_FOLDER_ID ? leadDateDisplayChats.filter((item) => (item.chat.unread || 0) > 0).length : 0),
       });
     }
     const folderStats = new Map<string, FolderStats>();
@@ -345,6 +366,34 @@ export function buildSidebarItems({
         depth,
       });
       if (!searchActive && folder.collapsed) return;
+      if (folder.id === LEAD_INBOX_FOLDER_ID) {
+        for (const [groupId, group] of leadDateBlocks) {
+          const collapsed = collapsedLeadDateIds?.has(groupId) ?? false;
+          items.push({
+            kind: "lead_date_header",
+            id: `lead-date-${groupId}`,
+            groupId,
+            label: group.label,
+            chatIds: [...new Set(group.chats.flatMap((item) => item.memberChatIds))],
+            total: group.chats.length,
+            collapsed,
+            depth: depth + 1,
+          });
+          if (!collapsed || searchActive) {
+            for (const item of group.chats) {
+              items.push({
+                kind: "chat",
+                id: item.chat.id,
+                chat: item.chat,
+                folderId: folder.id,
+                folderDepth: depth + 1,
+                accountCount: item.accountCount,
+                memberChatIds: item.memberChatIds,
+              });
+            }
+          }
+        }
+      }
       for (const child of childrenByParent.get(folder.id) || []) {
         appendFolder(child, depth + 1);
       }

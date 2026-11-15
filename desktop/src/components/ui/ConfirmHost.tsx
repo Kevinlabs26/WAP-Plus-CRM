@@ -57,7 +57,7 @@ export function ConfirmHost() {
         aria-describedby={
           dialog.description ? `confirm-desc-${dialog.id}` : undefined
         }
-        className="confirm-modal-box w-full max-w-[22rem] overflow-hidden rounded-2xl border border-zinc-700/80 bg-zinc-900/95 shadow-2xl shadow-black/40 backdrop-blur-md"
+        className="confirm-modal-box w-full max-w-[22rem] overflow-hidden rounded-xl border border-zinc-700/80 bg-zinc-900/95 shadow-2xl shadow-black/40 backdrop-blur-md"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="px-4 pt-4 pb-1">

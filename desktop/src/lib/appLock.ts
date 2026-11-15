@@ -26,3 +26,6 @@ export const changeAppLockPassword = (currentPassword: string, newPassword: stri
     currentPassword,
     newPassword,
   });
+
+export const removeAppLockPassword = (currentPassword: string) =>
+  invoke<boolean>("app_lock_remove", { currentPassword });

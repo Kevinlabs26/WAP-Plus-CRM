@@ -6,10 +6,11 @@ import { Button, Input } from "@/components/ui/primitives";
 import {
   changeAppLockPassword,
   createAppLockPassword,
+  removeAppLockPassword,
   verifyAppLockPassword,
 } from "@/lib/appLock";
 
-export type AppLockMode = "setup" | "unlock" | "change";
+export type AppLockMode = "setup" | "unlock" | "change" | "disable";
 
 export function AppLockOverlay({
   mode,
@@ -17,12 +18,14 @@ export function AppLockOverlay({
   onCreated,
   onUnlocked,
   onChanged,
+  onDisabled,
 }: {
   mode: AppLockMode;
   onCancel: () => void;
   onCreated: () => void;
   onUnlocked: () => void;
   onChanged: () => void;
+  onDisabled: () => void;
 }) {
   const { t } = useI18n();
   const [currentPassword, setCurrentPassword] = useState("");
@@ -41,7 +44,7 @@ export function AppLockOverlay({
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError("");
-    if (mode !== "unlock") {
+    if (mode === "setup" || mode === "change") {
       if (Array.from(password).length < 6) {
         setError(t("appLock.passwordMin"));
         return;
@@ -60,8 +63,11 @@ export function AppLockOverlay({
       } else if (mode === "unlock") {
         if (await verifyAppLockPassword(password)) onUnlocked();
         else setError(t("appLock.passwordWrong"));
-      } else {
+      } else if (mode === "change") {
         if (await changeAppLockPassword(currentPassword, password)) onChanged();
+        else setError(t("appLock.passwordWrong"));
+      } else {
+        if (await removeAppLockPassword(currentPassword)) onDisabled();
         else setError(t("appLock.passwordWrong"));
       }
     } catch (reason) {
@@ -76,7 +82,9 @@ export function AppLockOverlay({
       ? t("appLock.setupTitle")
       : mode === "change"
         ? t("appLock.changeTitle")
-        : t("appLock.lockedTitle");
+        : mode === "disable"
+          ? t("appLock.disablePassword")
+          : t("appLock.lockedTitle");
 
   return (
     <div className="fixed inset-0 z-[300] flex items-center justify-center overflow-hidden bg-zinc-950 p-5" role="dialog" aria-modal="true" aria-label={heading}>
@@ -98,21 +106,21 @@ export function AppLockOverlay({
           </div>
           <h1 className="text-lg font-semibold text-[var(--app-text)]">{heading}</h1>
           <p className="text-sm text-[var(--app-muted)]">
-            {mode === "setup" ? t("appLock.setupHint") : mode === "change" ? t("appLock.changeHint") : t("appLock.unlockHint")}
+            {mode === "setup" ? t("appLock.setupHint") : mode === "change" ? t("appLock.changeHint") : mode === "disable" ? t("appLock.disableHint") : t("appLock.unlockHint")}
           </p>
         </div>
 
-        {mode === "change" && (
+        {(mode === "change" || mode === "disable") && (
           <label className="block space-y-1.5 text-sm text-[var(--app-muted)]">
             <span>{t("appLock.currentPassword")}</span>
             <Input autoFocus type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.currentTarget.value)} maxLength={512} />
           </label>
         )}
-        <label className="block space-y-1.5 text-sm text-[var(--app-muted)]">
+        {mode !== "disable" && <label className="block space-y-1.5 text-sm text-[var(--app-muted)]">
           <span>{mode === "unlock" ? t("appLock.password") : t("appLock.newPassword")}</span>
           <Input autoFocus={mode !== "change"} type="password" autoComplete={mode === "unlock" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.currentTarget.value)} maxLength={512} />
-        </label>
-        {mode !== "unlock" && (
+        </label>}
+        {(mode === "setup" || mode === "change") && (
           <label className="block space-y-1.5 text-sm text-[var(--app-muted)]">
             <span>{t("appLock.confirmPassword")}</span>
             <Input type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.currentTarget.value)} maxLength={512} />
@@ -122,8 +130,8 @@ export function AppLockOverlay({
         {error && <p role="alert" className="rounded-lg bg-rose-500/10 px-3 py-2 text-sm text-[var(--app-danger)]">{error}</p>}
         <div className="flex justify-end gap-2 pt-1">
           {mode !== "unlock" && <Button variant="secondary" onClick={onCancel} disabled={busy}>{t("common.cancel")}</Button>}
-          <Button variant="primary" type="submit" disabled={busy || (mode === "unlock" ? !password : !password || (mode === "change" && !currentPassword) || !confirmation)}>
-            {busy ? t("appLock.working") : mode === "setup" ? t("appLock.setPassword") : mode === "change" ? t("appLock.changePassword") : t("appLock.unlock")}
+          <Button variant="primary" type="submit" disabled={busy || (mode === "unlock" ? !password : mode === "disable" ? !currentPassword : !password || (mode === "change" && !currentPassword) || !confirmation)}>
+            {busy ? t("appLock.working") : mode === "setup" ? t("appLock.setPassword") : mode === "change" ? t("appLock.changePassword") : mode === "disable" ? t("appLock.disablePassword") : t("appLock.unlock")}
           </Button>
         </div>
       </form>

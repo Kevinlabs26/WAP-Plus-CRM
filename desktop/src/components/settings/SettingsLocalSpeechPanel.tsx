@@ -96,7 +96,7 @@ export function SettingsLocalSpeechPanel({ embedded = false }: { embedded?: bool
           {t("settingsSpeech.presets")}
           {models.some(m => m.ready) && <span className="ml-2 text-2xs text-brand">{t("settingsSpeech.ready")} · {models.filter(m => m.ready).length}</span>}
         </summary>
-        <div className="space-y-2">
+        <div className="divide-y divide-zinc-800/80 border-y border-zinc-800/80">
           {SPEECH_MODEL_PRESETS.map((preset) => {
             const installed = models.some((m) => m.name === preset.id && m.ready);
             const busy = busyId === preset.id;
@@ -104,7 +104,7 @@ export function SettingsLocalSpeechPanel({ embedded = false }: { embedded?: bool
             return (
               <div
                 key={preset.id}
-                className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950/50 px-3 py-2.5"
+                className="flex items-center gap-3 py-3"
               >
                 <HardDriveDownload className="h-4 w-4 shrink-0 text-zinc-500" />
                 <div className="min-w-0 flex-1">
@@ -155,11 +155,11 @@ export function SettingsLocalSpeechPanel({ embedded = false }: { embedded?: bool
         {models.length > 0 && (
           <section>
             <SectionLabel>{t("settingsSpeech.localDirectory")}</SectionLabel>
-            <div className="space-y-2">
+            <div className="divide-y divide-zinc-800/80 border-y border-zinc-800/80">
               {models.map((model) => (
                 <div
                   key={model.name}
-                  className="flex items-center gap-3 rounded-lg border border-zinc-800/70 px-3 py-2"
+                  className="flex items-center gap-3 py-2.5"
                 >
                   <span
                     className={cn(
@@ -192,11 +192,11 @@ export function SettingsLocalSpeechPanel({ embedded = false }: { embedded?: bool
             {t("settingsSpeech.noVoices")}
           </p>
         ) : (
-          <div className="grid grid-cols-2 gap-1.5">
+          <div className="grid grid-cols-2 gap-x-3">
             {systemVoices.map((voice) => (
               <div
                 key={voice.name}
-                className="truncate rounded-md border border-zinc-800/70 px-2 py-1.5 text-2xs"
+                className="truncate border-b border-zinc-800/70 py-1.5 text-2xs"
                 title={voice.name}
               >
                 <span className="font-mono text-zinc-500">{voice.lang}</span>

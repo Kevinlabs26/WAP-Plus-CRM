@@ -225,7 +225,7 @@ export function FolderGroupImportDialog({
       <div
         role="dialog"
         aria-modal="true"
-        className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-zinc-700/90 bg-zinc-900 shadow-2xl shadow-black/50"
+        className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-zinc-700/90 bg-zinc-900 shadow-2xl shadow-black/50"
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           if (event.key === "Escape" && !joining && !previewing) onClose();

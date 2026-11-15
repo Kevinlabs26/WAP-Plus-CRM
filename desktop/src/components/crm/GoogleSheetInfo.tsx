@@ -1,6 +1,7 @@
+import { Star } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useI18n } from "@/i18n";
-import { letter, readGoogleDoc, readSheet, refreshSheets, sheetHeaders, tabRange, updateSheetCell, useGoogleSheets, sheetConnections, type SheetCell, type SheetField, type SheetConfig } from "@/lib/googleSheets";
+import { letter, primarySheetTagForPhone, readGoogleDoc, readSheet, refreshSheets, sheetHeaders, tabRange, updateSheetCell, useGoogleSheets, sheetConnections, type SheetCell, type SheetField, type SheetConfig } from "@/lib/googleSheets";
 import { useAppStore } from "@/store/appStore";
 import { resolveFolderSheetIds } from "@/lib/folderSheetBinding";
 import { resolveSheetColumn, sheetInternationalPhone } from "@/lib/googleSheetMatch";
@@ -70,6 +71,26 @@ function SheetValue({ contact, field, cell, columnIndex, active,connectionId,con
   return <p className="whitespace-pre-wrap break-words">{cell.value || "—"}</p>;
 }
 
+export function GoogleSheetPrimaryTag({ contact, chatId }: { contact: Contact; chatId?: string | null }) {
+  const settings = useAppStore(state => state.settings);
+  const chats = useAppStore(state => state.chats);
+  const state = useGoogleSheets();
+  const effectiveChat = chatId || chats.find(chat => chat.contactId === contact.id)?.id || "";
+  if (contact.isGroup) return null;
+  const ids = resolveFolderSheetIds(settings, effectiveChat);
+  const connections = sheetConnections(state);
+  const tags = ids.flatMap(id => {
+    const connection = connections.find(item => item.id === id);
+    const value = primarySheetTagForPhone(connection, contact.phone);
+    return value ? [{ id, value }] : [];
+  });
+  return <>
+    {tags.map(tag => <span key={tag.id} title={tag.value} className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border border-amber-500/50 bg-amber-500/20 px-2 py-0.5 text-[10px] font-medium text-amber-800 dark:text-amber-300">
+      <Star className="h-2.5 w-2.5 shrink-0" fill="currentColor" /><span className="min-w-0 truncate">{tag.value}</span>
+    </span>)}
+  </>;
+}
+
 export function GoogleSheetInfo({ contact,chatId, open = false, expanded: controlledExpanded, onExpandedChange }: { contact: Contact;chatId?:string|null; open?: boolean; expanded?: boolean; onExpandedChange?: (expanded: boolean) => void }) {
   const { t } = useI18n();
   const state=useGoogleSheets();
@@ -89,7 +110,7 @@ export function GoogleSheetInfo({ contact,chatId, open = false, expanded: contro
   useEffect(() => { if (open) setLocalExpanded(true); }, [open]);
   if (!state.email || contact.isGroup||id==="none"&&ids.length===1||!connections.length&&ids.length===1&&id==="default") return null;
   const phone = sheetInternationalPhone(contact.phone);
-  return <details open={expanded} onToggle={event => setExpanded(event.currentTarget.open)} className="rounded-xl border border-zinc-800 p-2.5">
+  return <details open={expanded} onToggle={event => setExpanded(event.currentTarget.open)} className="border-t border-zinc-800 py-2.5">
     <summary className="cursor-pointer text-xs font-medium">{t("sheets.info")}</summary>
     {expanded && <div className="mt-2 space-y-2 text-xs">
       {ids.length>1&&<><p className="text-zinc-500">{t("sheets.multipleBindings")}</p><select className="ui-control w-full px-2 py-1" aria-label={t("sheets.chooseSource")} value={id} onChange={event=>setChoice({context,id:event.target.value})}><option value="">{t("sheets.chooseSource")}</option>{ids.map(id=><option key={id} value={id}>{id==="none"?t("sheets.noBinding"):connections.find(item=>item.id===id)?.name||t("sheets.missing")}</option>)}</select></>}

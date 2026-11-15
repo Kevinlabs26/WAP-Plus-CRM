@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/primitives";
 import { useI18n } from "@/i18n";
 
-export function SettingsNumberInput({ value, min, max, integer = false, disabled, className, onCommit }: {
-  value: number; min: number; max?: number; integer?: boolean; disabled?: boolean; className?: string; onCommit: (value: number) => void;
+export function SettingsNumberInput({ value, min, max, integer = false, disabled, className, ariaLabel, onCommit }: {
+  value: number; min: number; max?: number; integer?: boolean; disabled?: boolean; className?: string; ariaLabel?: string; onCommit: (value: number) => void;
 }) {
   const { t } = useI18n();
   const [draft, setDraft] = useState(String(value));
@@ -18,7 +18,7 @@ export function SettingsNumberInput({ value, min, max, integer = false, disabled
     if (number !== value) onCommit(number);
   }
   return <>
-    <Input type="number" min={min} max={max} step={integer ? 1 : "any"} value={draft} disabled={disabled} className={className} aria-invalid={invalid || undefined}
+    <Input type="number" min={min} max={max} step={integer ? 1 : "any"} value={draft} disabled={disabled} className={className} aria-label={ariaLabel} aria-invalid={invalid || undefined}
       onChange={event => { setDraft(event.target.value); setInvalid(false); }} onBlur={commit}
       onKeyDown={event => {
         if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }

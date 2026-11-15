@@ -1,5 +1,5 @@
 import { useAppStore } from "@/store/appStore";
-import { SectionLabel, Switch } from "@/components/ui/primitives";
+import { SectionLabel } from "@/components/ui/primitives";
 import { useI18n } from "@/i18n";
 import { AiServiceFields } from "./SettingsAiPanel";
 import { getTranslationSettings, translationSettingsPatch } from "@/lib/translationConfig";
@@ -10,7 +10,7 @@ export function SettingsTranslationPanel() {
   const updateSettings = useAppStore(state => state.updateSettings);
   return <div className="mx-auto max-w-3xl space-y-6">
     <header><h3 className="text-lg font-semibold text-zinc-100">{t("settingsTranslation.title")}</h3><p className="mt-1 text-xs text-zinc-500">{t("settingsTranslation.description")}</p></header>
-    <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+    <section className="border-t border-zinc-800 pt-4">
       <div className="grid grid-cols-2 gap-3">
           <label className="col-span-2 block text-2xs text-zinc-500">
             {t("settingsAi.translationService")}
@@ -27,7 +27,7 @@ export function SettingsTranslationPanel() {
       </div>
       {settings.translateService !== "google" && <AiServiceFields allowMuse={false} showMockHint={false} settings={getTranslationSettings(settings)} updateSettings={patch => updateSettings(translationSettingsPatch(patch))} />}
     </section>
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
 <SectionLabel>{t("settings.translation")}</SectionLabel>
 <div className="mt-3 grid grid-cols-2 gap-3">
 
@@ -54,7 +54,7 @@ export function SettingsTranslationPanel() {
           </label>
 </div>
       </section>
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <SectionLabel>{t("settingsMessaging.inputTranslation")}</SectionLabel>
         <p className="mt-2 text-[11px] text-zinc-600">
           {t("settingsMessaging.inputTranslationHint")}
@@ -80,16 +80,6 @@ export function SettingsTranslationPanel() {
             <option value="ja">日本語</option>
             <option value="ko">한국어</option>
           </select>
-        </label>
-        <label className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-zinc-800/80 bg-zinc-900/30 px-3 py-2.5 text-xs text-zinc-300">
-          <span>
-            <span className="block text-zinc-200">{t("settingsMessaging.enterTranslateSend")}</span>
-            <span className="mt-0.5 block text-[11px] text-zinc-600">{t("settingsMessaging.enterTranslateSendHint")}</span>
-          </span>
-          <Switch
-            checked={settings.enterTranslateSend === true}
-            onChange={(event) => updateSettings({ enterTranslateSend: event.target.checked })}
-          />
         </label>
       </section>
   </div>;

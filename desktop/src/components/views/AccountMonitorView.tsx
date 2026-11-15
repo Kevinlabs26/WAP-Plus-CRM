@@ -304,7 +304,7 @@ export function AccountMonitorView() {
         </p>
 
         {(totals.red > 0 || totals.paused > 0) && (
-          <div className="mt-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-100/90">
+          <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-100/90">
             {t("monitor.recommendation")}
           </div>
         )}
@@ -313,7 +313,7 @@ export function AccountMonitorView() {
           <button
             type="button"
             onClick={() => setActiveNav("broadcast")}
-            className="mt-3 flex w-full items-center gap-2 rounded-xl border border-brand/30 bg-brand/10 px-3 py-2 text-left text-[11px] text-brand hover:bg-brand/15"
+            className="mt-3 flex w-full items-center gap-2 rounded-lg border border-brand/30 bg-brand/10 px-3 py-2 text-left text-[11px] text-brand hover:bg-brand/15"
           >
             <Megaphone className="h-3.5 w-3.5 shrink-0" />
             <span className="min-w-0 flex-1 truncate">
@@ -326,7 +326,7 @@ export function AccountMonitorView() {
         )}
 
         {!accounts.length ? (
-          <div className="mt-8 rounded-xl border border-dashed border-zinc-800 px-6 py-12 text-center">
+          <div className="mt-8 rounded-lg border border-dashed border-zinc-800 px-6 py-12 text-center">
             <ShieldAlert className="mx-auto h-8 w-8 text-zinc-600" />
             <p className="mt-3 text-[13px] text-zinc-300">{t("monitor.noAccounts")}</p>
             <p className="mt-1 text-[11px] text-zinc-600">
@@ -376,7 +376,7 @@ export function AccountMonitorView() {
                 <div
                   key={h.accountId}
                   className={cn(
-                    "relative overflow-hidden rounded-2xl border p-4 shadow-lg shadow-black/20",
+                    "relative overflow-hidden rounded-lg border p-4 shadow-sm shadow-black/20",
                     ui.border,
                     ui.bg,
                     isPaused && "opacity-90 ring-1 ring-zinc-500/40"
@@ -512,7 +512,7 @@ export function AccountMonitorView() {
           </div>
         )}
 
-        <div className="mt-8 rounded-xl border border-zinc-800/90 bg-zinc-900/30">
+        <div className="mt-8 rounded-lg border border-zinc-800/90 bg-zinc-900/30">
           <button
             type="button"
             className="flex w-full items-center gap-2 px-4 py-3 text-left"
@@ -550,7 +550,7 @@ function StatChip({
   tone?: "ok" | "warn" | "bad";
 }) {
   return (
-    <div className="stat-chip-card rounded-xl border border-zinc-800/90 bg-zinc-900/60 px-3 py-2.5 shadow-2xs">
+    <div className="stat-chip-card rounded-lg border border-zinc-800/90 bg-zinc-900/60 px-3 py-2.5 shadow-2xs">
       <div className="text-2xs font-medium text-zinc-400 dark:text-zinc-400">{label}</div>
       <div
         className={cn(

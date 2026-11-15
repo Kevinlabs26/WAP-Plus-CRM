@@ -16,7 +16,7 @@ export function SettingsConnectionPanel() {
         <p className="mt-1 text-[13px] text-zinc-500">{t("settingsConnection.description")}</p>
       </header>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <SectionLabel>{t("settingsConnection.channel")}</SectionLabel>
         <label className="mt-3 block text-2xs text-zinc-500">
           {t("settingsConnection.currentChannel")}
@@ -79,7 +79,7 @@ export function SettingsConnectionPanel() {
         )}
       </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <SectionLabel>{t("settingsConnection.behavior")}</SectionLabel>
         <label className="mt-3 flex cursor-pointer items-center gap-2 text-[12px] text-zinc-300">
           <input
@@ -93,7 +93,7 @@ export function SettingsConnectionPanel() {
         <p className="mt-1 text-2xs text-zinc-600">{t("settingsConnection.autoConnectHint")}</p>
       </section>
       {settings.sendChannel !== "android_bridge" && (
-        <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+        <section className="border-t border-zinc-800 pt-4">
           <AccountHealthPanel />
         </section>
       )}

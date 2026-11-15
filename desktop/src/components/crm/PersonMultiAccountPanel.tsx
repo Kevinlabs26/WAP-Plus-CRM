@@ -8,6 +8,7 @@ import {
   Check,
   ChevronDown,
   GitBranch,
+  Languages,
   Merge,
   MessageCircle,
   Plus,
@@ -32,6 +33,7 @@ import type { ChatPreview, Contact, Message } from "@/types/crm";
 import { Avatar } from "@/components/ui/Avatar";
 import { SectionLabel } from "@/components/ui/primitives";
 import { useI18n } from "@/i18n";
+import { TranslationQuickSettingsPopover } from "@/components/layout/TranslationQuickSettingsPopover";
 
 type Props = {
   seed: Contact | null | undefined;
@@ -104,6 +106,7 @@ export function PersonMultiAccountPanel({
   const pushToast = useAppStore((s) => s.pushToast);
   const mergeContacts = useAppStore((s) => s.mergeContacts);
   const requestConfirm = useAppStore((s) => s.requestConfirm);
+  const setSettingsOpen = useAppStore((s) => s.setSettingsOpen);
   const storeContacts = useAppStore((s) =>
     contactsProp ? undefined : s.contacts
   );
@@ -142,6 +145,7 @@ export function PersonMultiAccountPanel({
   const accountPopupRef = useRef<HTMLDivElement | null>(null);
   const accountTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [translationQuickOpen, setTranslationQuickOpen] = useState(false);
   const [accountMenuPosition, setAccountMenuPosition] = useState({ left: 0, top: 0, maxHeight: 320 });
   const [visibleAccountIds, setVisibleAccountIds] = useState<string[] | null>(null);
   const isAccountSwitchBanner = variant === "banner" && Boolean(onSelectStartAccount) && (waAccounts?.length || 0) > 1;
@@ -476,6 +480,29 @@ export function PersonMultiAccountPanel({
               document.body
             )}
           </div>
+          <div className="relative shrink-0">
+            <button
+              type="button"
+              className={cn("inline-flex h-7 w-7 items-center justify-center rounded-full text-zinc-400 transition-colors hover:bg-zinc-800/80 hover:text-zinc-200", translationQuickOpen && "bg-zinc-800 text-brand")}
+              title={t("translation.quickSettings")}
+              aria-label={t("translation.quickSettings")}
+              aria-expanded={translationQuickOpen}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={() => setTranslationQuickOpen((open) => !open)}
+            >
+              <Languages className="h-4 w-4" />
+            </button>
+            {translationQuickOpen && (
+              <TranslationQuickSettingsPopover
+                above
+                onClose={() => setTranslationQuickOpen(false)}
+                onOpenSettings={() => {
+                  setTranslationQuickOpen(false);
+                  setSettingsOpen(true, "translation");
+                }}
+              />
+            )}
+          </div>
         </div>
       </div>
     );
@@ -544,7 +571,7 @@ export function PersonMultiAccountPanel({
 
   // card：CRM 侧栏
   return (
-    <section className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-3">
+    <section className="rounded-lg border border-zinc-800 bg-zinc-950/40 p-3">
       <div className="mb-2 flex items-center gap-1.5">
         <GitBranch className="h-3.5 w-3.5 text-brand" />
         <SectionLabel>{t("multiAccount.timeline", { count: rows.length })}</SectionLabel>

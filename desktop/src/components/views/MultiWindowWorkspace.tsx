@@ -80,6 +80,7 @@ export function MultiWindowWorkspace({
   const waAccounts = useAppStore((s) => s.settings.waAccounts || []);
   const chatFolders = useAppStore((s) => s.settings.chatFolders || []);
   const chatFolderClones = useAppStore((s) => s.settings.chatFolderClones || []);
+  const leadInbox = useAppStore((s) => s.settings.leadInbox);
   const selectedChatId = useAppStore((s) => s.selectedChatId);
   const setSelectedChat = useAppStore((s) => s.setSelectedChat);
   const setChatDraft = useAppStore((s) => s.setChatDraft);
@@ -217,11 +218,15 @@ export function MultiWindowWorkspace({
       const folder = chatFolders.find((item) => item.id === folderId);
       if (!folder) return [];
       const ids = [...folder.chatIds, ...(clonesByFolder.get(folderId) || []).map((item) => item.sourceChatId)];
+      if (folder.systemType === "leadInbox") {
+        const dismissed = new Set(leadInbox.dismissedChatIds);
+        ids.push(...leadInbox.collectedChatIds.filter((id) => !dismissed.has(id)));
+      }
       for (const child of childrenByParent.get(folderId) || []) ids.push(...collect(child.id, new Set(seen)));
       return [...new Set(ids)];
     };
     return new Map(chatFolders.map((folder) => [folder.id, collect(folder.id)]));
-  }, [chatFolderClones, chatFolders]);
+  }, [chatFolderClones, chatFolders, leadInbox.collectedChatIds, leadInbox.dismissedChatIds]);
   const candidateChats = useMemo(
     () => filterCandidateChats(chats, contactById, ignoreGroups),
     [chats, contactById, ignoreGroups]
@@ -255,21 +260,12 @@ export function MultiWindowWorkspace({
         grouped.set(key, {
           chat,
           memberChatIds: [chat.id],
-          accountCount: 1,
           unreadCount: chat.unread || 0,
         });
         continue;
       }
       current.memberChatIds.push(chat.id);
       current.unreadCount += chat.unread || 0;
-      const accountIds = new Set(
-        current.memberChatIds.map((id) => {
-          const member = chatById.get(id);
-          const memberContact = member ? contactById.get(member.contactId) : undefined;
-          return member?.accountId || member?.phoneId || memberContact?.accountId || memberContact?.boundPhoneId || id;
-        })
-      );
-      current.accountCount = accountIds.size;
       const currentPending = pendingChatIds.has(current.chat.id);
       const nextPending = pendingChatIds.has(chat.id);
       if ((nextPending && !currentPending) || (nextPending === currentPending && (chat.updatedAt || "") > (current.chat.updatedAt || ""))) {
@@ -277,7 +273,7 @@ export function MultiWindowWorkspace({
       }
     }
     return [...grouped.values()];
-  }, [chatById, contactById, folderChatIdsForDisplay, pendingChatIds]);
+  }, [contactById, folderChatIdsForDisplay, pendingChatIds]);
   const folderWindowByChatId = useMemo(
     () => new Map(folderWindows.flatMap(item => item.memberChatIds.map(id => [id, item] as const))),
     [folderWindows]
@@ -304,16 +300,9 @@ export function MultiWindowWorkspace({
           const bPending = pendingChatIds.has(b.id) ? 1 : 0;
           return bPending - aPending || (b.updatedAt || "").localeCompare(a.updatedAt || "");
         })[0];
-        const accountIds = new Set(
-          members.map((member) => {
-            const contact = contactById.get(member.contactId);
-            return member.accountId || member.phoneId || contact?.accountId || contact?.boundPhoneId || member.id;
-          })
-        );
         return {
           chat: selected,
           memberChatIds: members.map((member) => member.id),
-          accountCount: accountIds.size,
           unreadCount: members.reduce((sum, member) => sum + (member.unread || 0), 0),
         };
       })
@@ -913,7 +902,6 @@ export function MultiWindowWorkspace({
                   contact={contact}
                   messages={messagesForChat(chat.id)}
                   summary={chat.lastMessage}
-                  accountCount={folderWindow?.accountCount}
                   unreadCount={folderWindow?.unreadCount}
                   hasMoreHistory={historyByChatId[chat.id]?.hasMore}
                   historyLoading={historyByChatId[chat.id]?.loading}
@@ -972,7 +960,7 @@ export function MultiWindowWorkspace({
             })}
           </div>
         ) : (
-          <div className="flex h-full min-h-72 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-zinc-800 bg-zinc-900/20 text-center">
+          <div className="flex h-full min-h-72 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-zinc-800 bg-zinc-900/20 text-center">
             <div className="rounded-full bg-brand/10 p-3 text-brand">
               <Plus className="h-5 w-5" />
             </div>

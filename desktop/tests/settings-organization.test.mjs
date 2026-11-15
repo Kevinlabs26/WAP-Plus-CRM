@@ -7,7 +7,7 @@ const mocks={
  '@/lib/desktopNotify':'export const getNotifyPermission=async()=>"granted";export const ensureNotifyPermission=async()=>globalThis.notificationGrant;',
  'react/jsx-runtime':'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;export const Fragment="fragment";',
  '@/store/appStore':'export const useAppStore=selector=>selector(globalThis.organizationState);',
- '@/components/ui/primitives':'export const Input="input",SectionLabel="h4";',
+ '@/components/ui/primitives':'export const Input="input",SectionLabel="h4",Switch="switch";',
  '@/i18n':'export const useI18n=()=>({t:k=>k});',
 };
 const built=await build({stdin:{contents:`export { SettingsMessagingPanel } from './src/components/settings/SettingsMessagingPanel.tsx';export { SettingsNotificationsPanel } from './src/components/settings/SettingsNotificationsPanel.tsx';`,resolveDir:fileURLToPath(new URL('../',import.meta.url))},bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},plugins:[{name:'boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});

@@ -52,6 +52,11 @@ export interface Contact {
   aiSuggestedStage?: SalesStage;
   /** 洞察上次生成时间 ISO */
   aiInsightAt?: string;
+  /** 最近一次 AI 汇报（可手动编辑） */
+  aiReport?: string;
+  aiReportTemplateId?: string;
+  aiReportTemplateName?: string;
+  aiReportAt?: string;
   /** 永久绑定的手机 id — 核心壁垒功能 */
   boundPhoneId?: string;
   lastMessageAt?: string;
@@ -246,6 +251,11 @@ export interface Message {
   /** 自动回复生成上下文的 SHA-256；排队/重启后复核，不含聊天正文或密钥。 */
   aiReplyContextHash?: string;
   aiReplyInboundId?: string;
+  aiAutoFollowUpRootId?: string;
+  aiAutoFollowUpStep?: number;
+  aiAutoFollowUpSentAt?: number;
+  aiAutoFollowUpAttemptAt?: number;
+  aiAutoFollowUpCancelled?: boolean;
   systemAction?: string;
   /** 被 @ 的成员 jid */
   mentionedJids?: string[];

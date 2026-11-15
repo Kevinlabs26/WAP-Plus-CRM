@@ -40,7 +40,7 @@ export function parseQuickReplyTable(input: string) {
     const fields = splitCsvLine(record, delimiter);
     const [title = "", body = "", category = "", translation = "", parent = ""] = fields;
     if (index === 0 && /^(标题|名称|title|titre|原文|source|original)$/i.test(title) && /^(内容|正文|body|content|contenu|text|原文|source|original|译文|翻译|translation|translated|traduction)$/i.test(body)) return;
-    if (fields.length < 2 || fields.length > 5 || !title || (!body && !translation) || title.length > 40 || body.length > 2000 || category.length > 32 || translation.length > 2000 || parent.length > 32) {
+    if (fields.length < 2 || fields.length > 5 || !title || (!body && !translation) || title.length > 40 || category.length > 32 || parent.length > 32) {
       invalidRows.push(index + 1); return;
     }
     rows.push({ title, body, category, ...(translation ? { translation } : {}), ...(parent ? { parent } : {}) });
@@ -73,11 +73,10 @@ export function quickReplySheetRowsWithLinks(
       const translation = String(translations[index] ?? "").trim();
       if (index === 0 && ((ORIGINAL_HEADER.test(original) && TRANSLATION_HEADER.test(translation)) || (TRANSLATION_HEADER.test(original) && ORIGINAL_HEADER.test(translation)))) continue;
       if (!original && !translation) continue;
-      if (original.length > 2000 || translation.length > 2000) throw new Error("contentTooLong");
       const titleText = (titleSource === "translation" ? translation : original) || original || translation;
       const title = (titleText.split("\n")[0] || titleText).trim().slice(0, 40) || titleText.slice(0, 40);
-      const body = original.slice(0, 2000);
-      const safeTranslation = translation.slice(0, 2000);
+      const body = original;
+      const safeTranslation = translation;
       rows.push([title, body, sheet.name.slice(0, 32), safeTranslation, groupName.slice(0, 32)]);
       links.push({ spreadsheetId, tab: sheet.name, row: index + 1, originalColumn, translationColumn, titleSnapshot: title, originalSnapshot: original, translationSnapshot: safeTranslation });
       if (rows.length > MAX_QUICK_REPLIES) throw new Error("limit");

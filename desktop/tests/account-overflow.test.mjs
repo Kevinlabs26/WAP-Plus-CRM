@@ -12,12 +12,12 @@ const mocks = {
     export const useState = initial => globalThis.accountHarness.useState(initial);
   `,
   "react/jsx-runtime": "export const jsx = (type, props, key) => ({type,props,key}); export const jsxs = jsx;",
-  "lucide-react": "export const Check = () => null; export const ChevronDown = () => null; export const GitBranch = () => null; export const Merge = () => null; export const MessageCircle = () => null; export const Plus = () => null; export const Star = () => null;",
+  "lucide-react": "export const Check = () => null; export const ChevronDown = () => null; export const GitBranch = () => null; export const Languages = () => null; export const Merge = () => null; export const MessageCircle = () => null; export const Plus = () => null; export const Settings2 = () => null; export const Star = () => null;",
   "react-dom": "export const createPortal = (children, container) => ({type:'portal',props:{children},container});",
   "@/store/appStore": "export const useAppStore = selector => selector({settings:{},messagesByChatId:{}});",
   "@/i18n": "export const translateCurrent = key => key; const t = (key,args) => key === 'multiAccount.moreAccounts' ? '+' + args.count : key; export const useI18n = () => ({t});",
   "@/components/ui/Avatar": "export const Avatar = () => null;",
-  "@/components/ui/primitives": "export const SectionLabel = () => null;",
+  "@/components/ui/primitives": "export const SectionLabel = () => null; export const Switch = () => null;",
 };
 const result = await build({
   entryPoints: [fileURLToPath(new URL('../src/components/crm/PersonMultiAccountPanel.tsx', import.meta.url))],

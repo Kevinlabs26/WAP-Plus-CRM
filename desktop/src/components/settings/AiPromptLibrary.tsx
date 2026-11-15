@@ -18,7 +18,7 @@ export function AiPromptLibrary() {
     const template={id:id||crypto.randomUUID(),name:name.trim().slice(0,80),prompt:prompt.trim().slice(0,6000)};
     current.updateSettings({aiPromptTemplates:id?library.map(item=>item.id===id?template:item):[...library,template]});setId(template.id);
   };
-  return <details className="rounded-xl border border-zinc-800 p-3">
+  return <details className="border-y border-zinc-800 py-3">
     <summary className="cursor-pointer text-[13px] font-semibold">{t("aiLibrary.title")} · {templates.length}</summary>
     <p className="mt-2 text-2xs text-zinc-500">{t("aiLibrary.hint")}</p>
     <Input className="mt-2" value={query} placeholder={t("aiLibrary.search")} aria-label={t("aiLibrary.search")} onChange={event=>setQuery(event.target.value)} />

@@ -113,7 +113,9 @@ export function useChatFolderDrag({ chatFolders }: { chatFolders: ChatFolder[] }
       const next = id === "__ungrouped" ? null : id;
       const moved = cur.chatIds.filter(chatId => {
         const current = store.settings.chatFolders?.find(f => f.chatIds.includes(chatId));
-        return (current?.id || null) !== next;
+        const collectedLead = store.settings.leadInbox.collectedChatIds.includes(chatId) && !store.settings.leadInbox.dismissedChatIds.includes(chatId);
+        const leadRoot = collectedLead ? store.settings.chatFolders?.find(folder => folder.systemType === "leadInbox") : undefined;
+        return (current?.id || leadRoot?.id || null) !== next;
       });
       if (!moved.length) { store.pushToast(t("folder.dropUnchanged"), "info"); return; }
       moved.forEach(chatId => store.moveChatToFolder(chatId, next));

@@ -187,7 +187,7 @@ export function CommonGroupsPanel({
   if (contact.isGroup) return null;
 
   return (
-    <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-2.5">
+    <section className="rounded-lg border border-zinc-800 bg-zinc-900/30 p-2.5">
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
           <Users className="h-3.5 w-3.5 text-brand" />

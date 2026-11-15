@@ -5,8 +5,9 @@ export interface AutoReplyScopeSettings {
   aiAutoReplyPaused?: boolean;
   aiAutoReplyManualChatIds?: string[];
   aiAutoReplyModeByChatId?: Record<string, AutoReplyMode>;
-  chatFolders?: { id: string; name: string; parentId?: string; chatIds: string[]; autoReplyMode?: AutoReplyMode }[];
+  chatFolders?: { id: string; name: string; parentId?: string; chatIds: string[]; autoReplyMode?: AutoReplyMode; systemType?: string }[];
   chatFolderClones?: { folderId: string; sourceChatId: string }[];
+  leadInbox?: { collectedChatIds?: string[]; dismissedChatIds?: string[] };
 }
 
 export function resolveAutoReplyScope(settings: AutoReplyScopeSettings, chatId: string) {
@@ -17,7 +18,24 @@ export function resolveAutoReplyScope(settings: AutoReplyScopeSettings, chatId: 
   const cloneFolders = new Set(settings.chatFolderClones?.filter(item => item.sourceChatId === chatId).map(item => item.folderId));
   const all = settings.chatFolders || [];
   const byId = new Map(all.map(folder => [folder.id, folder]));
-  const folders = all.filter(folder => folder.chatIds.includes(chatId) || cloneFolders.has(folder.id)).flatMap(member => {
+  const memberFolders = all.filter(folder => folder.chatIds.includes(chatId) || cloneFolders.has(folder.id));
+  const leadRoot = all.find(folder => folder.systemType === "leadInbox");
+  const inLeadTree = (folderId: string) => {
+    let folder = byId.get(folderId);
+    const seen = new Set<string>();
+    while (folder && !seen.has(folder.id)) {
+      if (folder.id === leadRoot?.id) return true;
+      seen.add(folder.id);
+      folder = folder.parentId ? byId.get(folder.parentId) : undefined;
+    }
+    return false;
+  };
+  const assignedOutsideLead = memberFolders.some(folder => folder.chatIds.includes(chatId) && !inLeadTree(folder.id));
+  if (leadRoot && settings.leadInbox?.collectedChatIds?.includes(chatId) &&
+      !settings.leadInbox.dismissedChatIds?.includes(chatId) && !assignedOutsideLead) {
+    memberFolders.push(leadRoot);
+  }
+  const folders = memberFolders.flatMap(member => {
     const seen = new Set<string>();
     let folder: typeof member | undefined = member;
     while (folder && !seen.has(folder.id)) {

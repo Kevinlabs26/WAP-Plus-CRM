@@ -6,14 +6,15 @@ import {
   MoreHorizontal,
   RefreshCw,
   Search,
+  Sparkles,
   UserPlus,
   UsersRound,
   CheckCheck,
   Settings2,
-  UserRoundPlus,
   Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
+import type { LucideIcon } from "lucide-react";
 import { isSyncDebugEnabled, syncLog } from "@/lib/syncDebug";
 import { cn } from "@/lib/utils";
 import { useI18n, type TranslationKey } from "@/i18n";
@@ -64,10 +65,6 @@ type Props = {
   onMarkAllGroupsRead: () => void;
   savedActive: boolean;
   onOpenSaved: () => void;
-  leadCount: number;
-  leadActive: boolean;
-  leadEnabled: boolean;
-  onOpenLeads: () => void;
   onOpenLeadSettings: () => void;
   filter: string;
   onFilterChange: (value: string) => void;
@@ -87,6 +84,7 @@ type Props = {
   onSync: () => void;
   folderCount: number;
   onClearAllFolders: () => void;
+  onMuseFolderRouting?: () => void;
 };
 
 export function SidebarListHeader({
@@ -101,10 +99,6 @@ export function SidebarListHeader({
   onMarkAllGroupsRead,
   savedActive,
   onOpenSaved,
-  leadCount,
-  leadActive,
-  leadEnabled,
-  onOpenLeads,
   onOpenLeadSettings,
   filter,
   onFilterChange,
@@ -124,6 +118,7 @@ export function SidebarListHeader({
   onSync,
   folderCount,
   onClearAllFolders,
+  onMuseFolderRouting,
 }: Props) {
   const { t, locale } = useI18n();
   const currentCount = (listTab === "chats" ? chatsCount : contactsCount).toLocaleString(locale);
@@ -136,7 +131,7 @@ export function SidebarListHeader({
   const actionsRef = useRef<HTMLDivElement | null>(null);
   const actions: {
     label: string;
-    Icon: typeof UsersRound;
+    Icon: LucideIcon;
     run: () => void;
     disabled?: boolean;
     title?: string;
@@ -144,11 +139,11 @@ export function SidebarListHeader({
     count?: number;
   }[] = [
     { label: t("sidebar.saved"), Icon: Bookmark, run: onOpenSaved, active: savedActive },
-    ...(listTab === "chats" ? [{ label: t("leadInbox.title"), Icon: UserRoundPlus, run: onOpenLeads, active: leadActive, count: leadCount, title: !leadEnabled ? t("leadInbox.settings") : t("leadInbox.title") }] : []),
     { label: syncing ? t("sidebar.syncing") : t("sidebar.syncChats"), Icon: RefreshCw, run: onSync, disabled: syncDisabled, title: syncTitle },
     ...(isBaileys ? [{ label: t("sidebar.newGroup"), Icon: UsersRound, run: onCreateGroup }] : []),
     { label: t("sidebar.batchSaveContacts"), Icon: UserPlus, run: onBatchSaveContacts },
     ...(listTab === "chats" ? [{ label: t("leadInbox.settings"), Icon: Settings2, run: onOpenLeadSettings }] : []),
+    ...(listTab === "chats" && onMuseFolderRouting ? [{ label: t("museRouting.action"), Icon: Sparkles, run: onMuseFolderRouting }] : []),
     ...(listTab === "chats" && folderCount > 0 ? [{ label: t("folder.clearAll"), Icon: Trash2, run: onClearAllFolders }] : []),
   ];
 
@@ -214,12 +209,11 @@ export function SidebarListHeader({
           />
         </div>
         {listTab !== "manage" && <div className="relative shrink-0" ref={actionsRef}>
-          <button type="button" aria-label={t("sidebar.actions")} title={leadCount > 0 && listTab === "chats" ? t("leadInbox.filterActive", { count: leadCount }) : t("sidebar.actions")}
+          <button type="button" aria-label={t("sidebar.actions")} title={t("sidebar.actions")}
             aria-expanded={actionsOpen} aria-controls="sidebar-actions" aria-busy={syncing}
             onClick={() => { setGroupFilterOpen(false); if (sortOpen) onToggleSort(); setActionsOpen(open => !open); }}
-            className={cn("relative flex h-9 w-8 items-center justify-center rounded-md hover:bg-zinc-900", savedActive || leadActive ? "text-brand" : "text-zinc-500")}>
+            className={cn("relative flex h-9 w-8 items-center justify-center rounded-md hover:bg-zinc-900", savedActive ? "text-brand" : "text-zinc-500")}>
             {syncing ? <RefreshCw className="h-4 w-4 animate-spin" aria-label={t("sidebar.syncing")} /> : <MoreHorizontal className="h-4 w-4" />}
-            {listTab === "chats" && leadCount > 0 && <span className="absolute -right-1 -top-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-deeper px-1 text-[11px] font-bold leading-none tabular-nums text-white" aria-label={t("leadInbox.filterActive", { count: leadCount })}>{leadCount > 99 ? "99+" : leadCount}</span>}
           </button>
           {actionsOpen && <div id="sidebar-actions" role="group" aria-label={t("sidebar.actions")}
             className="absolute right-0 top-[calc(100%+6px)] z-50 max-h-[60vh] w-64 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 p-1 shadow-xl shadow-black/30">

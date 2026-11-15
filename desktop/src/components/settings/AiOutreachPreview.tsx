@@ -36,13 +36,13 @@ export function AiOutreachPreview({settings,folderIds,assumeRunning=false,auto=t
   const rows=(data?.rows||[]).filter(row=>!reason||row.reason===reason);
   const format=(at:number,zone:string)=>new Intl.DateTimeFormat(settings.uiLanguage||"zh-CN",{timeZone:zone,dateStyle:"short",timeStyle:"short"}).format(at);
   const displayZone=data?.rows.find(row=>row.eligible&&row.scheduledAt===data.nextAt)?.timeZone||settings.aiTimeZone||Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return <section className="mt-3 rounded-xl border border-zinc-800 p-3 text-xs">
+  return <section className="mt-3 border-t border-zinc-800 pt-3 text-xs">
     <div className="flex items-center justify-between gap-2"><strong>{t(assumeRunning?"outreachPreview.beforeEnable":"outreachPreview.title")}</strong><Button size="xs" disabled={busy} onClick={()=>void refresh()}>{t(data?"outreachPreview.refresh":"outreachPreview.check")}</Button></div>
     {busy&&<p role="status" className="mt-2 text-zinc-500">{t("outreachPreview.checking",{count:checked})}</p>}
     {error&&<p role="alert" className="mt-2 text-amber-500">{error}</p>}
     {data&&<>
-      {!!data.rows.length&&<div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">{([
-        ["eligible",data.eligible+data.quotaWaiting],["ready",data.readyNow],["quota",data.quotaWaiting],["blocked",data.blocked-data.quotaWaiting],
+      {!!data.rows.length&&<div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">{([
+        ["eligible",data.eligible],["ready",data.readyNow],["blocked",data.blocked],
       ] as const).map(([label,count])=><div key={label} className="flex items-baseline gap-2"><strong className={`text-lg tabular-nums ${label==="ready"?"text-brand":""}`}>{count}</strong><span className="text-zinc-500">{t(`outreachPreview.stat.${label}`)}</span></div>)}</div>}
       {data.nextAt!==null&&<p className="mt-1">{t("outreachPreview.next",{time:`${format(data.nextAt,displayZone)} · ${displayZone}`})}</p>}
       {!data.rows.length&&<p className="mt-2 text-zinc-500">{t("outreachPreview.noMembers")}</p>}
@@ -53,7 +53,7 @@ export function AiOutreachPreview({settings,folderIds,assumeRunning=false,auto=t
         <div className="mt-2 max-h-72 divide-y divide-zinc-800/80 overflow-y-auto">{rows.slice(0,limit).map((row,index)=><div key={`${row.folderId}:${row.chatId}:${index}`} className="py-2">
           <div className="flex justify-between gap-2"><span className="truncate font-medium">{row.name}</span><span className={row.eligible?"text-brand":"text-zinc-500"}>{t(`outreachReason.${row.reason}`)}</span></div>
           <p className="mt-1 text-zinc-500">{row.folderName} · {settings.waAccounts.find(account=>account.id===row.accountId)?.label||row.accountId||"—"} · {t(row.mode==="auto"?"aiOutreach.auto":"aiOutreach.draft")}</p>
-          <p className="mt-1 text-zinc-500">{row.scheduledAt!==null?`${format(row.scheduledAt,row.timeZone)} · ${row.timeZone}`:"—"} · {t("outreachPreview.limit",{count:row.dailyLimit})}</p>
+          <p className="mt-1 text-zinc-500">{row.scheduledAt!==null?`${format(row.scheduledAt,row.timeZone)} · ${row.timeZone}`:"—"}</p>
           {row.historyPending&&<p className="mt-1 text-amber-500">{t("outreachPreview.history")}</p>}
         </div>)}</div>
         {rows.length>limit&&<Button size="xs" className="mt-2" onClick={()=>setLimit(limit+20)}>{t("aiTasks.more")}</Button>}

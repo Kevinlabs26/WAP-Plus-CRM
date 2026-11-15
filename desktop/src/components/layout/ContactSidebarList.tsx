@@ -103,7 +103,7 @@ export const ContactSidebarList = memo(function ContactSidebarList({
 
   return (
     <Virtuoso
-      className="h-full"
+      className="min-h-0 flex-1"
       data={contacts}
       computeItemKey={(_i, contact) => contact.id}
       defaultItemHeight={58}

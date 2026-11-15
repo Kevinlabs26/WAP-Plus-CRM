@@ -1,19 +1,17 @@
 import { resolveAutoReplyScope, type AutoReplyScopeSettings } from "./autoReplyScope.ts";
-export const MANUAL_TAKEOVER_WINDOW_MS = 30 * 60 * 1000;
+export const MANUAL_TAKEOVER_WINDOW_MS = 60 * 1000;
 
 export interface AiAutoReplyPolicy {
   /** 本地时间 HH:mm；任一留空表示全天 */
   activeStart: string;
   activeEnd: string;
   takeoverMinutes: number;
-  allowPricing: boolean;
 }
 
 export const DEFAULT_AUTO_REPLY_POLICY: AiAutoReplyPolicy = {
   activeStart: "",
   activeEnd: "",
   takeoverMinutes: MANUAL_TAKEOVER_WINDOW_MS / 60_000,
-  allowPricing: false,
 };
 
 export interface AutoReplySafetyMessage {
@@ -57,17 +55,14 @@ export function normalizeAutoReplyPolicy(
   fallback: AiAutoReplyPolicy = DEFAULT_AUTO_REPLY_POLICY
 ): AiAutoReplyPolicy {
   const source = raw && typeof raw === "object" ? raw as Partial<AiAutoReplyPolicy> : {};
-  const minutes = Number(source.takeoverMinutes ?? fallback.takeoverMinutes);
+  const storedMinutes = Number(source.takeoverMinutes ?? fallback.takeoverMinutes);
+  const minutes = storedMinutes === 30 ? 1 : storedMinutes;
   return {
     activeStart: normalizeTime(source.activeStart ?? fallback.activeStart),
     activeEnd: normalizeTime(source.activeEnd ?? fallback.activeEnd),
     takeoverMinutes: Number.isFinite(minutes)
       ? Math.min(1440, Math.max(1, Math.round(minutes)))
       : fallback.takeoverMinutes,
-    allowPricing:
-      typeof source.allowPricing === "boolean"
-        ? source.allowPricing
-        : fallback.allowPricing,
   };
 }
 
@@ -145,14 +140,9 @@ export function getAutoReplyBlockReason(text: string): string | null {
   return getAutoReplyRisk(text)?.reason || null;
 }
 
-export function getAutoReplyOutputBlockReason(
-  text: string,
-  options?: { allowPricing?: boolean }
-): string | null {
+export function getAutoReplyOutputBlockReason(text: string): string | null {
   const risk = getAutoReplyRisk(text);
-  if (risk && !(risk.category === "pricing" && options?.allowPricing)) {
-    return `AI 回复${risk.reason}`;
-  }
+  if (risk) return `AI 回复${risk.reason}`;
   if (
     /(保证|承诺|一定能|肯定能|百分之百|已经安排|已确认|马上退款|按时送达|\b(?:i|we)\s+(?:guarantee|promise|confirm that|will refund|will arrive|have already arranged)\b|100%|\bdefinitely\b|\b(?:garantis|garantissons|promets|promettons|garantizo|prometo|garanto|garantimos|garantieren|verspreche)\b)/i.test(
       text
@@ -225,9 +215,7 @@ export function evaluateAutoReplyDecision(
     };
   }
   const risk = getAutoReplyRisk(inbound.transcript || inbound.body || "");
-  if (risk && !(risk.category === "pricing" && policy.allowPricing)) {
-    return { allow: false, kind: "risk", reason: risk.reason };
-  }
+  if (risk) return { allow: false, kind: "risk", reason: risk.reason };
   return { allow: true, kind: "reply", reason: "低风险消息，可以自动回复" };
 }
 
@@ -249,7 +237,7 @@ export function getAutoReplySendError(
       (item.direction === "in" && !inboundId || item.direction === "out" && !item.systemKind))) return "生成后收到新消息或检测到手动回复，旧自动回复已停止";
   const policy = resolveAutoReplyPolicy(settings.aiAutoReplyPolicy, settings.aiAutoReplyPolicyByAccountId, reply.accountId);
   const decision=evaluateAutoReplyDecision(thread, inbound, Date.now(), policy);
-  return decision.allow ? getAutoReplyOutputBlockReason(reply.body, { allowPricing: policy.allowPricing }) : decision.reason;
+  return decision.allow ? getAutoReplyOutputBlockReason(reply.body) : decision.reason;
 }
 
 export function canSendAutoReply(...args:Parameters<typeof getAutoReplySendError>):boolean {

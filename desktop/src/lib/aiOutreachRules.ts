@@ -1,6 +1,6 @@
 export type AiOutreachRule = {
-  enabled: boolean; paused?: boolean; mode: "draft" | "auto"; trigger: "new" | "daily" | "both";
-  time: string; timeZone: string; minIdleHours: number; dailyLimit: number; goal: string; runNowAt?: number; firstContactQuotas?: Record<string,number>; firstContactAssignments?: Record<string,string>;
+  enabled: boolean; paused?: boolean; mode: "draft" | "auto";
+  time: string; timeZone: string; goal: string; runNowAt?: number;
 };
 export type AiOutreachRun = {
   id: string; folderId: string; chatId: string; accountId: string; day: string; at: string;
@@ -14,12 +14,9 @@ export function normalizeOutreachRule(raw: unknown): AiOutreachRule {
   const value = raw && typeof raw === "object" ? raw as Partial<AiOutreachRule> : {};
   let zone = typeof value.timeZone === "string" ? value.timeZone : "UTC";
   try {new Intl.DateTimeFormat("en",{timeZone:zone});} catch {zone="UTC";}
-  const number = (value: unknown, fallback: number, min: number, max: number) => typeof value === "number" && Number.isFinite(value) ? Math.min(max,Math.max(min,Math.round(value))) : fallback;
-  const quotas=value.firstContactQuotas&&typeof value.firstContactQuotas==='object'?Object.fromEntries(Object.entries(value.firstContactQuotas).filter(([id,n])=>id.length<=200&&typeof n==='number'&&Number.isFinite(n)).slice(0,100).map(([id,n])=>[id,Math.min(100,Math.max(0,Math.floor(n)))])):undefined;
-  const assignments=quotas&&value.firstContactAssignments&&typeof value.firstContactAssignments==='object'?Object.fromEntries(Object.entries(value.firstContactAssignments).filter(([key,id])=>key.length<=200&&typeof id==='string'&&Object.hasOwn(quotas,id)).slice(0,10000)):undefined;
-  return {...(quotas?{firstContactQuotas:quotas,firstContactAssignments:assignments||{}}:{}),...(typeof value.runNowAt === "number" && Number.isFinite(value.runNowAt) ? {runNowAt:value.runNowAt} : {}), enabled: value.enabled === true, ...(value.paused===true?{paused:true}:{}), mode: value.mode === "auto" ? "auto" : "draft", trigger: value.trigger === "new" ? "new" : value.trigger==="both"?"both":"daily",
+  return {...(typeof value.runNowAt === "number" && Number.isFinite(value.runNowAt) ? {runNowAt:value.runNowAt} : {}), enabled: value.enabled === true, ...(value.paused===true?{paused:true}:{}), mode: value.mode === "auto" ? "auto" : "draft",
     time: typeof value.time === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value.time) ? value.time : "09:00", timeZone: zone,
-    minIdleHours: number(value.minIdleHours,12,1,168), dailyLimit: number(value.dailyLimit,10,1,100), goal: typeof value.goal === "string" ? value.goal.trim().slice(0,2000) : ""};
+    goal: typeof value.goal === "string" ? value.goal.trim().slice(0,2000) : ""};
 }
 export function normalizeOutreachRuns(raw: unknown): AiOutreachRun[] {
   const seen = new Set<string>();
@@ -52,24 +49,21 @@ export function isImmediateOutreach(rule: {runNowAt?:number}, now=Date.now()): b
   return typeof rule.runNowAt === "number" && now >= rule.runNowAt && now - rule.runNowAt < 2 * 3600_000;
 }
 
-export function outreachWindowOffset(rule:Pick<AiOutreachRule,"time"|"timeZone">,now=Date.now()) {
-  const time=outreachClock(rule.timeZone,now).time;
-  return (Number(time.slice(0,2))*60+Number(time.slice(3))-Number(rule.time.slice(0,2))*60-Number(rule.time.slice(3))+1440)%1440;
-}
 export function outreachRunClock(rule:Pick<AiOutreachRule,"time"|"timeZone"|"runNowAt">,now=Date.now()) {
   const clock=outreachClock(rule.timeZone,now);
   if(isImmediateOutreach(rule,now))return {...clock,day:outreachClock(rule.timeZone,rule.runNowAt!).day};
-  const start=Number(rule.time.slice(0,2))*60+Number(rule.time.slice(3));
-  const minutes=Number(clock.time.slice(0,2))*60+Number(clock.time.slice(3));
-  return outreachWindowOffset(rule,now)<120&&minutes<start ? {...clock,day:outreachClock(rule.timeZone,now-120*60_000).day}:clock;
+  return clock;
 }
 
-/** Search actual instants so missing and repeated daylight-saving hours follow the runner's window. */
+/** Search actual instants so missing and repeated daylight-saving hours follow the runner's schedule. */
 export function nextOutreachWindow(rule:Pick<AiOutreachRule,"time"|"timeZone"|"runNowAt">,now=Date.now(),skipToday=false):number|null {
   if (!skipToday && isImmediateOutreach(rule,now)) return now;
   const today=outreachClock(rule.timeZone,now).day;
-  const inside=(at:number)=>{const clock=outreachRunClock(rule,at),late=outreachWindowOffset(rule,at);return (!skipToday||clock.day>today)&&late>=0&&late<120;};
-  if(inside(now))return now;
-  for(let at=Math.ceil(now/60_000)*60_000;at<=now+27*3600_000;at+=60_000)if(inside(at))return at;
+  const current=outreachClock(rule.timeZone,now);
+  if(!skipToday&&current.time>=rule.time)return now;
+  for(let at=Math.ceil(now/60_000)*60_000;at<=now+27*3600_000;at+=60_000){
+    const clock=outreachClock(rule.timeZone,at);
+    if(clock.time===rule.time&&(!skipToday||clock.day>today))return at;
+  }
   return null;
 }

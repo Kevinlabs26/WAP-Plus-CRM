@@ -2,7 +2,6 @@ import { useState } from "react";
 import { cn, displayContactLabel } from "@/lib/utils";
 import { Virtuoso } from "react-virtuoso";
 import { contactSendablePhone } from "@/lib/broadcastTemplate";
-import { BROADCAST_HARD_CAP } from "@/types/broadcast";
 import type { Contact, SalesStage } from "@/types/crm";
 import { Avatar } from "@/components/ui/Avatar";
 import {
@@ -20,7 +19,6 @@ type Props = {
   phoneText: string;
   onPhoneTextChange: (value: string) => void;
   directPhoneCount: number;
-  recipientCount: number;
   stages: { id: SalesStage; label: string }[];
   stageFilter: SalesStage | "all";
   onStageFilterChange: (value: SalesStage | "all") => void;
@@ -43,7 +41,6 @@ export function BroadcastPickStep({
   phoneText,
   onPhoneTextChange,
   directPhoneCount,
-  recipientCount,
   stages,
   stageFilter,
   onStageFilterChange,
@@ -72,16 +69,8 @@ export function BroadcastPickStep({
         <Button variant={source === "contacts" ? "secondary" : "ghost"} aria-pressed={source === "contacts"} onClick={() => onSourceChange("contacts")}>
           {t("broadcast.chooseContacts")} · {selected.size}
         </Button>
-        <span className="ml-auto text-2xs text-zinc-500" role="status">{t("broadcast.recipientTotal", { count: recipientCount, cap: BROADCAST_HARD_CAP })}</span>
       </div>
-      {source === "numbers" && <section
-        className={cn(
-          "flex flex-1 flex-col rounded-xl border p-3",
-          directPhoneCount
-            ? "border-brand/30 bg-brand/5"
-            : "border-zinc-800 bg-zinc-900/30"
-        )}
-      >
+      {source === "numbers" && <section className="flex min-h-0 w-full flex-1 flex-col">
         <p className="mt-1 text-2xs text-zinc-500">
           {t("broadcast.directPhonesHint")}
         </p>
@@ -89,9 +78,9 @@ export function BroadcastPickStep({
           aria-label={t("broadcast.directPhones")}
           value={phoneText}
           onChange={(event) => onPhoneTextChange(event.target.value)}
-          rows={12}
+          rows={4}
           spellCheck={false}
-          className="mt-3 min-h-80 flex-1 overflow-y-auto font-mono"
+          className="mt-3 min-h-44 flex-1 resize-y overflow-y-auto font-mono"
           placeholder={"+12025550123\n+12025550124"}
         />
         <p className="mt-2 text-2xs text-zinc-500">
@@ -99,7 +88,7 @@ export function BroadcastPickStep({
         </p>
       </section>}
 
-      {source === "contacts" && <section className="flex flex-1 flex-col rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
+      {source === "contacts" && <section className="flex flex-1 flex-col rounded-lg border border-zinc-800 bg-zinc-900/30 p-3">
         <div className="flex flex-wrap items-end gap-2">
           <label className="text-2xs text-zinc-500">
             {t("broadcast.stage")}

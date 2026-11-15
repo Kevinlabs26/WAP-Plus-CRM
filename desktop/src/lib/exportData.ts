@@ -71,6 +71,10 @@ export type SettingsSafeExport = {
   quickReplyPinnedIds: string[];
   quickReplyRecentIds: string[];
   translateTargetLang: string;
+  autoDetectContactLanguage: boolean;
+  incomingTranslateEnabled: boolean;
+  backTranslate: boolean;
+  emojiEnabled: boolean;
   enterTranslateSend: boolean;
   myLang: string;
   aiTimeZone: string;
@@ -97,6 +101,9 @@ export type SettingsSafeExport = {
   /** AI 回复模式与人设（此前导出丢失，跨机恢复后全部回落默认） */
   aiReplyMode: AppSettings["aiReplyMode"];
   aiAutoReplyPaused: boolean;
+  aiAutoFollowUpEnabled: boolean;
+  aiAutoFollowUpEnabledAt: number;
+  aiAutoFollowUpDelaysMinutes: number[];
   aiAutoReplyModeByChatId: AppSettings["aiAutoReplyModeByChatId"];
   aiAutoReplyManualChatIds: string[];
   aiAutoReplyIntervalMs: number;
@@ -111,8 +118,9 @@ export type SettingsSafeExport = {
   aiPlaybookPlans?: AppSettings["aiPlaybookPlans"];
   aiPlaybookOverviewId: string;
   aiPlaybookBindings: AppSettings["aiPlaybookBindings"];
-  aiPlaybookMuseRoot: string;
+  aiPlaybookMuseMode: AppSettings["aiPlaybookMuseMode"];
   aiPlaybookAutoSync: boolean;
+  broadcastThemes: AppSettings["broadcastThemes"];
   imagePromptTemplates: AppSettings["imagePromptTemplates"];
   aiContextMode: AppSettings["aiContextMode"];
   aiOutreachRuns: AppSettings["aiOutreachRuns"];
@@ -155,6 +163,16 @@ function stripAccountAvatars(accounts: WaAccount[]): WaAccount[] {
 }
 
 export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
+  // Muse Workspace references belong to the signed-in Muse user and must be rediscovered after restoring settings.
+  const aiPlaybooks = (settings.aiPlaybooks || []).filter(book => !book.musePath).map(({museShareRevision: _revision, museAccountCopies: _copies, ...book}) => book);
+  const playbookIds = new Set(aiPlaybooks.map(book => book.id));
+  const aiPlaybookPlans = (settings.aiPlaybookPlans || []).filter(plan => plan.days.every(id => id === "off" || playbookIds.has(id)));
+  const planIds = new Set(aiPlaybookPlans.map(plan => plan.id));
+  const chatFolders = (settings.chatFolders || []).map(folder => {
+    const {aiPlaybookId, aiPlaybookSchedule, ...rest} = folder;
+    return {...rest, ...(aiPlaybookId === "off" || aiPlaybookId && playbookIds.has(aiPlaybookId) ? {aiPlaybookId} : {}),
+      ...(aiPlaybookSchedule && planIds.has(aiPlaybookSchedule.planId) ? {aiPlaybookSchedule} : {})};
+  });
   return {
     bridgeHost: settings.bridgeHost,
     bridgePort: settings.bridgePort,
@@ -176,13 +194,17 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     quickReplyPinnedIds: settings.quickReplyPinnedIds || [],
     quickReplyRecentIds: settings.quickReplyRecentIds || [],
     translateTargetLang: settings.translateTargetLang,
+    autoDetectContactLanguage: settings.autoDetectContactLanguage !== false,
+    incomingTranslateEnabled: settings.incomingTranslateEnabled === true,
+    backTranslate: settings.backTranslate !== false,
+    emojiEnabled: settings.emojiEnabled !== false,
     enterTranslateSend: settings.enterTranslateSend === true,
     myLang: settings.myLang,
     aiTimeZone: settings.aiTimeZone || "",
     voiceInputEngine: settings.voiceInputEngine,
     voiceInputLang: settings.voiceInputLang,
     leadInbox: settings.leadInbox,
-    chatFolders: settings.chatFolders,
+    chatFolders,
     chatFolderClones: settings.chatFolderClones,
     scheduledMessages: settings.scheduledMessages || [],
     scheduledPlans: settings.scheduledPlans || [],
@@ -200,6 +222,9 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     followUpRuleSettings: settings.followUpRuleSettings,
     aiReplyMode: settings.aiReplyMode,
     aiAutoReplyPaused: settings.aiAutoReplyPaused,
+    aiAutoFollowUpEnabled: settings.aiAutoFollowUpEnabled,
+    aiAutoFollowUpEnabledAt: settings.aiAutoFollowUpEnabledAt,
+    aiAutoFollowUpDelaysMinutes: settings.aiAutoFollowUpDelaysMinutes,
     aiAutoReplyModeByChatId: settings.aiAutoReplyModeByChatId || {},
     aiAutoReplyManualChatIds: settings.aiAutoReplyManualChatIds || [],
     aiAutoReplyIntervalMs: settings.aiAutoReplyIntervalMs,
@@ -210,12 +235,13 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     aiSystemPrompt: settings.aiSystemPrompt || "",
     aiSystemPromptByAccountId: settings.aiSystemPromptByAccountId || {},
     aiPromptTemplates: settings.aiPromptTemplates || [],
-    aiPlaybooks: settings.aiPlaybooks || [],
-    aiPlaybookPlans: settings.aiPlaybookPlans || [],
-    aiPlaybookOverviewId: settings.aiPlaybookOverviewId || "",
-    aiPlaybookBindings: settings.aiPlaybookBindings || {},
-    aiPlaybookMuseRoot: settings.aiPlaybookMuseRoot || "",
+    aiPlaybooks,
+    aiPlaybookPlans,
+    aiPlaybookOverviewId: settings.aiPlaybookOverviewId && playbookIds.has(settings.aiPlaybookOverviewId) ? settings.aiPlaybookOverviewId : "",
+    aiPlaybookBindings: Object.fromEntries(Object.entries(settings.aiPlaybookBindings || {}).filter(([,id]) => id === "off" || playbookIds.has(id))),
+    aiPlaybookMuseMode: settings.aiPlaybookMuseMode || "workspace",
     aiPlaybookAutoSync: false,
+    broadcastThemes: settings.broadcastThemes || [],
     imagePromptTemplates: settings.imagePromptTemplates || [],
     aiContextMode: settings.aiContextMode || "full",
     aiOutreachRuns: settings.aiOutreachRuns || [],
@@ -468,6 +494,11 @@ function sanitizeMessage(raw: unknown): Message | null {
     aiReplyInboundId: str(m.aiReplyInboundId, 200) || undefined,
     aiReplyContextHash: typeof m.aiReplyContextHash === "string" && /^[a-f0-9]{64}$/.test(m.aiReplyContextHash)
       ? m.aiReplyContextHash : undefined,
+    aiAutoFollowUpRootId: str(m.aiAutoFollowUpRootId, 200) || undefined,
+    aiAutoFollowUpStep: typeof m.aiAutoFollowUpStep === "number" && Number.isInteger(m.aiAutoFollowUpStep) && m.aiAutoFollowUpStep >= 0 && m.aiAutoFollowUpStep <= 10 ? m.aiAutoFollowUpStep : undefined,
+    aiAutoFollowUpSentAt: typeof m.aiAutoFollowUpSentAt === "number" && Number.isFinite(m.aiAutoFollowUpSentAt) && m.aiAutoFollowUpSentAt > 0 ? m.aiAutoFollowUpSentAt : undefined,
+    aiAutoFollowUpAttemptAt: typeof m.aiAutoFollowUpAttemptAt === "number" && Number.isFinite(m.aiAutoFollowUpAttemptAt) && m.aiAutoFollowUpAttemptAt > 0 ? m.aiAutoFollowUpAttemptAt : undefined,
+    aiAutoFollowUpCancelled: m.aiAutoFollowUpCancelled === true || undefined,
     systemAction: str(m.systemAction, 80) || undefined,
     mentionedJids: Array.isArray(m.mentionedJids)
       ? m.mentionedJids
@@ -706,8 +737,9 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
   if (settingsSafe) {
     const allowed = [
       "quickReplies", "quickReplyCustomCategories", "quickReplyRemovedCategories", "quickReplyCategoryLabels", "quickReplyCategoryOrder", "quickReplyPinnedIds", "quickReplyRecentIds", "translateTargetLang", "enterTranslateSend", "myLang",
-      "voiceInputLang", "aiTimeZone", "leadInbox", "chatFolders", "chatFolderClones", "aiPromptTemplates", "aiPlaybooks", "aiPlaybookPlans", "aiPlaybookOverviewId", "aiPlaybookBindings", "aiPlaybookMuseRoot", "imagePromptTemplates", "aiContextMode", "aiOutreachRuns", "aiOutreachPaused", "aiOutreachExcludedRecipients",
+      "voiceInputLang", "aiTimeZone", "leadInbox", "chatFolders", "chatFolderClones", "aiPromptTemplates", "aiPlaybooks", "aiPlaybookPlans", "aiPlaybookOverviewId", "aiPlaybookBindings", "aiPlaybookMuseMode", "broadcastThemes", "imagePromptTemplates", "aiContextMode", "aiOutreachRuns", "aiOutreachPaused", "aiOutreachExcludedRecipients",
       "aiReplyTaskRecords", "aiTaskDismissedIds", "scheduledMessages", "scheduledPlans", "waAccounts", "accountViewMode", "historySyncNote",
+      "aiAutoFollowUpDelaysMinutes",
       "historySyncNoteByAccountId", "internalNotesByKey", "chatBackground",
       "salesStageLabels", "salesStageOrder", "theme", "folderDefaultColor", "folderColorDepth", "folderRowDensity", "showContactTagsInChatList",
     ];

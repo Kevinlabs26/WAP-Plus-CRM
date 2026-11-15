@@ -69,7 +69,7 @@ export function ContactManagementPanel({contacts, accounts, accountId, connected
   };
   const exportPicked = () => downloadText(`contacts-${new Date().toISOString().slice(0,10)}.csv`,
     `\ufeff${contactsToCsv(picked)}`, "text/csv;charset=utf-8");
-  return <div className="flex min-h-0 flex-1 flex-col">
+  return <div className="flex h-full min-h-0 flex-1 flex-col">
     <div className="shrink-0 space-y-2 border-b border-zinc-800/70 pb-2 text-[12px]">
       <div className="flex items-center gap-1">
         {[

@@ -121,7 +121,7 @@ export async function createEventSpool(directory, key, { warningBytes = 256 * 10
       const backlog = pendingBytes > 32 * 1024 * 1024 || diskBytes > warningBytes;
       const warningCode = receivingPaused ? "paused" : writeError ? "write-error" : backlog ? "backlog" : recoveryWarning ? "recovery" : "";
       const warning = receivingPaused
-        ? `${writeError ? `${writeError}；` : ""}已暂停接收，请检查磁盘空间和写入权限后重连${pendingBytes ? `；约 ${formatBytes(pendingBytes)} 尚未落盘，请勿退出` : ""}`
+        ? `${writeError ? `${writeError}；已暂停接收，请检查磁盘空间和写入权限后重连` : "同步数据突发，缓存写入暂时跟不上；已暂停接收，请等待待写记录落盘后重连"}${pendingBytes ? `；约 ${formatBytes(pendingBytes)} 尚未落盘，请勿退出` : ""}`
         : writeError || (backlog
           ? `同步缓存积压：${formatBytes(diskBytes)}，${files.size} 个批次等待本地保存确认。未确认的数据不会自动删除`
           : recoveryWarning);
@@ -134,7 +134,8 @@ export async function createEventSpool(directory, key, { warningBytes = 256 * 10
       const json=JSON.stringify(event), bytes=Buffer.byteLength(json);
       pending.push({seq:event.seq,json,bytes});pendingBytes+=bytes;
       if(writeError||pendingBytes>32*1024*1024)pauseReceiving();
-      queueMicrotask(()=>{void drain().catch(()=>{});});
+      if(pendingBytes>=BATCH_BYTES)void drain().catch(()=>{});
+      else queueMicrotask(()=>{void drain().catch(()=>{});});
     },
     async flush() { await flushThrough(sequence); },
     acknowledge(cursor) {

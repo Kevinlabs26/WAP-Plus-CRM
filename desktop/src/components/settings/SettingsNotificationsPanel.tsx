@@ -24,7 +24,7 @@ export function SettingsNotificationsPanel() {
  }, []);
  return <div className="mx-auto max-w-3xl space-y-6">
  <header><h3 className="text-lg font-semibold text-zinc-100">{t("settings.notifications")}</h3><p className="mt-1 text-xs leading-5 text-zinc-500">{t("settings.notificationsDesc")}</p></header>
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <SectionLabel>{t("settingsMessaging.notifications")}</SectionLabel>
         <p className="mt-2 text-[11px] text-zinc-600">
           {t("settingsMessaging.notificationsHint")}

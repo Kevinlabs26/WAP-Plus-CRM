@@ -267,21 +267,23 @@ export function resolveTargetLanguage(
   if (pref && pref !== "auto" && LANG_NAME[pref]) {
     return { code: pref as TargetLanguage["code"], source: "preferred" };
   }
-  const country = (contact?.country || "").toLowerCase();
-  if (/france|法国|fr\b/.test(country)) return { code: "fr", source: "country" };
-  if (/spain|西班牙|es\b|mexico|墨西哥/.test(country)) return { code: "es", source: "country" };
-  if (/germany|德国|de\b|austria|瑞士/.test(country)) return { code: "de", source: "country" };
-  if (/brazil|brasil|葡萄牙|portugal/.test(country)) return { code: "pt", source: "country" };
-  if (/russia|俄罗斯|ru\b/.test(country)) return { code: "ru", source: "country" };
-  if (/japan|日本|jp\b/.test(country)) return { code: "ja", source: "country" };
-  if (/korea|韩国|kr\b/.test(country)) return { code: "ko", source: "country" };
-  if (/arab|saudi|uae|dubai|埃及|qatar/.test(country)) return { code: "ar", source: "country" };
-  if (/china|中国|cn\b|taiwan|香港|singapore/.test(country)) return { code: "zh", source: "country" };
+  if (settings.autoDetectContactLanguage !== false) {
+    const country = (contact?.country || "").toLowerCase();
+    if (/france|法国|fr\b/.test(country)) return { code: "fr", source: "country" };
+    if (/spain|西班牙|es\b|mexico|墨西哥/.test(country)) return { code: "es", source: "country" };
+    if (/germany|德国|de\b|austria|瑞士/.test(country)) return { code: "de", source: "country" };
+    if (/brazil|brasil|葡萄牙|portugal/.test(country)) return { code: "pt", source: "country" };
+    if (/russia|俄罗斯|ru\b/.test(country)) return { code: "ru", source: "country" };
+    if (/japan|日本|jp\b/.test(country)) return { code: "ja", source: "country" };
+    if (/korea|韩国|kr\b/.test(country)) return { code: "ko", source: "country" };
+    if (/arab|saudi|uae|dubai|埃及|qatar/.test(country)) return { code: "ar", source: "country" };
+    if (/china|中国|cn\b|taiwan|香港|singapore/.test(country)) return { code: "zh", source: "country" };
 
-  // 客户最近一次用对方语言发来的消息，最可信：自动按它默认译出语，省去每个会话手选
-  if (lastInboundBody) {
-    const detected = detectMessageLanguage(lastInboundBody);
-    if (detected) return { code: detected, source: "message" };
+    // 客户最近一次用对方语言发来的消息，最可信：自动按它默认译出语，省去每个会话手选
+    if (lastInboundBody) {
+      const detected = detectMessageLanguage(lastInboundBody);
+      if (detected) return { code: detected, source: "message" };
+    }
   }
 
   const def = (settings.translateTargetLang || "en").toLowerCase();
@@ -408,7 +410,8 @@ export function getTranslationContextKey(text: string, to: string, settings: App
   return JSON.stringify([to, text, service, google ? "google" : settings.aiProvider,
     google ? "" : config?.model || settings.aiModel || "",
     google ? "" : config?.baseUrl || (settings.aiProvider === "ollama" ? settings.ollamaUrl : ""),
-    google || ready, opts?.googleFirst && service === "auto" ? "google-first" : "", !google&&settings.aiProvider==="vertex"?[settings.vertexProjectId,settings.vertexLocation,settings.vertexCredentialId]:null]);
+    google || ready, opts?.googleFirst && service === "auto" ? "google-first" : "", !google&&settings.aiProvider==="vertex"?[settings.vertexProjectId,settings.vertexLocation,settings.vertexCredentialId]:null,
+    !google && settings.emojiEnabled !== false]);
 }
 
 function rememberTranslation(key: string, text: string, source: TranslateResult["source"]) {
@@ -690,6 +693,9 @@ async function translateDraftTextUncached(src: string, to: string, settings: App
     "- Keep numbers, model names, URLs, @mentions and WhatsApp formatting.",
     "- Keep a natural chat tone; do not make it more formal than the source.",
     "- If the text is already in the target language, return it unchanged.",
+    settings.emojiEnabled === false
+      ? "- Do not add emojis; preserve any emojis already present in the source."
+      : "- Preserve source emojis. You may add 0–2 natural emojis; any new emoji must be only ❤️ 🙂 👏 🌱 🙏 😇.",
   ].join("\n");
 
   try {

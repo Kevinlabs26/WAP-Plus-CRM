@@ -39,7 +39,22 @@ test('identical simultaneous translations share one request without shortening t
   assert.equal(calls, 1);
   assert.ok(body.messages[1].content.includes(text.trim()));
   assert.match(body.messages[0].content, /Keep numbers, model names, URLs, @mentions and WhatsApp formatting/);
+  assert.match(body.messages[0].content, /0–2 natural emojis/);
   finish(); assert.deepEqual(await a, await b);
+});
+
+test('AI translation emoji setting changes the prompt and cache key', async t => {
+  const bodies = [];
+  t.mock.method(globalThis, 'fetch', async (_url, opts) => {
+    bodies.push(JSON.parse(opts.body));
+    return Response.json({ choices: [{ message: { content: translated } }] });
+  });
+  const text = source('emoji-policy');
+  await translateDraftText(text, 'en', { ...settings, emojiEnabled: true });
+  await translateDraftText(text, 'en', { ...settings, emojiEnabled: false });
+  assert.equal(bodies.length, 2);
+  assert.match(bodies[0].messages[0].content, /0–2 natural emojis/);
+  assert.match(bodies[1].messages[0].content, /Do not add emojis/);
 });
 
 test('failed translations remain retryable, expired entries refresh, and old entries are bounded', async t => {

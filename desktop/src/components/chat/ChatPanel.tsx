@@ -215,6 +215,7 @@ export function ChatPanel() {
       salesStageLabels: s.settings.salesStageLabels,
       blocklistByAccountId: s.settings.blocklistByAccountId,
       blocklistJids: s.settings.blocklistJids,
+      incomingTranslateEnabled: s.settings.incomingTranslateEnabled,
     }))
   );
   const baileysUi = useAppStore(
@@ -693,6 +694,33 @@ export function ChatPanel() {
     patchMessage,
     pushToast,
   });
+
+  const autoTranslatedMessageIdsRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (!settings.incomingTranslateEnabled || localOnlyChat || !selectedChatId) return;
+    const candidates = chatMessages
+      .slice(-40)
+      .filter((message) =>
+        message.direction === "in" &&
+        !message.translation &&
+        message.mediaType !== "system" &&
+        !message.systemKind &&
+        Boolean(message.body?.trim()) &&
+        !autoTranslatedMessageIdsRef.current.has(message.id)
+      );
+    if (!candidates.length) return;
+
+    let cancelled = false;
+    void (async () => {
+      // shortcut: translate the latest 40 loaded messages, upgrade to viewport tracking if exact visibility is needed.
+      for (const message of candidates) {
+        if (cancelled) return;
+        autoTranslatedMessageIdsRef.current.add(message.id);
+        await translate(message.id, { googleOnly: true });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [chatMessages, localOnlyChat, selectedChatId, settings.incomingTranslateEnabled, translate]);
 
   const switchSiblingThread = (row: PersonThreadRow) => {
     // 底部标签只切换聊天线程，顶部账号浏览范围保持不变。

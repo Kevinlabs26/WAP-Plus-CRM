@@ -24,7 +24,7 @@ const columnName = (index: number) => {
   return name;
 };
 
-const cellText = (value: unknown) => String(value ?? "").trim().slice(0, 2000);
+const cellText = (value: unknown) => String(value ?? "").trim();
 
 function headerColumn(headers: string[], patterns: RegExp[]) {
   return headers.findIndex(value => patterns.some(pattern => pattern.test(value.trim().toLocaleLowerCase())));

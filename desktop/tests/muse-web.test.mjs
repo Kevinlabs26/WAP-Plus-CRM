@@ -417,23 +417,24 @@ test('handoff generations are counted separately with unknown tokens, including 
  globalThis.museNative=async()=>({text:'Ordinary reply',error:null,summaryRequests:0,summaryFailed:false});
  assert.equal(await client.generateMuseWeb('No handoff'),'Ordinary reply');assert.equal(client.getAiUsageSnapshot().buckets.find(row=>row.feature==='context').requests,2);
 });
-test('account switching refuses an active generation and requires a verified new login before reuse',async()=>{
+test('the native adapter lists, adds, selects and checks individual Muse accounts',async()=>{
+ const calls=[];const pool={accounts:[{id:'one',name:'Muse 1',selected:true},{id:'two',name:'Muse 2',selected:false}],selectedId:'one'};
+ globalThis.museNative=async(cmd,args)=>{calls.push([cmd,args]);if(cmd==='muse_web_accounts')return pool;if(cmd==='muse_web_account_add')return{...pool,accounts:[...pool.accounts,{id:'three',name:'Muse 3',selected:true}],selectedId:'three'};if(cmd==='muse_web_account_select')return{...pool,selectedId:args.accountId};if(cmd==='muse_web_status')return{opened:true,ready:args.accountId==='two',state:args.accountId==='two'?'ready':'login',message:'Sign in'};};
+ assert.equal((await client.museWebAccounts()).accounts.length,2);
+ assert.equal((await client.addMuseWebAccount()).selectedId,'three');
+ assert.equal((await client.selectMuseWebAccount('two')).selectedId,'two');
+ assert.equal((await client.museWebStatus(false,'two')).ready,true);
+ assert.deepEqual(calls.map(([cmd])=>cmd),['muse_web_accounts','muse_web_account_add','muse_web_account_select','muse_web_status']);
+ assert.equal(calls.at(-1)[1].accountId,'two');
+});
+test('account creation and selection refuse an active generation',async()=>{
  await new Promise(resolve=>setImmediate(resolve));
  let finish;globalThis.museNative=async cmd=>cmd==='muse_web_generate'?await new Promise(resolve=>{finish=resolve;}):undefined;
  const generation=client.generateMuseWeb('Active reply');await new Promise(resolve=>setImmediate(resolve));
- await assert.rejects(client.switchMuseWebAccount(),/等待完成后切换账号/);
+ await assert.rejects(client.addMuseWebAccount(),/等待完成后切换账号/);
+ await assert.rejects(client.selectMuseWebAccount('two'),/等待完成后切换账号/);
  finish('Done');await generation;await new Promise(resolve=>setImmediate(resolve));
- let ready=false;const commands=[];
- globalThis.museNative=async cmd=>{commands.push(cmd);return cmd==='muse_web_status'?{ready,state:ready?'ready':'login',message:'Sign in'}:'New account reply';};
- await client.switchMuseWebAccount();assert.deepEqual(commands,['muse_web_switch_account']);
- await assert.rejects(client.generateMuseWeb('Must not send'),/登录新的 Muse 账号/);
- await client.museWebStatus();await assert.rejects(client.generateMuseWeb('Still signed out'),/登录新的 Muse 账号/);
- ready=true;await client.museWebStatus();assert.equal(await client.generateMuseWeb('New login'),'New account reply');
-});
-test('no generation can enter the queue while account switching is in progress',async()=>{
- await new Promise(resolve=>setImmediate(resolve));
- let finish;globalThis.museNative=async cmd=>cmd==='muse_web_switch_account'?await new Promise(resolve=>{finish=resolve;}):{ready:true,state:'ready'};
- const switching=client.switchMuseWebAccount();await new Promise(resolve=>setImmediate(resolve));
- await assert.rejects(client.generateMuseWeb('Do not submit'),/登录新的 Muse 账号/);
- finish();await switching;await client.museWebStatus();
+ const commands=[];globalThis.museNative=async(cmd,args)=>{commands.push([cmd,args]);return{accounts:[],selectedId:args?.accountId||'new'};};
+ await client.addMuseWebAccount();await client.selectMuseWebAccount('new');
+ assert.deepEqual(commands.map(([cmd])=>cmd),['muse_web_account_add','muse_web_account_select']);
 });

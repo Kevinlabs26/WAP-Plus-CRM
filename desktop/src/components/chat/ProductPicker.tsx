@@ -60,7 +60,7 @@ export function ProductPicker({
         if (event.target === event.currentTarget && !busyId) onClose();
       }}
     >
-      <div className="flex max-h-[78vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl">
+      <div className="flex max-h-[78vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl">
         <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
           <div className="flex items-center gap-2 text-[13px] font-semibold text-zinc-100">
             <ShoppingBag className="h-4 w-4 text-brand" />
@@ -119,7 +119,7 @@ export function ProductPicker({
               {filtered.map((product) => (
                 <div
                   key={product.id}
-                  className="flex gap-3 rounded-xl border border-zinc-800 bg-zinc-950/50 p-2.5"
+                  className="flex gap-3 rounded-lg border border-zinc-800 bg-zinc-950/50 p-2.5"
                 >
                   <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-zinc-800">
                     {product.imageUrl ? (

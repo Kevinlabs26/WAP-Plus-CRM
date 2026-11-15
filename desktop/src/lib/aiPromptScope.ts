@@ -1,5 +1,5 @@
 import type { SettingsShape, SettingsChatFolder } from "../store/settingsDefaults";
-import { resolvePlaybook, type PlaybookSettings } from "./aiPlaybooks.ts";
+import { resolvePlaybook, type MusePlaybookMaterial, type PlaybookSettings } from "./aiPlaybooks.ts";
 
 export type AiPromptTemplate = { id: string; name: string; prompt: string };
 export const MAX_EFFECTIVE_PROMPT_CHARS = 24_000;
@@ -12,8 +12,8 @@ export function normalizePromptTemplates(value: unknown): AiPromptTemplate[] {
     return [{id: item.id, name: item.name.trim().slice(0,80), prompt: item.prompt.trim().slice(0,6000)}];
   });
 }
-type PromptSettings = Pick<SettingsShape, "aiSystemPrompt" | "aiSystemPromptByAccountId" | "chatFolders" | "liveBaileysAccountId" | "activeAccountId"> & Omit<PlaybookSettings, 'chatFolders'> & {aiPromptTemplates?: AiPromptTemplate[]};
-export type AiReplyProfile = { prompt: string; source: "folder" | "account" | "global" | "default"; folderId?: string; folderName?: string; primaryFolderIds?: string[]; error?: string; templateIds?: string[] };
+type PromptSettings = Pick<SettingsShape, "aiSystemPrompt" | "aiSystemPromptByAccountId" | "chatFolders" | "liveBaileysAccountId" | "activeAccountId" | "leadInbox"> & Omit<PlaybookSettings, 'chatFolders'> & {aiPromptTemplates?: AiPromptTemplate[]};
+export type AiReplyProfile = { prompt: string; source: "folder" | "account" | "global" | "default"; folderId?: string; folderName?: string; primaryFolderIds?: string[]; error?: string; templateIds?: string[]; readMuseFiles?: boolean; musePlaybookPaths?: string[]; museMaterials?: MusePlaybookMaterial[] };
 
 function scopeKey(settings: PromptSettings, folder: SettingsChatFolder): string {
   return folder.scope?.type === "all" ? "all"
@@ -64,6 +64,9 @@ export function resolveFolderAiProfile(settings: PromptSettings, folderId: strin
 function resolveBaseReplyProfile(settings: PromptSettings, accountId?: string, chatId?: string): AiReplyProfile {
   const id = accountId?.trim();
   const primary = (settings.chatFolders || []).filter(folder => chatId && folder.chatIds.includes(chatId));
+  const root = settings.chatFolders.find(folder => folder.systemType === "leadInbox");
+  if (chatId && !primary.length && root && settings.leadInbox.collectedChatIds.includes(chatId) &&
+      !settings.leadInbox.dismissedChatIds.includes(chatId)) primary.push(root);
   const scopes = id ? [`account:${id}`, "all"] : ["all"];
   const primaryFolderIds = primary.filter(folder => scopes.includes(scopeKey(settings, folder))).map(folder => folder.id).sort();
   for (const scope of scopes) {
@@ -75,12 +78,12 @@ function resolveBaseReplyProfile(settings: PromptSettings, accountId?: string, c
   return { ...defaultProfile(settings, id), primaryFolderIds };
 }
 
-export function resolveAiReplyProfile(settings: PromptSettings, accountId?: string, chatId?: string): AiReplyProfile {
+export function resolveAiReplyProfile(settings: PromptSettings, accountId?: string, chatId?: string, museAccountId?: string): AiReplyProfile {
   const profile = resolveBaseReplyProfile(settings, accountId, chatId);
   if (profile.error) return profile;
-  const playbook = resolvePlaybook(settings, accountId, chatId);
+  const playbook = resolvePlaybook(settings, accountId, chatId, museAccountId);
   if (playbook.error) return {...profile, prompt: '', error: playbook.error};
   const prompt = [profile.prompt, playbook.prompt].filter(Boolean).join('\n\n');
   return prompt.length > MAX_EFFECTIVE_PROMPT_CHARS
-    ? {...profile, prompt: '', error: '合并 Playbook 后超过 24000 字符，请精简后重试'} : {...profile, prompt};
+    ? {...profile, prompt: '', error: '合并 Playbook 后超过 24000 字符，请精简后重试'} : {...profile, prompt, readMuseFiles: playbook.readMuseFiles, musePlaybookPaths:playbook.musePaths, museMaterials:playbook.museMaterials};
 }

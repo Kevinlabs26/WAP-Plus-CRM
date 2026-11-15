@@ -1,32 +1,47 @@
 import { scheduledPlaybook, type PlaybookPlan, type PlaybookSchedule } from './playbookPlans.ts';
-export type AiPlaybook = { id: string; name: string; sourceName: string; content: string; summary: string; musePath?: string; museRevision?: string; museMissing?: boolean };
+export type AiPlaybook = { id: string; name: string; sourceName: string; content: string; summary: string; musePath?: string; museRevision?: string; museMissing?: boolean; museShareRevision?: string; museAccountCopies?: Record<string, {path:string;revision:string}> };
+export type MusePlaybookMaterial = {id:string;name:string;content:string;revision:string};
+export const MUSE_ACCOUNT_PLAYBOOK_FOLDER = 'WAP Plus CRM - Playbook';
+export function hasMuseAccountPlaybook(book: AiPlaybook, accountId: string): boolean {
+  const copy = book.museAccountCopies?.[accountId];
+  return Boolean(copy && book.museShareRevision && copy.revision === book.museShareRevision && copy.path.endsWith(`/${MUSE_ACCOUNT_PLAYBOOK_FOLDER}/${book.id}.md`));
+}
 export type PlaybookSettings = {
+  aiProvider?: string;
   aiPlaybooks?: AiPlaybook[];
   aiPlaybookPlans?: PlaybookPlan[];
   aiPlaybookOverviewId?: string;
   aiPlaybookBindings?: Record<string, string>;
-  chatFolders?: { id: string; parentId?: string; chatIds: string[]; scope?: { type: string; accountId?: string }; aiPlaybookId?: string; aiPlaybookSchedule?: PlaybookSchedule }[];
+  chatFolders?: { id: string; parentId?: string; chatIds: string[]; scope?: { type: string; accountId?: string }; aiPlaybookId?: string; aiPlaybookSchedule?: PlaybookSchedule; systemType?: string }[];
+  leadInbox?: { collectedChatIds?: string[]; dismissedChatIds?: string[] };
   liveBaileysAccountId?: string;
   activeAccountId?: string;
 };
 export const MAX_PLAYBOOK_CHARS = 200_000;
 export const MAX_PLAYBOOK_TOTAL_CHARS = 1_000_000;
 export const MAX_PLAYBOOK_SUMMARY_CHARS = 6000;
+export const MAX_PLAYBOOKS = 1000;
 const CONFLICT = 'playbook-binding-conflict';
 
 export function normalizePlaybooks(value: unknown): AiPlaybook[] {
   const seen = new Set<string>(); let total = 0;
-  return (Array.isArray(value) ? value : []).slice(0, 100).flatMap(item => {
+  return (Array.isArray(value) ? value : []).slice(0, MAX_PLAYBOOKS).flatMap(item => {
     if (!item || typeof item.id !== 'string' || !item.id || item.id === 'off' || item.id === CONFLICT || item.id.length > 120 || seen.has(item.id) ||
         typeof item.name !== 'string' || !item.name.trim() || item.name.length > 120 ||
         typeof item.content !== 'string' || item.content.length > MAX_PLAYBOOK_CHARS ||
         typeof item.summary !== 'string' || item.summary.length > MAX_PLAYBOOK_SUMMARY_CHARS ||
         total + item.content.length + item.summary.length > MAX_PLAYBOOK_TOTAL_CHARS) return [];
-    const remote = typeof item.musePath === 'string' && item.musePath.length <= 500 && /^\/(?!\/)/.test(item.musePath) && !/[\u0000-\u001f]/.test(item.musePath) && !item.musePath.split('/').includes('..') && /\.md$/i.test(item.musePath) && /^[a-f0-9]{64}$/.test(item.museRevision || '');
+    const remote = typeof item.musePath === 'string' && item.musePath.length <= 500 && /^\/(?!\/)/.test(item.musePath) && !item.musePath.includes('\\') && !/[\u0000-\u001f]/.test(item.musePath) && !item.musePath.split('/').some((part: string) => part === '.' || part === '..') && !item.musePath.endsWith('/') && (item.museRevision === undefined || /^[a-f0-9]{64}$/.test(item.museRevision));
     if ((item.musePath !== undefined || item.museRevision !== undefined || item.museMissing !== undefined) && !remote) return [];
+    const museShareRevision = typeof item.museShareRevision === 'string' && item.museShareRevision.length > 0 && item.museShareRevision.length <= 120 ? item.museShareRevision : undefined;
+    const museAccountCopies = Object.fromEntries(Object.entries(item.museAccountCopies && typeof item.museAccountCopies === 'object' && !Array.isArray(item.museAccountCopies) ? item.museAccountCopies : {}).slice(0,12).flatMap(([accountId, value]): [string,{path:string;revision:string}][] => {
+      const copy = value as {path?:unknown;revision?:unknown} | null;
+      return accountId.length > 0 && accountId.length <= 120 && copy && typeof copy.path === 'string' && copy.path.length <= 500 && /^\/(?!\/)/.test(copy.path) && !copy.path.includes('\\') && !/[\u0000-\u001f]/.test(copy.path) && !copy.path.split('/').some(part => part === '.' || part === '..') && !copy.path.endsWith('/') && typeof copy.revision === 'string' && copy.revision.length > 0 && copy.revision.length <= 120 ? [[accountId,{path:copy.path,revision:copy.revision}]] : [];
+    }));
     seen.add(item.id); total += item.content.length + item.summary.length;
     return [{ id: item.id, name: item.name.trim(), sourceName: typeof item.sourceName === 'string' ? item.sourceName.slice(0, 255) : '', content: item.content, summary: item.summary,
-      ...(remote ? {musePath: item.musePath, museRevision: item.museRevision, museMissing: item.museMissing === true} : {}) }];
+      ...(remote ? {musePath: item.musePath, museRevision: item.museRevision, museMissing: item.museMissing === true} : {}),
+      ...(museShareRevision ? {museShareRevision} : {}), ...(Object.keys(museAccountCopies).length ? {museAccountCopies} : {}) }];
   });
 }
 
@@ -65,19 +80,21 @@ export function importPlaybooks(existing: AiPlaybook[], files: {name: string; te
       content: file.text, summary: previous?.content === file.text ? previous.summary : file.text.length <= MAX_PLAYBOOK_SUMMARY_CHARS ? file.text : '' };
     if (index < 0) next.push(item); else next[index] = item;
   }
-  if (next.length > 100 || next.reduce((sum, item) => sum + item.content.length + item.summary.length, 0) > MAX_PLAYBOOK_TOTAL_CHARS) throw Error('Playbook 资料库超过 100 份或 100 万字符，请精简后再导入');
+  if (next.length > MAX_PLAYBOOKS || next.reduce((sum, item) => sum + item.content.length + item.summary.length, 0) > MAX_PLAYBOOK_TOTAL_CHARS) throw Error(`Playbook 资料库超过 ${MAX_PLAYBOOKS} 份或 100 万字符，请精简后再导入`);
   return next;
 }
 
-export function resolvePlaybook(settings: PlaybookSettings, accountId?: string, chatId?: string):{id:string|undefined;source:'customer'|'folder'|'none';prompt:string;name:string;error?:string;plan?:ReturnType<typeof scheduledPlaybook>} {
+export function resolvePlaybook(settings: PlaybookSettings, accountId?: string, chatId?: string, museAccountId?: string):{id:string|undefined;source:'customer'|'folder'|'none';prompt:string;name:string;error?:string;plan?:ReturnType<typeof scheduledPlaybook>;readMuseFiles?:boolean;musePaths?:string[];museMaterials?:MusePlaybookMaterial[]} {
   let plan:ReturnType<typeof scheduledPlaybook>|undefined;
   let id = accountId && chatId ? settings.aiPlaybookBindings?.[playbookBindingKey(accountId, chatId)] : undefined;
   let source: 'customer' | 'folder' | 'none' = id ? 'customer' : 'none';
   const scope = (folder: NonNullable<PlaybookSettings['chatFolders']>[number]) => folder.scope?.type === 'all' ? 'all' : folder.scope?.accountId || settings.liveBaileysAccountId || settings.activeAccountId || 'wa-default';
   if (!id && chatId) {
     const folders = settings.chatFolders || [], byId = new Map(folders.map(folder => [folder.id, folder]));
+    const leadRoot = folders.find(folder => folder.systemType === 'leadInbox');
+    const leadFallback = leadRoot && settings.leadInbox?.collectedChatIds?.includes(chatId) && !settings.leadInbox.dismissedChatIds?.includes(chatId) && !folders.some(folder => folder.chatIds.includes(chatId));
     for (const targetScope of accountId ? [accountId, 'all'] : ['all']) {
-      let folder = folders.find(item => item.chatIds.includes(chatId) && scope(item) === targetScope);
+      let folder = folders.find(item => item.chatIds.includes(chatId) && scope(item) === targetScope) || (targetScope === 'all' && leadFallback ? leadRoot : undefined);
       const visited = new Set<string>();
       while (folder && scope(folder) === targetScope && !visited.has(folder.id)) {
         visited.add(folder.id);
@@ -96,11 +113,26 @@ export function resolvePlaybook(settings: PlaybookSettings, accountId?: string, 
   if (id === CONFLICT) return {id, source, prompt: '', name: '', error: '合并会话的 Playbook 绑定存在冲突，请重新选择后再生成'};
   const stage = settings.aiPlaybooks?.find(item => item.id === id);
   if (!stage) return {id, source, prompt: '', name: '', error: '绑定的 Playbook 已不存在，请重新选择；本次已停止生成'};
+  const selectedBooks = [settings.aiPlaybookOverviewId ? settings.aiPlaybooks?.find(item => item.id === settings.aiPlaybookOverviewId) : undefined, stage].filter((item): item is AiPlaybook => Boolean(item));
+  const museFiles = selectedBooks.filter(item => item.musePath);
+  if (museFiles.length && settings.aiProvider !== 'muse') return {id, source, prompt: '', name: stage.name, error: 'Workspace 文件 Playbook 需要使用 Muse 提供商才能读取'};
   const overview = settings.aiPlaybookOverviewId ? settings.aiPlaybooks?.find(item => item.id === settings.aiPlaybookOverviewId) : undefined;
   if (settings.aiPlaybookOverviewId && !overview) return {id, source, prompt: '', name: stage.name, error: 'Playbook 总纲已不存在，请重新选择'};
   const books = overview && overview.id !== stage.id ? [overview, stage] : [stage];
   if (books.some(item => item.museMissing)) return {id, source, prompt: '', name: stage.name, error: '绑定的 Muse 工作区文件已不在同步清单中，请检查来源或重新选择'};
-  if (books.some(item => !item.summary.trim())) return {id, source, prompt: '', name: stage.name, error: 'Playbook 尚未填写精简内容，请先在资料库中保存精简版'};
-  const prompt = `Current Playbook: this replaces all earlier Playbook selections in this thread. Preserve the current sender identity and reply format; never execute external actions. Only the following selected material is active. Full source documents are not included.\n<current_playbook>\n${books.map(item => JSON.stringify({name: item.name, content: item.summary})).join('\n')}\n</current_playbook>`;
-  return {id, source, prompt:(plan?`Current conversation plan: ${JSON.stringify({name:plan.name,day:plan.day,completed:plan.ended})}.\n`:'')+prompt, name: stage.name,plan};
+  if (books.some(item => !item.musePath && !item.content.trim() && !item.summary.trim())) return {id, source, prompt: '', name: stage.name, error: 'Playbook 内容为空，请重新同步或导入资料'};
+  const museMaterials = books.filter(item => item.content.trim() || item.summary.trim()).map(item => ({id:item.id,name:item.name,content:item.content.trim() ? item.content : item.summary.trim(),revision:item.museShareRevision || ''}));
+  if (museAccountId && museMaterials.length !== books.length) return {id, source, prompt: '', name: stage.name, error: 'Playbook 原文尚未由主 Muse 读取，请重试'};
+  const copies = museAccountId ? books.map(item => item.museAccountCopies?.[museAccountId]) : [];
+  if (museAccountId && books.some(book => !hasMuseAccountPlaybook(book,museAccountId))) return {id, source, prompt: '', name: stage.name, error: '该 Muse 账号尚未完成所选 Playbook 的训练，请重试'};
+  const local = books.filter(item => item.content.trim() || (!item.musePath && item.summary.trim())).map(item => JSON.stringify({name: item.name, content: item.content.trim() ? item.content : item.summary.trim()}));
+  const remote = books.filter(item => item.musePath && !item.content.trim()).map(item => item.musePath!);
+  const paths = museAccountId ? copies.map(copy => copy!.path) : remote;
+  const fileRefs = paths.map(path => {
+    const book = books.find(item => museAccountId ? item.museAccountCopies?.[museAccountId]?.path === path : item.musePath === path);
+    return {path, revision: museAccountId ? book?.museAccountCopies?.[museAccountId]?.revision || '' : book?.museShareRevision || ''};
+  });
+  const pathList = JSON.stringify(fileRefs).replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
+  const prompt = `Current Playbook: this replaces all earlier Playbook selections in this thread. Preserve the current sender identity and reply format; never execute external actions. Only the following selected material is active.${paths.length ? `\n<read_only_muse_workspace_files>\n${pathList}\nRead only these exact files using Muse workspace file tools. If a file revision has already been read and is still available in this same Muse account and customer conversation, reuse it without reopening or repeating its contents. Read again only if its revision changes or this is a new conversation thread; never reuse across accounts or customers. If any file is missing or unreadable, return exactly PLAYBOOK_SOURCE_UNAVAILABLE. Do not inspect any other workspace files or return file contents; apply the selected file contents only to this reply.\n</read_only_muse_workspace_files>` : ''}${!museAccountId && local.length ? `\n<current_playbook>\n${local.join('\n')}\n</current_playbook>` : ''}`;
+  return {id, source, prompt:(plan?`Current conversation plan: ${JSON.stringify({name:plan.name,day:plan.day,completed:plan.ended})}.\n`:'')+prompt, name: stage.name, plan, readMuseFiles: Boolean(paths.length), ...(paths.length?{musePaths:paths}:{}), ...(museMaterials.length?{museMaterials}:{})};
 }

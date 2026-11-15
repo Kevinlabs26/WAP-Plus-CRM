@@ -61,7 +61,7 @@ export function FolderDialog({
       <div
         role="dialog"
         aria-modal="true"
-        className="w-full max-w-md overflow-hidden rounded-2xl border border-zinc-700/90 bg-zinc-900 shadow-2xl shadow-black/50"
+        className="w-full max-w-md overflow-hidden rounded-xl border border-zinc-700/90 bg-zinc-900 shadow-2xl shadow-black/50"
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           if (event.key === "Escape") onClose();

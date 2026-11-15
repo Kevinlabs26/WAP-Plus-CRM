@@ -41,7 +41,7 @@ function OutreachTasks({active}:{active:boolean}) {
   const [planOpen,setPlanOpen]=useState(false);
   const [enablePreview,setEnablePreview]=useState(false);
   const [selectedIds,setSelectedIds]=useState<string[]>([]);
-  const [bulkRule,setBulkRule]=useState(()=>normalizeOutreachRule({enabled:true,mode:"auto",trigger:"both",timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}));
+  const [bulkRule,setBulkRule]=useState(()=>normalizeOutreachRule({enabled:true,mode:"auto",timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone}));
   useEffect(()=>{const timer=window.setInterval(()=>setNow(Date.now()),5_000);return()=>window.clearInterval(timer);},[]);
   const byId=new Map(folders.map(folder=>[folder.id,folder]));
   const accountNames=new Map(settings.waAccounts.map(account=>[account.id,account.label]));
@@ -121,7 +121,7 @@ function OutreachTasks({active}:{active:boolean}) {
     <details open={planOpen} onToggle={event=>setPlanOpen(event.currentTarget.open)} className="border-y border-zinc-800 py-2">
       <summary className="cursor-pointer text-xs text-zinc-500">{t("aiTasks.plans")} · {folders.filter(folder=>folder.aiOutreach).length}</summary>
       {planOpen&&<div className="mt-3 space-y-3">
-    {bulkOpen&&<section className="rounded-xl border border-brand/30 p-3">
+    {bulkOpen&&<section className="rounded-lg border border-brand/30 p-3">
       <div className="flex items-center justify-between gap-2 text-sm"><strong>{t("aiOutreach.bulk")} · {selectedIds.length}</strong><Button size="xs" onClick={()=>setSelectedIds(selectedIds.length===folders.length?[]:folders.map(folder=>folder.id))}>{t(selectedIds.length===folders.length?"aiOutreach.clearSelection":"aiOutreach.selectAll")}</Button></div>
       <div className="mt-2 grid max-h-48 grid-cols-1 gap-1 overflow-auto sm:grid-cols-2">{folders.map(folder=><label key={folder.id} className="flex min-w-0 items-center gap-2 rounded px-2 py-1 text-xs"><input type="checkbox" checked={selectedIds.includes(folder.id)} onChange={event=>setSelectedIds(event.target.checked?[...selectedIds,folder.id]:selectedIds.filter(id=>id!==folder.id))}/><span className="truncate">{folder.name}</span></label>)}</div>
       <AiOutreachControls value={bulkRule} onChange={setBulkRule}/>
@@ -131,8 +131,8 @@ function OutreachTasks({active}:{active:boolean}) {
     </section>}
     {!bulkOpen&&<AiOutreachPreview settings={settings} folderIds={!enablePreview&&folderId?[folderId]:folders.filter(folder=>folder.aiOutreach?.enabled).map(folder=>folder.id)} auto={active&&activeNav==="ai-outreach"} assumeRunning={enablePreview} onConfirm={enablePreview?()=>{useAppStore.getState().updateSettings({aiOutreachPaused:false});setEnablePreview(false);}:undefined}/>}
     {enablePreview&&<Button size="xs" onClick={()=>setEnablePreview(false)}>{t("dialog.cancel")}</Button>}
-    <section className="space-y-2" aria-label={t("aiTasks.folder")}>
-      {folders.filter(folder=>(!folderId||folder.id===folderId)&&folder.aiOutreach).map(folder=><div key={folder.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-zinc-800 px-3 py-2 text-xs">
+    <section className="divide-y divide-zinc-800" aria-label={t("aiTasks.folder")}>
+      {folders.filter(folder=>(!folderId||folder.id===folderId)&&folder.aiOutreach).map(folder=><div key={folder.id} className="flex flex-wrap items-center gap-2 py-2 text-xs">
         <button type="button" className="min-w-0 flex-1 truncate text-left font-semibold hover:text-brand" onClick={()=>setEditing(folder.id)}>{folder.name}</button>
         <span className="text-zinc-500">{folder.aiOutreach!.time} · {folder.aiOutreach!.timeZone} · {t(folder.aiOutreach!.mode==="auto"?"aiOutreach.auto":"aiOutreach.draft")}</span>
         <span role="status" className="text-zinc-500">{t(!folder.aiOutreach!.enabled?"aiTasks.disabled":folder.aiOutreach!.paused||settings.aiAutoReplyPaused||settings.aiOutreachPaused?"aiTasks.folderPaused":"aiTasks.running")}</span>
@@ -147,7 +147,7 @@ function OutreachTasks({active}:{active:boolean}) {
       <select className="ui-control px-2 text-xs" aria-label={t("aiTasks.allAccounts")} value={accountFilter} onChange={event=>{setAccountFilter(event.target.value);setLimit(30);}}><option value="">{t("aiTasks.allAccounts")}</option>{settings.waAccounts.map(account=><option key={account.id} value={account.id}>{account.label||account.id}</option>)}</select>
       <Button size="xs" disabled={!!busy} onClick={()=>{const state=useAppStore.getState();state.updateSettings({aiTaskDismissedIds:[...new Set([...(state.settings.aiTaskDismissedIds||[]),...visible.filter(run=>!pending(run.status)).map(run=>`outreach:${run.id}`)])]});void flushPersist(useAppStore.getState).catch(error=>state.pushToast(String(error),"error"));}}>{t("aiTasks.clearFinished")}</Button>
     </div>
-    {!visible.length&&<p className="rounded-xl border border-zinc-800 p-6 text-center text-sm text-zinc-500">{t("aiOutreach.empty")}</p>}
+    {!visible.length&&<p className="rounded-lg border border-zinc-800 p-6 text-center text-sm text-zinc-500">{t("aiOutreach.empty")}</p>}
     {visible.slice(0,limit).map((run,index)=>{
       const folder=byId.get(run.folderId),personExcluded=!!(run.recipient&&settings.aiOutreachExcludedRecipients?.includes(recipientKey("",run.recipient))),paused=settings.aiAutoReplyPaused||settings.aiOutreachPaused||folder?.aiOutreach?.paused||personExcluded;
       const chat=chats.find(chat=>chat.id===run.chatId);
@@ -156,7 +156,7 @@ function OutreachTasks({active}:{active:boolean}) {
       const phone=contact?.phone||run.recipient;
       return <Fragment key={run.id}>
       {(index===0||pending(visible[index-1].status)!==pending(run.status))&&<h3 className="text-sm font-semibold">{t(pending(run.status)?"aiOutreach.queue":"aiTasks.history")} · {visible.filter(item=>pending(item.status)===pending(run.status)).length}</h3>}
-      <article className="rounded-xl border border-zinc-800 p-3 text-xs">
+      <article className="rounded-lg border border-zinc-800 p-3 text-xs">
       <div className="flex items-start justify-between gap-2"><button type="button" className="flex min-w-0 items-center gap-2 text-left hover:text-brand" onClick={()=>{const state=useAppStore.getState();state.setSelectedChat(run.chatId,run.accountId);state.goToChats("all");}}>
         <Avatar name={name} seed={phone||run.chatId} src={contact?.avatarUrl||contact?.avatarFullUrl} />
         <span className="min-w-0"><span className="block truncate font-semibold">{name}</span>{phone&&phone!==name&&<span className="block truncate text-zinc-500">{phone}</span>}</span>

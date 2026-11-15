@@ -251,7 +251,7 @@ export function SettingsDataPanel() {
         </div>}
       </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <SectionLabel>{t("settingsData.privacy")}</SectionLabel>
         <ul className="mt-3 space-y-2 text-[11px] leading-5 text-zinc-400">
           <li className="flex gap-2">
@@ -279,7 +279,7 @@ export function SettingsDataPanel() {
         </ul>
       </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <SectionLabel>{t("settingsData.localData")}</SectionLabel>
         <p className="mt-3 rounded-lg bg-zinc-900 px-3 py-2 text-[11px] text-zinc-400">
           {dbLabel || t("settingsData.checking")}
@@ -344,7 +344,7 @@ export function SettingsDataPanel() {
 
       <div hidden={dataPage !== "storage"} className="space-y-6">
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <SectionLabel>{t("settingsData.appStorage")}</SectionLabel>
           <Button variant="secondary" size="sm" className="text-2xs" disabled={!isTauri() || storageBusy} onClick={() => void scanStorage()}>
@@ -368,7 +368,7 @@ export function SettingsDataPanel() {
         {!isTauri() && <p className="mt-2 text-2xs text-zinc-500">{t("settingsData.desktopOnly")}</p>}
       </section>
 
-      <section className="rounded-xl border border-amber-900/50 bg-amber-950/10 p-4">
+      <section className="rounded-lg border border-amber-900/50 bg-amber-950/10 p-4">
         <SectionLabel>{t("settingsData.releaseHistory")}</SectionLabel>
         <p className="mt-2 text-[11px] leading-5 text-zinc-400">
           {t("settingsData.releaseDescription")}
@@ -430,7 +430,7 @@ export function SettingsDataPanel() {
         </Button>
       </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <SectionLabel>{t("settingsData.mediaCache")}</SectionLabel>
         <p className="mt-2 text-[11px] leading-5 text-zinc-500">
           {t("settingsData.mediaDescription")}
@@ -474,7 +474,7 @@ export function SettingsDataPanel() {
         </Button>
       </section>
 
-      <section className="rounded-xl border border-red-950/60 bg-red-950/10 p-4">
+      <section className="rounded-lg border border-red-950/60 bg-red-950/10 p-4">
         <SectionLabel>{t("settingsData.danger")}</SectionLabel>
         <p className="mt-2 text-[11px] text-zinc-500">
           {t("settingsData.dangerHint")}

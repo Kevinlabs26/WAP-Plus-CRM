@@ -4,7 +4,7 @@ import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import { translate } from "../src/i18n/core.ts";
 
-const icons = ["Search", "Users", "Smartphone", "RefreshCw", "ChevronDown", "Star", "Coffee", "Settings", "LockKeyhole", "AlertTriangle", "CalendarCheck", "CheckCircle2", "Clock", "LayoutGrid", "List", "Radio", "Send"];
+const icons = ["Search", "Users", "Smartphone", "RefreshCw", "ChevronDown", "Star", "Coffee", "Settings", "LockKeyhole", "Languages", "Settings2", "AlertTriangle", "CalendarCheck", "CheckCircle2", "Clock", "LayoutGrid", "List", "Radio", "Send"];
 const mocks = {
   "@/lib/bridge": "export const isTauri=()=>true;",
   react: "export const useMemo=fn=>fn(); export const useState=value=>globalThis.onboardingHooks.state(value); export const useRef=value=>globalThis.onboardingHooks.ref(value); export const useEffect=()=>{};",
@@ -12,7 +12,7 @@ const mocks = {
   "lucide-react": icons.map(name => `export const ${name}=()=>null;`).join(""),
   "@/store/appStore": "export const useAppStore=selector=>selector(globalThis.onboardingState); useAppStore.getState=()=>globalThis.onboardingState;",
   "@/i18n": "export const useI18n=()=>({t:(key,params)=>globalThis.onboardingTranslate(key,params)});",
-  "@/components/ui/primitives": "export const Button='button', Badge='badge', SectionLabel='label';",
+  "@/components/ui/primitives": "export const Button='button', Badge='badge', SectionLabel='label', Switch='switch';",
   "@/components/ui/Avatar": "export const Avatar=()=>null;",
   "@/components/brand/WapPlusMark": "export const WapPlusMark=()=>null;",
   "@/components/DonateModal": "export const DonateModal=()=>null;",

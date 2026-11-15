@@ -66,7 +66,7 @@ export function useMessageActions(opts: {
   );
 
   const translate = useCallback(
-    async (messageId: string) => {
+    async (messageId: string, options?: { googleOnly?: boolean }) => {
       const message = useAppStore
         .getState()
         .messages.find((item) => item.id === messageId);
@@ -76,7 +76,7 @@ export function useMessageActions(opts: {
       return translateMessage({
         message,
         targetLang: myLang,
-        settings,
+        settings: options?.googleOnly ? { ...settings, translateService: "google" } : settings,
         patchMessage: opts.patchMessage,
         setTranslatingId,
         pushToast: opts.pushToast,

@@ -1062,7 +1062,17 @@ async function connectInternal(opts = {}) {
       }
     });
 
-    sock.ev.on("messaging-history.set", (data) => {
+    const handleHistorySync = async (data) => {
+      const HISTORY_SPOOL_FLUSH_BYTES = 8 * 1024 * 1024;
+      let canFlushHistory = true;
+      const flushHistory = async () => {
+        if (!canFlushHistory) return;
+        try { await eventSpool.flush(); }
+        catch (error) {
+          canFlushHistory = false;
+          syncDbg("history spool flush failed", { error: String(error) });
+        }
+      };
       const {
         chats = [],
         contacts: people = [],
@@ -1140,6 +1150,9 @@ async function connectInternal(opts = {}) {
             total: contactTotal,
           },
         });
+        if (canFlushHistory && eventSpool.health.pendingBytes >= HISTORY_SPOOL_FLUSH_BYTES) {
+          await flushHistory();
+        }
       }
 
       const msgTotal = Math.max(
@@ -1166,8 +1179,12 @@ async function connectInternal(opts = {}) {
               total: msgTotal,
             },
           });
+          if (canFlushHistory && eventSpool.health.pendingBytes >= HISTORY_SPOOL_FLUSH_BYTES) {
+            await flushHistory();
+          }
         }
       }
+      await flushHistory();
 
       // 历史灌完后：轻量 enrich + 头像（联系人分片推，避免二次全量）
       setTimeout(() => {
@@ -1196,6 +1213,12 @@ async function connectInternal(opts = {}) {
           }
         })();
       }, 800);
+    };
+    let historySyncQueue = Promise.resolve();
+    sock.ev.on("messaging-history.set", (data) => {
+      historySyncQueue = historySyncQueue
+        .then(() => handleHistorySync(data))
+        .catch((error) => console.error("[sync] history processing failed", error));
     });
     sock.ev.on("messages.upsert", ({ messages: incoming, type }) => {
       const items = (incoming || []).map(ingestMessage).filter(Boolean);

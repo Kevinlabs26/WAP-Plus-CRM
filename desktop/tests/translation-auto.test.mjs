@@ -13,6 +13,7 @@ test("target language retains existing priority and reports its actual source", 
     [{ preferredLang: "es", country: "France" }, inbound, settings, { code: "es", source: "preferred" }],
     [{ preferredLang: "auto", country: "France" }, inbound, settings, { code: "fr", source: "country" }],
     [{ preferredLang: "invalid" }, inbound, settings, { code: "zh", source: "message" }],
+    [undefined, inbound, { ...settings, autoDetectContactLanguage: false }, { code: "en", source: "default" }],
     [undefined, "👍", { translateTargetLang: "pt" }, { code: "pt", source: "default" }],
     [undefined, "", { translateTargetLang: "auto" }, { code: "en", source: "default" }],
   ]) {
@@ -31,15 +32,23 @@ test("Swahili is a valid translation target", () => {
   });
 });
 
+
 // Run the actual Composer handler; service and draft writes throw if it ever
 // tries to translate, send, or replace text while changing a preference.
 const composerSource = readFileSync(new URL("../src/components/chat/Composer.tsx", import.meta.url), "utf8");
-test("enter translation workflow is opt-in and keeps attachments on the normal send path", () => {
+const chatPanelSource = readFileSync(new URL("../src/components/chat/ChatPanel.tsx", import.meta.url), "utf8");
+test("incoming automatic translation uses Google without changing draft translation settings", () => {
+  assert.match(chatPanelSource, /await translate\(message\.id, \{ googleOnly: true \}\);/);
+});
+test("automatic input translation is opt-in and keeps attachments on the normal send path", () => {
   assert.match(composerSource, /enterTranslateSend/);
-  assert.match(composerSource, /pendingMedia\.length === 0/);
-  assert.match(composerSource, /translateOriginal == null/);
+  assert.match(composerSource, /scheduleAutoTranslate\(v\)/);
+  assert.match(composerSource, /sendDraftValue\(translatedDraft \?\? readDraft\(\), translatedDraft != null\)/);
+  assert.match(composerSource, /pendingSendAfterTranslationRef/);
+  assert.match(composerSource, /pendingMedia\.length > 0/);
+  assert.match(composerSource, /e\.key === "Enter" && !e\.shiftKey/);
   assert.match(composerSource, /handleBackTranslate/);
-  assert.match(composerSource, /detectMessageLanguage\(original\)/);
+  assert.match(composerSource, /resolveMyLang\(fullSettings\(\)\)/);
   assert.match(composerSource, /void runBackTranslation\(base, next\)/);
 });
 const start = composerSource.indexOf("  const handleTranslateLangChange =");
@@ -141,7 +150,7 @@ function elements(node) {
 
 test("translation bar keeps source in tooltip and moves automatic selection into the language dropdown", () => {
   const calls=[];
-  const props={visible:true,hasDraft:true,translateOriginal:null,translating:false,translateLang:'fr',onTranslateLangChange:v=>calls.push(v),onRestoreAuto:()=>calls.push('auto'),onTranslate(){},onRestore(){},onBackTranslate(){},recording:false,recordSec:0};
+  const props={visible:true,hasDraft:true,translateOriginal:null,translatedDraft:null,translating:false,translateLang:'fr',onTranslateLangChange:v=>calls.push(v),onRestoreAuto:()=>calls.push('auto'),onTranslate(){},onRestore(){},onBackTranslate(){},recording:false,recordSec:0};
   for(const source of ['preferred','country','message','default']){
     const tree=elements(TranslateBar({...props,source})),label='translation.source'+source[0].toUpperCase()+source.slice(1);
     assert.ok(!tree.some(n=>n.type==='span'&&n.props.children===label));
@@ -158,16 +167,18 @@ test("translation bar keeps source in tooltip and moves automatic selection into
 
 test('compact translation tools preserve translate, undo and recording behavior without permanent shortcut text',()=>{
  let translated=0,restored=0,backTranslated=0;
- const props={visible:true,hasDraft:true,translateOriginal:null,translating:false,translateLang:'fr',source:'country',onTranslateLangChange(){},onRestoreAuto(){},onTranslate:()=>translated++,onRestore:()=>restored++,onBackTranslate:()=>backTranslated++,recording:false,recordSec:0};
+ let edited='';
+ const props={visible:true,hasDraft:true,translateOriginal:null,translatedDraft:null,translating:false,translateLang:'fr',source:'country',onTranslateLangChange(){},onRestoreAuto(){},onTranslate:()=>translated++,onTranslatedDraftChange:v=>edited=v,onRestore:()=>restored++,onBackTranslate:()=>backTranslated++,recording:false,recordSec:0};
  let tree=elements(TranslateBar(props));
  const action=tree.find(n=>n.type==='button');assert.match(action.props.title,/Ctrl\+Shift\+T/);action.props.onClick();assert.equal(translated,1);
  assert.equal(tree.filter(n=>n.type==='button').length,1);
- tree=elements(TranslateBar({...props,translateOriginal:'Original',recording:true,recordSec:12}));
+ tree=elements(TranslateBar({...props,translateOriginal:'Original',translatedDraft:'Translated',recording:true,recordSec:12}));
+ const result=tree.find(n=>n.type==='textarea');assert.equal(result.props.value,'Translated');result.props.onChange({target:{value:'Edited'}});assert.equal(edited,'Edited');
  tree.find(n=>n.type==='button'&&n.props.title==='translation.showBack').props.onClick();assert.equal(backTranslated,1);
- tree.find(n=>n.type==='button'&&n.props.title==='tooltip.restoreOriginal').props.onClick();assert.equal(restored,1);
+ tree.find(n=>n.type==='button'&&n.props.title==='translation.clearResult').props.onClick();assert.equal(restored,1);
  assert.ok(tree.some(n=>n.type==='span'&&Array.isArray(n.props.children)&&n.props.children[0]===12));
  assert.ok(!tree.some(n=>n.props.children==='translation.shortcuts'));
- const withBack=elements(TranslateBar({...props,translateOriginal:'Original',backTranslation:'Original text'}));
+ const withBack=elements(TranslateBar({...props,translateOriginal:'Original',translatedDraft:'Translated',backTranslation:'Original text'}));
  assert.ok(withBack.some(n=>n.type==='span'&&Array.isArray(n.props.children)&&n.props.children.includes('translation.backLabel')));
  assert.equal(TranslateBar({...props,visible:false}),null);
 });

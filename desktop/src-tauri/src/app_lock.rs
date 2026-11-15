@@ -177,6 +177,19 @@ pub fn app_lock_change(
     Ok(true)
 }
 
+#[cfg(windows)]
+#[tauri::command]
+pub fn app_lock_remove(app: AppHandle, current_password: String) -> Result<bool, String> {
+    let Some(record) = read_record(&app)? else {
+        return Err("尚未设置锁屏密码".into());
+    };
+    if !matches(&record, &current_password) {
+        return Ok(false);
+    }
+    std::fs::remove_file(lock_path(&app)?).map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
 #[cfg(not(windows))]
 #[tauri::command]
 pub fn app_lock_change(
@@ -184,5 +197,11 @@ pub fn app_lock_change(
     _current_password: String,
     _new_password: String,
 ) -> Result<bool, String> {
+    Err("锁屏仅支持 Windows 桌面版".into())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+pub fn app_lock_remove(_app: AppHandle, _current_password: String) -> Result<bool, String> {
     Err("锁屏仅支持 Windows 桌面版".into())
 }

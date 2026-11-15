@@ -1,16 +1,18 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 use tauri::{Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
-use tokio::sync::{oneshot, Mutex as AsyncMutex};
+use tokio::sync::{oneshot, Mutex as AsyncMutex, OwnedMutexGuard};
 
 const LABEL: &str = "muse-web";
 const MEDIA_LABEL: &str = "muse-web-media";
+const ACCOUNT_POOL_FILE: &str = "muse-web-account-pool.json";
+const MAX_MUSE_ACCOUNTS: usize = 12;
 const DRIVER: &str = include_str!("muse_web_driver.js");
 const MAX_SUMMARY_CHARS: usize = 6000;
 #[cfg(windows)]
@@ -253,9 +255,36 @@ struct MuseOutput {
 }
 #[derive(Default)]
 pub struct MuseWebState {
-    operation: AsyncMutex<()>,
-    media_operation: AsyncMutex<()>,
+    text_operations: Mutex<BTreeMap<String, Arc<AsyncMutex<()>>>>,
+    media_operations: Mutex<BTreeMap<String, Arc<AsyncMutex<()>>>>,
+    account_pool_operation: AsyncMutex<()>,
     cancelled: Mutex<BTreeSet<String>>,
+}
+fn muse_operation(
+    state: &MuseWebState,
+    account_id: &str,
+    media: bool,
+) -> Result<Arc<AsyncMutex<()>>, String> {
+    let operations = if media { &state.media_operations } else { &state.text_operations };
+    let mut operations = operations.lock().map_err(|_| "Muse 任务状态不可用")?;
+    Ok(operations
+        .entry(account_id.to_string())
+        .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+        .clone())
+}
+fn try_muse_operation(
+    state: &MuseWebState,
+    account_id: &str,
+    media: bool,
+) -> Result<OwnedMutexGuard<()>, String> {
+    muse_operation(state, account_id, media)?.try_lock_owned().map_err(|_| {
+        let message = if media {
+            "Muse 正在处理图片，请稍后重试"
+        } else {
+            "Muse 正在处理回复，请稍后重试"
+        };
+        message.to_string()
+    })
 }
 #[derive(Serialize)]
 pub struct MuseStatus {
@@ -300,15 +329,175 @@ fn conversation_id(key: &str) -> Result<String, String> {
 fn thread_file(root: &Path, id: &str) -> PathBuf {
     root.join("muse-web-threads").join(format!("{id}.json"))
 }
-fn account_thread_root(root:&Path)->Result<PathBuf,String>{
-    match std::fs::read_to_string(root.join("muse-web-account-session")){
-        Ok(id)=>{
-            let id=uuid::Uuid::parse_str(id.trim()).map_err(|_|"Muse 账号会话记录无效，请重新切换账号")?;
-            Ok(root.join("muse-web-accounts").join(id.to_string()))
-        },
-        Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Ok(root.to_path_buf()),
-        Err(_)=>Err("无法读取 Muse 账号会话记录".into()),
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MuseAccountRecord {
+    id: String,
+    name: String,
+    legacy_profile: bool,
+    legacy_threads: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MuseAccountPool {
+    selected_id: String,
+    #[serde(default)]
+    primary_id: String,
+    accounts: Vec<MuseAccountRecord>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MuseAccountView {
+    id: String,
+    name: String,
+    selected: bool,
+    primary: bool,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MuseAccountPoolView {
+    accounts: Vec<MuseAccountView>,
+    selected_id: String,
+    primary_id: String,
+}
+fn validate_muse_account_pool(pool: &MuseAccountPool) -> Result<(), String> {
+    if pool.accounts.is_empty() || pool.accounts.len() > MAX_MUSE_ACCOUNTS {
+        return Err("Muse 账号数量无效".into());
     }
+    let mut ids = BTreeSet::new();
+    let mut legacy_profiles = 0;
+    for account in &pool.accounts {
+        uuid::Uuid::parse_str(&account.id).map_err(|_| "Muse 账号编号无效")?;
+        if !ids.insert(&account.id)
+            || account.name.trim().is_empty()
+            || account.name.chars().count() > 80
+            || account.name.chars().any(char::is_control)
+        {
+            return Err("Muse 账号资料无效".into());
+        }
+        if account.legacy_threads && !account.legacy_profile {
+            return Err("Muse 账号资料无效".into());
+        }
+        if account.legacy_profile {
+            legacy_profiles += 1;
+        }
+    }
+    if legacy_profiles > 1 || !ids.contains(&pool.selected_id) || !ids.contains(&pool.primary_id) {
+        return Err("Muse 默认账号或旧会话绑定无效".into());
+    }
+    Ok(())
+}
+fn save_muse_account_pool(root: &Path, pool: &MuseAccountPool) -> Result<(), String> {
+    validate_muse_account_pool(pool)?;
+    std::fs::create_dir_all(root).map_err(|_| "无法建立 Muse 账号目录")?;
+    let bytes = serde_json::to_vec(pool).map_err(|_| "Muse 账号资料无法序列化")?;
+    crate::atomic_file::write_atomic(&root.join(ACCOUNT_POOL_FILE), &bytes)
+        .map_err(|_| "无法保存 Muse 账号资料".to_string())
+}
+fn load_muse_account_pool(root: &Path) -> Result<MuseAccountPool, String> {
+    let path = root.join(ACCOUNT_POOL_FILE);
+    let mut pool = match std::fs::read(&path) {
+        Ok(bytes) => {
+            if bytes.len() > 64_000 {
+                return Err("Muse 账号资料无效".into());
+            }
+            serde_json::from_slice(&bytes).map_err(|_| "Muse 账号资料无效")?
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let (id, legacy_threads) = match std::fs::read_to_string(root.join("muse-web-account-session")) {
+                Ok(id) => {
+                    let id = uuid::Uuid::parse_str(id.trim())
+                        .map_err(|_| "Muse 账号会话记录无效，请检查本地 Muse 资料")?;
+                    (id.to_string(), false)
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    (uuid::Uuid::new_v4().to_string(), true)
+                }
+                Err(_) => return Err("无法读取 Muse 账号会话记录".into()),
+            };
+            let pool = MuseAccountPool {
+                selected_id: id.clone(),
+                primary_id: id.clone(),
+                accounts: vec![MuseAccountRecord {
+                    id,
+                    name: "Muse 1".into(),
+                    legacy_profile: true,
+                    legacy_threads,
+                }],
+            };
+            save_muse_account_pool(root, &pool)?;
+            pool
+        }
+        Err(_) => return Err("无法读取 Muse 账号资料".into()),
+    };
+    if pool.primary_id.is_empty() {
+        pool.primary_id = pool.selected_id.clone();
+        save_muse_account_pool(root, &pool)?;
+    }
+    validate_muse_account_pool(&pool)?;
+    Ok(pool)
+}
+fn account_from_pool(pool: &MuseAccountPool, id: Option<&str>) -> Result<MuseAccountRecord, String> {
+    let id = id.unwrap_or(&pool.selected_id);
+    pool.accounts
+        .iter()
+        .find(|account| account.id == id)
+        .cloned()
+        .ok_or_else(|| "Muse 账号不存在，请刷新账号列表".into())
+}
+fn account_thread_root(root: &Path, account: &MuseAccountRecord) -> PathBuf {
+    if account.legacy_threads {
+        root.to_path_buf()
+    } else {
+        root.join("muse-web-accounts").join(&account.id)
+    }
+}
+fn account_profile_dir(root: &Path, account: &MuseAccountRecord) -> PathBuf {
+    if account.legacy_profile {
+        root.join("muse-web-profile")
+    } else {
+        root.join("muse-web-accounts").join(&account.id).join("profile")
+    }
+}
+fn account_window_label(account: &MuseAccountRecord, media: bool) -> String {
+    if account.legacy_profile {
+        if media { MEDIA_LABEL.into() } else { LABEL.into() }
+    } else if media {
+        format!("muse-web-media-{}", account.id)
+    } else {
+        format!("muse-web-{}", account.id)
+    }
+}
+fn account_pool_view(pool: MuseAccountPool) -> MuseAccountPoolView {
+    let selected_id = pool.selected_id;
+    let primary_id = pool.primary_id;
+    let accounts = pool.accounts.into_iter().map(|account| MuseAccountView {
+        selected: account.id == selected_id,
+        primary: account.id == primary_id,
+        id: account.id,
+        name: account.name,
+    }).collect();
+    MuseAccountPoolView {
+        selected_id,
+        primary_id,
+        accounts,
+    }
+}
+fn add_muse_account(root: &Path) -> Result<MuseAccountPool, String> {
+    let mut pool = load_muse_account_pool(root)?;
+    if pool.accounts.len() >= MAX_MUSE_ACCOUNTS {
+        return Err(format!("最多可添加 {MAX_MUSE_ACCOUNTS} 个 Muse 账号"));
+    }
+    let account = MuseAccountRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        name: format!("Muse {}", pool.accounts.len() + 1),
+        legacy_profile: false,
+        legacy_threads: false,
+    };
+    pool.selected_id = account.id.clone();
+    pool.accounts.push(account);
+    save_muse_account_pool(root, &pool)?;
+    Ok(pool)
 }
 fn load_thread(file: &Path) -> Result<ThreadRecord, String> {
     let raw = match std::fs::read(file) {
@@ -433,9 +622,17 @@ fn muse_output(data: &serde_json::Value) -> Result<MuseOutput, String> {
     Ok(MuseOutput { text, media })
 }
 
-fn muse_window(app: &tauri::AppHandle, visible: bool, media: bool) -> Result<WebviewWindow, String> {
-    let label=if media { MEDIA_LABEL } else { LABEL };
-    if let Some(window) = app.get_webview_window(label) {
+fn muse_window_for(
+    app: &tauri::AppHandle,
+    visible: bool,
+    media: bool,
+    account_id: Option<&str>,
+) -> Result<WebviewWindow, String> {
+    let root = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+    let pool = load_muse_account_pool(&root)?;
+    let account = account_from_pool(&pool, account_id)?;
+    let label = account_window_label(&account, media);
+    if let Some(window) = app.get_webview_window(&label) {
         if visible {
             window.show().map_err(|e| e.to_string())?;
             window.unminimize().map_err(|e| e.to_string())?;
@@ -443,19 +640,15 @@ fn muse_window(app: &tauri::AppHandle, visible: bool, media: bool) -> Result<Web
         }
         return Ok(window);
     }
-    let dir = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("muse-web-profile");
+    let dir = account_profile_dir(&root, &account);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     // This remote window receives no application IPC capabilities (the default capability only covers main).
     let window = WebviewWindowBuilder::new(
         app,
-        label,
+        &label,
         WebviewUrl::External("https://muse.ai/thread/new".parse().unwrap()),
     )
-    .title(if media { "Muse 图片 · WAP Plus CRM" } else { "Muse 回复 · WAP Plus CRM" })
+    .title(if media { format!("Muse 图片 · {} · WAP Plus CRM", account.name) } else { format!("Muse 回复 · {} · WAP Plus CRM", account.name) })
     .inner_size(1100.0, 760.0)
     .visible(visible)
     .focused(visible)
@@ -463,11 +656,15 @@ fn muse_window(app: &tauri::AppHandle, visible: bool, media: bool) -> Result<Web
     .on_navigation(|url| matches!(url.scheme(), "https" | "http"))
     .on_new_window(|_, _| tauri::webview::NewWindowResponse::Allow)
     .build()
-    .or_else(|error| app.get_webview_window(label).ok_or(error))
+    .or_else(|error| app.get_webview_window(&label).ok_or(error))
     .map_err(|e| format!("无法打开 Muse 窗口：{e}"))?;
+    let keep_hidden_on_close = account.legacy_profile;
     let hidden = window.clone();
     window.on_window_event(move |event| {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            if !keep_hidden_on_close {
+                return;
+            }
             api.prevent_close();
             let _ = hidden.hide();
         }
@@ -479,28 +676,57 @@ fn muse_window(app: &tauri::AppHandle, visible: bool, media: bool) -> Result<Web
     }
     Ok(window)
 }
-
 #[tauri::command]
-pub async fn muse_web_open(app: tauri::AppHandle, media: Option<bool>) -> Result<(), String> {
-    muse_window(&app, true, media.unwrap_or(false)).map(|_| ())
+pub async fn muse_web_open(
+    app: tauri::AppHandle,
+    media: Option<bool>,
+    account_id: Option<String>,
+) -> Result<(), String> {
+    muse_window_for(&app, true, media.unwrap_or(false), account_id.as_deref()).map(|_| ())
 }
 
 #[tauri::command]
-pub async fn muse_web_switch_account(app:tauri::AppHandle)->Result<(),String>{
+pub async fn muse_web_accounts(app: tauri::AppHandle) -> Result<MuseAccountPoolView, String> {
+    let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
+    load_muse_account_pool(&root).map(account_pool_view)
+}
+
+#[tauri::command]
+pub async fn muse_web_account_add(app: tauri::AppHandle) -> Result<MuseAccountPoolView, String> {
     let state=app.state::<MuseWebState>();
-    let _text=state.operation.try_lock().map_err(|_|"Muse 正在处理回复，请等待完成后切换账号")?;
-    let _media=state.media_operation.try_lock().map_err(|_|"Muse 正在处理图片，请等待完成后切换账号")?;
-    let window=muse_window(&app,true,false)?;
+    let _pool=state.account_pool_operation.try_lock().map_err(|_|"Muse 账号池正在更新，请稍后重试")?;
+    let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
+    add_muse_account(&root).map(account_pool_view)
+}
+
+#[tauri::command]
+pub async fn muse_web_account_select(app: tauri::AppHandle, account_id: String) -> Result<MuseAccountPoolView, String> {
+    let state=app.state::<MuseWebState>();
+    let _pool=state.account_pool_operation.try_lock().map_err(|_|"Muse 账号池正在更新，请稍后重试")?;
+    let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
+    let mut pool = load_muse_account_pool(&root)?;
+    account_from_pool(&pool, Some(&account_id))?;
+    pool.selected_id = account_id;
+    save_muse_account_pool(&root, &pool)?;
+    Ok(account_pool_view(pool))
+}
+
+#[tauri::command]
+pub async fn muse_web_account_set_primary(app: tauri::AppHandle, account_id: String) -> Result<MuseAccountPoolView, String> {
+    let state=app.state::<MuseWebState>();
+    let _pool=state.account_pool_operation.try_lock().map_err(|_|"Muse 账号池正在更新，请稍后重试")?;
     let root=app.path().app_local_data_dir().map_err(|error|error.to_string())?;
-    // Rotate before signing out so a partial failure cannot reuse the previous account's threads.
-    crate::atomic_file::write_atomic(&root.join("muse-web-account-session"),uuid::Uuid::new_v4().to_string().as_bytes()).map_err(|_|"无法保存 Muse 换号状态，未退出登录")?;
-    window.clear_all_browsing_data().map_err(|_|"无法退出 Muse 登录，请在 Muse 窗口手动退出后重新登录")?;
-    if let Some(media)=app.get_webview_window(MEDIA_LABEL){
-        media.clear_all_browsing_data().map_err(|_|"无法清理 Muse 图片窗口登录，请手动退出后重新登录")?;
-        media.navigate("https://muse.ai/".parse().unwrap()).map_err(|error|error.to_string())?;
-    }
-    window.navigate("https://muse.ai/".parse().unwrap()).map_err(|error|error.to_string())?;
-    Ok(())
+    let mut pool=load_muse_account_pool(&root)?;
+    account_from_pool(&pool,Some(&account_id))?;
+    pool.primary_id=account_id;
+    save_muse_account_pool(&root,&pool)?;
+    Ok(account_pool_view(pool))
+}
+
+#[tauri::command]
+pub async fn muse_web_switch_account(app: tauri::AppHandle) -> Result<(), String> {
+    // Keep older desktop builds safe: switching now adds an isolated profile instead of clearing the current login.
+    muse_web_account_add(app).await.map(|_| ())
 }
 
 fn connection_settled(
@@ -518,12 +744,26 @@ fn connection_settled(
     }
 }
 
+fn connection_settled_for_operation(
+    state: &str,
+    operation: bool,
+    login_since: &mut Option<tokio::time::Instant>,
+    now: tokio::time::Instant,
+) -> bool {
+    if operation && state == "busy" {
+        return false;
+    }
+    connection_settled(state, login_since, now)
+}
+
 async fn wait_for_connection(
     window: &WebviewWindow,
     operation: Option<(&MuseWebState, &str)>,
+    timeout: Duration,
 ) -> Result<serde_json::Value, String> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let mut deadline = tokio::time::Instant::now() + timeout;
     let mut login_since = None;
+    let mut reloaded = false;
     loop {
         if let Some((state, id)) = operation {
             check_cancelled(state, id)?;
@@ -541,12 +781,18 @@ async fn wait_for_connection(
             )
         };
         // A restored session can briefly render sign-in before hydration finishes.
-        let settled = connection_settled(
-            status
-                .as_ref()
-                .and_then(|data| data.get("state"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("loading"),
+        let state_name = status
+            .as_ref()
+            .and_then(|data| data.get("state"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("loading")
+            .to_string();
+        // A previous Muse generation can leave the stop control visible for a
+        // moment. For an actual new request, wait for it to clear instead of
+        // turning a transient busy state into a refresh-only error.
+        let settled = connection_settled_for_operation(
+            &state_name,
+            operation.is_some(),
             &mut login_since,
             tokio::time::Instant::now(),
         );
@@ -556,6 +802,14 @@ async fn wait_for_connection(
             }
         }
         if tokio::time::Instant::now() >= deadline {
+            if operation.is_some() && !reloaded && state_name == "loading" {
+                // The app retries from its saved per-chat thread, so it is safe to reload before submitting.
+                window.navigate("https://muse.ai/".parse().unwrap()).map_err(|_| "Muse 自动重连失败".to_string())?;
+                reloaded = true;
+                deadline = tokio::time::Instant::now() + timeout;
+                login_since = None;
+                continue;
+            }
             return Err("Muse 后台连接超时，请稍后重试，或打开 Muse 查看连接状态".into());
         }
         tokio::time::sleep(Duration::from_millis(350)).await;
@@ -563,13 +817,20 @@ async fn wait_for_connection(
 }
 
 #[tauri::command]
-pub async fn muse_web_status(app: tauri::AppHandle, media: Option<bool>) -> Result<MuseStatus, String> {
+pub async fn muse_web_status(
+    app: tauri::AppHandle,
+    media: Option<bool>,
+    account_id: Option<String>,
+) -> Result<MuseStatus, String> {
     let state = app.state::<MuseWebState>();
     let media=media.unwrap_or(false);
-    let operation=if media { &state.media_operation } else { &state.operation };
-    let Ok(_guard) = operation.try_lock() else {
+    let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
+    let pool = load_muse_account_pool(&root)?;
+    let account = account_from_pool(&pool, account_id.as_deref())?;
+    let label = account_window_label(&account, media);
+    let Ok(_guard) = try_muse_operation(&state, &account.id, media) else {
         return Ok(MuseStatus {
-            opened: app.get_webview_window(if media {MEDIA_LABEL}else{LABEL}).is_some(),
+            opened: app.get_webview_window(&label).is_some(),
             ready: false,
             state: "busy".into(),
             message: "Muse 正在连接或生成回复".into(),
@@ -577,14 +838,19 @@ pub async fn muse_web_status(app: tauri::AppHandle, media: Option<bool>) -> Resu
             parallel_media: true,
         });
     };
-    let window = muse_window(&app, false, media)?;
-    let data = wait_for_connection(&window, None).await?;
+    let existed = app.get_webview_window(&label).is_some();
+    let window = muse_window_for(&app, false, media, Some(&account.id))?;
+    let data_result = wait_for_connection(&window, None, Duration::from_secs(20)).await;
+    if !existed {
+        let _ = window.destroy();
+    }
+    let data = data_result?;
     let status = data
         .get("state")
         .and_then(|v| v.as_str())
         .unwrap_or("loading")
         .to_string();
-    Ok(MuseStatus {
+    let result = MuseStatus {
         opened: true,
         ready: status == "ready",
         state: status,
@@ -595,19 +861,25 @@ pub async fn muse_web_status(app: tauri::AppHandle, media: Option<bool>) -> Resu
             .to_string(),
         media_protocol: 7,
         parallel_media: true,
-    })
+    };
+    Ok(result)
 }
 
 #[tauri::command]
-pub async fn muse_web_collect_media(app: tauri::AppHandle) -> Result<MuseGeneratedMedia, String> {
+pub async fn muse_web_collect_media(
+    app: tauri::AppHandle,
+    account_id: Option<String>,
+) -> Result<MuseGeneratedMedia, String> {
     let state = app.state::<MuseWebState>();
-    let media=app.get_webview_window(MEDIA_LABEL).is_some();
-    let operation=if media { &state.media_operation } else { &state.operation };
-    let _guard = operation
-        .try_lock()
-        .map_err(|_| "Muse 正在生成，请稍后取回")?;
-    let window = muse_window(&app, true, media)?;
-    let status = wait_for_connection(&window, None).await?;
+    let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
+    let pool = load_muse_account_pool(&root)?;
+    let account = account_from_pool(&pool, account_id.as_deref())?;
+    let media = app
+        .get_webview_window(&account_window_label(&account, true))
+        .is_some();
+    let _guard = try_muse_operation(&state, &account.id, media)?;
+    let window = muse_window_for(&app, true, media, Some(&account.id))?;
+    let status = wait_for_connection(&window, None, Duration::from_secs(60)).await?;
     if status.get("state").and_then(|v| v.as_str()) != Some("ready") {
         return Err(page_error(&status));
     }
@@ -683,7 +955,7 @@ impl MuseRun<'_> {
         let result = async {
         check_cancelled(self.state, self.operation_id)?;
         let mut target = record.path.clone();
-        let status = wait_for_connection(window, Some((self.state,self.operation_id))).await?;
+        let status = wait_for_connection(window, Some((self.state,self.operation_id)), Duration::from_secs(60)).await?;
         if status.get("state").and_then(|v| v.as_str()) != Some("ready") { return Err(page_error(&status)); }
         let fresh = format!("https://muse.ai/thread/new?wapRequest={request_id}");
         if target.as_deref() != Some(window.url().map_err(|e| e.to_string())?.path()) {
@@ -789,6 +1061,7 @@ impl MuseRun<'_> {
 #[tauri::command]
 pub async fn muse_web_generate(
     app: tauri::AppHandle,
+    account_id: Option<String>,
     request_id: String,
     prompt: String,
     conversation_key: Option<String>,
@@ -813,10 +1086,10 @@ pub async fn muse_web_generate(
     }
     let state = app.state::<MuseWebState>();
     let expect_media=expect_media.unwrap_or(false);
-    let operation=if expect_media { &state.media_operation } else { &state.operation };
-    let _guard = operation
-        .try_lock()
-        .map_err(|_| "429 Muse 正在连接或生成回复，请稍后重试")?;
+    let app_root = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+    let pool = load_muse_account_pool(&app_root)?;
+    let account = account_from_pool(&pool, account_id.as_deref())?;
+    let _guard = try_muse_operation(&state, &account.id, expect_media)?;
     let mut summary_requests = 0;
     let mut summary_failed = false;
     let result = async {
@@ -825,22 +1098,16 @@ pub async fn muse_web_generate(
             .as_deref()
             .map(conversation_id)
             .transpose()?;
-        let file = owner
-            .as_ref()
-            .map(|id| {
-                app.path()
-                    .app_local_data_dir()
-                    .map_err(|e| e.to_string())
-                    .and_then(|root|account_thread_root(&root).map(|root|thread_file(&root,id)))
-            })
-            .transpose()?;
+        let file = owner.as_ref().map(|id| {
+            thread_file(&account_thread_root(&app_root, &account), id)
+        });
         let mut record = file
             .as_deref()
             .map(load_thread)
             .transpose()?
             .unwrap_or_default();
         let run = MuseRun {
-            window: muse_window(&app, false, expect_media)?,
+            window: muse_window_for(&app, false, expect_media, Some(&account.id))?,
             state: &state,
             operation_id: &request_id,
             owner,
@@ -914,6 +1181,29 @@ pub fn muse_web_cancel(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn account_pool_migrates_the_current_login_and_adds_isolated_profiles() {
+        let root = std::env::temp_dir().join(format!("wap-muse-pool-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("muse-web-threads")).unwrap();
+        let legacy_thread = root.join("muse-web-threads").join("existing.json");
+        std::fs::write(&legacy_thread, b"existing thread").unwrap();
+
+        let first = load_muse_account_pool(&root).unwrap();
+        assert_eq!(first.accounts.len(), 1);
+        assert!(first.accounts[0].legacy_profile);
+        assert!(first.accounts[0].legacy_threads);
+        assert_eq!(account_profile_dir(&root, &first.accounts[0]), root.join("muse-web-profile"));
+        assert_eq!(account_thread_root(&root, &first.accounts[0]), root);
+
+        let pool = add_muse_account(&root).unwrap();
+        let second = pool.accounts.last().unwrap();
+        assert_eq!(pool.selected_id, second.id);
+        assert_eq!(account_profile_dir(&root, second), root.join("muse-web-accounts").join(&second.id).join("profile"));
+        assert_eq!(account_thread_root(&root, second), root.join("muse-web-accounts").join(&second.id));
+        assert!(legacy_thread.exists());
+        assert_eq!(load_muse_account_pool(&root).unwrap().accounts.len(), 2);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[cfg(windows)]
     #[test]
     fn customer_handoffs_are_encrypted_and_plaintext_records_migrate_without_data_loss() {
@@ -970,6 +1260,18 @@ mod tests {
         ));
         assert!(connection_settled(
             "login",
+            &mut login_since,
+            now + Duration::from_secs(5)
+        ));
+        assert!(!connection_settled_for_operation(
+            "busy",
+            true,
+            &mut login_since,
+            now + Duration::from_secs(5)
+        ));
+        assert!(connection_settled_for_operation(
+            "busy",
+            false,
             &mut login_since,
             now + Duration::from_secs(5)
         ));

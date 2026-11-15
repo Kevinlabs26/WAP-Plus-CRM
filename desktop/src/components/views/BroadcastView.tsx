@@ -3,15 +3,18 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
+  Info,
   Megaphone,
+  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useAppStore } from "@/store/appStore";
+import { flushPersist, useAppStore } from "@/store/appStore";
 import { useShallow } from "zustand/react/shallow";
 import {
   BROADCAST_DEFAULT_EXTRA_GAP_MAX_SEC,
   BROADCAST_DEFAULT_EXTRA_GAP_SEC,
   BROADCAST_HARD_CAP,
+  BROADCAST_MAX_THEMES,
   BROADCAST_MAX_VARIANTS,
 } from "@/types/broadcast";
 import type { SalesStage } from "@/types/crm";
@@ -31,15 +34,17 @@ import { formatAccountDisplay } from "@/lib/accountLabels";
 import { buildContactLookup } from "@/lib/groupMemberDisplay";
 import { salesStagesWithLabels } from "@/lib/contactWorkflow";
 import { Button, Input, SectionLabel, Textarea } from "@/components/ui/primitives";
+import { SettingsNumberInput } from "@/components/settings/SettingsNumberInput";
 import { CampaignRunPanel } from "./CampaignRunPanel";
 import { BroadcastPickStep, type BroadcastRecipientSource } from "./BroadcastPickStep";
 import { BroadcastMediaPicker } from "./BroadcastMediaPicker";
 import type {
   BroadcastMedia,
   BroadcastMediaMode,
+  BroadcastTheme,
   BroadcastVariant,
 } from "@/types/broadcast";
-import { cacheMediaUrl } from "@/lib/mediaCache";
+import { cacheMediaUrl, readMediaCache } from "@/lib/mediaCache";
 import { isWaAccountConnected } from "@/lib/accountConnection";
 import { lastContactedAccounts, recipientKey } from "@/lib/scheduledPlans";
 import { useI18n } from "@/i18n";
@@ -59,6 +64,7 @@ export function BroadcastView() {
   const chats = useAppStore((s) => s.chats);
   const messages = useAppStore((s) => s.messages);
   const campaigns = useAppStore((s) => s.broadcastCampaigns || []);
+  const broadcastThemes = useAppStore((s) => s.settings.broadcastThemes || []);
   const {
     waAccounts,
     liveBaileysAccountId,
@@ -137,15 +143,113 @@ export function BroadcastView() {
   const [phoneText, setPhoneText] = useState("");
   const [recipientSource, setRecipientSource] = useState<BroadcastRecipientSource>(() => selected.size ? "contacts" : "numbers");
   const [mediaBusy, setMediaBusy] = useState(false);
-  const [versions, setVersions] = useState<VariantDraft[]>(() => [newVariant("您好 {name}，我是负责对接的同事。方便了解一下贵司{company}最近的采购计划吗？")]);
+  const [themeBusy, setThemeBusy] = useState(false);
+  const [themeError, setThemeError] = useState("");
+  const [versions, setVersions] = useState<VariantDraft[]>(() => [newVariant("您好 {name}，我是负责对接的同事。方便了解一下贵司最近的采购计划吗？")]);
   const [randomVersions, setRandomVersions] = useState(false);
   const [versionId, setVersionId] = useState("");
+  const [selectedThemeId, setSelectedThemeId] = useState("");
+  const [themeName, setThemeName] = useState("");
+  const [themeEditorOpen, setThemeEditorOpen] = useState(false);
   const currentVersion = (randomVersions && versions.find(v => v.id === versionId)) || versions[0];
   const { template, media, mediaMode, dataUrls: mediaDataUrls } = currentVersion;
   const activeVersions = randomVersions ? versions : [versions[0]];
   const updateVersion = (patch: Partial<VariantDraft>) => setVersions(all => all.map(v => v.id === currentVersion.id ? { ...v, ...patch } : v));
   const setTemplate = (value: string) => updateVersion({ template: value });
   const currentVersionNumber = versions.indexOf(currentVersion) + 1;
+  const loadTheme = async (id: string) => {
+    setThemeError("");
+    if (!id) {
+      setSelectedThemeId(""); setThemeName(""); setThemeEditorOpen(false);
+      return;
+    }
+    const theme = useAppStore.getState().settings.broadcastThemes.find(item => item.id === id);
+    if (!theme) return;
+    setThemeBusy(true);
+    try {
+      const loaded = await Promise.all(theme.variants.map(async variant => {
+        const saved = await Promise.all((variant.media || []).map(async item => [item, await readMediaCache(item.id)] as const));
+        const available = saved.filter((entry): entry is [BroadcastMedia, string] => Boolean(entry[1]));
+        return { ...variant, media: available.map(([item]) => item), mediaMode: variant.mediaMode || "single",
+          dataUrls: Object.fromEntries(available.map(([item, url]) => [item.id, url])) };
+      }));
+      setVersions(loaded);
+      setVersionId(loaded[0]?.id || "");
+      setSelectedThemeId(theme.id);
+      setThemeName(theme.name);
+      setThemeEditorOpen(false);
+      setRandomVersions(true);
+      if (loaded.some((variant, index) => variant.media.length !== (theme.variants[index]?.media || []).length)) setThemeError(t("broadcast.themeMediaMissing"));
+    } catch (error) {
+      setThemeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThemeBusy(false);
+    }
+  };
+  const startNewTheme = () => {
+    setSelectedThemeId(""); setThemeName(""); setThemeEditorOpen(true); setThemeError(""); setRandomVersions(true);
+  };
+  const cancelThemeEdit = () => {
+    if (selectedThemeId) { void loadTheme(selectedThemeId); return; }
+    setThemeName(""); setThemeEditorOpen(false); setThemeError("");
+  };
+  const saveTheme = async () => {
+    const name = themeName.trim();
+    if (!name || versions.length < 2 || versions.length > BROADCAST_MAX_VARIANTS || themeBusy || mediaBusy) return;
+    const isDuplicate = (themes: BroadcastTheme[]) => themes.some(item => item.id !== selectedThemeId && item.name.toLocaleLowerCase() === name.toLocaleLowerCase());
+    const before = useAppStore.getState().settings.broadcastThemes || [];
+    if (!selectedThemeId && before.length >= BROADCAST_MAX_THEMES) { setThemeError(t("broadcast.themeLimit")); return; }
+    if (isDuplicate(before)) { setThemeError(t("broadcast.themeNameTaken")); return; }
+    setThemeBusy(true); setThemeError("");
+    try {
+      await Promise.all(versions.flatMap(version => version.media.map(item => {
+        const dataUrl = version.dataUrls[item.id];
+        if (!dataUrl) throw new Error(t("broadcast.mediaMissing"));
+        return cacheMediaUrl(item.id, dataUrl, true);
+      })));
+      const current = useAppStore.getState();
+      const library = current.settings.broadcastThemes || [];
+      if (isDuplicate(library)) { setThemeError(t("broadcast.themeNameTaken")); return; }
+      const id = selectedThemeId || crypto.randomUUID();
+      const saved: BroadcastTheme = { id, name, variants: versions.map(({ id: versionId, template: body, media: attachments, mediaMode: mode }) => ({ id: versionId, template: body, media: attachments, mediaMode: mode })) };
+      const index = library.findIndex(item => item.id === id);
+      const next = [...library];
+      if (index < 0) next.push(saved); else next[index] = saved;
+      current.updateSettings({ broadcastThemes: next });
+      await flushPersist(useAppStore.getState);
+      setSelectedThemeId(id); setThemeName(name); setThemeEditorOpen(false);
+      current.pushToast(t("broadcast.themeSaved"), "success");
+    } catch (error) {
+      setThemeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThemeBusy(false);
+    }
+  };
+  const deleteSelectedTheme = async () => {
+    if (!selectedThemeId || themeBusy || mediaBusy) return;
+    const theme = (useAppStore.getState().settings.broadcastThemes || []).find(item => item.id === selectedThemeId);
+    if (!theme || !await requestConfirm({
+      title: t("broadcast.deleteThemeTitle", { name: theme.name }),
+      description: t("broadcast.deleteThemeDescription"),
+      confirmLabel: t("common.delete"),
+      cancelLabel: t("common.cancel"),
+      tone: "danger",
+    })) return;
+
+    setThemeBusy(true); setThemeError("");
+    try {
+      const current = useAppStore.getState();
+      current.updateSettings({ broadcastThemes: (current.settings.broadcastThemes || []).filter(item => item.id !== theme.id) });
+      await flushPersist(useAppStore.getState);
+      setSelectedThemeId(""); setThemeName(""); setThemeEditorOpen(false);
+      current.pushToast(t("broadcast.themeDeleted"), "success");
+    } catch (error) {
+      setThemeError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setThemeBusy(false);
+    }
+  };
+  const themeLocked = Boolean(selectedThemeId && !themeEditorOpen);
   const [extraGapSec, setExtraGapSec] = useState(BROADCAST_DEFAULT_EXTRA_GAP_SEC);
   const [extraGapMaxSec, setExtraGapMaxSec] = useState(
     BROADCAST_DEFAULT_EXTRA_GAP_MAX_SEC
@@ -153,7 +257,7 @@ export function BroadcastView() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [previewIndex, setPreviewIndex] = useState(0);
 
-  const insertTemplateVariable = (variable: "{name}" | "{company}") => {
+  const insertTemplateVariable = (variable: "{name}") => {
     const input = templateRef.current;
     const start = input?.selectionStart ?? template.length;
     const end = input?.selectionEnd ?? template.length;
@@ -304,7 +408,7 @@ export function BroadcastView() {
   const invalidVersion = versionErrors.findIndex(Boolean);
   const templateError = invalidVersion < 0 ? "" : randomVersions
     ? `${t("broadcast.variant", { number: invalidVersion + 1 })}：${versionErrors[invalidVersion]}` : versionErrors[invalidVersion];
-  const launchBlockedReason = mediaBusy ? t("broadcast.mediaBusy") : !accountId
+  const launchBlockedReason = mediaBusy || themeBusy ? t("broadcast.mediaBusy") : !accountId
     ? t("broadcast.selectAccountRequired")
     : !recipientCount
       ? t("broadcast.addRecipientsRequired")
@@ -525,33 +629,72 @@ export function BroadcastView() {
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {step === "setup" && (
-          <div className="mx-auto grid max-w-[1440px] items-stretch gap-4 lg:grid-cols-[minmax(320px,0.85fr)_minmax(0,1.15fr)]">
-            <BroadcastPickStep
-              source={recipientSource}
-              onSourceChange={setRecipientSource}
-              phoneText={phoneText}
-              onPhoneTextChange={setPhoneText}
-              directPhoneCount={directPhones.length}
-              recipientCount={recipientCount}
-              stages={stages}
-              stageFilter={stageFilter}
-              onStageFilterChange={setStageFilter}
-              tagFilter={tagFilter}
-              onTagFilterChange={setTagFilter}
-              q={q}
-              onQChange={setQ}
-              pool={pool}
-              selectedContacts={selectedList}
-              selected={selected}
-              onToggle={toggle}
-              onSelectVisible={() => selectVisible()}
-              onClear={() => setSelected(new Set())}
-            />
+          <div className="mx-auto flex min-h-full w-full max-w-[1440px] flex-col gap-4">
+            <div className={cn(
+              "grid flex-1 items-stretch divide-y divide-zinc-800 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/20 lg:divide-x lg:divide-y-0",
+              randomVersions
+                ? "lg:grid-cols-[minmax(250px,0.7fr)_minmax(250px,0.75fr)_minmax(0,2fr)]"
+                : "lg:grid-cols-[minmax(250px,0.7fr)_minmax(0,2.75fr)]"
+            )}>
+              <div className="flex min-w-0 p-4">
+                <BroadcastPickStep
+                  source={recipientSource}
+                  onSourceChange={setRecipientSource}
+                  phoneText={phoneText}
+                  onPhoneTextChange={setPhoneText}
+                  directPhoneCount={directPhones.length}
+                  stages={stages}
+                  stageFilter={stageFilter}
+                  onStageFilterChange={setStageFilter}
+                  tagFilter={tagFilter}
+                  onTagFilterChange={setTagFilter}
+                  q={q}
+                  onQChange={setQ}
+                  pool={pool}
+                  selectedContacts={selectedList}
+                  selected={selected}
+                  onToggle={toggle}
+                  onSelectVisible={() => selectVisible()}
+                  onClear={() => setSelected(new Set())}
+                />
+              </div>
 
-            <div className="min-w-0 space-y-3">
-              <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
+              {randomVersions && <section className="flex min-h-0 min-w-0 flex-col p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <SectionLabel>{t("broadcast.randomVersions")}</SectionLabel>
+                  <div className="flex flex-wrap gap-1">
+                    {selectedThemeId && !themeEditorOpen && <Button size="xs" variant="secondary" disabled={themeBusy || mediaBusy} onClick={() => { setThemeError(""); setThemeEditorOpen(true); }}>{t("broadcast.editTheme")}</Button>}
+                    {selectedThemeId && !themeEditorOpen && <Button size="xs" variant="ghost" className="text-rose-400 hover:text-rose-300" aria-label={t("common.delete")} title={t("common.delete")} disabled={themeBusy || mediaBusy} onClick={() => void deleteSelectedTheme()}><Trash2 className="h-3.5 w-3.5" /></Button>}
+                    {!themeEditorOpen && <Button size="xs" variant="secondary" disabled={themeBusy || mediaBusy || broadcastThemes.length >= BROADCAST_MAX_THEMES} title={broadcastThemes.length >= BROADCAST_MAX_THEMES ? t("broadcast.themeLimit") : undefined} onClick={startNewTheme}>{t("broadcast.newTheme")}</Button>}
+                  </div>
+                </div>
+                <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto" aria-label={t("broadcast.theme")}>
+                  <button type="button" aria-pressed={!selectedThemeId} disabled={themeBusy || mediaBusy || themeEditorOpen}
+                    className={cn("w-full rounded-lg border px-2.5 py-2 text-left text-xs disabled:opacity-50", !selectedThemeId ? "border-brand/40 bg-brand/10 text-brand" : "border-zinc-800/80 text-zinc-300 hover:bg-zinc-800/60")}
+                    onClick={() => void loadTheme("")}>{t("broadcast.unsavedTheme")}</button>
+                  {broadcastThemes.map(theme => <button key={theme.id} type="button" aria-pressed={selectedThemeId === theme.id} disabled={themeBusy || mediaBusy || themeEditorOpen}
+                    className={cn("w-full rounded-lg border px-2.5 py-2 text-left text-xs disabled:opacity-50", selectedThemeId === theme.id ? "border-brand/40 bg-brand/10 text-brand" : "border-zinc-800/80 text-zinc-300 hover:bg-zinc-800/60")}
+                    onClick={() => void loadTheme(theme.id)}>
+                    <span className="block truncate">{t("broadcast.themeVersionCount", { name: theme.name, count: theme.variants.length })}</span>
+                  </button>)}
+                </div>
+                {themeEditorOpen && <div className="mt-3 shrink-0 space-y-2 border-t border-zinc-800/80 pt-3">
+                  <Input value={themeName} maxLength={80} aria-label={t("broadcast.themeName")} placeholder={t("broadcast.themeName")} disabled={themeBusy} onChange={event=>{setThemeName(event.target.value);setThemeError("");}} />
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="primary" disabled={themeBusy || mediaBusy || !themeName.trim() || versions.length < 2} onClick={()=>void saveTheme()}>{t(selectedThemeId ? "broadcast.saveTheme" : "broadcast.createTheme")}</Button>
+                    <Button size="sm" variant="secondary" disabled={themeBusy} onClick={cancelThemeEdit}>{t("common.cancel")}</Button>
+                  </div>
+                </div>}
+                {themeError&&<p role="alert" className="mt-2 shrink-0 text-2xs text-rose-400">{themeError}</p>}
+              </section>}
+
+            <div className="flex h-full min-w-0 flex-col p-4">
+              <section className="flex min-h-0 flex-1 flex-col">
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <SectionLabel className="!mb-0">{t("broadcast.copy")}</SectionLabel>
+                  <div className="flex items-center gap-2">
+                    <SectionLabel className="!mb-0">{t("broadcast.copy")}</SectionLabel>
+                    <Button size="xs" variant="ghost" disabled={themeBusy || themeLocked} title={t("broadcast.copyHint")} aria-label={t("broadcast.copyHint")} onClick={() => insertTemplateVariable("{name}")}>{t("broadcast.name")}</Button>
+                  </div>
                   <label className="flex min-w-0 items-center gap-2 text-2xs text-zinc-500">
                     <span className="shrink-0">{t("broadcast.newContactAccount")}</span>
                     <select
@@ -575,76 +718,58 @@ export function BroadcastView() {
                   </label>
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-1.5" role="group" aria-label={t("broadcast.contentMode")}>
-                  <Button size="sm" variant={!randomVersions ? "primary" : "secondary"} disabled={mediaBusy} aria-pressed={!randomVersions}
+                  <Button size="sm" variant={!randomVersions ? "primary" : "secondary"} disabled={mediaBusy || themeBusy} aria-pressed={!randomVersions}
                     onClick={() => setRandomVersions(false)}>{t("broadcast.fixedContent")}</Button>
-                  <Button size="sm" variant={randomVersions ? "primary" : "secondary"} disabled={mediaBusy} aria-pressed={randomVersions}
+                  <Button size="sm" variant={randomVersions ? "primary" : "secondary"} disabled={mediaBusy || themeBusy} aria-pressed={randomVersions}
                     onClick={() => {
                       if (versions.length === 1) setVersions(all => [...all, newVariant()]);
                       setRandomVersions(true);
                     }}>{t("broadcast.randomVersions")}</Button>
                 </div>
-                {randomVersions && <>
-                  <div className="mt-2 flex flex-wrap items-center gap-1" role="tablist" aria-label={t("broadcast.randomVersions")}>
-                    {versions.map((v, index) => <button key={v.id} type="button" role="tab" aria-selected={v.id === currentVersion.id} disabled={mediaBusy}
-                      className={cn("rounded-lg px-2.5 py-1.5 text-xs disabled:opacity-40", v.id === currentVersion.id ? "bg-brand/15 text-brand" : "text-zinc-500 hover:bg-zinc-800")}
-                      onClick={() => setVersionId(v.id)}>{t("broadcast.variant", { number: index + 1 })}{versionErrors[index] ? " · !" : ""}</button>)}
-                    <Button size="sm" variant="ghost" disabled={mediaBusy || versions.length >= BROADCAST_MAX_VARIANTS}
-                      onClick={() => { const v = newVariant(); setVersions(all => [...all, v]); setVersionId(v.id); }}>{t("broadcast.addVariant")}</Button>
-                    <Button size="sm" variant="ghost" disabled={mediaBusy || versions.length <= 1}
-                      onClick={() => {
-                        setVersions(all => all.filter(v => v.id !== currentVersion.id));
-                        setVersionId("");
-                        if (versions.length === 2) setRandomVersions(false);
-                      }}>{t("broadcast.removeVariant")}</Button>
-                  </div>
-                  <p className="mt-1 text-2xs text-zinc-500">{t("broadcast.variantHint")}</p>
-                </>}
-                <p className="mt-1 text-2xs text-zinc-600">
-                  {t("broadcast.copyHint")}
-                </p>
-                <p className="mt-1 text-2xs text-zinc-600">{t("planQueue.accountRoutingHint")}</p>
-                <p className="mt-1 text-2xs text-zinc-500">{t("planQueue.accountRoutingSummary", { contacted: contactedCount, new: newContactCount })}</p>
-                <div className="mt-2 flex items-center gap-1.5">
-                  <Button
-                    variant="ghost"
-                    className="!min-h-7 !px-2 text-2xs"
-                    onClick={() => insertTemplateVariable("{name}")}
-                  >
-                    {t("broadcast.name")}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    className="!min-h-7 !px-2 text-2xs"
-                    onClick={() => insertTemplateVariable("{company}")}
-                  >
-                    {t("broadcast.company")}
-                  </Button>
+                {randomVersions && <div className="mt-2 flex flex-wrap items-center gap-1 border-b border-zinc-800/80 pb-2" role="tablist" aria-label={t("broadcast.randomVersions")}>
+                  {versions.map((v, index) => <button key={v.id} type="button" role="tab" aria-selected={v.id === currentVersion.id} disabled={mediaBusy || themeBusy}
+                    className={cn("rounded-lg px-2.5 py-1.5 text-xs disabled:opacity-40", v.id === currentVersion.id ? "bg-brand/15 text-brand" : "text-zinc-500 hover:bg-zinc-800")}
+                    onClick={() => setVersionId(v.id)}>{t("broadcast.variant", { number: index + 1 })}{versionErrors[index] ? " · !" : ""}</button>)}
+                  <Button size="sm" variant="ghost" disabled={mediaBusy || themeBusy || themeLocked || versions.length >= BROADCAST_MAX_VARIANTS}
+                    onClick={() => { const v = newVariant(); setVersions(all => [...all, v]); setVersionId(v.id); }}>{t("broadcast.addVariant")}</Button>
+                  <Button size="sm" variant="ghost" disabled={mediaBusy || themeBusy || themeLocked || versions.length <= 1}
+                    onClick={() => {
+                      setVersions(all => all.filter(v => v.id !== currentVersion.id));
+                      setVersionId("");
+                      if (versions.length === 2) setRandomVersions(false);
+                    }}>{t("broadcast.removeVariant")}</Button>
+                </div>}
+                <div className="mt-1 flex items-center gap-1.5 text-2xs text-zinc-500">
+                  <span>{t("planQueue.accountRoutingSummary", { contacted: contactedCount, new: newContactCount })}</span>
+                  <span role="note" tabIndex={0} className="inline-flex cursor-help rounded p-1" title={[randomVersions ? t("broadcast.variantHint") : "", t("planQueue.accountRoutingHint")].filter(Boolean).join("\n")} aria-label={[randomVersions ? t("broadcast.variantHint") : "", t("planQueue.accountRoutingHint")].filter(Boolean).join(". ")}><Info className="h-3.5 w-3.5" /></span>
                 </div>
-                <Textarea
-                  ref={templateRef}
-                  value={template}
-                  onChange={(event) => setTemplate(event.target.value)}
-                  rows={5}
-                  className="mt-2 min-h-36 max-h-72 resize-y"
-                />
-                <div className="mt-2 border-t border-zinc-800/80 pt-2">
-                  <div className="mb-1 text-2xs text-zinc-500">
-                    {t("broadcast.mediaHint")}
-                  </div>
-                  <BroadcastMediaPicker
-                    key={currentVersion.id}
-                    media={media}
-                    mediaMode={mediaMode}
-                    dataUrls={mediaDataUrls}
-                    onBusyChange={setMediaBusy}
-                    onChange={(nextMedia, nextMode, dataUrls) => {
-                      updateVersion({ media: nextMedia, mediaMode: nextMode, dataUrls });
-                    }}
+                <fieldset disabled={themeBusy || themeLocked} className="flex min-h-0 flex-1 flex-col border-0 p-0">
+                  <Textarea
+                    ref={templateRef}
+                    value={template}
+                    onChange={(event) => setTemplate(event.target.value)}
+                    rows={4}
+                    className="mt-2 min-h-28 max-h-[48vh] flex-1 resize-y"
                   />
-                </div>
+                  <div className="mt-2 border-t border-zinc-800/80 pt-2">
+                    <div className="mb-1 text-2xs text-zinc-500">
+                      {t("broadcast.mediaHint")}
+                    </div>
+                    <BroadcastMediaPicker
+                      key={currentVersion.id}
+                      media={media}
+                      mediaMode={mediaMode}
+                      dataUrls={mediaDataUrls}
+                      onBusyChange={setMediaBusy}
+                      onChange={(nextMedia, nextMode, dataUrls) => {
+                        updateVersion({ media: nextMedia, mediaMode: nextMode, dataUrls });
+                      }}
+                    />
+                  </div>
+                </fieldset>
               </section>
 
-              <section className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
+              <section className="mt-auto shrink-0 border-t border-zinc-800/80 pt-3">
                 <div className="flex items-center justify-between gap-2">
                   <SectionLabel>{t("broadcast.preview")}</SectionLabel>
                   {randomVersions && <span className="text-xs text-brand">{t("broadcast.variant", { number: currentVersionNumber })}</span>}
@@ -693,7 +818,9 @@ export function BroadcastView() {
 
             </div>
 
-              <section className="flex flex-wrap items-center gap-3 rounded-xl border border-brand/30 bg-zinc-900/95 p-3 lg:col-span-2">
+            </div>
+
+            <section className="flex flex-wrap items-center gap-3 rounded-lg border border-brand/30 bg-zinc-900/95 p-3">
                 <div className="grid shrink-0 grid-cols-2 gap-x-6 gap-y-2 text-2xs text-zinc-500">
                   <div>
                     <div>{t("broadcast.recipients")}</div>
@@ -715,16 +842,14 @@ export function BroadcastView() {
                 </div>
                 <div role="group" aria-label={t("broadcast.gap")} className="flex items-center gap-2 text-2xs text-zinc-500">
                   <span className="shrink-0">{t("broadcast.gap")}</span>
-                  <Input type="number" aria-label={t("broadcast.minGap")} min={20} max={120} value={extraGapSec}
-                    onChange={event => {
-                      const value = Math.min(120, Math.max(20, Number(event.target.value) || 20));
+                  <div><SettingsNumberInput ariaLabel={t("broadcast.minGap")} min={20} max={120} integer value={extraGapSec}
+                    onCommit={value => {
                       setExtraGapSec(value);
                       setExtraGapMaxSec(current => Math.max(current, value));
-                    }} className="h-8 !w-16" />
+                    }} className="h-8 !w-16" /></div>
                   <span>{t("broadcast.to")}</span>
-                  <Input type="number" aria-label={t("broadcast.maxGap")} min={extraGapSec} max={120} value={extraGapMaxSec}
-                    onChange={event => setExtraGapMaxSec(Math.min(120, Math.max(extraGapSec, Number(event.target.value) || 30)))}
-                    className="h-8 !w-16" />
+                  <div><SettingsNumberInput ariaLabel={t("broadcast.maxGap")} min={extraGapSec} max={120} integer value={extraGapMaxSec}
+                    onCommit={setExtraGapMaxSec} className="h-8 !w-16" /></div>
                 </div>
                 {destinationWarmup && (
                   <p className="order-last w-full text-2xs text-sky-300">
@@ -750,7 +875,7 @@ export function BroadcastView() {
                 >
                   {launchBlockedReason || t("broadcast.start")}
                 </Button>
-              </section>
+            </section>
           </div>
         )}
 

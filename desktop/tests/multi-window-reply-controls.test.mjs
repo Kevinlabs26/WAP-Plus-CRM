@@ -69,7 +69,7 @@ globalThis.replyControlTranslate = translate;
 const mocks = {
   react: 'export const useState=v=>[v,()=>{}];export const useEffect=()=>{};',
   'react/jsx-runtime': 'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
-  '@/store/appStore': 'export const useAppStore=fn=>fn(globalThis.replyControlState);',
+  '@/store/appStore': 'export const useAppStore=fn=>fn(globalThis.replyControlState);useAppStore.getState=()=>globalThis.replyControlState;',
   '@/lib/autoReplyRuntime': 'export const useAutoReplyRuntime=fn=>fn({byChat:globalThis.replyRuntime||{}});',
   '@/i18n': 'export const useI18n=()=>({t:(...a)=>globalThis.replyControlTranslate("zh-CN",...a)});',
   '@/lib/utils': 'export const cn=(...a)=>a.filter(Boolean).join(" ");',
@@ -83,38 +83,43 @@ const built = await build({ entryPoints: [fileURLToPath(new URL('../src/features
 const { MultiWindowReplyControls } = await import('data:text/javascript;base64,' + Buffer.from(built.outputFiles[0].text).toString('base64'));
 const nodes = tree => Array.isArray(tree) ? tree.flatMap(nodes) : tree?.props ? [tree, ...nodes(tree.props.children)] : [];
 const render = (props = {}, config = {}) => {
-  globalThis.replyControlState = { settings: { ...settings(), ...config }, phones: [{ id: 'phone-a', name: '工作手机' }], bridge: { connected: false } };
+  const state = { settings: { ...settings(), ...config }, bridge: { connected: false }, updateSettings(patch) { this.settings = { ...this.settings, ...patch }; } };
+  globalThis.replyControlState = state;
   return nodes(MultiWindowReplyControls({ chat, contact, messages: [], accountId: 'account-a', connected: true, ...props }));
 };
 
-test('single-account cards always show sender identity and the effective rule source', () => {
+test('reply mode controls reflect scope and persist a per-chat manual/auto choice', () => {
   const tree = render({}, { chatFolders: [{ id: 'folder', name: '售后', chatIds: [chat.id], autoReplyMode: 'manual' }] });
+  const group = tree.find(n => n.props.role === 'group');
+  const toggles = tree.filter(n => n.props['aria-pressed'] !== undefined);
   assert.equal(tree.some(n => n.type === 'select'), false);
-  const sender = tree.find(n => n.props.children === '测试账号 1');
-  assert.match(sender.props.title, /测试账号 1.*12025550101/);
-  const badge = tree.find(n => n.props.role === 'status');
-  assert.equal(badge.props.children, '人工');
-  assert.match(badge.props.title, /售后/);
-  assert.equal(badge.props['aria-label'], badge.props.title);
+  assert.equal(tree.some(n => n.props.children === '测试账号 1'), false);
+  assert.deepEqual(toggles.map(n => n.props.children), ['人工', '自动']);
+  assert.equal(toggles[0].props['aria-pressed'], true);
+  assert.match(group.props.title, /售后/);
+  toggles[1].props.onClick();
+  assert.equal(globalThis.replyControlState.settings.aiAutoReplyModeByChatId[chat.id], 'auto');
+  assert.deepEqual(globalThis.replyControlState.settings.aiAutoReplyManualChatIds, []);
+  toggles[0].props.onClick();
+  assert.equal(globalThis.replyControlState.settings.aiAutoReplyModeByChatId[chat.id], 'manual');
 });
 
-test('multi-account selection keeps chat routing and Android cards show the sending device', () => {
-  let selected;
-  const tree = render({ accountOptions: [{ id: 'chat-a', label: '测试账号 1' }, { id: 'chat-b', label: '测试账号 2' }], onSelectAccount: id => selected = id });
-  const select = tree.find(n => n.type === 'select');
-  assert.equal(select.props.value, chat.id);
-  select.props.onChange({ target: { value: 'chat-b' } });
-  assert.equal(selected, 'chat-b');
-  const android = render({ chat: { ...chat, phoneId: 'phone-a' } }, { sendChannel: 'android_bridge' });
-  assert.ok(android.find(n => n.props.children === '工作手机'));
-  assert.equal(android.find(n => n.props.role === 'status').props.children, '自动 待连接');
+test('account identity is omitted from the row and unsupported chats stay manual', () => {
+  const tree = render({ accountOptions: [{ id: 'chat-a', label: '测试账号 1' }, { id: 'chat-b', label: '测试账号 2' }] });
+  assert.equal(tree.some(n => n.type === 'select'), false);
+  assert.equal(tree.some(n => n.props.children === '测试账号 1'), false);
+  const group = render({ chat: { ...chat, isGroup: true } }).find(n => n.props.role === 'group');
+  const toggles = nodes(group).filter(n => n.props['aria-pressed'] !== undefined);
+  assert.equal(toggles[0].props['aria-pressed'], true);
+  assert.equal(toggles.every(n => n.props.disabled), true);
 });
 
-test('the compact row keeps account count in its tooltip and combines mode with work status', () => {
-  const tree = render({ workStatus: 'waiting', accountCount: 2, children: 'complete-action' }, { aiReplyMode: 'semi' });
-  const sender = tree.find(n => n.props.children === '测试账号 1');
-  assert.match(sender.props.title, /2 个账号/);
-  assert.equal(tree.find(n => n.props.role === 'status').props.children, '人工 · 等客户回复');
+test('the mode group tooltip keeps account scope and work status details', () => {
+  const tree = render({ workStatus: 'waiting', children: 'complete-action' }, { aiReplyMode: 'semi' });
+  const group = tree.find(n => n.props.role === 'group');
+  assert.match(group.props.title, /等客户回复/);
+  assert.equal(tree.find(n => n.props.children === '人工').props['aria-pressed'], true);
+  assert.equal(tree.find(n => n.props.role === 'status').props.children, '等客户回复');
   assert.equal(tree.some(n => n.props.children === '回复账号'), false);
 });
 
@@ -123,10 +128,10 @@ test('cards expose runtime labels and retry details without showing another mess
  try{
   for(const [phase,label]of [['transcribing','正在转写'],['generating','正在生成'],['retry','等待重试'],['human','需人工处理']]){
    globalThis.replyRuntime={[chat.id]:{phase,inboundId:incoming.id,accountId:'account-a',reason:'controlled reason',retryAt:now+10000}};
-   const badge=render({messages:[incoming]}).find(n=>n.props.role==='status');assert.equal(badge.props.children,label);assert.match(badge.props.title,/controlled reason/);assert.match(badge.props.title,/重试时间/);
-   assert.equal(render({messages:[{...incoming,id:'newer'}]}).find(n=>n.props.role==='status').props.children,'自动');
-   assert.equal(render({messages:[incoming]},{aiReplyMode:'semi'}).find(n=>n.props.role==='status').props.children,'人工');
-   globalThis.replyRuntime[chat.id].accountId='other';assert.equal(render({messages:[incoming]}).find(n=>n.props.role==='status').props.children,'自动');
+   const group=render({messages:[incoming]}).find(n=>n.props.role==='group');assert.match(group.props.title,new RegExp(label));assert.match(group.props.title,/controlled reason/);assert.match(group.props.title,/重试时间/);
+   assert.equal(render({messages:[{...incoming,id:'newer'}]}).find(n=>n.props['aria-pressed']===true).props.children,'自动');
+   assert.equal(render({messages:[incoming]},{aiReplyMode:'semi'}).find(n=>n.props['aria-pressed']===true).props.children,'人工');
+   globalThis.replyRuntime[chat.id].accountId='other';assert.equal(render({messages:[incoming]}).find(n=>n.props['aria-pressed']===true).props.children,'自动');
   }
  }finally{delete globalThis.replyRuntime;}
 });

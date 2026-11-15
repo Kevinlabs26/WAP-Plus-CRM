@@ -86,6 +86,11 @@ export function createMessageActionsSlice({
         systemKind: input.systemKind,
         aiReplyContextHash: input.aiReplyContextHash,
         aiReplyInboundId: input.aiReplyInboundId,
+        aiAutoFollowUpRootId: input.aiAutoFollowUpRootId,
+        aiAutoFollowUpStep: input.aiAutoFollowUpStep,
+        aiAutoFollowUpSentAt: input.aiAutoFollowUpSentAt,
+        aiAutoFollowUpAttemptAt: input.aiAutoFollowUpAttemptAt,
+        aiAutoFollowUpCancelled: input.aiAutoFollowUpCancelled,
       };
       set((state) => ({
         messages: [...state.messages, msg],

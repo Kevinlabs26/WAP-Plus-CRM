@@ -2,11 +2,11 @@ import { useAppStore, flushPersist } from "@/store/appStore";
 import { isDataRestoreActive, getDataRestoreGeneration } from "@/store/restoreGuard";
 import { generateSuggestions, hasRealAiKey } from "./aiSuggest";
 import { hashAiReplyContext } from "./aiReplyContext";
-import { outreachCandidate, inspectOutreachCandidate, outreachContextKey, currentOutreachContext, isOutreachOptOut } from "./aiOutreachContext";
+import { outreachCandidate, inspectOutreachCandidate, outreachContextKey, currentOutreachContext, isOutreachOptOut, outreachFolderChatIds } from "./aiOutreachContext";
 import { getAutoReplyOutputBlockReason } from "./aiSafety";
 import { resolveSendTarget } from "./utils";
 import type { AiOutreachRun } from "./aiOutreachRules";
-import { normalizeOutreachRule, outreachGoal, isImmediateOutreach, outreachRunClock, outreachWindowOffset } from "./aiOutreachRules";
+import { normalizeOutreachRule, outreachGoal, isImmediateOutreach, outreachRunClock } from "./aiOutreachRules";
 import type { Message } from "@/types/crm";
 import { retainMessageChats } from "@/store/messageMemory";
 import { hydrateOutreachHistory } from "./aiOutreachHistory";
@@ -40,10 +40,9 @@ async function saveRun(run:AiOutreachRun) {
   await flushPersist(useAppStore.getState);
 }
 export function noteOutreachOptOut(messages:Message[]) {
-  const folders=useAppStore.getState().settings.chatFolders;
-  const ids=messages.filter(item=>!item.isGroup&&folders.some(folder=>folder.aiOutreach?.enabled&&folder.chatIds.includes(item.chatId))&&isOutreachOptOut(item.transcript||item.body)).map(item=>item.chatId);
+  const state=useAppStore.getState(),folders=state.settings.chatFolders;
+  const ids=messages.filter(item=>!item.isGroup&&folders.some(folder=>folder.aiOutreach?.enabled&&outreachFolderChatIds(state,folder.id).includes(item.chatId))&&isOutreachOptOut(item.transcript||item.body)).map(item=>item.chatId);
   if (!ids.length) return;
-  const state=useAppStore.getState();
   state.updateSettings({aiAutoReplyManualChatIds:[...new Set([...(state.settings.aiAutoReplyManualChatIds||[]),...ids])]});
 }
 export async function queueOutreachDraft(id:string,approved=true) {
@@ -97,7 +96,7 @@ export async function tickAiOutreach(now=Date.now()) {
       if(run.status==="draft"){
         const folder=initial.settings.chatFolders.find(folder=>folder.id===run.folderId),rule=folder?.aiOutreach&&normalizeOutreachRule(folder.aiOutreach);
         const clock=rule&&outreachRunClock(rule,now);
-        if(!rule||clock!.day!==run.day||!isImmediateOutreach(rule,now)&&outreachWindowOffset(rule,now)>=120)await saveRun({...run,status:"cancelled",error:"草稿已过期，未自动发送"});
+        if(!rule||clock!.day!==run.day)await saveRun({...run,status:"cancelled",error:"草稿已过期，未自动发送"});
       }
       if (run.status==="generating") await saveRun({...run,status:"failed",error:"生成被中断，未自动重试以避免重复花费"});
       if (run.status==="queued") {
@@ -121,13 +120,12 @@ export async function tickAiOutreach(now=Date.now()) {
     for (const folder of folders) {
       if (!folder.aiOutreach?.enabled) continue;
       const rule=normalizeOutreachRule(folder.aiOutreach),clock=outreachRunClock(rule,now);
-      if(!isImmediateOutreach(rule,now)&&outreachWindowOffset(rule,now)>=120||(state.settings.aiOutreachRuns||[]).filter(run=>run.folderId===folder.id&&run.day===clock.day).length>=rule.dailyLimit)continue;
-      const members=new Set(folder.chatIds);
-      for (const chatId of folder.chatIds) {
+      if(!isImmediateOutreach(rule,now)&&clock.time<rule.time)continue;
+      const members=new Set(outreachFolderChatIds(planningState,folder.id));
+      for (const chatId of members) {
         if(planningState.settings.aiOutreachRuns.length>=10_000)break;
         const chat=chats.get(chatId),contact=chat&&contacts.get(chat.contactId);
-        if(!chat||!contact||rule.trigger==="new"&&(chat.hasMessageHistory||chat.lastMessage||chat.lastMessageDirection||contact.lastMessageAt)||
-          rule.trigger==="daily"&&now-Date.parse(chat.updatedAt)<rule.minIdleHours*3600_000)continue;
+        if(!chat||!contact)continue;
         const candidate=outreachCandidate(planningState,folder.id,chatId,now,undefined,undefined,{chat,contact,members,clock,lastAccounts});
         if (!candidate) continue;
         const run:AiOutreachRun={id:crypto.randomUUID(),folderId:folder.id,chatId,accountId:candidate.accountId,recipient:candidate.recipient,day:candidate.day,basisAt:candidate.basisAt,at:new Date(now).toISOString(),status:"waiting"};
@@ -144,7 +142,7 @@ export async function tickAiOutreach(now=Date.now()) {
       if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return;
       const check=inspectOutreachCandidate(useAppStore.getState(),run.folderId,run.chatId,now,run.id);
       if(!check.candidate){
-        if(["changed_context","not_member","disabled","invalid_contact","invalid_recipient","optout","person_excluded","manual_optout","already_contacted","not_new","unanswered","missed_window"].includes(check.reason))await saveRun({...run,status:"cancelled",error:translateCurrent(`outreachReason.${check.reason}`)});
+        if(["changed_context","not_member","disabled","invalid_contact","invalid_recipient","optout","person_excluded","manual_optout","already_contacted","unanswered"].includes(check.reason))await saveRun({...run,status:"cancelled",error:translateCurrent(`outreachReason.${check.reason}`)});
         continue;
       }
       await generateOutreach(run.folderId,run.chatId,run.id,now);
@@ -167,22 +165,6 @@ async function generateOutreach(folderId:string,chatId:string,id:string,now=Date
   const initialStatus=routingState.settings.aiOutreachRuns.find(run=>run.id===id)?.status;
   const routed=outreachCandidate(routingState,folderId,chatId,now,id);
   if(!routed)return false;
-  if(routed.rule.firstContactQuotas&&routed.chat.accountId!==routed.accountId){
-    const target=routingState.chats.find(c=>{
-      const contact=routingState.contacts.find(person=>person.id===c.contactId);
-      return (c.accountId||contact?.accountId)===routed.accountId&&contact&&recipientKey('',resolveSendTarget({phone:contact.phone,channelAddress:contact.channelAddress,entityId:contact.id}))===recipientKey('',routed.recipient);
-    })?.id||routingState.ensureChatForContact(routed.contact.id,routed.accountId);
-    if(!target)return false;
-    const fresh=useAppStore.getState();
-    if(!fresh.settings.chatFolders.some(f=>f.id===folderId&&f.chatIds.includes(chatId)))return false;
-    if(!routingState.chats.some(c=>c.id===target))fresh.patchChat(target,{hasMessageHistory:false});
-    fresh.updateSettings({chatFolders:fresh.settings.chatFolders.map(f=>f.id===folderId?{...f,chatIds:[...new Set(f.chatIds.map(id=>id===chatId?target:id))]}:f)});
-    chatId=target;
-    const waiting=useAppStore.getState().settings.aiOutreachRuns.find(run=>run.id===id&&run.status==="waiting");
-    if(waiting)await saveRun({...waiting,chatId,basisAt:useAppStore.getState().chats.find(chat=>chat.id===chatId)!.updatedAt});
-    await flushPersist(useAppStore.getState);
-    now=Date.now();
-  }
   scheduler={at:Date.now(),phase:"history",error:""};
   await hydrateOutreachHistory(chatId);
   if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return false;
@@ -208,7 +190,7 @@ async function generateOutreach(folderId:string,chatId:string,id:string,now=Date
     if(controller.signal.aborted||useAppStore.getState().settings.aiTaskDismissedIds?.includes(`outreach:${id}`)||useAppStore.getState().settings.aiOutreachRuns.find(item=>item.id===id)?.status!=="generating"||outreachContextKey(useAppStore.getState(),folderId,chatId,id)!==key){
       await saveRun({...run,status:"cancelled",error:"生成期间上下文或规则发生变化"});return false;
     }
-    const block=text&&getAutoReplyOutputBlockReason(text,{allowPricing:candidate.policy.allowPricing});
+    const block=text&&getAutoReplyOutputBlockReason(text);
     if(result.fallback||result.source==="mock"||!text||block){await saveRun({...run,status:"failed",error:result.error||block||"AI 没有返回有效内容"});return false;}
     const hash=await hashAiReplyContext(key);
     if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return false;

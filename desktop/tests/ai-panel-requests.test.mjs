@@ -112,6 +112,15 @@ test('automatic mode starts compact, does no duplicate generation and expands wh
  h.requests[0].resolve(reply('Manual recovery'));await settle();assert.ok(nodes(h.render()).some(node=>node.type==='suggestion-card'));h.fireTimers();assert.equal(h.requests.length,1);h.unmount();
 });
 
+test('a stuck suggestion can be cancelled without refreshing the chat', async () => {
+ const h=harness(); await h.mount(); h.fireTimers();
+ const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
+ const cancel=nodes(h.render()).find(node=>node.props['aria-label']==='common.cancel');
+ assert.ok(cancel,'cancel button exists while generating'); cancel.props.onClick();
+ assert.equal(h.requests[0].args[3].signal.aborted,true);
+ h.render(); h.refresh(); assert.equal(h.requests.length,2); h.unmount();
+});
+
 test('edited original is inserted into the current composer only and stale editor callbacks cannot change another conversation',async()=>{
  const h=harness(),inserted=[];h.state.applyAiSuggestion=(...args)=>inserted.push(args);await h.mount();h.fireTimers();h.requests[0].resolve(reply('Original'));await settle();
  const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];

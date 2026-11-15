@@ -1,9 +1,10 @@
 import type { SettingsShape } from "../store/settingsDefaults";
 
-type ConstraintSettings=Pick<SettingsShape,"chatFolders"|"liveBaileysAccountId"|"activeAccountId">;
+type ConstraintSettings=Pick<SettingsShape,"chatFolders"|"liveBaileysAccountId"|"activeAccountId"|"leadInbox">;
 export function resolveAiReplyConstraints(settings:ConstraintSettings,accountId?:string,chatId?:string,folderId?:string){
   const folders=settings.chatFolders||[],scope=(folder:typeof folders[number])=>folder.scope?.type==="all"?"all":folder.scope?.accountId||settings.liveBaileysAccountId||settings.activeAccountId||"wa-default";
   let folder=(folderId?folders.find(item=>item.id===folderId):undefined)||folders.find(item=>item.chatIds.includes(chatId||"")&&scope(item)===accountId)||folders.find(item=>item.chatIds.includes(chatId||"")&&scope(item)==="all");
+  if(!folder&&chatId&&settings.leadInbox.collectedChatIds.includes(chatId)&&!settings.leadInbox.dismissedChatIds.includes(chatId)&&!folders.some(item=>item.chatIds.includes(chatId)))folder=folders.find(item=>item.systemType==="leadInbox");
   const owner=folder&&scope(folder),seen=new Set<string>(),terms=new Set<string>();let maxChars:number|undefined;
   while(folder&&!seen.has(folder.id)&&scope(folder)===owner){
     seen.add(folder.id);

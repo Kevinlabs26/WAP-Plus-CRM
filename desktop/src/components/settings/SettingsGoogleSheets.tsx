@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ExternalLink, Link2, RefreshCw, TableProperties } from "lucide-react";
+import { Check, ExternalLink, Link2, Pencil, RefreshCw, Star, TableProperties, Trash2 } from "lucide-react";
 import { Button, SectionLabel } from "@/components/ui/primitives";
 import { useI18n } from "@/i18n";
 import { useAppStore } from "@/store/appStore";
@@ -12,47 +12,81 @@ export interface SheetCloseGuard {
   dirty: boolean; busy: boolean; canSave: boolean;
   save: () => Promise<boolean>;
 }
+type TabDraft = { name: string; row: number; phone: string; fields: SheetField[]; primaryTagFieldId: string; actions: Record<string, SheetAction>; headers: string[] };
+const emptyTabDraft = (name: string): TabDraft => ({ name, row: 1, phone: "", fields: [], primaryTagFieldId: "", actions: {}, headers: [] });
+function validTabDraft(draft: TabDraft, tab: string, url: string) {
+  return !!draft.name.trim() && !!spreadsheetId(url) && !!tab && Number.isInteger(draft.row) && draft.row >= 1 && draft.row <= 1000 && !!draft.phone && draft.fields.length > 0 && draft.fields.length <= MAX_SHEET_DISPLAY_COLUMNS && draft.fields.every(field => !!field.label.trim() && (field.schedule.kind !== "interval" || (Number.isInteger(field.schedule.minutes) && field.schedule.minutes >= 1 && field.schedule.minutes <= 525600)) && (field.schedule.kind !== "daily" || /^([01]\d|2[0-3]):[0-5]\d$/.test(field.schedule.time)));
+}
 export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChange?: (guard: SheetCloseGuard | null) => void } = {}) {
   const { t } = useI18n();
   const allState = useGoogleSheets();
   const [connectionId,setConnectionId]=useState<string|null>(null);
+  const [batchAdd,setBatchAdd]=useState(false);
   const [name,setName]=useState("");
   const connections=sheetConnections(allState),connection=connections.find(item=>item.id===connectionId);
   const state={...allState,config:connection?.config||null,data:connection?.data||{},error:connection?connection.error:allState.error,pauseReason:connection?.pauseReason||null,retryAt:connection?.retryAt||null};
   const requestConfirm = useAppStore(s => s.requestConfirm);
   const [url, setUrl] = useState("");
   const [tabs, setTabs] = useState<string[]>([]);
+  const [selectedTabs,setSelectedTabs]=useState<string[]>([]);
+  const [tabDrafts,setTabDrafts]=useState<Record<string,TabDraft>>({});
+  const [batchConnectionIds,setBatchConnectionIds]=useState<Record<string,string>>({});
+  const [tabSearch,setTabSearch]=useState("");
   const [tab, setTab] = useState("");
   const [headers, setHeaders] = useState<string[]>([]);
   const [row, setRow] = useState(1);
   const [phone, setPhone] = useState("");
   const [fields, setFields] = useState<SheetField[]>([]);
+  const [primaryTagFieldId, setPrimaryTagFieldId] = useState("");
   const [actions, setActions] = useState<Record<string, SheetAction>>({});
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [draftReady, setDraftReady] = useState(false);
   useEffect(() => { void initializeSheets(); }, []);
-  useEffect(()=>{setConnectionId(null);setName("");},[allState.email]);
+  useEffect(()=>{setConnectionId(null);setBatchAdd(false);setSelectedTabs([]);setTabDrafts({});setBatchConnectionIds({});setName("");},[allState.email]);
   useEffect(() => {
     setDraftReady(true);
+    if (batchAdd) return;
     if (!state.config) {
-      setUrl(""); setTabs([]); setTab(""); setHeaders([]); setRow(1); setPhone(""); setFields([]); setActions({});
+      setUrl(""); setTabs([]); setTab(""); setHeaders([]); setRow(1); setPhone(""); setFields([]); setPrimaryTagFieldId(""); setActions({});
+      setSelectedTabs([]); setTabDrafts({}); setBatchConnectionIds({});
       return;
     }
     setUrl(`https://docs.google.com/spreadsheets/d/${state.config.spreadsheet}/edit`);
     setTabs([state.config.tab]); setTab(state.config.tab); setRow(state.config.headerRow);
+    setSelectedTabs([state.config.tab]); setTabDrafts({}); setBatchConnectionIds({});
     setFields(state.config.fields);
+    setPrimaryTagFieldId(state.config.primaryTagFieldId || "");
     setActions({ ...(state.config.actions || {}), ...Object.fromEntries(state.config.fields.flatMap(field => field.action ? [["heading" in field.column ? field.column.heading : letter(field.column.position), field.action]] : [])) });
     setPhone("heading" in state.config.phone ? state.config.phone.heading : "");
-  }, [state.config,connectionId]);
-  const draft = { spreadsheet: spreadsheetId(url) || url.trim(), tab, headerRow: row, phone: { heading: phone }, fields, actions };
+  }, [state.config,connectionId,batchAdd]);
+  const currentTabDraft: TabDraft = { name, row, phone, fields, primaryTagFieldId, actions, headers };
+  const draft = { spreadsheet: spreadsheetId(url) || url.trim(), tab, headerRow: row, phone: { heading: phone }, fields, primaryTagFieldId: primaryTagFieldId || undefined, actions };
   const baseline = state.config ? { ...state.config, actions: state.config.actions || {} } : { spreadsheet: "", tab: "", headerRow: 1, phone: { heading: "" }, fields: [], actions: {} };
-  const dirty = connectionId!==null&&draftReady && (JSON.stringify(draft) !== JSON.stringify(baseline)||name.trim()!==(connection?.name||""));
-  const canSave = draftReady&&!!name.trim()&&!!spreadsheetId(url) && !!tab && Number.isInteger(row) && row >= 1 && row <= 1000 && !!phone && fields.length > 0 && fields.length <= MAX_SHEET_DISPLAY_COLUMNS && fields.every(field => !!field.label.trim() && (field.schedule.kind !== "interval" || (Number.isInteger(field.schedule.minutes) && field.schedule.minutes >= 1 && field.schedule.minutes <= 525600)) && (field.schedule.kind !== "daily" || /^([01]\d|2[0-3]):[0-5]\d$/.test(field.schedule.time)));
+  const draftForTab = (tabName: string) => tabName === tab ? currentTabDraft : tabDrafts[tabName] || emptyTabDraft(tabName);
+  const dirty = connectionId!==null&&draftReady && (JSON.stringify(draft) !== JSON.stringify(baseline)||name.trim()!==(connection?.name||"")||(batchAdd&&selectedTabs.length>0&&!connection)||(batchAdd&&!!connection&&selectedTabs.length>1));
+  const canSave = draftReady && (batchAdd
+    ? selectedTabs.length > 0 && selectedTabs.every(tabName => validTabDraft(draftForTab(tabName), tabName, url))
+    : validTabDraft(currentTabDraft, tab, url));
   async function saveDraft() {
-    if (!canSave || !connectionId||!name.trim()||busy || state.busy) return false;
+    if (!canSave || !connectionId||busy || state.busy) return false;
     setBusy(true); setError("");
-    try { await saveSheetConfig(draft,connectionId,name);setConnectionId(null);return true; }
+    try {
+      if (batchAdd) {
+        const drafts = { ...tabDrafts, [tab]: currentTabDraft };
+        const ids = { ...batchConnectionIds };
+        for (const tabName of selectedTabs) if (!ids[tabName]) ids[tabName] = tabName === tab ? connectionId || crypto.randomUUID() : crypto.randomUUID();
+        setBatchConnectionIds(ids);
+        for (const tabName of selectedTabs) {
+          const configDraft = drafts[tabName];
+          await saveSheetConfig({ spreadsheet: spreadsheetId(url)!, tab: tabName, headerRow: configDraft.row, phone: { heading: configDraft.phone }, fields: configDraft.fields, primaryTagFieldId: configDraft.primaryTagFieldId || undefined, actions: configDraft.actions }, ids[tabName], configDraft.name || tabName);
+        }
+      } else {
+        if (!name.trim()) return false;
+        await saveSheetConfig(draft,connectionId,name);
+      }
+      setConnectionId(null);setBatchAdd(false);return true;
+    }
     catch (error) { setError(String(error)); return false; }
     finally { setBusy(false); }
   }
@@ -60,7 +94,7 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
     if (!onCloseGuardChange) return;
     onCloseGuardChange({ dirty, busy: busy || state.busy, canSave, save: saveDraft });
     return () => { onCloseGuardChange(null); };
-  }, [onCloseGuardChange, dirty, busy, state.busy, canSave, url, tab, row, phone, fields,name,connectionId]);
+  }, [onCloseGuardChange, dirty, busy, state.busy, canSave, url, tab, row, phone, fields, primaryTagFieldId, actions, headers, name, connectionId, batchAdd, selectedTabs, tabDrafts, batchConnectionIds]);
   useEffect(() => {
     if (!dirty) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
@@ -80,15 +114,91 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
     if (confirmed) await run(disconnectSheets);
   }
   const unique = (header: string) => !!header && headers.filter(value => value === header).length === 1;
-  async function editConnection(id:string|null,label=""){
+  function tabsLoaded(names: string[]) {
+    setTabs(names);
+    if (!batchAdd) {
+      const selected = names.includes(tab) ? tab : names[0] || "";
+      setTab(selected); setHeaders([]);
+      if (selected !== tab) { setFields([]); setPrimaryTagFieldId(""); setPhone(""); setActions({}); }
+      return;
+    }
+    const retained = selectedTabs.filter(tabName => names.includes(tabName));
+    const nextSelected = retained.length || tabs.length ? retained : names.slice(0, 1);
+    const nextTab = nextSelected.includes(tab) ? tab : nextSelected[0] || "";
+    const nextDrafts = { ...tabDrafts, ...(tab ? { [tab]: snapshotTabDraft() } : {}) };
+    const nextIds = { ...batchConnectionIds };
+    for (const [index, tabName] of nextSelected.entries()) {
+      nextDrafts[tabName] ||= emptyTabDraft(tabName);
+      if (!nextIds[tabName]) nextIds[tabName] = !tab && index === 0 ? connectionId || crypto.randomUUID() : crypto.randomUUID();
+    }
+    setSelectedTabs(nextSelected); setTabDrafts(nextDrafts); setBatchConnectionIds(nextIds);
+    if (nextTab && nextTab !== tab) restoreTabDraft(nextTab, nextDrafts[nextTab]);
+    else if (!nextTab && tab) { setTab(""); setName(""); setRow(1); setPhone(""); setFields([]); setPrimaryTagFieldId(""); setActions({}); setHeaders([]); }
+  }
+  function snapshotTabDraft(): TabDraft { return { name, row, phone, fields, primaryTagFieldId, actions, headers }; }
+  function restoreTabDraft(tabName: string, value: TabDraft) {
+    setTab(tabName); setName(value.name); setRow(value.row); setPhone(value.phone); setFields(value.fields); setPrimaryTagFieldId(value.primaryTagFieldId); setActions(value.actions); setHeaders(value.headers);
+  }
+  function switchBatchTab(tabName: string) {
+    if (!selectedTabs.includes(tabName) || tabName === tab) return;
+    setTabDrafts(current => ({ ...current, [tab]: snapshotTabDraft() }));
+    restoreTabDraft(tabName, tabDrafts[tabName] || emptyTabDraft(tabName));
+  }
+  function addBatchTabs(tabNames: string[], activate = false) {
+    const added = tabNames.filter(tabName => !selectedTabs.includes(tabName));
+    if (!added.length) return;
+    const nextDrafts = { ...tabDrafts, ...(tab ? { [tab]: snapshotTabDraft() } : {}) };
+    const nextIds = { ...batchConnectionIds };
+    for (const [index, tabName] of added.entries()) {
+      nextDrafts[tabName] ||= emptyTabDraft(tabName);
+      if (!nextIds[tabName]) nextIds[tabName] = !tab && index === 0 ? connectionId || crypto.randomUUID() : crypto.randomUUID();
+    }
+    setTabDrafts(nextDrafts); setBatchConnectionIds(nextIds); setSelectedTabs(current => [...current, ...added]);
+    if ((activate || !tab) && added[0]) restoreTabDraft(added[0], nextDrafts[added[0]]);
+  }
+  function toggleBatchTab(tabName: string, checked: boolean) {
+    if (checked) { addBatchTabs([tabName], true); return; }
+    const remaining = selectedTabs.filter(value => value !== tabName);
+    setSelectedTabs(remaining);
+    setTabDrafts(current => { const next = { ...current }; delete next[tabName]; return next; });
+    setBatchConnectionIds(current => { const next = { ...current }; delete next[tabName]; return next; });
+    if (tabName === tab) {
+      if (remaining.length) restoreTabDraft(remaining[0], tabDrafts[remaining[0]] || emptyTabDraft(remaining[0]));
+      else { setTab(""); setName(""); setRow(1); setPhone(""); setFields([]); setPrimaryTagFieldId(""); setActions({}); setHeaders([]); }
+    }
+  }
+  function clearBatchTabs() {
+    setSelectedTabs([]); setTabDrafts({}); setBatchConnectionIds({}); setTab(""); setName(""); setRow(1); setPhone(""); setFields([]); setPrimaryTagFieldId(""); setActions({}); setHeaders([]);
+  }
+  async function reuseCurrentConfig() {
+    if (!spreadsheetId(url) || !tab || !headers.length) return;
+    const copies: Record<string, TabDraft> = {};
+    for (const tabName of selectedTabs.filter(value => value !== tab)) {
+      const targetHeaders = await sheetHeaders(spreadsheetId(url)!, tabName, row);
+      if (JSON.stringify(headers) !== JSON.stringify(targetHeaders)) throw new Error("Column headings changed. Please configure the mapping again.");
+      const ids = new Map(fields.map(field => [field.id, crypto.randomUUID()]));
+      copies[tabName] = {
+        ...(tabDrafts[tabName] || emptyTabDraft(tabName)), row, phone, headers: targetHeaders,
+        fields: fields.map(field => ({ ...field, id: ids.get(field.id)!, column: { ...field.column }, schedule: { ...field.schedule } })),
+        primaryTagFieldId: ids.get(primaryTagFieldId) || "", actions: { ...actions },
+      };
+    }
+    setTabDrafts(current => ({ ...current, [tab]: snapshotTabDraft(), ...copies }));
+  }
+  async function editConnection(id:string|null,label="",multiple=false){
     if(id===connectionId)return;
     if(dirty&&!await requestConfirm({title:t("sheets.discardTitle"),description:t("sheets.discardHint"),confirmLabel:t("sheets.discard"),tone:"danger"}))return;
-    setDraftReady(false);setConnectionId(id);setName(label);setError("");
+    setDraftReady(false);setConnectionId(id);setBatchAdd(multiple);setSelectedTabs([]);setTabDrafts({});setBatchConnectionIds({});setTabSearch("");setName(label);setError("");
+    const existing = multiple ? connections.find(item => item.id === id) : undefined;
+    if(existing){
+      const config=existing.config,selected=config.tab;
+      setUrl(`https://docs.google.com/spreadsheets/d/${config.spreadsheet}/edit`);setTabs([selected]);setSelectedTabs([selected]);setTab(selected);setHeaders([]);setRow(config.headerRow);setPhone("heading" in config.phone?config.phone.heading:"");setFields(config.fields);setPrimaryTagFieldId(config.primaryTagFieldId||"");setActions({...(config.actions||{}),...Object.fromEntries(config.fields.flatMap(field=>field.action?[["heading"in field.column?field.column.heading:letter(field.column.position),field.action]]:[]))});setBatchConnectionIds({[selected]:id||DEFAULT_SHEET_ID});
+    }else if(multiple){setUrl("");setTabs([]);setTab("");setHeaders([]);setRow(1);setPhone("");setFields([]);setPrimaryTagFieldId("");setActions({});}
   }
   return <div className="mx-auto max-w-3xl space-y-5">
     <header className="flex items-center justify-between gap-2">
       <h3 className="flex items-center gap-2 text-lg font-semibold text-zinc-100"><TableProperties className="h-5 w-5 text-brand" />Google Sheets</h3>
-      {state.email&&<Button size="sm" disabled={busy||state.busy} onClick={()=>void editConnection(connections.length?crypto.randomUUID():DEFAULT_SHEET_ID,t("sheets.newName",{count:connections.length+1}))}>{t("sheets.add")}</Button>}
+      {state.email&&<Button size="sm" disabled={busy||state.busy} onClick={()=>void editConnection(connections.length?crypto.randomUUID():DEFAULT_SHEET_ID,t("sheets.newName",{count:connections.length+1}),true)}>{t("sheets.add")}</Button>}
     </header>
     <section className="space-y-2 border-b border-zinc-800 pb-3">
       <div className="flex items-center justify-between gap-3"><SectionLabel className="!mb-0">{t("sheets.accountStep")}</SectionLabel><span role="status" className={`rounded-full px-2 py-1 text-[10px] ${state.email ? "bg-brand/10 text-brand" : "bg-zinc-800 text-zinc-500"}`}>{state.email ? t("sheets.connected") : t("sheets.disconnected")}</span></div>
@@ -105,22 +215,51 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
     {state.retryAt && <p role="status" className="text-xs text-zinc-500">{t("sheets.retry.waiting", { time: new Date(state.retryAt).toLocaleTimeString() })}</p>}
     {state.email&&<div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead className="text-zinc-500"><tr>{(["name","tab","fields","status","operations"] as const).map(key=><th key={key} className="px-2 py-2 font-medium">{t(`sheets.table.${key}`)}</th>)}</tr></thead><tbody className="divide-y divide-zinc-800">{connections.map(item=><tr key={item.id} className={connectionId===item.id?"bg-brand/5":""}>
       <td className="max-w-40 truncate px-2 py-3 font-medium" title={item.name}>{item.name}</td><td className="max-w-40 truncate px-2 py-3" title={item.config.tab}>{item.config.tab}</td><td className="px-2 py-3">{item.config.fields.length}</td><td className="px-2 py-3" title={item.error}>{t(item.error?"sheets.table.error":"sheets.table.ready")}</td>
-      <td className="px-2 py-2"><div className="flex gap-2"><Button size="xs" disabled={busy||state.busy} onClick={()=>void editConnection(item.id,item.name)}>{t("sheets.edit")}</Button><Button size="xs" disabled={busy||state.busy} onClick={()=>void refreshSheets(true,item.id)}>{t("sheets.refresh")}</Button><Button size="xs" disabled={busy||state.busy} onClick={()=>void run(async()=>{if(await requestConfirm({title:t("sheets.removeTitle",{name:item.name}),description:t("sheets.removeHint"),confirmLabel:t("common.delete"),tone:"danger"})){await removeSheetConnection(item.id);if(connectionId===item.id)setConnectionId(null);}})}>{t("common.delete")}</Button></div></td>
+      <td className="px-2 py-2"><div className="flex gap-1"><Button size="xs" aria-label={t("sheets.edit")} title={t("sheets.edit")} disabled={busy||state.busy} onClick={()=>void editConnection(item.id,item.name,true)}><Pencil className="h-3.5 w-3.5" /></Button><Button size="xs" aria-label={t("sheets.refresh")} title={t("sheets.refresh")} disabled={busy||state.busy} onClick={()=>void refreshSheets(true,item.id)}><RefreshCw className="h-3.5 w-3.5" /></Button><Button size="xs" variant="ghost" className="text-rose-400 hover:text-rose-300" aria-label={t("common.delete")} title={t("common.delete")} disabled={busy||state.busy} onClick={()=>void run(async()=>{if(await requestConfirm({title:t("sheets.removeTitle",{name:item.name}),description:t("sheets.removeHint"),confirmLabel:t("common.delete"),tone:"danger"})){await removeSheetConnection(item.id);if(connectionId===item.id)setConnectionId(null);}})}><Trash2 className="h-3.5 w-3.5" /></Button></div></td>
     </tr>)}</tbody></table>{!connections.length&&<p className="py-4 text-xs text-zinc-500">{t("sheets.empty")}</p>}</div>}
     {state.email && connectionId && <>
       <div className="flex flex-wrap items-center gap-2"><input aria-label={t("sheets.table.name")} className="ui-control min-w-40 flex-1 px-3 py-2 text-sm" maxLength={120} value={name} onChange={event=>setName(event.target.value)} placeholder={t("sheets.table.name")}/><Button size="sm" variant="primary" disabled={busy||state.busy||!canSave||!name.trim()} onClick={()=>void saveDraft()}>{t("sheets.save")}</Button><Button size="sm" disabled={busy||state.busy} onClick={()=>void editConnection(null)}>{t("common.close")}</Button><span role="status" className="text-xs text-zinc-500">{t(busy?"sheets.saving":dirty?"sheets.unsaved":"sheets.explicitSave")}</span></div>
-      <fieldset disabled={busy || state.busy} className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/35 p-4 disabled:opacity-60">
-      <SectionLabel className="flex items-center gap-2"><Link2 className="h-3.5 w-3.5" />{t("sheets.sourceStep")}</SectionLabel>
-      <label className="block text-xs">{t("sheets.url")}<input className="ui-control px-3 py-2 text-sm leading-5 font-normal mt-1 w-full" value={url} onChange={e => { setUrl(e.target.value); setHeaders([]); setTabs([]); setFields([]); setActions({}); }} placeholder="https://docs.google.com/spreadsheets/d/…" /></label>
-      <Button variant="secondary" disabled={busy || state.busy || !spreadsheetId(url)} onClick={() => void run(async () => { const result = await readSheet(spreadsheetId(url)!); const names = result.sheets?.map(sheet => sheet.properties.title) || []; const selected = names.includes(tab) ? tab : names[0] || ""; setTabs(names); setTab(selected); setHeaders([]); if (selected !== tab) { setFields([]); setPhone(""); setActions({}); } })}>{t("sheets.load")}</Button>
-      {tabs.length > 0 && <div className="flex flex-wrap items-end gap-3">
-        <label className="text-xs">{t("sheets.tab")}<select className="ui-control px-3 py-2 text-sm leading-5 font-normal mt-1 block" value={tab} onChange={e => { setTab(e.target.value); setHeaders([]); setFields([]); setActions({}); }}>{tabs.map(name => <option key={name}>{name}</option>)}</select></label>
-        <label className="text-xs">{t("sheets.header")}<input type="number" min={1} max={1000} className="ui-control px-3 py-2 text-sm leading-5 font-normal mt-1 block w-24" value={row} onChange={e => { setRow(Number(e.target.value)); setHeaders([]); setFields([]); setActions({}); }} /></label>
-        <Button variant="secondary" disabled={busy || !tab || !Number.isInteger(row) || row < 1 || row > 1000} onClick={() => void run(async () => { const values = await sheetHeaders(spreadsheetId(url)!, tab, row); setHeaders(values); setPhone(current => values.includes(current) ? current : ""); setFields(current => current.filter(field => "heading" in field.column && values.filter(value => value === (field.column as { heading: string }).heading).length === 1)); })}>{t("sheets.columns")}</Button>
-      </div>}
+      <fieldset disabled={busy || state.busy} className="space-y-4 border-t border-zinc-800 pt-4 disabled:opacity-60">
+        <SectionLabel className="flex items-center gap-2"><Link2 className="h-3.5 w-3.5" />{t("sheets.sourceStep")}</SectionLabel>
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+          <label className="block min-w-0 text-xs">{t("sheets.url")}<input className="ui-control mt-1 w-full min-w-0 px-3 py-2 text-sm leading-5 font-normal" value={url} onChange={e => { setUrl(e.target.value); setHeaders([]); setTabs([]); setFields([]); setPrimaryTagFieldId(""); setActions({}); if (batchAdd) { setSelectedTabs([]); setTabDrafts({}); setBatchConnectionIds({}); setTab(""); setName(""); setRow(1); setPhone(""); } }} placeholder="https://docs.google.com/spreadsheets/d/…" /></label>
+          <Button variant="secondary" className="sm:min-w-40" disabled={busy || state.busy || !spreadsheetId(url)} onClick={() => void run(async () => { const result = await readSheet(spreadsheetId(url)!); tabsLoaded(result.sheets?.map(sheet => sheet.properties.title) || []); })}>{t("sheets.load")}</Button>
+        </div>
+        {tabs.length > 0 && (batchAdd ? <div className="space-y-3 border-t border-zinc-800/70 pt-3">
+          <details className="border-b border-zinc-800/70 pb-3">
+            <summary className="cursor-pointer py-2 text-xs font-medium">{t("sheets.selectedTabs", { count: selectedTabs.length })}</summary>
+            <div className="space-y-2 pt-2">
+              <div className="flex flex-wrap gap-2">
+                <input className="ui-control min-w-40 flex-1 px-3 py-2 text-xs" value={tabSearch} onChange={event => setTabSearch(event.target.value)} placeholder={t("sheets.searchTabs")} />
+                <Button size="xs" variant="secondary" onClick={() => addBatchTabs(tabs.filter(tabName => tabName.toLocaleLowerCase().includes(tabSearch.trim().toLocaleLowerCase())))}>{t("sheets.selectFiltered")}</Button>
+                <Button size="xs" variant="secondary" onClick={clearBatchTabs}>{t("sheets.clearSelection")}</Button>
+              </div>
+              <div className="max-h-48 space-y-1 overflow-y-auto">
+                {tabs.filter(tabName => tabName.toLocaleLowerCase().includes(tabSearch.trim().toLocaleLowerCase())).map(tabName => <label key={tabName} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-zinc-800/70">
+                  <input type="checkbox" checked={selectedTabs.includes(tabName)} onChange={event => toggleBatchTab(tabName, event.target.checked)} />
+                  <span className="min-w-0 truncate">{tabName}</span>
+                </label>)}
+                {!tabs.some(tabName => tabName.toLocaleLowerCase().includes(tabSearch.trim().toLocaleLowerCase())) && <p className="px-2 py-2 text-xs text-zinc-500">{t("sheets.noTabsFound")}</p>}
+              </div>
+            </div>
+          </details>
+          {selectedTabs.length > 0 && <div className="flex flex-wrap gap-1.5">
+            {selectedTabs.map(tabName => <button key={tabName} type="button" aria-pressed={tab === tabName} className={`inline-flex max-w-48 items-center gap-1 rounded-full border px-2.5 py-1 text-xs ${tab === tabName ? "border-brand/40 bg-brand/10 text-brand" : "border-zinc-800 text-zinc-400 hover:bg-zinc-800"}`} onClick={() => switchBatchTab(tabName)}>{validTabDraft(draftForTab(tabName), tabName, url) && <Check className="h-3 w-3 shrink-0 text-emerald-500" />}<span className="min-w-0 truncate">{tabName}</span></button>)}
+          </div>}
+          {selectedTabs.length > 1 && headers.length > 0 && fields.length > 0 && phone && <Button size="xs" variant="secondary" onClick={() => void run(reuseCurrentConfig)}>{t("sheets.reuseConfig")}</Button>}
+          {selectedTabs.includes(tab) && <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem_auto] sm:items-end">
+            <label className="block min-w-0 text-xs">{t("sheets.tab")}<input className="ui-control mt-1 block w-full px-3 py-2 text-sm leading-5 font-normal" value={tab} readOnly /></label>
+            <label className="block text-xs">{t("sheets.header")}<input type="number" min={1} max={1000} className="ui-control mt-1 block w-full px-3 py-2 text-sm leading-5 font-normal" value={row} onChange={e => { setRow(Number(e.target.value)); setHeaders([]); setFields([]); setPrimaryTagFieldId(""); setActions({}); }} /></label>
+            <Button variant="secondary" className="sm:min-w-28" disabled={busy || !tab || !Number.isInteger(row) || row < 1 || row > 1000} onClick={() => void run(async () => { const values = await sheetHeaders(spreadsheetId(url)!, tab, row); setHeaders(values); setPhone(current => values.includes(current) ? current : ""); setFields(current => current.filter(field => "heading" in field.column && values.filter(value => value === (field.column as { heading: string }).heading).length === 1)); })}>{t("sheets.columns")}</Button>
+          </div>}
+        </div> : <div className="grid gap-3 border-t border-zinc-800/70 pt-3 sm:grid-cols-[minmax(0,1fr)_8rem_auto] sm:items-end">
+          <label className="block min-w-0 text-xs">{t("sheets.tab")}<select className="ui-control mt-1 block w-full px-3 py-2 text-sm leading-5 font-normal" value={tab} onChange={e => { setTab(e.target.value); setHeaders([]); setFields([]); setPrimaryTagFieldId(""); setActions({}); }}>{tabs.map(name => <option key={name}>{name}</option>)}</select></label>
+          <label className="block text-xs">{t("sheets.header")}<input type="number" min={1} max={1000} className="ui-control mt-1 block w-full px-3 py-2 text-sm leading-5 font-normal" value={row} onChange={e => { setRow(Number(e.target.value)); setHeaders([]); setFields([]); setPrimaryTagFieldId(""); setActions({}); }} /></label>
+          <Button variant="secondary" className="sm:min-w-28" disabled={busy || !tab || !Number.isInteger(row) || row < 1 || row > 1000} onClick={() => void run(async () => { const values = await sheetHeaders(spreadsheetId(url)!, tab, row); setHeaders(values); setPhone(current => values.includes(current) ? current : ""); setFields(current => current.filter(field => "heading" in field.column && values.filter(value => value === (field.column as { heading: string }).heading).length === 1)); })}>{t("sheets.columns")}</Button>
+        </div>)}
       </fieldset>
       {headers.length > 0 && <>
-        <fieldset disabled={busy || state.busy} className="space-y-3 rounded-xl border border-zinc-800 bg-zinc-950/35 p-4 disabled:opacity-60">
+        <fieldset disabled={busy || state.busy} className="space-y-3 border-t border-zinc-800 pt-4 disabled:opacity-60">
         <div className="flex items-center justify-between gap-2"><SectionLabel className="!mb-0">{t("sheets.fieldsStep")}</SectionLabel><span className="text-xs text-zinc-500">{t("sheets.selectedCount", { count: fields.length })}</span></div>
         <label className="block text-xs">{t("sheets.phone")}<select className="ui-control px-3 py-2 text-sm leading-5 font-normal mt-1 block w-full" value={phone} onChange={e => setPhone(e.target.value)}><option value="">—</option>{headers.map((header, index) => <option key={index} value={header} disabled={!unique(header)}>{letter(index)} · {header || "—"}</option>)}</select></label>
         <p className="text-xs text-zinc-500">{t("sheets.phoneHint")}</p>
@@ -135,8 +274,12 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
             if (field) update({ action });
           };
           return <div key={index} className="flex flex-wrap items-center gap-2 border-b border-zinc-800/70 py-2">
-            <label className="flex min-w-32 items-center gap-2 text-sm leading-5"><input type="checkbox" checked={!!field} disabled={!field && fields.length >= MAX_SHEET_DISPLAY_COLUMNS} onChange={e => setFields(values => e.target.checked ? values.length >= MAX_SHEET_DISPLAY_COLUMNS ? values : [...values, { id: crypto.randomUUID(), label: header, column: { heading: header }, schedule: { kind: "interval", minutes: 15 }, action: actions[header] }] : values.filter(value => value.id !== field?.id))} />{letter(index)} · {header}</label>
+            <label className="flex min-w-32 items-center gap-2 text-sm leading-5"><input type="checkbox" checked={!!field} disabled={!field && fields.length >= MAX_SHEET_DISPLAY_COLUMNS} onChange={e => {
+              if (e.target.checked) setFields(values => values.length >= MAX_SHEET_DISPLAY_COLUMNS ? values : [...values, { id: crypto.randomUUID(), label: header, column: { heading: header }, schedule: { kind: "interval", minutes: 15 }, action: actions[header] }]);
+              else { setFields(values => values.filter(value => value.id !== field?.id)); if (field && primaryTagFieldId === field.id) setPrimaryTagFieldId(""); }
+            }} />{letter(index)} · {header}</label>
             {field && <>
+              <button type="button" aria-label={t(primaryTagFieldId === field.id ? "sheets.primaryTagUnset" : "sheets.primaryTagSet")} title={t(primaryTagFieldId === field.id ? "sheets.primaryTagUnset" : "sheets.primaryTagSet")} className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-amber-500/10 ${primaryTagFieldId === field.id ? "text-amber-600 dark:text-amber-400" : "text-zinc-500 hover:text-amber-600 dark:hover:text-amber-400"}`} onClick={() => setPrimaryTagFieldId(current => current === field.id ? "" : field.id)}><Star className="h-3.5 w-3.5" fill={primaryTagFieldId === field.id ? "currentColor" : "none"} /></button>
               <input aria-label={t("sheets.label")} className="ui-control px-3 py-2 text-sm leading-5 font-normal w-36" value={field.label} onChange={e => update({ label: e.target.value })} />
               <select aria-label={t("sheets.schedule")} className="ui-control px-3 py-2 text-sm leading-5 font-normal" value={field.schedule.kind} onChange={e => update({ schedule: e.target.value === "daily" ? { kind: "daily", time: "09:00" } : e.target.value === "manual" ? { kind: "manual" } : { kind: "interval", minutes: 15 } })}><option value="interval">{t("sheets.interval")}</option><option value="daily">{t("sheets.daily")}</option><option value="manual">{t("sheets.manual")}</option></select>
               {field.schedule.kind === "interval" && <input aria-label={t("sheets.minutes")} type="number" min={1} max={525600} className="ui-control px-3 py-2 text-sm leading-5 font-normal w-24" value={field.schedule.minutes} onChange={e => update({ schedule: { kind: "interval", minutes: Number(e.target.value) } })} />}
@@ -145,12 +288,18 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
             <label className="ml-auto flex shrink-0 items-center gap-2 text-xs"><span>{t("sheets.action")}</span><select aria-label={`${t("sheets.action")} ${header}`} className="ui-control px-2 py-2 text-sm leading-5" value={actions[header] || ""} onChange={e => setAction((e.target.value || undefined) as SheetAction | undefined)}><option value="">—</option><option value="edit">{t("sheets.action.edit")}</option><option value="link">{t("sheets.action.link")}</option><option value="content">{t("sheets.action.content")}</option></select></label>
           </div>;
         })}
-        <p className="text-xs text-zinc-500">{t("sheets.timing")}</p>
-        <p className="text-xs text-zinc-500">{t("sheets.actionHint")}</p>
-        <div className="flex items-center justify-between gap-3 border-t border-zinc-800 pt-3"><p className="text-xs leading-5 text-zinc-500">{t("sheets.displayHint")}</p><Button variant="primary" className="shrink-0" disabled={busy || state.busy || !canSave} onClick={() => void saveDraft()}>{t(busy ? "sheets.saving" : "sheets.save")}</Button></div>
+        <details className="text-xs text-zinc-500">
+          <summary className="cursor-pointer">{t("sheets.configurationNotes")}</summary>
+          <div className="mt-2 space-y-1.5 leading-5">
+            <p>{t("sheets.timing")}</p>
+            <p>{t("sheets.actionHint")}</p>
+            <p>{t("sheets.displayHint")}</p>
+          </div>
+        </details>
+        <div className="flex justify-end border-t border-zinc-800 pt-3"><Button variant="primary" className="shrink-0" disabled={busy || state.busy || !canSave} onClick={() => void saveDraft()}>{t(busy ? "sheets.saving" : "sheets.save")}</Button></div>
         </fieldset>
       </>}
     </>}
-    {!state.email && <div className="rounded-xl border border-dashed border-zinc-800 p-5 text-xs leading-6 text-zinc-500"><p className="font-medium text-zinc-400">{t("sheets.nextTitle")}</p><p>{t("sheets.nextDescription")}</p></div>}
+    {!state.email && <div className="rounded-lg border border-dashed border-zinc-800 p-5 text-xs leading-6 text-zinc-500"><p className="font-medium text-zinc-400">{t("sheets.nextTitle")}</p><p>{t("sheets.nextDescription")}</p></div>}
   </div>;
 }

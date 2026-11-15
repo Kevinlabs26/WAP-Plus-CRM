@@ -95,7 +95,7 @@ export function AccountSlotCard({
       onDrop={onDrop}
       onDragEnd={onDragEnd}
       className={cn(
-        "group relative flex flex-col rounded-2xl border p-3.5 transition-all",
+        "group relative flex flex-col rounded-lg border p-3.5 transition-all",
         dragActive && "opacity-70 ring-1 ring-brand/40",
         online
           ? "border-brand/35 bg-gradient-to-b from-brand/10 to-zinc-900/80"

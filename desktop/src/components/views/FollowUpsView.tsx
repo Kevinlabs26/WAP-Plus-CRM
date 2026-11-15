@@ -132,7 +132,7 @@ export function FollowUpsView({ viewMode = "list", scopedFollowUps }: Props) {
       <div>
         <div className="mx-auto w-full max-w-5xl space-y-4">
         {pending.length === 0 && (
-          <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900/30 px-6 py-12 text-center">
+          <div className="rounded-lg border border-dashed border-zinc-800 bg-zinc-900/30 px-6 py-12 text-center">
             <div className="text-[15px] font-semibold text-zinc-200">
               {history.length > 0 ? t("followUps.noPending") : t("followUps.empty")}
             </div>

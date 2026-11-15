@@ -237,7 +237,7 @@ export function BatchSaveContactsModal({
       className="fixed inset-0 z-[210] flex items-center justify-center bg-black/70 p-4 backdrop-blur-[2px]"
       onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}
     >
-      <div className="flex h-[min(82vh,760px)] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900 shadow-2xl shadow-black/60">
+      <div className="flex h-[min(82vh,760px)] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl shadow-black/60">
         <header className="flex items-center gap-3 border-b border-zinc-800 px-5 py-4">
           <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand/15 text-brand">
             <UsersRound className="h-5 w-5" />
@@ -355,7 +355,7 @@ export function BatchSaveContactsModal({
           </aside>
 
           <section className="min-h-0 overflow-auto bg-zinc-950/25 p-4">
-            <div className="mb-3 rounded-xl border border-dashed border-zinc-700 bg-zinc-900/60 p-3">
+            <div className="mb-3 rounded-lg border border-dashed border-zinc-700 bg-zinc-900/60 p-3">
               <div className="mb-1 flex items-center justify-between gap-2">
                 <span className="text-[11px] font-medium text-zinc-300">
                   {t("batchContacts.pasteTitle")}

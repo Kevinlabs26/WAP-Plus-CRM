@@ -320,6 +320,11 @@ export function createBootSlice({
       );
       settingsNorm.chatFolders = cleanedFolderRefs.folders;
       settingsNorm.chatFolderClones = cleanedFolderRefs.clones;
+      const validLeadChatIds = new Set(chats.map((chat) => chat.id));
+      settingsNorm.leadInbox = {
+        ...settingsNorm.leadInbox,
+        collectedChatIds: [...new Set(settingsNorm.leadInbox.collectedChatIds.map(id => mergedLocalChats.replacements.get(id) || id).filter(id => validLeadChatIds.has(id)))].slice(-20_000),
+      };
       markHydrate("chats");
       // 消息补 accountId，便于会话气泡按号过滤
       const chatOwner = new Map(
@@ -462,6 +467,7 @@ export function createBootSlice({
           ...currentSettings,
           chatFolders: folderRefs.folders,
           chatFolderClones: folderRefs.clones,
+          leadInbox: { ...currentSettings.leadInbox, collectedChatIds: [] },
           scheduledMessages: [],
           internalNotesByKey: {},
           personPrimaryAccountByKey: {},
@@ -513,6 +519,8 @@ export function createBootSlice({
           translationApiKey: currentSettings.translationApiKey,
           bridgeToken: currentSettings.bridgeToken,
           aiReplyMode: "semi",
+          aiAutoFollowUpEnabled: false,
+          aiAutoFollowUpEnabledAt: 0,
         }) as AppSettings;
         settings.waAccounts = settings.waAccounts.map((account) => {
           const local = currentSettings.waAccounts.find((item) => item.id === account.id);

@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { useAppStore } from "@/store/appStore";
 import { useShallow } from "zustand/react/shallow";
 import type { ChatPreview, Contact } from "@/types/crm";
@@ -17,6 +17,7 @@ import {
   type SidebarVirtItem,
 } from "./buildSidebarItems";
 import type { ChatFolder, ChatFolderClone } from "@/store/appStore";
+import { LEAD_INBOX_FOLDER_ID } from "@/store/settingsDefaults";
 import { chatInView } from "@/store/accountScope";
 import {
   leadCandidatesForChats,
@@ -24,7 +25,7 @@ import {
   leadDateLabel,
   type LeadCandidate,
 } from "@/lib/leadInbox";
-import { normalizeLocale } from "@/i18n";
+import { normalizeLocale, translate } from "@/i18n";
 import { hideEmptySiblingChats } from "@/lib/chatActivity";
 
 const EMPTY_WA: WaAccount[] = [];
@@ -64,6 +65,7 @@ export function useSidebarData({
   const uiLanguage = useAppStore((s) => s.settings.uiLanguage);
   const leadInbox = useAppStore((s) => s.settings.leadInbox);
   const messagesByChatId = useAppStore((s) => s.messagesByChatId);
+  const updateSettings = useAppStore((s) => s.updateSettings);
 
   const { accountViewMode, activeAccountId, liveBaileysAccountId, waAccounts, chatFoldersAll, chatFolderClones } =
     useAppStore(
@@ -100,17 +102,22 @@ export function useSidebarData({
 
   const leadCandidates = useMemo(() => {
     const candidates = new Map<string, LeadCandidate>();
-    if (!leadInbox.enabled) return candidates;
     const dismissed = new Set(leadInbox.dismissedChatIds || []);
+    const collected = new Set(leadInbox.collectedChatIds || []);
     const rangeStart =
       leadInbox.dateRangeDays > 0
         ? Date.now() - leadInbox.dateRangeDays * 24 * 60 * 60 * 1000
         : 0;
     const currentAccountId =
       viewMode.type === "account" ? viewMode.accountId : filterFallback;
-    const eligible = leadCandidatesForChats(chats, contactById, messagesByChatId, leadInbox, filterFallback);
+    const eligible = leadCandidatesForChats(chats, contactById, messagesByChatId, {
+      ...leadInbox,
+      enabled: true,
+      removeAfterReply: leadInbox.enabled ? leadInbox.removeAfterReply : false,
+    }, filterFallback);
     for (const chat of chats) {
       if (dismissed.has(chat.id)) continue;
+      if (!leadInbox.enabled && !collected.has(chat.id)) continue;
       const contact = contactById.get(chat.contactId);
       const accountId =
         chat.accountId || contact?.accountId || chat.phoneId || filterFallback;
@@ -148,10 +155,21 @@ export function useSidebarData({
     viewMode,
   ]);
 
+  useEffect(() => {
+    if (!leadInbox.enabled || !leadCandidates.size) return;
+    const current = useAppStore.getState().settings.leadInbox;
+    const collected = new Set(current.collectedChatIds || []);
+    for (const chatId of leadCandidates.keys()) collected.add(chatId);
+    if (collected.size === (current.collectedChatIds || []).length) return;
+    updateSettings({ leadInbox: { ...current, collectedChatIds: [...collected].slice(-20_000) } });
+  }, [leadCandidates, leadInbox.enabled, updateSettings]);
+
   const leadDateGroupByChatId = useMemo(() => {
     const locale = normalizeLocale(uiLanguage);
     const out = new Map<string, { id: string; label: string }>();
+    const alreadyFiled = new Set(chatFoldersAll.filter((folder) => folder.id !== LEAD_INBOX_FOLDER_ID).flatMap((folder) => folder.chatIds));
     for (const candidate of leadCandidates.values()) {
+      if (alreadyFiled.has(candidate.chatId)) continue;
       const bucket = leadDateBucket(candidate.firstInboundAt, leadInbox.dateGrouping);
       if (bucket) {
         out.set(
@@ -164,7 +182,7 @@ export function useSidebarData({
       }
     }
     return out;
-  }, [leadCandidates, leadInbox.dateGrouping, uiLanguage]);
+  }, [chatFoldersAll, leadCandidates, leadInbox.dateGrouping, uiLanguage]);
 
   const filteredContacts = useMemo(
     () =>
@@ -256,8 +274,9 @@ export function useSidebarData({
     () => new Set([
       ...chatFoldersAll.flatMap((folder) => folder.chatIds),
       ...chatFolderClones.map((clone) => clone.sourceChatId),
+      ...leadCandidates.keys(),
     ]),
-    [chatFoldersAll, chatFolderClones]
+    [chatFoldersAll, chatFolderClones, leadCandidates]
   );
   const filteredChats = useMemo(
     () => hideEmptySiblingChats(groupFilteredChats, chats, contactById, folderChatIds),
@@ -281,10 +300,34 @@ export function useSidebarData({
     return m;
   }, [chats, listTab]);
 
-  const chatFolders = useMemo(
-    () =>
-      chatFoldersAll
+  const chatFolders = useMemo(() => {
+    const root = chatFoldersAll.find((folder) => folder.id === LEAD_INBOX_FOLDER_ID);
+    const allById = new Map(chatFoldersAll.map((folder) => [folder.id, folder]));
+    const isInLeadTree = (folder: ChatFolder) => {
+      let current: ChatFolder | undefined = folder;
+      const seen = new Set<string>();
+      while (current && !seen.has(current.id)) {
+        if (current.id === LEAD_INBOX_FOLDER_ID) return true;
+        seen.add(current.id);
+        current = current.parentId ? allById.get(current.parentId) : undefined;
+      }
+      return false;
+    };
+    const rootChildren = root ? chatFoldersAll.filter((folder) => folder.id !== root.id && isInLeadTree(folder)) : [];
+    const nestedIds = new Set(rootChildren.flatMap((folder) => folder.chatIds));
+    const outsideIds = new Set(chatFoldersAll.filter((folder) => !isInLeadTree(folder)).flatMap((folder) => folder.chatIds));
+    const candidates = [...leadCandidates.keys()].filter((chatId) => !nestedIds.has(chatId) && !outsideIds.has(chatId));
+    const collected = new Set(leadInbox.collectedChatIds || []);
+    const foldersWithLeadRoot = chatFoldersAll.map((folder) => {
+      if (folder.id !== LEAD_INBOX_FOLDER_ID) return folder;
+      const chatIds = leadInbox.dateGrouping === "none"
+        ? [...new Set([...folder.chatIds, ...candidates])]
+        : folder.chatIds.filter((chatId) => !collected.has(chatId));
+      return { ...folder, chatIds };
+    });
+    return foldersWithLeadRoot
         .filter((f) => {
+          if (f.id === LEAD_INBOX_FOLDER_ID || isInLeadTree(f)) return true;
           const scope = f.scope;
           if (viewMode.type === "all") {
             // 全部：号内夹子 + 跨号夹子都显示
@@ -310,6 +353,8 @@ export function useSidebarData({
         })
         .slice()
         .sort((a, b) => {
+          if (a.id === LEAD_INBOX_FOLDER_ID) return -1;
+          if (b.id === LEAD_INBOX_FOLDER_ID) return 1;
           // 全部视图：先按账号、再按 sort/名称，便于「夹子都合过来」扫一眼
           if (viewMode.type === "all") {
             const scopeKey = (f: (typeof chatFoldersAll)[number]) => {
@@ -324,9 +369,8 @@ export function useSidebarData({
             (a.sort || 0) - (b.sort || 0) ||
             a.name.localeCompare(b.name, "zh")
           );
-        }),
-    [chatFoldersAll, viewMode, dataAccountId]
-  );
+        });
+  }, [chatFoldersAll, viewMode, dataAccountId, leadCandidates, leadInbox.dateGrouping, leadInbox.collectedChatIds]);
 
   const isAllAccountsView =
     viewMode.type === "all" ||
@@ -345,11 +389,13 @@ export function useSidebarData({
     return full.slice(0, 1).toUpperCase();
   };
   const folderDisplayName = (folder: (typeof chatFolders)[number]) => {
-    return folder.name;
+    return folder.systemType === "leadInbox" && folder.name === "主动联系"
+      ? translate(normalizeLocale(uiLanguage), "leadInbox.title")
+      : folder.name;
   };
   const primaryFolderIdOf = (chatId: string) => {
     const f = chatFolders.find((x) => x.chatIds.includes(chatId));
-    return f?.id ?? null;
+    return f?.id ?? (leadCandidates.has(chatId) ? LEAD_INBOX_FOLDER_ID : null);
   };
 
   const sidebarItems: SidebarVirtItem[] = useMemo(
@@ -362,7 +408,7 @@ export function useSidebarData({
         filteredChats,
         chatFolders,
         chatFolderClones,
-        leadView: chatListFilter === "leads",
+        leadView: false,
         leadMergeAccounts: leadInbox.mergeAccounts,
         leadDateGroupByChatId,
         collapsedLeadDateIds,

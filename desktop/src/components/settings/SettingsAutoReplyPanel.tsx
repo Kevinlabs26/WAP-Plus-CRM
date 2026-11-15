@@ -6,9 +6,11 @@ import {
 } from "@/lib/aiSafety";
 import { formatAccountDisplay } from "@/lib/accountLabels";
 import { Button, Input, SectionLabel, Switch, Textarea } from "@/components/ui/primitives";
+import { ArrowRight, ClipboardList } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 import { AiPromptLibrary } from "./AiPromptLibrary";
+import { SettingsNumberInput } from "./SettingsNumberInput";
 import { MAX_EFFECTIVE_PROMPT_CHARS } from "@/lib/aiPromptScope";
 
 /**
@@ -21,6 +23,8 @@ export function SettingsAutoReplyPanel() {
   const settings = useAppStore((state) => state.settings);
   const updateSettings = useAppStore((state) => state.updateSettings);
   const [profileAccountId, setProfileAccountId] = useState("");
+  const followUpDelays = settings.aiAutoFollowUpDelaysMinutes || [];
+  const followUpConfigured = followUpDelays.length > 0 && followUpDelays.every(value => Number.isFinite(value) && value > 0);
 
   const accountPrompt = profileAccountId
     ? settings.aiSystemPromptByAccountId[profileAccountId] || ""
@@ -57,6 +61,13 @@ export function SettingsAutoReplyPanel() {
     updateSettings({ aiSystemPromptByAccountId: next });
   };
 
+  const updateFollowUpDelays = (delays: number[]) => updateSettings({
+    aiAutoFollowUpDelaysMinutes: delays,
+    ...(settings.aiAutoFollowUpEnabled && (!delays.length || delays.some(value => value <= 0))
+      ? { aiAutoFollowUpEnabled: false }
+      : {}),
+  });
+
   const updateAccountPolicy = (patch: Partial<AiAutoReplyPolicy>) => {
     const nextPolicy = { ...effectivePolicy, ...patch };
     if (!profileAccountId) {
@@ -87,20 +98,28 @@ export function SettingsAutoReplyPanel() {
         </p>
       </header>
 
-      <label className="flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950/35 p-4 text-sm">
-        {t("autoReplyScope.pauseAll")}
-        <Switch checked={settings.aiAutoReplyPaused} onChange={event => updateSettings({ aiAutoReplyPaused: event.target.checked })} />
-      </label>
-      <p className="text-xs text-zinc-500">{t("autoReplyScope.defaultHint")}</p>
-
-      <AiPromptLibrary />
-      <Button onClick={() => { useAppStore.getState().setActiveNav("ai-outreach"); useAppStore.getState().setSettingsOpen(false); }}>{t("aiOutreach.tasks")}</Button>
-      <label className="block rounded-xl border border-zinc-800 p-3 text-xs">{t("aiLibrary.context")}
+      <div className="space-y-3">
+        <AiPromptLibrary />
+        <Button
+          className="flex w-full items-center justify-between gap-3 p-3 text-left"
+          onClick={() => { useAppStore.getState().setActiveNav("ai-outreach"); useAppStore.getState().setSettingsOpen(false); }}
+        >
+          <span className="flex min-w-0 items-center gap-3">
+            <ClipboardList className="h-5 w-5 shrink-0 text-brand" aria-hidden="true" />
+            <span className="min-w-0">
+              <span className="block text-sm font-medium">{t("aiOutreach.tasks")}</span>
+              <span className="mt-0.5 block text-xs text-zinc-500">{t("settingsAutoReply.taskEntryHint")}</span>
+            </span>
+          </span>
+          <ArrowRight className="h-4 w-4 shrink-0 text-zinc-500" aria-hidden="true" />
+        </Button>
+      </div>
+      <label className="block border-t border-zinc-800 pt-4 text-xs">{t("aiLibrary.context")}
         <select value={settings.aiContextMode||"full"} onChange={event=>updateSettings({aiContextMode:event.target.value as "compact"|"full"})} className="ui-control mt-2 w-full px-2 py-2">
           <option value="full">{t("aiLibrary.full")}</option><option value="compact">{t("aiLibrary.compact")}</option>
         </select>
       </label>
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <SectionLabel>{t("autoReplyScope.defaultMode")}</SectionLabel>
         <div className="mt-3 grid grid-cols-2 gap-3">
           <button
@@ -134,38 +153,98 @@ export function SettingsAutoReplyPanel() {
             </span>
           </button>
         </div>
+        <p className="mt-3 text-xs text-zinc-500">{t("autoReplyScope.defaultHint")}</p>
       </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
           <SectionLabel>{t("settingsAutoReply.behavior")}</SectionLabel>
           <label className="mt-3 block text-2xs text-zinc-500">
             {t("settingsAutoReply.minInterval")}
-            <Input
-              type="number"
+            <SettingsNumberInput
               min={5}
+              integer
               value={Math.round((settings.aiAutoReplyIntervalMs || 30000) / 1000)}
-              onChange={(event) => {
-                const v = Math.max(5, Number(event.target.value) || 30);
-                updateSettings({ aiAutoReplyIntervalMs: v * 1000 });
-              }}
+              onCommit={value => updateSettings({ aiAutoReplyIntervalMs: value * 1000 })}
               className="mt-1"
             />
           </label>
           <p className="mt-3 text-xs">{t("settingsAutoReply.delayRange")}</p>
           <div className="mt-2 grid grid-cols-2 gap-3">
-            <label className="text-2xs">{t("settingsAutoReply.delayMin")}<Input type="number" min={0} max={300} value={settings.aiAutoReplyDelayMinMs/1000} onChange={event=>{
-              const min=Math.min(300,Math.max(0,Number(event.target.value)||0))*1000;
-              updateSettings({aiAutoReplyDelayMinMs:min,aiAutoReplyDelayMaxMs:Math.max(min,settings.aiAutoReplyDelayMaxMs)});
-            }}/></label>
-            <label className="text-2xs">{t("settingsAutoReply.delayMax")}<Input type="number" min={settings.aiAutoReplyDelayMinMs/1000} max={300} value={settings.aiAutoReplyDelayMaxMs/1000} onChange={event=>updateSettings({aiAutoReplyDelayMaxMs:Math.max(settings.aiAutoReplyDelayMinMs,Math.min(300,Math.max(0,Number(event.target.value)||0))*1000)})}/></label>
+            <label className="text-2xs">{t("settingsAutoReply.delayMin")}<SettingsNumberInput min={0} max={300} integer value={settings.aiAutoReplyDelayMinMs / 1000} onCommit={value => {
+              const min = value * 1000;
+              updateSettings({ aiAutoReplyDelayMinMs: min, aiAutoReplyDelayMaxMs: Math.max(min, settings.aiAutoReplyDelayMaxMs) });
+            }} /></label>
+            <label className="text-2xs">{t("settingsAutoReply.delayMax")}<SettingsNumberInput min={settings.aiAutoReplyDelayMinMs / 1000} max={300} integer value={settings.aiAutoReplyDelayMaxMs / 1000} onCommit={value => updateSettings({ aiAutoReplyDelayMaxMs: value * 1000 })} /></label>
           </div>
           <p className="mt-2 text-2xs text-zinc-500">{t("settingsAutoReply.delayHint")}</p>
-          <p className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-2xs leading-4 text-amber-100">
-            {t("settingsAutoReply.warning")}
-          </p>
+          <details className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-2xs leading-4 text-amber-100">
+            <summary className="cursor-pointer font-medium">{t("settingsAutoReply.warningTitle")}</summary>
+            <p className="mt-2">{t("settingsAutoReply.warning")}</p>
+          </details>
       </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <SectionLabel>{t("settingsAutoReply.followUpTitle")}</SectionLabel>
+            <p className="mt-1 text-2xs text-zinc-500">{t("settingsAutoReply.followUpHint")}</p>
+          </div>
+          <Switch
+            checked={settings.aiAutoFollowUpEnabled}
+            aria-label={t("settingsAutoReply.followUpTitle")}
+            disabled={!settings.aiAutoFollowUpEnabled && !followUpConfigured}
+            onChange={event => updateSettings(event.target.checked
+              ? { aiAutoFollowUpEnabled: true, aiAutoFollowUpEnabledAt: Date.now() }
+              : { aiAutoFollowUpEnabled: false })}
+          />
+        </div>
+        <div className="mt-3 divide-y divide-zinc-800/70">
+          {followUpDelays.map((minutes, index) => (
+            <div key={index} className="flex flex-wrap items-center gap-2 py-2 text-xs">
+              <span className="mr-auto text-zinc-300">{t("settingsAutoReply.followUpStep", { step: index + 1 })}</span>
+              <span className="text-zinc-500">{t("settingsAutoReply.followUpWait")}</span>
+              <Input
+                type="number"
+                min={1}
+                max={43_200}
+                value={minutes || ""}
+                aria-label={t("settingsAutoReply.followUpMinutes", { step: index + 1 })}
+                onChange={event => {
+                  const value = event.target.value === "" ? 0 : Math.max(0, Math.min(43_200, Math.round(Number(event.target.value) || 0)));
+                  const next = [...followUpDelays];
+                  next[index] = value;
+                  updateFollowUpDelays(next);
+                }}
+                className="w-28"
+              />
+              <span className="text-zinc-500">{t("settingsAutoReply.minutes")}</span>
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                aria-label={t("settingsAutoReply.removeFollowUpStep", { step: index + 1 })}
+                onClick={() => updateFollowUpDelays(followUpDelays.filter((_, itemIndex) => itemIndex !== index))}
+              >
+                {t("common.delete")}
+              </Button>
+            </div>
+          ))}
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              type="button"
+              size="xs"
+              variant="secondary"
+              disabled={followUpDelays.length >= 10}
+              onClick={() => updateFollowUpDelays([...followUpDelays, 0])}
+            >
+              {t("settingsAutoReply.addFollowUpStep")}
+            </Button>
+            {!followUpConfigured && <span className="text-2xs text-amber-500">{t("settingsAutoReply.followUpNeedsInterval")}</span>}
+          </div>
+        </div>
+      </section>
+
+      <section className="border-t border-zinc-800 pt-4">
         <SectionLabel
           action={
             <select
@@ -213,7 +292,7 @@ export function SettingsAutoReplyPanel() {
         </p>
       </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <SectionLabel
           action={
             hasPolicyOverride ? (
@@ -271,28 +350,12 @@ export function SettingsAutoReplyPanel() {
               updateAccountPolicy({
                 takeoverMinutes: Math.min(
                   1440,
-                  Math.max(1, Number(event.target.value) || 30)
+                  Math.max(1, Number(event.target.value) || 1)
                 ),
               })
             }
             className="mt-1"
           />
-        </label>
-        <label className="mt-3 flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2">
-          <input
-            type="checkbox"
-            checked={effectivePolicy.allowPricing}
-            onChange={(event) =>
-              updateAccountPolicy({ allowPricing: event.target.checked })
-            }
-            className="mt-0.5 accent-emerald-500"
-          />
-          <span className="text-2xs leading-4 text-zinc-400">
-            {t("settingsAutoReply.allowPricing")}
-            <span className="block text-zinc-600">
-              {t("settingsAutoReply.allowPricingHint")}
-            </span>
-          </span>
         </label>
       </section>
 

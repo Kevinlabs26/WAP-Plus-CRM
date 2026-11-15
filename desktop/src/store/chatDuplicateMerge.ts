@@ -9,6 +9,7 @@ export function protectedGroupChatIds(settings: SettingsShape, drafts?: Record<s
     ...Object.keys(settings.aiAutoReplyModeByChatId || {}),
     ...(settings.aiAutoReplyManualChatIds || []),
     ...(settings.leadInbox?.dismissedChatIds || []),
+    ...(settings.leadInbox?.collectedChatIds || []),
     ...(settings.scheduledMessages || []).map(task => task.chatId),
     ...(settings.scheduledPlans || []).flatMap(plan => plan.items.map(item => item.chatId)),
   ]);

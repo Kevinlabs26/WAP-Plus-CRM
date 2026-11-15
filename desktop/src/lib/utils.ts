@@ -5,6 +5,21 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const CONTACT_TAG_COLORS = [
+  "border-emerald-500/50 bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
+  "border-blue-500/50 bg-blue-500/20 text-blue-700 dark:text-blue-300",
+  "border-violet-500/50 bg-violet-500/20 text-violet-700 dark:text-violet-300",
+  "border-amber-500/50 bg-amber-500/20 text-amber-700 dark:text-amber-300",
+  "border-red-500/50 bg-red-500/20 text-red-700 dark:text-red-300",
+  "border-pink-500/50 bg-pink-500/20 text-pink-700 dark:text-pink-300",
+];
+
+export function contactTagColorClass(tag: string, colorIndex?: number) {
+  const hash = [...tag].reduce((value, char) => (value * 31 + char.charCodeAt(0)) >>> 0, 0);
+  const index = colorIndex === undefined ? hash : colorIndex;
+  return CONTACT_TAG_COLORS[((index % CONTACT_TAG_COLORS.length) + CONTACT_TAG_COLORS.length) % CONTACT_TAG_COLORS.length];
+}
+
 export function formatPhone(e164: string): string {
   return e164.startsWith("+") ? e164 : `+${e164}`;
 }

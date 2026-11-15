@@ -8,7 +8,6 @@ export type LayoutMode = "auto" | "one" | "two" | "three";
 export type FolderWindow = {
   chat: ChatPreview;
   memberChatIds: string[];
-  accountCount: number;
   unreadCount: number;
 };
 

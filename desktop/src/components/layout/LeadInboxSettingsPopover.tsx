@@ -39,7 +39,7 @@ export function LeadInboxSettingsPopover({ onClose }: Props) {
       className="fixed inset-0 z-[220] flex items-center justify-center bg-black/65 p-4 backdrop-blur-[2px]"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
-      <div className="max-h-[min(86vh,42rem)] w-full max-w-2xl overflow-y-auto rounded-2xl border border-zinc-700/90 bg-zinc-900 p-5 shadow-2xl shadow-black/50">
+      <div className="max-h-[min(86vh,42rem)] w-full max-w-2xl overflow-y-auto rounded-xl border border-zinc-700/90 bg-zinc-900 p-5 shadow-2xl shadow-black/50">
       <div className="mb-4 flex items-start justify-between gap-3 border-b border-zinc-800 pb-3">
         <div>
           <h3 id="lead-inbox-settings-title" className="text-sm font-semibold text-zinc-100">{t("leadInbox.settingsTitle")}</h3>
@@ -66,7 +66,7 @@ export function LeadInboxSettingsPopover({ onClose }: Props) {
         {t("leadInbox.enabled")}
       </label>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/25 p-3">
+      <section className="rounded-lg border border-zinc-800 bg-zinc-950/25 p-3">
         <h4 className="mb-2 text-[11px] font-medium text-zinc-300">{t("leadInbox.displayRules")}</h4>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <label className="text-[10px] text-zinc-500">
@@ -109,7 +109,7 @@ export function LeadInboxSettingsPopover({ onClose }: Props) {
       </div>
       </section>
 
-      <section className="mt-3 rounded-xl border border-zinc-800 bg-zinc-950/25 p-3">
+      <section className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950/25 p-3">
         <h4 className="mb-2 text-[11px] font-medium text-zinc-300">{t("leadInbox.accountRules")}</h4>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
         <label className="text-[10px] text-zinc-500">

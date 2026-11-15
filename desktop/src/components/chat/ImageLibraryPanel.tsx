@@ -7,7 +7,7 @@ import { useI18n } from "@/i18n";
 import { useAppStore } from "@/store/appStore";
 import { isTauri } from "@/lib/bridge";
 import { addLibraryImage, createLibraryCategory, deleteLibraryCategory, deleteLibraryImages, editLibraryImage, exportImageLibrary, filterLibraryImages, listLibraryCategories, listLibraryImages, readLibraryImage, restoreImageLibrary, renameLibraryCategory, orderLibraryCategories, moveLibraryImages, replaceLibraryImage, scanLibraryImport, libraryFolderCategory, moveLibraryCategory, type LibraryImage } from "@/lib/imageLibrary";
-import { emitQuickReplyMedia, quickReplyMediaToFile } from "@/lib/quickReplyMedia";
+import { emitQuickReplyMedia } from "@/lib/quickReplyMedia";
 import { geminiGenerateImage, GEMINI_IMAGE_MODEL } from "@/lib/gemini";
 import { openAiGenerateImage } from "@/lib/openAiImage";
 import { applyExactImageText } from "@/lib/imageTextOverlay";
@@ -16,6 +16,7 @@ import { trackAiRequest } from "@/lib/aiUsage";
 import { useImageLibraryDrag, type LibraryDrag, type LibraryDrop } from "./useImageLibraryDrag";
 import { takeImageGenerationRequest } from "@/lib/imageGenerationRequest";
 import { imageGenerationReferences, type ImageReference } from "@/lib/imageGenerationReferences";
+import { enqueueImageGenerationTask, type ImageGenerationResult } from "@/lib/imageGenerationTasks";
 type GalleryRow = {
     key: string;
     category: string;
@@ -82,7 +83,7 @@ export function ImageLibraryPanel({ chatId, contextKey }: {
     const [selected, setSelected] = useState<string[]>([]), [collapsed, setCollapsed] = useState<Set<string>>(initialCollapsed);
     const [busy, setBusy] = useState(false), [loading, setLoading] = useState(true), [importing, setImporting] = useState(false), [error, setError] = useState(""), [progress, setProgress] = useState("");
     const [preview, setPreview] = useState<LibraryImage | null>(null), [menu, setMenu] = useState<Menu | null>(null), [rename, setRename] = useState<Rename | null>(null);
-    const [generateOpen, setGenerateOpen] = useState(false), [generated, setGenerated] = useState<{ mimeType: string; data: string } | null>(null), [generationReference, setGenerationReference] = useState<ImageReference | null>(null), [imageProvider, setImageProvider] = useState<ImageProvider>("follow");
+    const [generateOpen, setGenerateOpen] = useState(false), [generationReference, setGenerationReference] = useState<ImageReference | null>(null), [imageProvider, setImageProvider] = useState<ImageProvider>("follow");
     const [referenceMode, setReferenceMode] = useState<"style" | "portrait">("style");
     const [generationTarget, setGenerationTarget] = useState<string | null>(chatId || null);
     const upload = useRef<HTMLInputElement>(null), folderUpload = useRef<HTMLInputElement>(null), restore = useRef<HTMLInputElement>(null), replacement = useRef<HTMLInputElement>(null), replaceId = useRef("");
@@ -90,6 +91,7 @@ export function ImageLibraryPanel({ chatId, contextKey }: {
     context.current = contextKey;
     renameRef.current = rename;
     const pushToast = useAppStore(state => state.pushToast), requestConfirm = useAppStore(state => state.requestConfirm);
+    const generationChat = useAppStore(state => chatId ? state.chats.find(chat => chat.id === chatId) : undefined);
     const vertex = settings.vertexCredentialId && settings.vertexProjectId ? { vertexCredentialId: settings.vertexCredentialId, vertexProjectId: settings.vertexProjectId, vertexLocation: settings.vertexLocation || "global" } : undefined;
     const activeImageProvider = imageProvider === "follow" ? settings.aiProvider : imageProvider;
     const imageAuth = activeImageProvider === "muse" ? { provider: "muse" as const } : activeImageProvider === "openai" && settings.openaiKey.trim() ? { provider: "openai" as const, apiKey: settings.openaiKey } : activeImageProvider === "gemini" && settings.geminiKey.trim() ? { provider: "gemini" as const, apiKey: settings.geminiKey } : activeImageProvider === "vertex" && vertex ? { provider: "vertex" as const, apiKey: "", vertex } : null;
@@ -178,7 +180,6 @@ export function ImageLibraryPanel({ chatId, contextKey }: {
                 setGenerationReference({ title: request.title, ...reference });
                 setReferenceMode(request.mode);
                 setGenerationTarget(request.chatId);
-                setGenerated(null);
                 setGenerateOpen(true);
             });
         };
@@ -369,73 +370,84 @@ export function ImageLibraryPanel({ chatId, contextKey }: {
             setGenerationReference({ title: image.title, ...reference });
             setReferenceMode("style");
             setGenerationTarget(chatId || null);
-            setGenerated(null);
             setGenerateOpen(true);
         } catch (error) { setError(`${t("gallery.referenceReadFailed")}: ${String(error)}`); }
     };
-    const generateImage = (options: { prompt: string; aspectRatio: ImageAspectRatio; exactText: string; stylePrompt?: string; subjectImage?: ImageReference | null; styleImage?: ImageReference | null }) => run(async () => {
-        if (!imageAuth)
-            throw Error(t("gallery.aiSetup"));
-        setGenerated(null);
-        setError("");
+    const generateImage = (options: { prompt: string; aspectRatio: ImageAspectRatio; exactText: string; stylePrompt?: string; subjectImage?: ImageReference | null; styleImage?: ImageReference | null }) => {
+      if (!imageAuth) { setError(t("gallery.aiSetup")); return false; }
+      try {
+        const auth = imageAuth;
         const ratioPrompt = options.aspectRatio === "2:3" ? "Use a vertical portrait composition with a 2:3 aspect ratio." : options.aspectRatio === "3:2" ? "Use a horizontal landscape composition with a 3:2 aspect ratio." : "Use a square composition with a 1:1 aspect ratio.";
         const exactTextPrompt = options.exactText.trim() ? "Create the background only: do not render any words, letters, numbers, logos, or watermarks. Keep the lower area simple and readable; the exact text will be added by the app." : "";
         const references = imageGenerationReferences(options.subjectImage, options.styleImage);
         const prompt = [options.prompt.trim(), references.instructions, options.stylePrompt ? `Visual style: ${options.stylePrompt}. Apply this style only; preserve the requested subject and facts.` : "", ratioPrompt, exactTextPrompt].filter(Boolean).join("\n\n");
         const referenceDataUrls = references.images.map(image => `data:${image.mimeType};base64,${image.data}`);
-        let result = imageAuth.provider === "muse"
-            ? await trackAiRequest({ provider: "muse", model: "muse-web", feature: "image" }, async () => {
-                const output = await generateMuseWebOutput(`Generate and attach the image or video requested below. Do not only describe it. Use Muse's media generation feature.\n\n${prompt}`, undefined, undefined, undefined, references.images.map((image, index) => ({ mimeType: image.mimeType, dataUrl: referenceDataUrls[index]! })), true);
-                if (!output.media) throw Error(t("gallery.museNoMedia"));
-                return output.media;
-            })
-            : imageAuth.provider === "openai" ? await openAiGenerateImage(imageAuth.apiKey, prompt, options.aspectRatio, referenceDataUrls) : await geminiGenerateImage({ ...imageAuth, prompt, model: GEMINI_IMAGE_MODEL, aspectRatio: options.aspectRatio, referenceImages: references.images.map(image => ({ mimeType: image.mimeType, data: image.data })) });
-        if (options.exactText.trim() && result.mimeType.startsWith("image/")) {
-            let composed;
-            try { composed = await applyExactImageText(result, options.exactText); }
-            catch { throw Error(t("gallery.exactTextFailed")); }
-            if (!composed) throw Error(t("gallery.exactTextTooLong"));
-            result = composed;
-        }
-        setGenerated(result);
-    });
-    const generatedDataUrl = generated ? `data:${generated.mimeType};base64,${generated.data}` : "";
-    const collectGenerated = (exactText: string) => run(async () => {
-        let result: { mimeType: string; data: string } = await collectMuseWebMedia();
-        if (exactText.trim() && result.mimeType.startsWith("image/")) {
-            const composed = await applyExactImageText(result, exactText);
-            if (!composed) throw Error(t("gallery.exactTextTooLong"));
-            result = composed;
-        }
-        setGenerated(result);
-    });
-    const generatedTitle = (prompt: string) => `AI · ${prompt.trim().slice(0, 54)}`;
-    const saveGenerated = (prompt: string) => run(async () => {
-        if (!generated)
-            return;
-        if (generated.mimeType.startsWith("video/")) throw Error(t("gallery.videoNotSaved"));
-        const title = generatedTitle(prompt), fileName = `${title}.${generated.mimeType.split("/")[1] === "jpeg" ? "jpg" : generated.mimeType.split("/")[1]}`;
-        const file = quickReplyMediaToFile({ dataUrl: generatedDataUrl, fileName, mimeType: generated.mimeType, kind: "image", token: "ai-image" });
-        if (!file)
-            throw Error(t("gallery.invalidGenerated"));
-        await addLibraryImage(file, category === "*" ? "" : category, title);
+        enqueueImageGenerationTask({
+          prompt: options.prompt,
+          category: category === "*" ? "" : category,
+          targetChatId: generationTarget,
+          targetChatName: generationChat?.contactName || "",
+          targetAccountId: generationChat?.accountId || generationChat?.phoneId || null,
+          run: async onStart => {
+            let result = auth.provider === "muse"
+              ? await trackAiRequest({ provider: "muse", model: "muse-web", feature: "image" }, async () => {
+                  const output = await generateMuseWebOutput(
+                    `Generate and attach the image or video requested below. Do not only describe it. Use Muse's media generation feature.\n\n${prompt}`,
+                    undefined, undefined, undefined,
+                    references.images.map((image, index) => ({ mimeType: image.mimeType, dataUrl: referenceDataUrls[index]! })),
+                    true, 0, onStart,
+                  );
+                  if (!output.media) throw Error(t("gallery.museNoMedia"));
+                  return output.media;
+                })
+              : (onStart(), auth.provider === "openai"
+                  ? await openAiGenerateImage(auth.apiKey, prompt, options.aspectRatio, referenceDataUrls)
+                  : await geminiGenerateImage({ ...auth, prompt, model: GEMINI_IMAGE_MODEL, aspectRatio: options.aspectRatio, referenceImages: references.images.map(image => ({ mimeType: image.mimeType, data: image.data })) }));
+            if (options.exactText.trim() && result.mimeType.startsWith("image/")) {
+              let overlaid: Awaited<ReturnType<typeof applyExactImageText>>;
+              try { overlaid = await applyExactImageText(result, options.exactText); }
+              catch { throw Error(t("gallery.exactTextFailed")); }
+              if (!overlaid) throw Error(t("gallery.exactTextTooLong"));
+              result = overlaid;
+            }
+            return result;
+          },
+        });
+        setError("");
         setGenerateOpen(false);
-        setGenerated(null);
-        setProgress(t("gallery.saved"));
-    });
-    const insertGenerated = (prompt: string) => run(async () => {
-        if (!generated || !generationTarget)
-            return;
-        if (useAppStore.getState().selectedChatId !== generationTarget || context.current !== contextKey)
-            throw Error(t("gallery.chatChanged"));
-        const title = generatedTitle(prompt), extension = generated.mimeType.split("/")[1] === "jpeg" ? "jpg" : generated.mimeType.split("/")[1];
-        const kind = generated.mimeType.startsWith("video/") ? "video" : "image";
-        if (!emitQuickReplyMedia({ dataUrl: generatedDataUrl, fileName: `${title}.${extension}`, mimeType: generated.mimeType, kind, token: crypto.randomUUID(), target: "main", chatId: generationTarget }))
-            throw Error(t("quickShelf.insertUnavailable"));
+        return true;
+      } catch (error) {
+        setError(error instanceof Error && error.message === "IMAGE_GENERATION_QUEUE_FULL" ? t("gallery.taskQueueFull") : String(error));
+        return false;
+      }
+    };
+    const collectGenerated = (exactText: string) => {
+      try {
+        enqueueImageGenerationTask({
+          prompt: t("gallery.collectMuse"),
+          category: category === "*" ? "" : category,
+          targetChatId: generationTarget,
+          targetChatName: generationChat?.contactName || "",
+          targetAccountId: generationChat?.accountId || generationChat?.phoneId || null,
+          run: async onStart => {
+            onStart();
+            let result: ImageGenerationResult = await collectMuseWebMedia();
+            if (exactText.trim() && result.mimeType.startsWith("image/")) {
+              const overlaid = await applyExactImageText(result, exactText);
+              if (!overlaid) throw Error(t("gallery.exactTextTooLong"));
+              result = overlaid;
+            }
+            return result;
+          },
+        });
+        setError("");
         setGenerateOpen(false);
-        setGenerated(null);
-        pushToast(t("quickShelf.mediaInserted"), "success");
-    });
+        return true;
+      } catch (error) {
+        setError(error instanceof Error && error.message === "IMAGE_GENERATION_QUEUE_FULL" ? t("gallery.taskQueueFull") : String(error));
+        return false;
+      }
+    };
     const menuImage = menu?.kind === "image" ? byId.get(menu.id) : undefined, menuIds = menuImage ? (selected.includes(menuImage.id) ? selected : [menuImage.id]) : [];
     const menuAction = (work: () => void) => () => { setMenu(null); work(); };
     const card = (image: LibraryImage) => <article key={image.id} data-library-image={image.id} onContextMenu={event => showMenu(event, "image", image.id)} className={"group relative min-w-0 rounded-lg p-1 " + (selected.includes(image.id) ? "ring-1 ring-brand bg-brand/10 " : "") + (drag.target?.imageId === image.id ? "ring-2 ring-brand " : "")}>
@@ -456,7 +468,7 @@ export function ImageLibraryPanel({ chatId, contextKey }: {
         return <p className="p-4 text-xs text-zinc-500">{t("gallery.desktopOnly")}</p>;
     return <section ref={drag.root} {...drag.events} data-image-library-drop onContextMenu={event => showMenu(event, "root")} className={"flex min-h-0 flex-1 flex-col " + (drag.active ? "select-none" : "")} aria-label={t("gallery.title")} onDragOver={event => { event.preventDefault(); event.stopPropagation(); }} onDrop={event => { event.preventDefault(); event.stopPropagation(); if (!lock.current)
         void importFiles(Array.from(event.dataTransfer.files)); }}>
-    <header className="shrink-0 space-y-2 border-b border-zinc-800 p-2"><h3 className="truncate text-xs font-semibold">{t("gallery.title")} <span className="font-normal text-zinc-500">{images.length}</span></h3><div className="flex flex-wrap gap-1"><Button size="xs" disabled={busy} onClick={() => { setError(""); setGenerated(null); setGenerationReference(null); setGenerationTarget(chatId || null); setGenerateOpen(true); }}><Sparkles className="mr-1 h-3.5 w-3.5"/>{t("gallery.generate")}</Button><Button size="xs" disabled={busy || loading} onClick={() => upload.current?.click()}><ImagePlus className="mr-1 h-3.5 w-3.5"/>{t("gallery.importImages")}</Button><Button size="xs" disabled={busy || loading} onClick={() => folderUpload.current?.click()}>{t("gallery.importFolder")}</Button><Button size="xs" disabled={busy} onClick={() => { setSelecting(value => !value); setSelected([]); }}>{t(selecting ? "common.close" : "gallery.multiSelect")}</Button></div>
+    <header className="shrink-0 space-y-2 border-b border-zinc-800 p-2"><h3 className="truncate text-xs font-semibold">{t("gallery.title")} <span className="font-normal text-zinc-500">{images.length}</span></h3><div className="flex flex-wrap gap-1"><Button size="xs" disabled={busy} onClick={() => { setError(""); setGenerationReference(null); setGenerationTarget(chatId || null); setGenerateOpen(true); }}><Sparkles className="mr-1 h-3.5 w-3.5"/>{t("gallery.generate")}</Button><Button size="xs" disabled={busy || loading} onClick={() => upload.current?.click()}><ImagePlus className="mr-1 h-3.5 w-3.5"/>{t("gallery.importImages")}</Button><Button size="xs" disabled={busy || loading} onClick={() => folderUpload.current?.click()}>{t("gallery.importFolder")}</Button><Button size="xs" disabled={busy} onClick={() => { setSelecting(value => !value); setSelected([]); }}>{t(selecting ? "common.close" : "gallery.multiSelect")}</Button></div>
       <input ref={upload} type="file" hidden multiple accept="image/png,image/jpeg,image/gif,image/webp" onChange={event => { const files = Array.from(event.currentTarget.files || []); event.currentTarget.value = ""; void importFiles(files); }}/>
       <input ref={folderUpload} type="file" hidden multiple {...{ webkitdirectory: "", directory: "" }} aria-label={t("gallery.importFolder")} onChange={event => { const files = Array.from(event.currentTarget.files || []); event.currentTarget.value = ""; void importFiles(files, true); }}/>
       <input ref={restore} type="file" hidden accept="application/json,.json" onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file)
@@ -488,11 +500,11 @@ export function ImageLibraryPanel({ chatId, contextKey }: {
       {menu.kind === "root" && <><Button size="xs" role="menuitem" onClick={menuAction(() => upload.current?.click())}>{t("gallery.importImages")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => folderUpload.current?.click())}>{t("gallery.importFolder")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => { setCreatingCategory(true); setDestination(""); })}>{t("gallery.createCategory")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => setCollapsed(new Set()))}>{t("gallery.expandAll")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => setCollapsed(new Set(["", ...categories])))}>{t("gallery.collapseAll")}</Button><Button size="xs" role="menuitem" disabled={!images.length && !categories.length} onClick={menuAction(() => void run(async () => { await exportImageLibrary(chosen.length ? chosen : images, chosen.length ? [...new Set(chosen.map(image => image.category).filter(Boolean))] : categories); setProgress(t("gallery.exported")); }))}>{t("gallery.backup")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => restore.current?.click())}>{t("gallery.restore")}</Button></>}
     </div>}
     {preview && <ImageLibraryPreview key={contextKey + ":" + preview.id} image={preview} busy={busy} saveError={error} canInsert={!!chatId} categories={categories} onClose={() => setPreview(null)} onInsert={image => void insert([image], image.caption, true)} onSave={image => void run(async () => { await editLibraryImage(image); setPreview(null); })}/>}
-    {generateOpen && <ImageGenerationDialog busy={busy} error={error} canGenerate={!!imageAuth} generated={generated} referenceImage={generationReference} referenceMode={referenceMode} libraryImages={images} onClearReference={() => setGenerationReference(null)} provider={imageProvider} onProviderChange={setImageProvider} providerOptions={[{ value: "follow", label: t("gallery.followAI"), disabled: false }, { value: "muse", label: t("gallery.muse"), disabled: false }, { value: "gemini", label: t("gallery.gemini"), disabled: !settings.geminiKey.trim() }, { value: "vertex", label: t("gallery.vertex"), disabled: !vertex }, { value: "openai", label: t("gallery.openai"), disabled: !settings.openaiKey.trim() }]} costHint={imageAuth?.provider === "muse" ? t("gallery.museMediaCost") : imageAuth?.provider === "openai" ? t("gallery.openAiCost") : imageAuth ? t("gallery.geminiCost") : t("gallery.aiSetup")} onClose={() => { setGenerateOpen(false); setGenerated(null); setGenerationReference(null); setError(""); }} onGenerate={generateImage} canCollect={imageAuth?.provider === "muse"} onCollect={collectGenerated} onSave={saveGenerated} onInsert={insertGenerated} canInsert={!!generationTarget}/>}
+    {generateOpen && <ImageGenerationDialog busy={busy} error={error} canGenerate={!!imageAuth} referenceImage={generationReference} referenceMode={referenceMode} libraryImages={images} onClearReference={() => setGenerationReference(null)} provider={imageProvider} onProviderChange={setImageProvider} providerOptions={[{ value: "follow", label: t("gallery.followAI"), disabled: false }, { value: "muse", label: t("gallery.muse"), disabled: false }, { value: "gemini", label: t("gallery.gemini"), disabled: !settings.geminiKey.trim() }, { value: "vertex", label: t("gallery.vertex"), disabled: !vertex }, { value: "openai", label: t("gallery.openai"), disabled: !settings.openaiKey.trim() }]} costHint={imageAuth?.provider === "muse" ? t("gallery.museMediaCost") : imageAuth?.provider === "openai" ? t("gallery.openAiCost") : imageAuth ? t("gallery.geminiCost") : t("gallery.aiSetup")} onClose={() => { setGenerateOpen(false); setGenerationReference(null); setError(""); }} onGenerate={generateImage} canCollect={imageAuth?.provider === "muse"} onCollect={collectGenerated}/>}
   </section>;
 }
 
-function ImageGenerationDialog({ busy, error, canGenerate, generated, referenceImage, referenceMode, libraryImages, onClearReference, provider, onProviderChange, providerOptions, costHint, onClose, onGenerate, canCollect, onCollect, onSave, onInsert, canInsert }: { busy: boolean; error: string; canGenerate: boolean; generated: { mimeType: string; data: string } | null; referenceImage: ImageReference | null; referenceMode: "style" | "portrait"; libraryImages: LibraryImage[]; onClearReference: () => void; provider: ImageProvider; onProviderChange: (provider: ImageProvider) => void; providerOptions: { value: ImageProvider; label: string; disabled: boolean }[]; costHint: string; onClose: () => void; onGenerate: (options: { prompt: string; aspectRatio: ImageAspectRatio; exactText: string; stylePrompt?: string; subjectImage?: ImageReference | null; styleImage?: ImageReference | null }) => void; canCollect: boolean; onCollect: (exactText: string) => void; onSave: (prompt: string) => void; onInsert: (prompt: string) => void; canInsert: boolean }) {
+function ImageGenerationDialog({ busy, error, canGenerate, referenceImage, referenceMode, libraryImages, onClearReference, provider, onProviderChange, providerOptions, costHint, onClose, onGenerate, canCollect, onCollect }: { busy: boolean; error: string; canGenerate: boolean; referenceImage: ImageReference | null; referenceMode: "style" | "portrait"; libraryImages: LibraryImage[]; onClearReference: () => void; provider: ImageProvider; onProviderChange: (provider: ImageProvider) => void; providerOptions: { value: ImageProvider; label: string; disabled: boolean }[]; costHint: string; onClose: () => void; onGenerate: (options: { prompt: string; aspectRatio: ImageAspectRatio; exactText: string; stylePrompt?: string; subjectImage?: ImageReference | null; styleImage?: ImageReference | null }) => boolean; canCollect: boolean; onCollect: (exactText: string) => boolean }) {
   const { t } = useI18n();
   const dialog = useRef<HTMLDialogElement>(null);
   const [prompt, setPrompt] = useState("");
@@ -546,7 +558,7 @@ function ImageGenerationDialog({ busy, error, canGenerate, generated, referenceI
   };
   const selectedStyle = imageStylePresets.find(option => option.id === style);
   useEffect(() => { dialog.current?.showModal(); }, []);
-  return <dialog ref={dialog} aria-labelledby="image-generation-title" onClose={onClose} className="m-auto max-h-[92vh] w-[min(560px,94vw)] overflow-y-auto rounded-xl border border-zinc-700 bg-zinc-900 p-4 text-zinc-100 shadow-xl backdrop:bg-black/60">
+  return <dialog ref={dialog} aria-labelledby="image-generation-title" onClose={onClose} className="m-auto max-h-[92vh] w-[min(1080px,94vw)] overflow-y-auto rounded-xl border border-zinc-700 bg-zinc-900 p-4 text-zinc-100 shadow-xl backdrop:bg-black/60">
     <div className="flex items-center gap-2"><h3 id="image-generation-title" className="flex-1 text-sm font-semibold">{t(provider === "muse" ? "gallery.museMediaTitle" : "gallery.generateTitle")}</h3><button type="button" disabled={busy} aria-label={t("common.close")} className="rounded px-2 py-1 text-zinc-400 hover:bg-zinc-800" onClick={() => dialog.current?.close()}>×</button></div>
     <label className="mt-3 block text-xs">{t("gallery.imageProvider")}<select value={provider} disabled={busy} onChange={event => onProviderChange(event.target.value as ImageProvider)} className="ui-control mt-1 w-full px-2 py-2">{providerOptions.map(option => <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>)}</select></label>
     <label className="mt-3 block text-xs">{t("gallery.promptTemplates")}<select value={templateId} disabled={busy} className="ui-control mt-1 w-full px-2 py-2" onChange={event => { const item = templates.find(row => row.id === event.target.value); setTemplateId(item?.id || ""); setTemplateName(item?.name || ""); if (item) setPrompt(item.prompt); }}><option value="">{t("gallery.promptCustom")}</option>{templates.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
@@ -560,9 +572,8 @@ function ImageGenerationDialog({ busy, error, canGenerate, generated, referenceI
     <fieldset className="mt-3"><legend className="text-xs">{t("gallery.stylePreset")}</legend><div className="mt-1 flex flex-wrap gap-1.5"><button type="button" disabled={busy} aria-pressed={!style} onClick={() => setStyle("")} className={`rounded-full border px-2.5 py-1 text-2xs ${!style ? "border-brand bg-brand/10 text-brand" : "border-zinc-700 text-zinc-400 hover:bg-zinc-800"}`}>{t("gallery.styleNone")}</button>{imageStylePresets.map(option => <button key={option.id} type="button" disabled={busy} aria-pressed={style === option.id} onClick={() => setStyle(current => current === option.id ? "" : option.id)} className={`rounded-full border px-2.5 py-1 text-2xs ${style === option.id ? "border-brand bg-brand/10 text-brand" : "border-zinc-700 text-zinc-400 hover:bg-zinc-800"}`}>{t(option.label)}</button>)}</div></fieldset>
     <label className="mt-3 block text-xs">{t("gallery.exactText")}<textarea value={exactText} disabled={busy} maxLength={300} onChange={event => setExactText(event.target.value)} className="ui-control mt-1 min-h-16 w-full resize-y p-2" placeholder={t("gallery.exactTextPlaceholder")}/><span className="mt-1 block text-2xs text-zinc-500">{t("gallery.exactTextHint")}</span></label>
     <p className="mt-2 text-2xs text-zinc-500">{costHint}</p>
-    {generated && (generated.mimeType.startsWith("video/") ? <video className="mt-3 max-h-[44vh] w-full rounded-lg bg-zinc-950 object-contain" src={`data:${generated.mimeType};base64,${generated.data}`} controls playsInline/> : <img className="mt-3 max-h-[44vh] w-full rounded-lg bg-zinc-950 object-contain" src={`data:${generated.mimeType};base64,${generated.data}`} alt={t("gallery.generatedPreview")}/>)}
     {error && <p role="alert" className="mt-2 break-words text-xs text-rose-400">{error}</p>}
-    <div className="mt-3 flex flex-wrap justify-end gap-2">{canCollect && <Button size="sm" disabled={busy} onClick={() => onCollect(exactText)}>{t("gallery.collectMuse")}</Button>}<Button size="sm" disabled={busy} onClick={() => dialog.current?.close()}>{t("common.close")}</Button>{generated && <><Button size="sm" disabled={busy || generated.mimeType.startsWith("video/")} title={generated.mimeType.startsWith("video/") ? t("gallery.videoNotSaved") : undefined} onClick={() => onSave(prompt)}>{t("gallery.saveGenerated")}</Button><Button size="sm" disabled={busy || !canInsert} onClick={() => onInsert(prompt)}>{t("gallery.insertGenerated")}</Button></>}<Button size="sm" variant="primary" disabled={busy || referenceLoading || !canGenerate || !prompt.trim()} onClick={() => onGenerate({ prompt: prompt.trim(), aspectRatio, exactText, stylePrompt: selectedStyle?.prompt, subjectImage, styleImage })}>{busy ? t("gallery.generating") : generated ? t("gallery.generateAgain") : t("gallery.generateNow")}</Button></div>
+    <div className="mt-3 flex flex-wrap justify-end gap-2">{canCollect && <Button size="sm" disabled={busy || referenceLoading} onClick={() => { if (onCollect(exactText)) dialog.current?.close(); }}>{t("gallery.collectMuse")}</Button>}<Button size="sm" disabled={busy} onClick={() => dialog.current?.close()}>{t("common.close")}</Button><Button size="sm" variant="primary" disabled={busy || referenceLoading || !canGenerate || !prompt.trim()} onClick={() => { if (onGenerate({ prompt: prompt.trim(), aspectRatio, exactText, stylePrompt: selectedStyle?.prompt, subjectImage, styleImage })) dialog.current?.close(); }}>{t("gallery.generateNow")}</Button></div>
   </dialog>;
 }
 
@@ -575,7 +586,7 @@ function ImageLibraryPreview({ image, busy, saveError, canInsert, categories, on
   const [category, setCategory] = useState(image.category);
   const [caption, setCaption] = useState(image.caption || "");
   useEffect(() => { dialog.current?.showModal(); let stopped = false; readLibraryImage(image.id).then(value => { if (!stopped) setData(value); }).catch(e => { if (!stopped) setError(String(e)); }); return () => { stopped = true; }; }, [image.id]);
-  return <dialog ref={dialog} aria-labelledby="image-library-preview-title" onClose={onClose} className="m-auto max-h-[90vh] w-[min(600px,94vw)] overflow-y-auto rounded-xl border border-zinc-700 bg-zinc-900 p-4 text-zinc-100 shadow-xl backdrop:bg-black/60">
+  return <dialog ref={dialog} aria-labelledby="image-library-preview-title" onClose={onClose} className="m-auto max-h-[90vh] w-[min(900px,94vw)] overflow-y-auto rounded-xl border border-zinc-700 bg-zinc-900 p-4 text-zinc-100 shadow-xl backdrop:bg-black/60">
     <h3 id="image-library-preview-title" className="mb-3 text-sm font-semibold">{t("quickShelf.preview")}</h3>
     {error ? <p role="alert" className="text-xs text-rose-400">{error}</p> : data ? <img src={data} alt={image.title} className="max-h-[45vh] w-full object-contain" /> : <p className="text-xs">{t("gallery.loading")}</p>}
     <p className="my-2 text-2xs text-zinc-500">{image.mime} · {(image.size / 1024 / 1024).toFixed(2)} MB</p>

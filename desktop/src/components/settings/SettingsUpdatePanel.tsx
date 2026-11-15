@@ -86,7 +86,7 @@ export function SettingsUpdatePanel() {
         </p>
       </header>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <SectionLabel>{t("updates.section")}</SectionLabel>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button variant="secondary" size="sm" disabled={busy} onClick={() => void checkNow()}>
@@ -125,7 +125,7 @@ export function SettingsUpdatePanel() {
         )}
       </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <SectionLabel>{t("updates.security")}</SectionLabel>
         <div className="flex gap-3 text-[11px] leading-5 text-zinc-400">
           <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-brand" />

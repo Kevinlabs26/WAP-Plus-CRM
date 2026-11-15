@@ -101,7 +101,7 @@ export function CampaignRunPanel({
         </span>
       </div>
 
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
+      <div className="rounded-lg border border-zinc-800 bg-zinc-900/30 p-4">
         <div className="flex justify-between text-[12px] text-zinc-400">
           <span>
             {t("broadcast.run.sent", { count: p.sent })} · {t("broadcast.run.failed", { count: p.failed })} · {t("broadcast.run.skipped", { count: p.skipped })} · {t("broadcast.run.pending", { count: p.pending })}

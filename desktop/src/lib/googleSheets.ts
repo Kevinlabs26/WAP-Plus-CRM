@@ -7,7 +7,7 @@ import { sheetErrorHint } from "./googleSheetErrors";
 
 export type SheetAction = "edit" | "link" | "content";
 export interface SheetField { id: string; label: string; column: SheetColumn; schedule: SheetSchedule; action?: SheetAction }
-export interface SheetConfig { spreadsheet: string; tab: string; headerRow: number; phone: SheetColumn; fields: SheetField[]; actions?: Record<string, SheetAction> }
+export interface SheetConfig { spreadsheet: string; tab: string; headerRow: number; phone: SheetColumn; fields: SheetField[]; primaryTagFieldId?: string; actions?: Record<string, SheetAction> }
 export interface SheetCell { value: string; row: number; links: string[]; formula?: boolean }
 interface FieldData { at: number; columnIndex?: number; values: Record<string, (SheetCell | string)[]> }
 export const DEFAULT_SHEET_ID="default";
@@ -17,6 +17,15 @@ const resetRetry = { failures: 0, retryAt: null, pauseReason: null } as const;
 export const useGoogleSheets = create<SheetState>(() => ({ ready: false, configured: false, email: null, needsAccess: false, config: null, data: {}, error: "", busy: false, authorizing: false, connections:{},defaultName:"", ...resetRetry }));
 export function sheetConnections(state=useGoogleSheets.getState()):SheetConnection[]{
   return [...(state.config?[{id:DEFAULT_SHEET_ID,name:state.defaultName||state.config.tab,config:state.config,data:state.data,error:state.error,failures:state.failures,retryAt:state.retryAt,pauseReason:state.pauseReason}]:[]),...Object.values(state.connections||{})];
+}
+export function primarySheetTagForPhone(connection:SheetConnection|undefined,phone:string):string|null{
+  const config=connection?.config;
+  const primaryTagFieldId=config?.primaryTagFieldId;
+  const field=config?.fields.find(item=>item.id===primaryTagFieldId);
+  const target=sheetInternationalPhone(phone),values=field&&target?connection?.data[field.id]?.values[target]:undefined;
+  const cell=values?.find(item=>(typeof item==="string"?item:item.value).trim());
+  const value=typeof cell==="string"?cell.trim():cell?.value.trim();
+  return field&&value?`${field.label}: ${value}`:null;
 }
 function updateConnection(id:string,patch:Partial<Omit<SheetConnection,"id"|"name">>){
   if(id===DEFAULT_SHEET_ID)useGoogleSheets.setState(patch);

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Input, Textarea } from "@/components/ui/primitives";
+import { Avatar } from "@/components/ui/Avatar";
 import { useAppStore } from "@/store/appStore";
-import { useI18n } from "@/i18n";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { DuplicateScheduledPlanError, saveScheduledPlan } from "@/lib/scheduledPlanActions";
 import { PlanVoiceRecorder } from "./PlanVoiceRecorder";
 import { lastContactedAccounts, recipientKey, scheduledAudioMode, scheduledFolderChatIds, scheduledPlanTargets, MAX_SCHEDULED_PLAN_ITEMS, MIN_SCHEDULED_GAP_SEC, MAX_PLAN_STEPS, type ScheduledPlan, type ScheduledPlanStep } from "@/lib/scheduledPlans";
@@ -18,6 +19,7 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
   const settings = useAppStore(s => s.settings);
   const chats = useAppStore(s => s.chats);
   const contacts = useAppStore(s => s.contacts);
+  const contactsById = useMemo(() => new Map(contacts.map(contact => [contact.id, contact])), [contacts]);
   const messages = useAppStore(s => s.messages);
   const pushToast = useAppStore(s => s.pushToast);
   const [includeChildren, setIncludeChildren] = useState(false);
@@ -91,8 +93,7 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
     return () => { const reader = readerRef.current; readerRef.current = null; reader?.abort(); previous?.focus(); };
   }, []);
 
-  return <div role="dialog" aria-modal="true" aria-labelledby="scheduled-plan-title" className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/65 p-4"
-    onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}
+  return <div role="dialog" aria-modal="true" aria-labelledby="scheduled-plan-title" className="fixed inset-0 z-[10000] overflow-hidden bg-zinc-950"
     onKeyDown={event => {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (!busy) onClose(); }
       if (event.key === "Tab") {
@@ -102,7 +103,7 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
       }
     }}>
-    <form ref={formRef} className="flex h-[min(820px,90vh)] w-full max-w-4xl flex-col rounded-xl border border-zinc-700 bg-zinc-900 shadow-xl"
+    <form ref={formRef} className="flex h-full w-full flex-col bg-zinc-900"
       onSubmit={event => {
         event.preventDefault(); if (busy || reading || recording) return;
         if (!review) {
@@ -124,7 +125,7 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
         <div ref={contentRef} className="min-w-0 space-y-3 md:overflow-y-auto md:pr-1">
           {!review ? <fieldset disabled={recording || busy} className="space-y-3">
             <label className="block space-y-1 text-xs text-zinc-400"><span>{t("planQueue.name")}</span><Input maxLength={80} value={title} onChange={event => setTitle(event.target.value)} /></label>
-            <label className="block space-y-1 text-xs text-zinc-400"><span>{t("planQueue.template")}</span><Input placeholder={t("multi.searchQuickReplies")} value={templateQuery} onChange={event => setTemplateQuery(event.target.value)} />
+            <label className="block space-y-1 text-xs text-zinc-400"><span>{t("planQueue.template")}</span><Input placeholder={t("planQueue.searchTemplates")} value={templateQuery} onChange={event => setTemplateQuery(event.target.value)} />
               <select aria-label={t("planQueue.template")} className="ui-control w-full px-2" value="" onChange={event => {
                 if (event.target.value.startsWith("plan:")) {
                   const plan=settings.scheduledPlans.find(p=>p.id===event.target.value.slice(5));
@@ -134,9 +135,19 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
                 if (template) { cancelMediaRead(); setTitle(template.title); setText(template.body); setMedia(template.media ? { ...template.media } : undefined);setSteps([]); }
               }}>
                 <option value="">{t("planQueue.pickTemplate")}</option>
-                {settings.quickReplies.filter(item => `${item.title}\n${item.body}`.toLocaleLowerCase().includes(templateQuery.toLocaleLowerCase())).map(item => <option key={item.id} value={item.id}>{item.title}</option>)}
-                {(settings.scheduledPlans||[]).filter(p=>!p.mediaUnavailable&&p.title.toLocaleLowerCase().includes(templateQuery.toLocaleLowerCase())).map(p=><option key={p.id} value={"plan:"+p.id}>{t("planQueue.sequenceTemplate")} · {p.title}</option>)}
+                <optgroup label={t("planQueue.template")}>
+                  {settings.quickReplies.filter(item => `${item.title}\n${item.body}`.toLocaleLowerCase().includes(templateQuery.toLocaleLowerCase())).map(item => <option key={item.id} value={item.id}>{item.title}</option>)}
+                </optgroup>
+                <optgroup label={t("planQueue.sequenceTemplate")}>
+                  {(settings.scheduledPlans||[]).filter(p=>!p.mediaUnavailable&&p.title.toLocaleLowerCase().includes(templateQuery.toLocaleLowerCase())).map(plan=><option key={plan.id} value={"plan:"+plan.id}>{t("planQueue.templatePlanOption",{
+                    title:plan.title,
+                    created:new Date(plan.createdAt).toLocaleString(locale,{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}),
+                    count:plan.items.length,
+                    status:t(`planQueue.status.${plan.status}` as TranslationKey),
+                  })}</option>)}
+                </optgroup>
               </select>
+              <span className="block text-2xs text-zinc-500">{t("planQueue.templateReuseHint")}</span>
             </label>
             {hasAudio&&<label className="flex items-center justify-between gap-2 text-xs text-zinc-400">{t("planQueue.audioMode")}<select className="ui-control px-2" aria-label={t("planQueue.audioMode")} value={audioMode} onChange={event=>setAudioMode(event.target.value as NonNullable<ScheduledPlan["audioMode"]>)}>{(["voice","audio","file"] as const).map(mode=><option key={mode} value={mode}>{t(`planQueue.audioMode.${mode}`)}</option>)}</select></label>}
             <label className="block space-y-1 text-xs text-zinc-400"><span>{t("scheduled.message")} · {text.length}/4000</span><Textarea rows={4} maxLength={4000} value={text} onChange={event => setText(event.target.value)} /></label>
@@ -158,7 +169,7 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
             <Textarea disabled={recording} rows={3} maxLength={4000} aria-label={t("planQueue.stepText",{number:index+2})} value={step.text} onChange={e=>setSteps(list=>list.map((s,i)=>i===index?{...s,text:e.target.value}:s))} />
             {step.media&&<><p className="break-all text-xs text-zinc-400">{step.media.fileName}</p>{step.media.kind==="image"&&<img src={step.media.dataUrl} alt={step.media.fileName} className="max-h-24 object-contain"/>}{step.media.kind==="audio"&&<audio controls src={step.media.dataUrl} aria-label={t("voice.previewAudio")} className="w-full"/>}<Button size="sm" disabled={recording} onClick={()=>{cancelMediaRead();setSteps(list=>list.map((s,i)=>i===index?{...s,media:undefined}:s));}}>{t("settingsQuickReplies.removeMedia")}</Button></>}
             {!step.media && <PlanVoiceRecorder disabled={busy || reading || recording} onBusyChange={setRecording} onRecorded={attachment => { setSteps(list=>list.map((value,i)=>i===index?{...value,media:attachment}:value)); setAudioMode("voice"); }} />}
-            <label className="block space-y-1 text-xs text-zinc-400"><span>{t("planQueue.gap")}</span><Input type="number" min={20} max={3600} disabled={recording} aria-label={t("planQueue.stepGap",{number:index+2})} value={step.gapSec??gapSec} onInput={e=>setSteps(list=>list.map((s,i)=>i===index?{...s,gapSec:Number(e.currentTarget.value)}:s))}/></label>
+            <label className="block space-y-1 text-xs text-zinc-400"><span>{t("planQueue.gap")}</span><Input type="number" min={20} max={3600} disabled={recording} aria-label={t("planQueue.stepGap",{number:index+2})} value={step.gapSec??gapSec} onInput={e=>{const value=Number(e.currentTarget.value);setSteps(list=>list.map((s,i)=>i===index?{...s,gapSec:value}:s));}}/></label>
             <details className="text-xs text-zinc-500"><summary className="cursor-pointer py-1" aria-label={t("planQueue.stepTools", { number: index + 2 })}>•••</summary>            <div className="flex flex-wrap gap-2"><Button size="sm" disabled={reading || recording} onClick={()=>{fileStep.current=index+1;fileInput.current?.click();}}>{t("settingsQuickReplies.addMedia")}</Button><Button size="sm" disabled={recording} onClick={()=>moveStep(index+1,-1)}>{t("planQueue.moveUp")}</Button><Button size="sm" disabled={recording || index===steps.length-1} onClick={()=>moveStep(index+1,1)}>{t("planQueue.moveDown")}</Button><Button size="sm" disabled={recording} onClick={()=>{cancelMediaRead();setSteps(list=>list.filter((_,i)=>i!==index));}}>{t("common.delete")}</Button></div></details>
           </div>)}
           {!review&&<><Button size="sm" disabled={steps.length>=MAX_PLAN_STEPS-1||reading||recording} onClick={()=>setSteps(list=>[...list,{text:""}])}>{t("planQueue.addStep")}</Button>{hasVideo&&<label className="flex items-center gap-2 text-xs text-zinc-400"><input type="checkbox" checked={nativeMedia} onChange={e=>setNativeMedia(e.target.checked)}/>{t("planQueue.nativeVideo")}</label>}</>}
@@ -177,10 +188,11 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
             const next = new Set(selected); pageItems.forEach(item => event.target.checked ? next.add(item.chatId) : next.delete(item.chatId)); setSelected(next);
           }} />{t("quickLibrary.selectPage")}</label>}
           <div className="min-h-24 max-h-64 flex-1 space-y-1 overflow-y-auto rounded-lg md:max-h-none border border-zinc-800 p-2">
-            {pageItems.map((item, index) => <label key={item.id} className="flex items-start gap-2 rounded p-2 hover:bg-zinc-800">
+            {pageItems.map((item, index) => { const contact = contactsById.get(item.contactId); return <label key={item.id} className="flex items-start gap-2 rounded p-2 hover:bg-zinc-800">
               {!review && <input type="checkbox" className="mt-1" checked={selected.has(item.chatId)} onChange={event => { const next = new Set(selected); event.target.checked ? next.add(item.chatId) : next.delete(item.chatId); setSelected(next); }} />}
+              <Avatar name={item.contactName} seed={item.contactId} src={contact?.avatarFullUrl || contact?.avatarUrl} size="sm" />
               <span className="min-w-0"><span className="block truncate text-sm text-zinc-200">{currentPage * 50 + index + 1}. {item.contactName}</span><span className="block truncate text-xs text-zinc-500">{settings.waAccounts.find(account => account.id === item.accountId)?.label || item.accountId} · {item.recipient}</span></span>
-            </label>)}
+            </label>; })}
             {!pageItems.length && <p className="p-4 text-xs text-zinc-500">{t("planQueue.noTargets")}</p>}
           </div>
           {visible.length > 50 && <div className="flex items-center justify-between text-xs text-zinc-500"><Button size="sm" disabled={!currentPage} onClick={() => setPage(currentPage - 1)}>‹</Button><span>{currentPage + 1}/{Math.max(1, Math.ceil(visible.length / 50))}</span><Button size="sm" disabled={(currentPage + 1) * 50 >= visible.length} onClick={() => setPage(currentPage + 1)}>›</Button></div>}

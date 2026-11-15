@@ -233,7 +233,7 @@ export function ContactEditor({
 
       <ContactTagsNotesEditor contact={contact} compact={compact} />
 
-      <div className="space-y-2 rounded-lg border border-brand/15 bg-brand/5 p-2.5">
+      <div className="space-y-2 border-t border-brand/25 pt-3">
         <div className="text-[11px] font-medium text-brand">{t("contact.card")}</div>
         <p className="text-2xs leading-3.5 text-zinc-600">
           {t("contact.cardHint")}
@@ -312,7 +312,7 @@ export function ContactEditor({
         )}
       </div>
 
-      <div className="space-y-2 rounded-lg border border-zinc-800/80 p-2.5">
+      <div className="space-y-2 border-t border-zinc-800/80 pt-3">
         <div className="text-2xs text-zinc-500">{t("contact.nextFollowUp")}</div>
         {nextFollowUp ? (
           <div className="space-y-1">

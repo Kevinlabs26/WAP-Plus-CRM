@@ -13,12 +13,14 @@ type Props = {
   visible: boolean;
   hasDraft: boolean;
   translateOriginal: string | null;
+  translatedDraft?: string | null;
   translating: boolean;
   translateLang: string;
   source: TargetLanguage["source"];
   onTranslateLangChange: (lang: string) => void;
   onRestoreAuto: () => void;
   onTranslate: () => void;
+  onTranslatedDraftChange?: (text: string) => void;
   onRestore: () => void;
   /** 可选：把译文回译成原文语言，仅用于发送前检查。 */
   backTranslation?: string | null;
@@ -36,12 +38,14 @@ export function TranslateBar({
   visible,
   hasDraft,
   translateOriginal,
+  translatedDraft,
   translating,
   translateLang,
   source,
   onTranslateLangChange,
   onRestoreAuto,
   onTranslate,
+  onTranslatedDraftChange,
   onRestore,
   backTranslation = null,
   backTranslating = false,
@@ -102,7 +106,7 @@ export function TranslateBar({
             ? t("translation.busy")
             : t("tooltip.translate")}
         </button>
-        {translateOriginal != null && onBackTranslate && !backTranslation && !backTranslating && (
+        {translatedDraft != null && onBackTranslate && !backTranslation && !backTranslating && (
           <button
             type="button"
             disabled={translating}
@@ -114,30 +118,39 @@ export function TranslateBar({
             {t("translation.showBack")}
           </button>
         )}
-        {translateOriginal != null && (
+        {(translatedDraft != null || translateOriginal != null) && (
           <button
             type="button"
             disabled={translating}
             onClick={onRestore}
             className="inline-flex h-7 items-center gap-1 rounded-lg px-2 text-[11px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-            title={t("tooltip.restoreOriginal")}
+            title={t("translation.clearResult")}
           >
             <Undo2 className="h-3 w-3" />
-            {t("translation.restore")}
+            {t("translation.clearResult")}
           </button>
         )}
-        {(backTranslation != null || backTranslating) && translateOriginal != null && (
-          <span
-            className="min-w-0 flex-[1_1_240px] break-words text-[11px] leading-5 text-zinc-400"
-            aria-live="polite"
-          >
-            <span className="mr-1 text-zinc-500">{t("translation.backLabel")}:</span>
-            {backTranslating
-              ? t("translation.backBusy")
-              : backTranslation || t("translation.backUnavailable")}
-          </span>
-        )}
       </div>
+      {translatedDraft != null && (
+        <div className="mt-1.5 w-full rounded-lg border border-brand/20 bg-brand/5 px-2.5 py-1.5" aria-live="polite">
+          <span className="mr-1 text-[10px] text-brand">{t("translation.resultLabel")}:</span>
+          <textarea
+            value={translatedDraft}
+            onChange={(e) => onTranslatedDraftChange?.(e.target.value)}
+            rows={1}
+            aria-label={t("translation.resultLabel")}
+            className="mt-0.5 block min-h-7 w-full resize-y bg-transparent text-[12px] leading-5 text-zinc-200 outline-none placeholder:text-zinc-500"
+          />
+        </div>
+      )}
+      {(backTranslation != null || backTranslating) && translatedDraft != null && (
+        <div className="mt-1.5 w-full rounded-lg border border-zinc-800 bg-zinc-900/50 px-2.5 py-1.5 text-[11px] leading-5 text-zinc-400" aria-live="polite">
+          <span className="mr-1 text-zinc-500">{t("translation.backLabel")}:</span>
+          {backTranslating
+            ? t("translation.backBusy")
+            : backTranslation || t("translation.backUnavailable")}
+        </div>
+      )}
       {recording ? (
         <span className="text-2xs tabular-nums text-rose-300/90">
           {recordSec}s

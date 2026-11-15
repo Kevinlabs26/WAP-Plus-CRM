@@ -1,5 +1,5 @@
 import { useAppStore } from "@/store/appStore";
-import { SectionLabel } from "@/components/ui/primitives";
+import { SectionLabel, Switch } from "@/components/ui/primitives";
 import { SettingsNumberInput } from "./SettingsNumberInput";
 import {
   DEFAULT_FOLLOW_UP_RULES,
@@ -11,7 +11,6 @@ import { useI18n, type TranslationKey } from "@/i18n";
 const FOLLOW_UP_I18N: Record<string, { title: TranslationKey; note: TranslationKey }> = {
   inbound_no_reply: { title: "settingsMessaging.rule.inbound.title", note: "settingsMessaging.rule.inbound.note" },
   outbound_no_answer: { title: "settingsMessaging.rule.outbound.title", note: "settingsMessaging.rule.outbound.note" },
-  quoting_stale: { title: "settingsMessaging.rule.quoting.title", note: "settingsMessaging.rule.quoting.note" },
 };
 
 export function SettingsMessagingPanel() {
@@ -42,7 +41,7 @@ export function SettingsMessagingPanel() {
         </p>
       </header>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <div className="flex items-center justify-between gap-3">
           <SectionLabel>{t("settingsMessaging.rateLimit")}</SectionLabel>
           <label className="flex cursor-pointer items-center gap-2 text-[12px] text-zinc-300">
@@ -139,7 +138,7 @@ export function SettingsMessagingPanel() {
         </label>
       </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
 <SectionLabel>{t("settingsMessaging.conversationBehavior")}</SectionLabel>
           <label className="flex cursor-pointer items-center gap-2 text-[12px] text-zinc-300">
             <input
@@ -155,9 +154,19 @@ export function SettingsMessagingPanel() {
           <p className="text-[11px] text-zinc-600">
             {t("settingsMessaging.autoReadGroupsHint")}
           </p>
+          <label className="mt-3 flex cursor-pointer items-center justify-between gap-3 border-t border-zinc-800/80 pt-3 text-xs text-zinc-300">
+            <span>
+              <span className="block text-zinc-200">{t("settings.emojiEnabled")}</span>
+              <span className="mt-0.5 block text-[11px] text-zinc-600">{t("settings.emojiEnabledDesc")}</span>
+            </span>
+            <Switch
+              checked={settings.emojiEnabled !== false}
+              onChange={(event) => updateSettings({ emojiEnabled: event.target.checked })}
+            />
+          </label>
       </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <div className="flex items-start justify-between gap-3">
           <div>
             <SectionLabel>{t("settingsMessaging.autoFollowUp")}</SectionLabel>
@@ -181,9 +190,9 @@ export function SettingsMessagingPanel() {
         <fieldset disabled={settings.autoFollowUpEnabled === false}>
         <ul
           className={
-            settings.autoFollowUpEnabled === false
-              ? "mt-3 space-y-2 opacity-40"
-              : "mt-3 space-y-2"
+              settings.autoFollowUpEnabled === false
+              ? "mt-3 divide-y divide-zinc-800/80 border-y border-zinc-800/80 opacity-40"
+              : "mt-3 divide-y divide-zinc-800/80 border-y border-zinc-800/80"
           }
         >
           {DEFAULT_FOLLOW_UP_RULES.map((rule) => {
@@ -193,7 +202,7 @@ export function SettingsMessagingPanel() {
             return (
               <li
                 key={rule.id}
-                className="flex flex-wrap items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2.5"
+                className="flex flex-wrap items-center gap-3 py-2.5"
               >
                 <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-[12px] text-zinc-200">
                   <input

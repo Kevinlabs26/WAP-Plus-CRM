@@ -12,7 +12,7 @@ export function SettingsSpeechPanel() {
  const updateSettings = useAppStore(s => s.updateSettings);
  return <div className="mx-auto max-w-3xl space-y-6">
  <header><h3 className="text-lg font-semibold text-zinc-100">{t("settings.localSpeech")}</h3><p className="mt-1 text-xs leading-5 text-zinc-500">{t("settings.localSpeechDesc")}</p></header>
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <SectionLabel>{t("settingsMessaging.voiceInput")}</SectionLabel>
         <p className="mt-2 text-[11px] text-zinc-600">
           {t("settingsMessaging.voiceInputHint")}
@@ -53,7 +53,7 @@ export function SettingsSpeechPanel() {
           </select>
         </label>
       </section>
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <SectionLabel>{t("settingsAi.speechService")}</SectionLabel>
         <p className="mt-2 text-xs leading-relaxed text-zinc-500">{t("settingsAi.speechHint")}</p>
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">

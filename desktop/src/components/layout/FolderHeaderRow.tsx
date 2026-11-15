@@ -8,6 +8,7 @@ import {
   Clock3,
   ChevronDown,
   ChevronRight,
+  CornerDownRight,
   Folder,
   FolderPlus,
   Link2,
@@ -19,11 +20,13 @@ import {
   Upload,
   Users,
   UserRoundX,
+  UserRoundPlus,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 import EmojiPicker, { EmojiStyle, Theme, type EmojiClickData } from "emoji-picker-react";
 import { useAppStore } from "@/store/appStore";
+import { canMoveChatFolderToParent } from "@/store/chatFolderActions";
 import { useShallow } from "zustand/react/shallow";
 import { sheetConnections, useGoogleSheets } from "@/lib/googleSheets";
 
@@ -40,6 +43,8 @@ type FolderHeaderRowProps = {
   dropActive: boolean;
   folderDropActive: boolean;
   dragging: boolean;
+  fixedPosition?: boolean;
+  isLeadInbox?: boolean;
   autoReplyMode?: AutoReplyMode;
   onAppearanceChange?: (icon?: string, color?: string) => void;
   onAutoReplyModeChange?: (mode: AutoReplyMode | undefined) => void;
@@ -76,6 +81,8 @@ export function FolderHeaderRow({
   dropActive,
   folderDropActive,
   dragging,
+  fixedPosition = false,
+  isLeadInbox = false,
   autoReplyMode,
   onAppearanceChange,
   onAutoReplyModeChange,
@@ -102,13 +109,51 @@ export function FolderHeaderRow({
   const defaultColor=useAppStore(s=>s.settings.folderDefaultColor);
   const colorDepth=useAppStore(s=>s.settings.folderColorDepth);
   const rowDensity=useAppStore(s=>s.settings.folderRowDensity);
+  const chatFolders=useAppStore(s=>s.settings.chatFolders);
+  const moveTargets=chatFolders.filter(folder=>canMoveChatFolderToParent(chatFolders,folderId,folder.id));
+  const moveTargetIds=new Set(moveTargets.map(folder=>folder.id));
+  const visibleMoveFolderIds=new Set(moveTargetIds);
+  const foldersById=new Map(chatFolders.map(folder=>[folder.id,folder]));
+  for(const target of moveTargets){
+    let current=target;
+    const seen=new Set([target.id]);
+    while(current.parentId&&!seen.has(current.parentId)){
+      const parent=foldersById.get(current.parentId);
+      if(!parent)break;
+      visibleMoveFolderIds.add(parent.id);
+      seen.add(parent.id);
+      current=parent;
+    }
+  }
+  const childrenByParent=new Map<string,typeof chatFolders>();
+  for(const folder of chatFolders){
+    if(!folder.parentId||!foldersById.has(folder.parentId))continue;
+    const children=childrenByParent.get(folder.parentId)||[];
+    children.push(folder);
+    childrenByParent.set(folder.parentId,children);
+  }
+  for(const children of childrenByParent.values())children.sort((a,b)=>(b.sort||0)-(a.sort||0)||a.name.localeCompare(b.name,"zh"));
+  const moveFolderRows:{folder:(typeof chatFolders)[number];depth:number;canMove:boolean}[]=[];
+  const visitedMoveFolders=new Set<string>();
+  const appendMoveFolder:(folder:(typeof chatFolders)[number],depth:number)=>void=(folder,depth)=>{
+    if(visitedMoveFolders.has(folder.id)||!visibleMoveFolderIds.has(folder.id))return;
+    visitedMoveFolders.add(folder.id);
+    moveFolderRows.push({folder,depth,canMove:moveTargetIds.has(folder.id)});
+    for(const child of childrenByParent.get(folder.id)||[])appendMoveFolder(child,depth+1);
+  };
+  for(const folder of chatFolders.filter(item=>!item.parentId||!foldersById.has(item.parentId)).sort((a,b)=>(a.sort||0)-(b.sort||0)||a.name.localeCompare(b.name,"zh")))appendMoveFolder(folder,0);
+  const appearanceColor=color||(isLeadInbox?"#ef4444":defaultColor);
+  const appearanceDepth=isLeadInbox?40:colorDepth;
   const sheetBinding=useAppStore(state=>state.settings.chatFolders.find(folder=>folder.id===folderId)?.sheetConnectionId);
   const sheetNames=useGoogleSheets(useShallow(state=>Object.fromEntries(sheetConnections(state).map(item=>[item.id,item.name]))));
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [submenu, setSubmenu] = useState<{ kind: SubmenuKind; left: number; top: number; focus: boolean } | null>(null);
+  const [choosingMoveTarget, setChoosingMoveTarget] = useState(false);
   const replyTrigger = useRef<HTMLButtonElement>(null);
   const importTrigger = useRef<HTMLButtonElement>(null);
   const organizeTrigger = useRef<HTMLButtonElement>(null);
+  const moveFolderTrigger = useRef<HTMLButtonElement>(null);
+  const moveFolderBackTrigger = useRef<HTMLButtonElement>(null);
   const sheetTrigger = useRef<HTMLButtonElement>(null);
   const submenuTriggers = { reply: replyTrigger, import: importTrigger, organize: organizeTrigger, appearance: organizeTrigger, sheet:sheetTrigger };
   const submenuPopup = useRef<HTMLDivElement>(null);
@@ -119,9 +164,10 @@ export function FolderHeaderRow({
     if (closeTimer.current) clearTimeout(closeTimer.current);
     closeTimer.current = null;
   };
-  const close = () => { cancelClose(); setSubmenu(null); setMenu(null); };
+  const close = () => { cancelClose(); setChoosingMoveTarget(false); setSubmenu(null); setMenu(null); };
   const openSubmenu = (kind: SubmenuKind, anchor: HTMLButtonElement, focus = false) => {
     cancelClose();
+    setChoosingMoveTarget(false);
     const rect = anchor.getBoundingClientRect();
     const width = kind === "appearance" ? 352 : 224;
     const height = kind === "appearance" ? 420 : kind === "reply" ? 184 : kind === "organize" && onCopyUnreplied ? 144 : 112;
@@ -149,11 +195,15 @@ export function FolderHeaderRow({
     } else if (!submenu && menu && (left !== menu.x || top !== menu.y)) {
       setMenu({ x: left, y: top });
     }
-  }, [menu, submenu]);
+  }, [menu, submenu, choosingMoveTarget]);
   useEffect(() => { if (menu) replyTrigger.current?.focus(); }, [menu]);
   useEffect(() => {
-    if (submenu?.focus) submenuPopup.current?.querySelector<HTMLButtonElement>(submenu.kind === "reply" ? '[aria-checked="true"]' : '[role="menuitem"]')?.focus();
-  }, [submenu]);
+    if (choosingMoveTarget) {
+      (submenuPopup.current?.querySelector<HTMLButtonElement>("[data-folder-move-target]") || moveFolderBackTrigger.current)?.focus();
+    } else if (submenu?.focus) {
+      submenuPopup.current?.querySelector<HTMLButtonElement>(submenu.kind === "reply" ? '[aria-checked="true"]' : '[role="menuitem"]')?.focus();
+    }
+  }, [submenu, choosingMoveTarget]);
 
   useEffect(() => {
     if (!menu) return;
@@ -188,6 +238,7 @@ export function FolderHeaderRow({
 
   const openMenu = (x: number, y: number) => {
     cancelClose();
+    setChoosingMoveTarget(false);
     setSubmenu(null);
     setMenu({
       x: Math.max(8, Math.min(x, window.innerWidth - 248)),
@@ -211,13 +262,13 @@ export function FolderHeaderRow({
     <div className="mb-0.5 px-1" style={{ marginLeft: Math.min(depth, 6) * 12 }}>
       <div
         data-chat-folder-drop={folderId}
-        data-folder-reorder-target={folderId}
+        data-folder-reorder-target={fixedPosition ? undefined : folderId}
         className={cn(
           "group/folder flex items-center gap-0.5 rounded-md px-1 py-1.5 transition-colors hover:bg-zinc-900/80",
           dropActive && "bg-brand/10 ring-1 ring-brand/40",
           folderDropActive && "bg-brand/15 ring-1 ring-brand/60"
         )}
-        style={{ backgroundColor: folderBackground(color||defaultColor,colorDepth),paddingTop:folderRowPadding(rowDensity),paddingBottom:folderRowPadding(rowDensity) }}
+        style={{ backgroundColor: folderBackground(appearanceColor,appearanceDepth),paddingTop:folderRowPadding(rowDensity),paddingBottom:folderRowPadding(rowDensity) }}
         onContextMenu={(event) => {
           event.preventDefault();
           openMenu(event.clientX, event.clientY);
@@ -234,9 +285,10 @@ export function FolderHeaderRow({
           ) : (
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
           )}
-          {icon ? <span className="w-4 shrink-0 text-center text-sm leading-4" style={{ filter: color ? `drop-shadow(0 0 2px ${color})` : undefined }} aria-hidden="true">{icon}</span> : <Folder className="h-3.5 w-3.5 shrink-0" style={{ color: color || "#71717a" }} />}
+          {icon ? <span className="w-4 shrink-0 text-center text-sm leading-4" style={{ filter: color ? `drop-shadow(0 0 2px ${color})` : undefined }} aria-hidden="true">{icon}</span> : isLeadInbox ? <UserRoundPlus className="h-3.5 w-3.5 shrink-0" style={{ color: appearanceColor || "#ef4444" }} /> : <Folder className="h-3.5 w-3.5 shrink-0" style={{ color: color || "#71717a" }} />}
           <span
             className="min-w-0 flex-1 truncate text-[13px] font-medium text-zinc-400"
+            style={isLeadInbox ? { color: appearanceColor || "#ef4444" } : undefined}
             title={name}
           >
             {name}
@@ -251,7 +303,7 @@ export function FolderHeaderRow({
             </span>
           )}
         </button>
-        <button
+        {!fixedPosition && <button
           type="button"
           title={t("folder.dragOrder")}
           aria-label={t("folder.dragOrder")}
@@ -266,7 +318,7 @@ export function FolderHeaderRow({
           }}
         >
           <GripVertical className="h-3 w-3" />
-        </button>
+        </button>}
         <button
           ref={actionsTrigger}
           type="button"
@@ -361,7 +413,7 @@ export function FolderHeaderRow({
             <span className="flex-1">文件夹图标和颜色</span><ChevronRight className="h-3.5 w-3.5" />
           </button>}
 
-          <div className="mt-1 border-t border-zinc-800 pt-1">
+          {!fixedPosition && <div className="mt-1 border-t border-zinc-800 pt-1">
           <button
             type="button"
             role="menuitem"
@@ -371,18 +423,23 @@ export function FolderHeaderRow({
             <Trash2 className="h-3.5 w-3.5" />
             {t("folder.delete")}
           </button>
-          </div>
+          </div>}
         </div>, document.body
       )}
       {menu && submenu && createPortal(
         <div ref={submenuPopup} id={`folder-${submenu.kind}-${folderId}`} data-folder-action-menu={folderId} role="menu"
-          aria-label={submenu.kind === "reply" ? t("autoReplyScope.folderRuleFor", { name }) : t(submenu.kind==="sheet"?"sheets.bindFolder":submenu.kind === "import" ? "folder.importMenu" : "folder.organizeMenu")}
+          aria-label={submenu.kind === "reply" ? t("autoReplyScope.folderRuleFor", { name }) : submenu.kind === "organize" && choosingMoveTarget ? t("folder.moveFolder") : t(submenu.kind==="sheet"?"sheets.bindFolder":submenu.kind === "import" ? "folder.importMenu" : "folder.organizeMenu")}
           className={`fixed z-[10000] ${submenu.kind === "appearance" ? "w-[22rem]" : "w-56"} max-w-[calc(100vw-1rem)] max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/50`}
           style={{ left: submenu.left, top: submenu.top }} onMouseEnter={cancelClose} onMouseLeave={scheduleClose}
           onContextMenu={event => event.preventDefault()}
           onKeyDown={event => {
             if (event.key === "Tab") { close(); actionsTrigger.current?.focus(); return; }
             if (["ArrowLeft", "Escape"].includes(event.key)) {
+              if (submenu.kind === "organize" && choosingMoveTarget) {
+                event.preventDefault(); event.stopPropagation(); setChoosingMoveTarget(false);
+                requestAnimationFrame(() => moveFolderTrigger.current?.focus());
+                return;
+              }
               event.preventDefault(); event.stopPropagation(); setSubmenu(null); submenuTriggers[submenu.kind].current?.focus(); return;
             }
             if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
@@ -429,7 +486,19 @@ export function FolderHeaderRow({
             {t("folderGroups.selectAction")}
           </button>
           </div>}
-          {submenu.kind === "organize" && <div>
+          {submenu.kind === "organize" && choosingMoveTarget && <div>
+          <button ref={moveFolderBackTrigger} type="button" role="menuitem" className={itemClass} onClick={() => setChoosingMoveTarget(false)}>
+            <ChevronDown className="h-3.5 w-3.5 rotate-90 text-zinc-500" />{t("folder.backToOrganize")}
+          </button>
+          {moveFolderRows.length ? moveFolderRows.map(({folder,depth,canMove})=>{
+            const content=<><span className="flex h-4 w-4 shrink-0 items-center justify-center">{depth ? <CornerDownRight className="h-3.5 w-3.5 text-zinc-500"/> : <Folder className="h-3.5 w-3.5 text-zinc-500"/>}</span><span className="truncate">{folder.name}</span></>;
+            return canMove
+              ? <button key={folder.id} type="button" role="menuitem" data-folder-move-target className={itemClass} style={{paddingLeft:12+Math.min(depth,8)*14}}
+                  onClick={()=>run(()=>{useAppStore.getState().moveChatFolderToParent(folderId,folder.id);})}>{content}</button>
+              : <div key={folder.id} aria-disabled="true" className="flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] text-zinc-500" style={{paddingLeft:12+Math.min(depth,8)*14}}>{content}</div>;
+          }) : <p className="px-3 py-2 text-[12px] text-zinc-500">{t("folder.noMoveTargets")}</p>}
+          </div>}
+          {submenu.kind === "organize" && !choosingMoveTarget && <div>
           {onCopyUnreplied && <button type="button" role="menuitem" className={itemClass} onClick={() => run(onCopyUnreplied)}>
             <Copy className="h-3.5 w-3.5 text-zinc-500" />{t("folder.copyUnreplied")}
           </button>}
@@ -442,6 +511,9 @@ export function FolderHeaderRow({
             <FolderPlus className="h-3.5 w-3.5 text-zinc-500" />
             {t("folder.createChild")}
           </button>
+          {!fixedPosition && !isLeadInbox && <button ref={moveFolderTrigger} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={choosingMoveTarget} className={itemClass} onClick={() => setChoosingMoveTarget(true)}>
+            <Folder className="h-3.5 w-3.5 text-zinc-500" />{t("folder.moveFolder")}
+          </button>}
           <button
             type="button"
             role="menuitem"

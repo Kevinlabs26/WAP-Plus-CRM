@@ -53,8 +53,8 @@ import { ChatSidebarRow } from "./ChatSidebarRow";
 import { ContactSidebarList } from "./ContactSidebarList";
 import { ContactManagementPanel } from "./ContactManagementPanel";
 import { FolderHeaderRow } from "./FolderHeaderRow";
-import { FolderBatchActionDialog } from "./FolderBatchActionDialog";
 import { FolderAiPromptDialog } from "./FolderAiPromptDialog";
+import { MuseFolderRoutingDialog } from "./MuseFolderRoutingDialog";
 import { ScheduledPlanDialog } from "@/components/chat/ScheduledPlanDialog";
 import { FolderGroupImportDialog } from "./FolderGroupImportDialog";
 import { SidebarSpecialItem } from "./SidebarSpecialItem";
@@ -76,9 +76,10 @@ import { SidebarListHeader } from "./SidebarListHeader";
 import { LeadInboxSettingsPopover } from "./LeadInboxSettingsPopover";
 import { useChatFolderDrag } from "./useChatFolderDrag";
 import { useSidebarData } from "./useSidebarData";
+import { LEAD_INBOX_FOLDER_ID } from "@/store/settingsDefaults";
 import { useI18n } from "@/i18n";
 import type { PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent } from "react";
-import { EyeOff, FolderInput, FolderPlus } from "lucide-react";
+import { CornerDownRight, EyeOff, FolderInput, FolderPlus } from "lucide-react";
 
 const EMPTY_WA: WaAccount[] = [];
 const GROUP_CHAT_FILTERS: GroupChatFilter[] = [
@@ -203,7 +204,6 @@ export function PhoneSidebar() {
     accountViewMode,
     activeAccountId,
     liveBaileysAccountId,
-    leadInbox,
     waAccounts,
     chatFolderClones,
     historySyncNoteByAccountId,
@@ -216,7 +216,6 @@ export function PhoneSidebar() {
       accountViewMode: s.settings.accountViewMode,
       activeAccountId: s.settings.activeAccountId,
       liveBaileysAccountId: s.settings.liveBaileysAccountId,
-      leadInbox: s.settings.leadInbox,
       waAccounts: s.settings.waAccounts ?? EMPTY_WA,
       chatFolderClones: s.settings.chatFolderClones ?? EMPTY_CLONES,
       historySyncNoteByAccountId: s.settings.historySyncNoteByAccountId,
@@ -272,6 +271,7 @@ export function PhoneSidebar() {
   const [batchSaveOpen, setBatchSaveOpen] = useState(false);
   const [batchSaveAccountId, setBatchSaveAccountId] = useState<string | null>(null);
   const listTab = useAppStore(s => s.sidebarTab);
+  const museRoutingAvailable = useAppStore(s => s.settings.aiProvider === "muse");
   const setListTab = useCallback((tab: "chats" | "contacts" | "manage") => useAppStore.setState({sidebarTab: tab}), []);
   const [visitedListTabs, setVisitedListTabs] = useState(
     () => new Set<"chats" | "contacts" | "manage">([listTab])
@@ -383,6 +383,7 @@ export function PhoneSidebar() {
   );
   const [folderNameDraft, setFolderNameDraft] = useState("");
   const [aiPromptFolderId, setAiPromptFolderId] = useState<string | null>(null);
+  const [museFolderRoutingOpen, setMuseFolderRoutingOpen] = useState(false);
   const [scheduleTarget, setScheduleTarget] = useState<{ folderId?: string; chatIds?: string[]; initialStartNow?: boolean } | null>(null);
   const folderNameInputRef = useRef<HTMLInputElement | null>(null);
   const [folderImportText, setFolderImportText] = useState("");
@@ -396,6 +397,10 @@ export function PhoneSidebar() {
     folderId: string;
     mode: "move" | "delete";
   } | null>(null);
+  const [folderBatchSelected, setFolderBatchSelected] = useState<Set<string>>(() => new Set());
+  const [folderBatchTargetFolderId, setFolderBatchTargetFolderId] = useState("");
+  const [folderBatchDeleteConfirm, setFolderBatchDeleteConfirm] = useState(false);
+  const [folderBatchBusy, setFolderBatchBusy] = useState(false);
 
   useEffect(() => {
     if (!chatMenu) return;
@@ -860,7 +865,6 @@ export function PhoneSidebar() {
     accountLabelOf,
     accountShortOf,
     folderDisplayName,
-    leadCount,
     primaryFolderIdOf,
     sidebarItems,
     chatListFilter,
@@ -877,18 +881,64 @@ export function PhoneSidebar() {
     groupFilter,
     collapsedLeadDateIds,
   });
+  const folderById = useMemo(() => new Map(chatFolders.map(folder => [folder.id, folder])), [chatFolders]);
+  const isFolderInTree = (folderId: string | null | undefined, ancestorId: string) => {
+    let folder = folderId ? folderById.get(folderId) : undefined;
+    const seen = new Set<string>();
+    while (folder && !seen.has(folder.id)) {
+      if (folder.id === ancestorId) return true;
+      seen.add(folder.id);
+      folder = folder.parentId ? folderById.get(folder.parentId) : undefined;
+    }
+    return false;
+  };
+  const folderOptionLabel = (folder: (typeof chatFolders)[number]) => {
+    let depth = 0;
+    let parentId = folder.parentId;
+    const seen = new Set([folder.id]);
+    while (parentId && !seen.has(parentId)) {
+      const parent = folderById.get(parentId);
+      if (!parent) break;
+      seen.add(parent.id);
+      depth += 1;
+      parentId = parent.parentId;
+    }
+    return `${"\u3000".repeat(depth)}${depth ? "└ " : ""}${folderDisplayName(folder)}`;
+  };
+  const folderTreeRows = (folders: typeof chatFolders) => {
+    type Folder = (typeof chatFolders)[number];
+    const ids = new Set(folders.map(folder => folder.id));
+    const children = new Map<string, Folder[]>();
+    const roots: Folder[] = [];
+    for (const folder of folders) {
+      const parentId = folder.parentId && ids.has(folder.parentId) ? folder.parentId : "";
+      if (!parentId) roots.push(folder);
+      else children.set(parentId, [...(children.get(parentId) || []), folder]);
+    }
+    const rows: { folder: Folder; depth: number }[] = [];
+    const visited = new Set<string>();
+    const append = (folder: Folder, depth: number) => {
+      if (visited.has(folder.id)) return;
+      visited.add(folder.id);
+      rows.push({ folder, depth });
+      for (const child of children.get(folder.id) || []) append(child, depth + 1);
+    };
+    roots.forEach(folder => append(folder, 0));
+    for (const folder of folders) if (!visited.has(folder.id)) append(folder, 0);
+    return rows;
+  };
 
   const moveLeadDateToFolder = useCallback(
     (chatIds: string[], folderId: string, folderName: string) => {
       chatIds.forEach((chatId) => moveChatToFolder(chatId, folderId));
-      dismissLeadChats(chatIds);
+      if (!isFolderInTree(folderId, LEAD_INBOX_FOLDER_ID)) dismissLeadChats(chatIds);
       setLeadDateMenu(null);
       pushToast(
         t("leadInbox.movedDate", { count: chatIds.length, name: folderName }),
         "success"
       );
     },
-    [dismissLeadChats, moveChatToFolder, pushToast, t]
+    [dismissLeadChats, moveChatToFolder, pushToast, t, chatFolders]
   );
 
   const fileImportedGroup = useCallback(async(folderId:string,chatId:string)=>{
@@ -957,11 +1007,14 @@ export function PhoneSidebar() {
 
   // StatsBar「今日活跃 / 待回复」跳转时强制回到会话列表
   useEffect(() => {
+    if (chatListFilter === "leads") {
+      setChatListFilter("all");
+      return;
+    }
     if (
       chatListFilter === "unread" ||
       chatListFilter === "awaiting" ||
-      chatListFilter === "today" ||
-      chatListFilter === "leads"
+      chatListFilter === "today"
     ) {
       setListTab("chats");
       setShowArchived(false);
@@ -1057,6 +1110,103 @@ export function PhoneSidebar() {
       if (notify) pushToast(e instanceof Error ? e.message : "删除失败", "error");
       return false;
     }
+  };
+
+  const clearFolderBatchAction = () => {
+    setFolderBatchAction(null);
+    setFolderBatchSelected(new Set());
+    setFolderBatchDeleteConfirm(false);
+    setFolderBatchBusy(false);
+  };
+
+  const startFolderBatchAction = (
+    folderId: string,
+    mode: "move" | "delete",
+    collapsed: boolean
+  ) => {
+    if (folderBatchBusy) return;
+    setFolderBatchSelected(new Set());
+    setFolderBatchDeleteConfirm(false);
+    setFolderBatchTargetFolderId(chatFolders.find(item => item.id !== folderId)?.id || "");
+    setFolderBatchAction({ folderId, mode });
+    if (collapsed) toggleChatFolderCollapsed(folderId);
+  };
+
+  const folderBatchMembers = (folderId: string, settings = useAppStore.getState().settings) => {
+    const folder = chatFolders.find((item) => item.id === folderId);
+    if (!folder) return new Set<string>();
+    const folderIds = folder.systemType === "leadInbox"
+      ? new Set((settings.chatFolders || []).filter((item) => item.id === folderId || isFolderInTree(item.id, folderId)).map((item) => item.id))
+      : new Set([folderId]);
+    const members = new Set((settings.chatFolders || []).filter((item) => folderIds.has(item.id)).flatMap((item) => item.chatIds));
+    for (const clone of settings.chatFolderClones || []) if (folderIds.has(clone.folderId)) members.add(clone.sourceChatId);
+    if (folder.systemType === "leadInbox") {
+      for (const chatId of settings.leadInbox.collectedChatIds) members.add(chatId);
+      for (const chatId of settings.leadInbox.dismissedChatIds) members.delete(chatId);
+    }
+    return members;
+  };
+
+  const toggleFolderBatchChat = useCallback((chatIds: string[]) => {
+    if (folderBatchBusy) return;
+    if (!folderBatchAction) return;
+    const settings = useAppStore.getState().settings;
+    const members = folderBatchMembers(folderBatchAction.folderId, settings);
+    const selectableIds = [...new Set(chatIds)].filter(chatId => members.has(chatId));
+    if (!selectableIds.length) return;
+    setFolderBatchDeleteConfirm(false);
+    setFolderBatchSelected(current => {
+      const next = new Set(current);
+      const allSelected = selectableIds.every(chatId => next.has(chatId));
+      selectableIds.forEach(chatId => allSelected ? next.delete(chatId) : next.add(chatId));
+      return next;
+    });
+  }, [folderBatchAction, folderBatchBusy, chatFolders]);
+
+  const selectedFolderBatchChatIds = () => {
+    if (!folderBatchAction) return [];
+    const settings = useAppStore.getState().settings;
+    const members = folderBatchMembers(folderBatchAction.folderId, settings);
+    return [...folderBatchSelected].filter(chatId => members.has(chatId));
+  };
+
+  const moveSelectedFolderChats = () => {
+    if (folderBatchAction?.mode !== "move") return;
+    const settings = useAppStore.getState().settings;
+    const folder = settings.chatFolders?.find(item => item.id === folderBatchAction.folderId);
+    const targetId = folderBatchTargetFolderId || null;
+    if (!folder || (targetId && !settings.chatFolders?.some(item => item.id === targetId && item.id !== folder.id))) {
+      pushToast(t("folder.toastNotFound"), "error");
+      return;
+    }
+    const selected = selectedFolderBatchChatIds();
+    if (!selected.length) return;
+    selected.forEach(chatId => moveChatToFolder(chatId, targetId));
+    pushToast(t("folder.batchMoved", {
+      count: selected.length,
+      name: targetId ? settings.chatFolders.find(item => item.id === targetId)?.name || t("folder.ungrouped") : t("folder.ungrouped"),
+    }), "success");
+    clearFolderBatchAction();
+  };
+
+  const deleteSelectedFolderChats = async () => {
+    if (folderBatchAction?.mode !== "delete" || !folderBatchDeleteConfirm || folderBatchBusy) return;
+    const selected = selectedFolderBatchChatIds();
+    if (!selected.length) return;
+    setFolderBatchBusy(true);
+    let deleted = 0;
+    let failed = 0;
+    for (const chatId of selected) {
+      const chat = useAppStore.getState().chats.find(item => item.id === chatId);
+      if (!chat) continue;
+      if (await performDeleteChat(chat, false)) deleted += 1;
+      else failed += 1;
+    }
+    pushToast(
+      failed ? t("folder.batchDeleteFailed", { deleted, failed }) : t("folder.batchDeleted", { count: deleted }),
+      failed ? "error" : "info"
+    );
+    clearFolderBatchAction();
   };
 
   const runChatAction = async (
@@ -1346,6 +1496,7 @@ export function PhoneSidebar() {
       cloneId?: string;
       accountCount?: number;
       memberChatIds?: string[];
+      folderId?: string | null;
     }
   ) => {
     const c = contactById.get(chat.contactId);
@@ -1369,6 +1520,10 @@ export function PhoneSidebar() {
         accountShort={accountShortOf(chatAccountId)}
         accountLabel={accountLabelOf(chatAccountId)}
         accountCount={opts?.accountCount}
+        selectable={Boolean(folderBatchAction && isFolderInTree(opts?.folderId, folderBatchAction.folderId))}
+        selected={folderBatchSelected.has(chat.id)}
+        onToggleSelected={toggleFolderBatchChat}
+        selectionDisabled={folderBatchBusy}
         memberChatIds={opts?.memberChatIds}
         cloneId={opts?.cloneId}
         isDragging={dragChatId === chat.id}
@@ -1380,7 +1535,7 @@ export function PhoneSidebar() {
   };
 
   return (
-    <aside className="crm-sidebar relative flex w-72 shrink-0 flex-col border-r border-zinc-800/90 bg-zinc-950">
+    <aside className="crm-sidebar relative flex h-full min-h-0 w-72 shrink-0 flex-col border-r border-zinc-800/90 bg-zinc-950">
       {!isBaileys && (
         <PhoneListSection
           phones={phones}
@@ -1401,7 +1556,18 @@ export function PhoneSidebar() {
               confirmLabel: t("folder.clearAll"),
               tone: "danger",
             });
-            if (ok) updateSettings({ chatFolders: [], chatFolderClones: [] });
+            if (ok) {
+              const root = folders.find(folder => folder.id === LEAD_INBOX_FOLDER_ID);
+              const leadInbox = useAppStore.getState().settings.leadInbox;
+              updateSettings({
+                chatFolders: root ? [{ ...root, chatIds: [] }] : [],
+                chatFolderClones: [],
+                leadInbox: {
+                  ...leadInbox,
+                  dismissedChatIds: [...new Set([...leadInbox.dismissedChatIds, ...leadInbox.collectedChatIds])].slice(-20_000),
+                },
+              });
+            }
           }}
           listTab={listTab}
           onTabChange={selectListTab}
@@ -1419,18 +1585,6 @@ export function PhoneSidebar() {
           isBaileys={isBaileys}
           onCreateGroup={() => setCreateGroupOpen(true)}
           onBatchSaveContacts={() => { setBatchSaveAccountId(syncAccountId); setBatchSaveOpen(true); }}
-          leadCount={leadCount}
-          leadActive={chatListFilter === "leads"}
-          leadEnabled={leadInbox.enabled}
-          onOpenLeads={() => {
-            if (!leadInbox.enabled) {
-              setLeadSettingsOpen(true);
-              return;
-            }
-            setListTab("chats");
-            setShowArchived(false);
-            setChatListFilter("leads");
-          }}
           onOpenLeadSettings={() => setLeadSettingsOpen((open) => !open)}
           listFilter={chatListFilter}
           onClearFilter={() => setChatListFilter("all")}
@@ -1460,17 +1614,18 @@ export function PhoneSidebar() {
                 : "从 WhatsApp 同步会话"
           }
           onSync={() => void syncConversations()}
+          onMuseFolderRouting={museRoutingAvailable ? () => setMuseFolderRoutingOpen(true) : undefined}
         />
         {leadSettingsOpen && (
           <LeadInboxSettingsPopover onClose={() => setLeadSettingsOpen(false)} />
         )}
-        {visitedListTabs.has("manage") && <div className={listTab === "manage" ? "flex min-h-0 flex-1 flex-col" : "hidden"} hidden={listTab !== "manage"} aria-hidden={listTab !== "manage"}>
+        {visitedListTabs.has("manage") && <div className={listTab === "manage" ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "hidden"} hidden={listTab !== "manage"} aria-hidden={listTab !== "manage"}>
           <ContactManagementPanel contacts={filteredContacts} accounts={waAccounts} accountId={syncAccountId || ""}
             connectedAccountIds={connectedAccountIds} isBaileys={isBaileys} onPaste={accountId => {setBatchSaveAccountId(accountId); setBatchSaveOpen(true);}} />
         </div>}
         {visitedListTabs.has("contacts") && (
           <div
-            className="min-h-0 flex-1"
+            className={listTab === "contacts" ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}
             hidden={listTab !== "contacts"}
             aria-hidden={listTab !== "contacts"}
             onContextMenu={(e) => e.preventDefault()}
@@ -1486,7 +1641,7 @@ export function PhoneSidebar() {
         )}
         {visitedListTabs.has("chats") && (
           <div
-            className="min-h-0 flex-1"
+            className="flex min-h-0 flex-1 flex-col"
             hidden={listTab !== "chats"}
             aria-hidden={listTab !== "chats"}
             onContextMenu={(e) => {
@@ -1495,13 +1650,13 @@ export function PhoneSidebar() {
             }}
           >
             <Virtuoso
-              className="sidebar-chat-scroll h-full"
+              className="sidebar-chat-scroll min-h-0 flex-1"
               data={sidebarItems}
               computeItemKey={(_i, it) => it.id}
               defaultItemHeight={56}
               increaseViewportBy={{ top: 120, bottom: 120 }}
               components={SIDEBAR_VIRTUOSO_COMPONENTS}
-              scrollSeekConfiguration={dragChatId || dragFolderId ? undefined : SIDEBAR_SCROLL_SEEK}
+              scrollSeekConfiguration={dragChatId || dragFolderId || folderBatchAction ? undefined : SIDEBAR_SCROLL_SEEK}
               itemContent={(_index, it) => {
                 if (
                   it.kind === "hint" ||
@@ -1592,6 +1747,8 @@ export function PhoneSidebar() {
                       }}
                       collapsed={it.collapsed}
                       depth={it.depth}
+                      fixedPosition={folder.systemType === "leadInbox"}
+                      isLeadInbox={folder.systemType === "leadInbox"}
                       total={it.total}
                       unread={it.unread}
                       containsSelected={it.containsSelected}
@@ -1641,8 +1798,8 @@ export function PhoneSidebar() {
                           name: folder.name,
                         });
                       }}
-                      onBatchMove={() => setFolderBatchAction({ folderId: folder.id, mode: "move" })}
-                      onBatchDelete={() => setFolderBatchAction({ folderId: folder.id, mode: "delete" })}
+                      onBatchMove={() => startFolderBatchAction(folder.id, "move", it.collapsed)}
+                      onBatchDelete={() => startFolderBatchAction(folder.id, "delete", it.collapsed)}
                       onClearTree={() => {
                         void (async () => {
                           const settings = useAppStore.getState().settings;
@@ -1661,6 +1818,7 @@ export function PhoneSidebar() {
                           }
                           const chatIds = new Set(folders.filter(item => affected.has(item.id)).flatMap(item => item.chatIds));
                           for (const clone of settings.chatFolderClones || []) if (affected.has(clone.folderId)) chatIds.add(clone.sourceChatId);
+                          if (folder.id === LEAD_INBOX_FOLDER_ID) for (const chatId of settings.leadInbox.collectedChatIds) chatIds.add(chatId);
                           const childCount = affected.size - 1;
                           const ok = await requestConfirm({
                             title: t("folder.clearTree"),
@@ -1677,6 +1835,10 @@ export function PhoneSidebar() {
                           updateSettings({
                             chatFolders: folders.filter(item => item.id === folder.id || !affected.has(item.id)).map(item => item.id === folder.id ? { ...item, chatIds: [] } : item),
                             chatFolderClones: (settings.chatFolderClones || []).filter(clone => !affected.has(clone.folderId)),
+                            ...(folder.id === LEAD_INBOX_FOLDER_ID ? { leadInbox: {
+                              ...latest.leadInbox,
+                              dismissedChatIds: [...new Set([...latest.leadInbox.dismissedChatIds, ...latest.leadInbox.collectedChatIds])].slice(-20_000),
+                            } } : {}),
                           });
                         })();
                       }}
@@ -1704,11 +1866,83 @@ export function PhoneSidebar() {
                       cloneId: it.cloneId,
                       accountCount: it.accountCount,
                       memberChatIds: it.memberChatIds,
+                      folderId: it.folderId,
                     })}
                   </div>
                 );
               }}
             />
+            {folderBatchAction && (
+              <div className="mt-2 shrink-0 rounded-lg border border-zinc-800 bg-zinc-900/90 p-2.5">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="text-[11px] text-zinc-400">
+                    {t("folder.batchSelectedCount", { count: folderBatchSelected.size })}
+                  </span>
+                  <button
+                    type="button"
+                    className="rounded px-2 py-1 text-[11px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-50"
+                    disabled={folderBatchBusy}
+                    onClick={clearFolderBatchAction}
+                  >
+                    {t("common.cancel")}
+                  </button>
+                </div>
+                {folderBatchAction.mode === "move" ? (
+                  <div className="flex gap-2">
+                    <select
+                      aria-label={t("folder.batchTarget")}
+                      className="ui-control h-8 min-w-0 flex-1 px-2 text-[11px]"
+                      value={folderBatchTargetFolderId}
+                      onChange={event => setFolderBatchTargetFolderId(event.target.value)}
+                    >
+                      <option value="">{t("folder.ungrouped")}</option>
+                      {chatFolders.filter(folder => folder.id !== folderBatchAction.folderId).map(folder => (
+                        <option key={folder.id} value={folder.id}>{folderOptionLabel(folder)}</option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="shrink-0 rounded-lg bg-brand px-2.5 py-1.5 text-[11px] font-medium text-[var(--brand-foreground)] disabled:opacity-40"
+                      disabled={!folderBatchSelected.size}
+                      onClick={moveSelectedFolderChats}
+                    >
+                      {t("folder.batchMoveConfirm", { count: folderBatchSelected.size })}
+                    </button>
+                  </div>
+                ) : folderBatchDeleteConfirm ? (
+                  <div className="space-y-2">
+                    <p role="alert" className="text-[11px] leading-4 text-rose-200">{t("folder.batchDeleteWarning")}</p>
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        className="rounded-lg px-2.5 py-1.5 text-[11px] text-zinc-400 hover:bg-zinc-800"
+                        disabled={folderBatchBusy}
+                        onClick={() => setFolderBatchDeleteConfirm(false)}
+                      >
+                        {t("common.cancel")}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-lg border border-rose-500/40 bg-rose-500/15 px-2.5 py-1.5 text-[11px] font-medium text-rose-200 disabled:opacity-40"
+                        disabled={folderBatchBusy}
+                        onClick={() => void deleteSelectedFolderChats()}
+                      >
+                        {t("common.confirm")}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="w-full rounded-lg border border-rose-500/40 bg-rose-500/15 px-2.5 py-1.5 text-[11px] font-medium text-rose-200 disabled:opacity-40"
+                    disabled={!folderBatchSelected.size}
+                    onClick={() => setFolderBatchDeleteConfirm(true)}
+                  >
+                    {t("folder.batchDeleteConfirm", { count: folderBatchSelected.size })}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
       </section>
@@ -1720,62 +1954,8 @@ export function PhoneSidebar() {
       )}
 
       {aiPromptFolderId && <FolderAiPromptDialog key={aiPromptFolderId} folderId={aiPromptFolderId} onClose={() => setAiPromptFolderId(null)} />}
+      {museFolderRoutingOpen && <MuseFolderRoutingDialog onClose={() => setMuseFolderRoutingOpen(false)} />}
       {scheduleTarget && <ScheduledPlanDialog {...scheduleTarget} onClose={() => setScheduleTarget(null)} />}
-      {folderBatchAction && (() => {
-        const folder = chatFolders.find(item => item.id === folderBatchAction.folderId);
-        if (!folder) return null;
-        const ids = [...new Set([
-          ...folder.chatIds,
-          ...chatFolderClones.filter(clone => clone.folderId === folder.id).map(clone => clone.sourceChatId),
-        ])];
-        const chatsById = new Map(chats.map(chat => [chat.id, chat]));
-        const folderChats = ids.map(id => chatsById.get(id)).filter((chat): chat is ChatPreview => Boolean(chat));
-        const targets = chatFolders
-          .filter(item => item.id !== folder.id)
-          .map(item => ({ id: item.id, name: item.name }));
-        return (
-          <FolderBatchActionDialog
-            mode={folderBatchAction.mode}
-            folderName={folder.name}
-            chats={folderChats}
-            folders={targets}
-            onClose={() => setFolderBatchAction(null)}
-            onConfirm={(chatIds, targetFolderId) => {
-              setFolderBatchAction(null);
-              if (folderBatchAction.mode === "move") {
-                chatIds.forEach(chatId => moveChatToFolder(chatId, targetFolderId));
-                pushToast(t("folder.batchMoved", {
-                  count: chatIds.length,
-                  name: targetFolderId ? chatFolders.find(item => item.id === targetFolderId)?.name || t("folder.ungrouped") : t("folder.ungrouped"),
-                }), "success");
-                return;
-              }
-              void (async () => {
-                const ok = await requestConfirm({
-                  title: t("folder.batchDeleteTitle", { name: folder.name }),
-                  description: t("folder.batchDeleteWarning"),
-                  confirmLabel: t("folder.batchDeleteConfirm", { count: chatIds.length }),
-                  cancelLabel: t("common.cancel"),
-                  tone: "danger",
-                });
-                if (!ok) return;
-                let deleted = 0;
-                let failed = 0;
-                for (const chatId of chatIds) {
-                  const chat = useAppStore.getState().chats.find(item => item.id === chatId);
-                  if (!chat) continue;
-                  if (await performDeleteChat(chat, false)) deleted += 1;
-                  else failed += 1;
-                }
-                pushToast(
-                  failed ? t("folder.batchDeleteFailed", { deleted, failed }) : t("folder.batchDeleted", { count: deleted }),
-                  failed ? "error" : "info"
-                );
-              })();
-            }}
-          />
-        );
-      })()}
       {groupFolderDialog && (() => {
         const folder = chatFolders.find((item) => item.id === groupFolderDialog.folderId);
         if (!folder) return null;
@@ -1961,8 +2141,9 @@ export function PhoneSidebar() {
                 {t("leadInbox.moveDateToFolder")}
               </p>
               <div className="max-h-44 overflow-y-auto">
-                {chatFolders
-                  .filter((folder) => {
+                {folderTreeRows(chatFolders)
+                  .filter(({ folder }) => {
+                    if (folder.id === LEAD_INBOX_FOLDER_ID) return false;
                     const accountIds = new Set(
                       leadDateMenu.chatIds
                         .map((chatId) => {
@@ -1984,11 +2165,12 @@ export function PhoneSidebar() {
                     const onlyAccount = [...accountIds][0] || dataAccountId;
                     return !folder.scope || folder.scope.accountId === onlyAccount;
                   })
-                  .map((folder) => (
+                  .map(({ folder, depth }) => (
                   <button
                     key={folder.id}
                     type="button"
                     className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] text-zinc-300 hover:bg-zinc-800"
+                    style={{ paddingLeft: 8 + Math.min(depth, 5) * 12 }}
                     onClick={() =>
                       moveLeadDateToFolder(
                         leadDateMenu.chatIds,
@@ -1997,7 +2179,7 @@ export function PhoneSidebar() {
                       )
                     }
                   >
-                    <FolderInput className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+                    {depth ? <CornerDownRight className="h-3.5 w-3.5 shrink-0 text-zinc-600" /> : <FolderInput className="h-3.5 w-3.5 shrink-0 text-zinc-500" />}
                     <span className="truncate">{folderDisplayName(folder)}</span>
                   </button>
                   ))}

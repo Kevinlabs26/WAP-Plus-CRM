@@ -9,11 +9,13 @@ const start = source.indexOf('  const handleTranslateDraft = async () => {');
 const end = source.indexOf('  const restoreTranslateOriginal =', start);
 assert.ok(start >= 0 && end > start);
 const create = new Function('translateDraftText', `
-  let draft = 'same draft', translating = false, translateOriginal = null;
+  let draft = 'same draft', translating = false, translateOriginal = null, translatedDraft = null;
+  const translatingRef = { current: false };
   let focusCalls = 0;
   const translationRequestRef = { current: 0 };
   const backTranslationRequestRef = { current: 0 };
   const refocusComposerAfterTranslationRef = { current: false };
+  const pendingSendAfterTranslationRef = { current: false };
   const textareaRef = { current: { focus: () => { focusCalls++; } } };
   const requestAnimationFrame = callback => { callback(); return 0; };
   const document = { body: {} };
@@ -26,6 +28,8 @@ const create = new Function('translateDraftText', `
   const setBackTranslating = () => {};
   const setBackTranslation = () => {};
   const setTranslateOriginal = value => { translateOriginal = value; };
+  const setTranslatedDraft = value => { translatedDraft = value; };
+  const onSend = () => {};
   const setDraftLocal = value => { draft = value; writes.push(value); };
   const flushDraftNow = value => writes.push(value);
   const pushToast = (...args) => toasts.push(args);
@@ -34,9 +38,9 @@ const create = new Function('translateDraftText', `
   ${source.slice(start, end)}
   return { run: handleTranslateDraft, writes, toasts,
     runFromEnter() { refocusComposerAfterTranslationRef.current = true; return handleTranslateDraft(); },
-    edit(value) { draft = value; translateOriginal = null; },
-    switchChat() { translationRequestRef.current++; translating = false; translateOriginal = null; },
-    state: () => ({ draft, translating, translateOriginal, focusCalls }) };
+    edit(value) { draft = value; translateOriginal = null; translatedDraft = null; },
+    switchChat() { translationRequestRef.current++; translating = false; translatingRef.current = false; translateOriginal = null; translatedDraft = null; },
+    state: () => ({ draft, translating, translateOriginal, translatedDraft, focusCalls }) };
 `);
 
 function deferred() {
@@ -60,7 +64,8 @@ test('late translation cannot replace an identical draft in another chat or clea
   assert.equal(ui.state().translateOriginal, null);
   second.resolve({ text: 'correct translation', targetLang: 'fr' });
   await newRun;
-  assert.equal(ui.state().draft, 'correct translation');
+  assert.equal(ui.state().draft, 'same draft');
+  assert.equal(ui.state().translatedDraft, 'correct translation');
   assert.equal(ui.state().translateOriginal, 'same draft');
   assert.equal(ui.state().translating, false);
 });

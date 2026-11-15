@@ -127,7 +127,7 @@ export function UpdateCompleteModal({ ready, showDonation = false }: { ready: bo
               aria-expanded={supportOpen}
               aria-controls="update-complete-support"
               onClick={() => setSupportOpen((open) => !open)}
-              className="flex w-full items-center gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/40 px-4 py-3 text-left text-xs text-zinc-300 transition-colors hover:border-brand/40 hover:bg-brand/5"
+              className="flex w-full items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950/40 px-4 py-3 text-left text-xs text-zinc-300 transition-colors hover:border-brand/40 hover:bg-brand/5"
             >
               <Coffee className="h-5 w-5 shrink-0 text-brand" aria-hidden="true" />
               <span className="flex-1">{t("updateComplete.sponsorTitle")}</span>

@@ -43,7 +43,7 @@ export function AiUsagePanel() {
   const maxFeatureTokens = Math.max(1, ...featureRows.map(({ sum }) => sum.total));
 
   return (
-    <section className="rounded-2xl border border-[var(--app-border)] bg-[var(--app-surface)] p-4">
+    <section className="mx-auto max-w-5xl border-t border-[var(--app-border)] pt-4">
       <div className="flex items-center gap-2">
         <span className="grid h-8 w-8 place-items-center rounded-lg bg-brand/10 text-brand"><Sparkles className="h-4 w-4" /></span>
         <h3 className="font-semibold">{t("aiUsage.title")}</h3>
@@ -58,7 +58,7 @@ export function AiUsagePanel() {
               key={key}
               aria-pressed={period === key}
               onClick={() => setPeriod(key)}
-              className={`rounded-xl border p-3 text-left transition-colors ${period === key ? "border-brand bg-brand/10" : "border-[var(--app-border)] bg-[var(--app-surface-2)] hover:border-brand/50"}`}
+              className={`rounded-lg border p-3 text-left transition-colors ${period === key ? "border-brand bg-brand/10" : "border-[var(--app-border)] bg-[var(--app-surface-2)] hover:border-brand/50"}`}
             >
               <span className="text-xs text-[var(--app-muted)]">{t(`aiUsage.${key}`)}</span>
               <strong className="mt-1 block text-lg tabular-nums">{numberLabel(sum.total)} Token</strong>
@@ -86,9 +86,9 @@ export function AiUsagePanel() {
               <h4 className="text-sm font-semibold">{t("aiUsage.feature")}</h4>
               <span className="text-xs text-[var(--app-muted)]">{t("aiUsage.cost")}</span>
             </div>
-            <div className="space-y-2">
+            <div className="divide-y divide-[var(--app-border)] border-y border-[var(--app-border)]">
               {featureRows.map(({ feature, sum }) => (
-                <div key={feature} className="rounded-xl border border-[var(--app-border)] bg-[var(--app-surface-2)] px-3 py-2.5">
+                <div key={feature} className="py-2.5">
                   <div className="flex items-center justify-between gap-3 text-xs">
                     <span className="min-w-0 truncate font-medium">{t(`aiUsage.${feature}`)}</span>
                     <span className="shrink-0 tabular-nums text-[var(--app-muted)]">{numberLabel(sum.total)} Token · {money(sum)}</span>
@@ -106,15 +106,15 @@ export function AiUsagePanel() {
         </>
       )}
 
-      {!data.buckets.length && <p className="mt-3 rounded-xl bg-[var(--app-surface-2)] p-3 text-sm text-[var(--app-muted)]">{t("aiUsage.empty")}</p>}
+      {!data.buckets.length && <p className="mt-3 rounded-lg bg-[var(--app-surface-2)] p-3 text-sm text-[var(--app-muted)]">{t("aiUsage.empty")}</p>}
 
       {!!models.length && (
-        <details className="mt-4 rounded-xl border border-[var(--app-border)] bg-[var(--app-surface-2)]">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-3 text-sm font-medium">
+        <details className="mt-4 border-t border-[var(--app-border)] pt-3">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 py-1 text-sm font-medium">
             <span>{t("aiUsage.prices")}</span>
             <span className="rounded-full bg-[var(--app-surface)] px-2 py-0.5 text-xs text-[var(--app-muted)]">{models.length}</span>
           </summary>
-          <div className="border-t border-[var(--app-border)] p-3">
+          <div className="pt-3">
             <p className="mb-3 text-xs text-[var(--app-muted)]">{t("aiUsage.autoHint")}</p>
             <div className="grid gap-2 sm:grid-cols-2">
               {models.map((row) => <ModelPriceRow key={usageRateKey(row)} row={row} rate={data.rates[usageRateKey(row)]} />)}
@@ -205,10 +205,10 @@ function ActivityChart({ buckets, locale }: { buckets: AiUsageBucket[]; locale: 
     : weekly.map((item, index) => ({ key: String(index), date: item.start, end: item.end, value: item.value }));
 
   return (
-    <section className="mt-4 rounded-xl border border-[var(--app-border)] bg-[var(--app-surface-2)] p-3">
+    <section className="mt-4 rounded-lg border border-[var(--app-border)] bg-[var(--app-surface-2)] p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h4 className="flex items-center gap-1.5 text-sm font-semibold"><Activity className="h-4 w-4 text-brand" />{t("aiUsage.activity")}</h4>
-        <div className="flex rounded-xl bg-[var(--app-surface)] p-1" role="group" aria-label={t("aiUsage.activity")}>
+        <div className="flex rounded-md bg-[var(--app-surface)] p-1" role="group" aria-label={t("aiUsage.activity")}>
           {(["day", "week", "total"] as const).map((item) => <button type="button" key={item} aria-pressed={mode === item} onClick={() => setMode(item)} className={tabClass(mode === item)}>{t(`aiUsage.${item === "day" ? "daily" : item === "week" ? "weekly" : "cumulative"}`)}</button>)}
         </div>
       </div>
@@ -219,7 +219,7 @@ function ActivityChart({ buckets, locale }: { buckets: AiUsageBucket[]; locale: 
             <div className="grid gap-1 text-[10px] text-[var(--app-muted)]" style={gridColumns}>
               {weeks.map((days, index) => {
                 const monthChanged = index === 0 || days[0].date.getMonth() !== weeks[index - 1][0].date.getMonth();
-                return <span key={index} className="truncate">{monthChanged ? monthFormat.format(days[0].date) : ""}</span>;
+                return <span key={index} className="whitespace-nowrap">{monthChanged ? monthFormat.format(days[0].date) : ""}</span>;
               })}
             </div>
             <div className={`mt-1 grid gap-1 ${mode === "day" ? "grid-flow-col grid-rows-7" : ""}`} style={gridColumns}>
@@ -274,7 +274,7 @@ function ModelPriceRow({ row, rate }: { row: AiUsageBucket; rate?: AiUsageRate }
   const rates = (["input", "cached", "output", "cacheWrite"] as const);
 
   return (
-    <article className="min-w-0 rounded-xl border border-[var(--app-border)] bg-[var(--app-surface)] p-3">
+    <article className="min-w-0 rounded-lg border border-[var(--app-border)] bg-[var(--app-surface)] p-3">
       <div className="flex min-w-0 items-start justify-between gap-2">
         <div className="min-w-0">
           <h5 className="truncate text-sm font-semibold" title={`${row.provider} · ${row.model}`}>{row.provider} · {row.model}</h5>

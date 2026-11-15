@@ -55,6 +55,13 @@ export interface BroadcastVariant {
 }
 
 export const BROADCAST_MAX_VARIANTS = 10;
+export const BROADCAST_MAX_THEMES = 50;
+
+export interface BroadcastTheme {
+  id: string;
+  name: string;
+  variants: BroadcastVariant[];
+}
 
 export interface BroadcastCampaign {
   id: string;

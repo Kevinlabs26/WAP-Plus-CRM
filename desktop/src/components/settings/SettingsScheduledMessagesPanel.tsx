@@ -77,7 +77,7 @@ export function SettingsScheduledMessagesPanel() {
     </div>
     <ScheduledPlansPanel filter={filter} onFilterChange={setFilter} />
     <LegacyScheduledMessagesPanel filter={filter} onFilterChange={setFilter} />
-    {counts[filter] === 0 && <div className="rounded-xl border border-dashed border-zinc-700 px-5 py-10 text-center text-sm text-zinc-500">
+    {counts[filter] === 0 && <div className="rounded-lg border border-dashed border-zinc-700 px-5 py-10 text-center text-sm text-zinc-500">
       <p>{t(filter === "active" ? "settingsScheduled.emptyActive" : "settingsScheduled.empty")}</p>
       <p className="mt-2 text-xs">{t("planQueue.entryHint")}</p>
     </div>}

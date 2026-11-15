@@ -1,14 +1,50 @@
 import type { FolderScope } from "@/types/account";
-import type { SettingsShape } from "./settingsDefaults";
+import type { SettingsChatFolder, SettingsShape } from "./settingsDefaults";
+import { LEAD_INBOX_FOLDER_ID } from "./settingsDefaults";
 import { normalizeLocale, translate, type TranslationKey } from "../i18n/core.ts";
 
 type FolderStoreDeps = {
   getSettings: () => SettingsShape;
   updateSettings: (
-    patch: Partial<Pick<SettingsShape, "chatFolders" | "chatFolderClones">>
+    patch: Partial<Pick<SettingsShape, "chatFolders" | "chatFolderClones" | "leadInbox">>
   ) => void;
   pushToast: (message: string, tone?: "info" | "success" | "error") => void;
 };
+
+export function canMoveChatFolderToParent(
+  folders: readonly SettingsChatFolder[],
+  folderId: string,
+  parentId: string
+): boolean {
+  const byId = new Map(folders.map((folder) => [folder.id, folder]));
+  const source = byId.get(folderId);
+  const parent = byId.get(parentId);
+  if (!source || !parent || source.id === parent.id || source.parentId === parent.id) return false;
+
+  const isInLeadTree = (folder: SettingsChatFolder) => {
+    const seen = new Set<string>();
+    let current: SettingsChatFolder | undefined = folder;
+    while (current && !seen.has(current.id)) {
+      if (current.id === LEAD_INBOX_FOLDER_ID || current.systemType === "leadInbox") return true;
+      seen.add(current.id);
+      current = current.parentId ? byId.get(current.parentId) : undefined;
+    }
+    return false;
+  };
+  if (isInLeadTree(source) || isInLeadTree(parent)) return false;
+  if (source.scope?.type !== parent.scope?.type ||
+    (source.scope?.type === "account" &&
+      (parent.scope?.type !== "account" || source.scope.accountId !== parent.scope.accountId))) return false;
+
+  const seen = new Set<string>();
+  let current: SettingsChatFolder | undefined = parent;
+  while (current) {
+    if (current.id === source.id || seen.has(current.id)) return false;
+    seen.add(current.id);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return true;
+}
 
 export function createChatFolderActions({
   getSettings,
@@ -75,6 +111,7 @@ export function createChatFolderActions({
     },
 
     deleteChatFolder(folderId: string) {
+      if (folderId === LEAD_INBOX_FOLDER_ID) return;
       const folders = getSettings().chatFolders || [];
       const deleted = folders.find((folder) => folder.id === folderId);
       const nextFolders = folders
@@ -98,6 +135,7 @@ export function createChatFolderActions({
 
     clearChatFolder(folderId: string) {
       const settings = getSettings();
+      const folder = (settings.chatFolders || []).find((item) => item.id === folderId);
       updateSettings({
         chatFolders: (settings.chatFolders || []).map((folder) =>
           folder.id === folderId ? { ...folder, chatIds: [] } : folder
@@ -105,6 +143,16 @@ export function createChatFolderActions({
         chatFolderClones: (settings.chatFolderClones || []).filter(
           (clone) => clone.folderId !== folderId
         ),
+        ...(folderId === LEAD_INBOX_FOLDER_ID ? {
+          leadInbox: {
+            ...settings.leadInbox,
+            dismissedChatIds: [...new Set([
+              ...settings.leadInbox.dismissedChatIds,
+              ...settings.leadInbox.collectedChatIds,
+              ...(folder?.chatIds || []),
+            ])].slice(-20_000),
+          },
+        } : {}),
       });
       pushToast(t("folder.toastCleared"), "info");
     },
@@ -119,12 +167,33 @@ export function createChatFolderActions({
       });
     },
 
+    moveChatFolderToParent(folderId: string, parentId: string): boolean {
+      const folders = getSettings().chatFolders || [];
+      const source = folders.find((folder) => folder.id === folderId);
+      const parent = folders.find((folder) => folder.id === parentId);
+      if (!source || !parent || !canMoveChatFolderToParent(folders, folderId, parentId)) {
+        pushToast(t("folder.toastMoveFailed"), "error");
+        return false;
+      }
+      const sort = folders
+        .filter((folder) => folder.parentId === parentId)
+        .reduce((max, folder) => Math.max(max, folder.sort || 0), -1) + 1;
+      updateSettings({
+        chatFolders: folders.map((folder) =>
+          folder.id === folderId ? { ...folder, parentId, sort } :
+            folder.id === parentId ? { ...folder, collapsed: false } : folder
+        ),
+      });
+      pushToast(t("folder.toastFolderMoved", { name: source.name, parent: parent.name }), "success");
+      return true;
+    },
+
     reorderChatFolder(folderId: string, targetFolderId: string, after = false) {
       if (!folderId || folderId === targetFolderId) return;
       const folders = getSettings().chatFolders || [];
       const source = folders.find((folder) => folder.id === folderId);
       const target = folders.find((folder) => folder.id === targetFolderId);
-      if (!source || !target || source.parentId !== target.parentId) return;
+      if (!source || !target || source.systemType === "leadInbox" || target.systemType === "leadInbox" || source.parentId !== target.parentId) return;
 
       const siblings = folders
         .filter(
@@ -168,9 +237,25 @@ export function createChatFolderActions({
 
     moveChatToFolder(chatId: string, folderId: string | null, options?: { removeClones?: boolean }) {
       if (!chatId) return;
+      const settings = getSettings();
+      const existingFolders = settings.chatFolders || [];
       // 无效目标不能先移除旧归属，避免文件夹在导入期间被删除时丢失成员。
-      if (folderId && !(getSettings().chatFolders || []).some((folder) => folder.id === folderId)) return;
-      let folders = (getSettings().chatFolders || []).map((folder) => ({
+      if (folderId && !existingFolders.some((folder) => folder.id === folderId)) return;
+      const byId = new Map(existingFolders.map((folder) => [folder.id, folder]));
+      const insideLeadTree = (id: string | null) => {
+        let current = id ? byId.get(id) : undefined;
+        const seen = new Set<string>();
+        while (current && !seen.has(current.id)) {
+          if (current.id === LEAD_INBOX_FOLDER_ID) return true;
+          seen.add(current.id);
+          current = current.parentId ? byId.get(current.parentId) : undefined;
+        }
+        return false;
+      };
+      const wasLead = settings.leadInbox.collectedChatIds.includes(chatId) &&
+        (existingFolders.some((folder) => insideLeadTree(folder.id) && folder.chatIds.includes(chatId)) || !existingFolders.some((folder) => folder.chatIds.includes(chatId)));
+      const remainsLead = insideLeadTree(folderId);
+      let folders = existingFolders.map((folder) => ({
         ...folder,
         chatIds: folder.chatIds.filter((id) => id !== chatId),
       }));
@@ -184,7 +269,67 @@ export function createChatFolderActions({
             : folder
         );
       }
-      updateSettings({ chatFolders: folders, chatFolderClones: clones });
+      updateSettings({
+        chatFolders: folders,
+        chatFolderClones: clones,
+        ...(wasLead ? {
+          leadInbox: {
+            ...settings.leadInbox,
+            dismissedChatIds: remainsLead
+              ? settings.leadInbox.dismissedChatIds.filter((id) => id !== chatId)
+              : [...new Set([...settings.leadInbox.dismissedChatIds, chatId])].slice(-20_000),
+          },
+        } : {}),
+      });
+    },
+
+    moveChatsToFolders(assignments: { chatId: string; folderId: string }[]) {
+      const settings = getSettings();
+      const folders = settings.chatFolders || [];
+      const byId = new Map(folders.map(folder => [folder.id, folder]));
+      const insideLeadTree = (id: string | null) => {
+        let current = id ? byId.get(id) : undefined;
+        const seen = new Set<string>();
+        while (current && !seen.has(current.id)) {
+          if (current.id === LEAD_INBOX_FOLDER_ID || current.systemType === "leadInbox") return true;
+          seen.add(current.id);
+          current = current.parentId ? byId.get(current.parentId) : undefined;
+        }
+        return false;
+      };
+      const targets = new Map<string, string>();
+      for (const { chatId, folderId } of assignments) {
+        if (chatId && byId.has(folderId) && !insideLeadTree(folderId)) targets.set(chatId, folderId);
+      }
+      if (!targets.size) return 0;
+
+      const moving = new Set(targets.keys());
+      const wasLead = new Set([...moving].filter(chatId =>
+        settings.leadInbox.collectedChatIds.includes(chatId) &&
+        (folders.some(folder => insideLeadTree(folder.id) && folder.chatIds.includes(chatId)) ||
+          !folders.some(folder => folder.chatIds.includes(chatId)))
+      ));
+      const nextFolders = folders.map(folder => ({
+        ...folder,
+        chatIds: [
+          ...folder.chatIds.filter(chatId => !moving.has(chatId)),
+          ...[...targets].filter(([, targetId]) => targetId === folder.id).map(([chatId]) => chatId),
+        ],
+      }));
+      const nextClones = (settings.chatFolderClones || []).filter(clone =>
+        targets.get(clone.sourceChatId) !== clone.folderId
+      );
+      updateSettings({
+        chatFolders: nextFolders,
+        chatFolderClones: nextClones,
+        ...(wasLead.size ? {
+          leadInbox: {
+            ...settings.leadInbox,
+            dismissedChatIds: [...new Set([...settings.leadInbox.dismissedChatIds, ...wasLead])].slice(-20_000),
+          },
+        } : {}),
+      });
+      return targets.size;
     },
 
     cloneChatToFolder(chatId: string, folderId: string) {

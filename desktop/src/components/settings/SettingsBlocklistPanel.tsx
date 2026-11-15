@@ -171,7 +171,7 @@ export function SettingsBlocklistPanel() {
         </p>
       </header>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <SectionLabel>{t("settingsBlocklist.blockedCount", { count: rows.length })}</SectionLabel>
           <Button
@@ -221,7 +221,7 @@ export function SettingsBlocklistPanel() {
         </ul>
       </section>
 
-      <section className="rounded-xl border border-zinc-800 bg-zinc-950/35 p-4">
+      <section className="border-t border-zinc-800 pt-4">
         <SectionLabel>{t("settingsBlocklist.manual")}</SectionLabel>
         <p className="mt-2 text-[11px] text-zinc-600">
           {t("settingsBlocklist.manualHint")}

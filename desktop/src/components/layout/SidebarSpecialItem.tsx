@@ -2,7 +2,7 @@ import {
   Archive,
   ChevronDown,
   ChevronRight,
-  CalendarDays,
+  Folder,
   Inbox,
   FolderPlus,
   MoreHorizontal,
@@ -21,6 +21,7 @@ export type SidebarSpecialItem =
       label: string;
       total: number;
       collapsed: boolean;
+      depth: number;
     }
   | {
       kind: "ungrouped_header";
@@ -106,10 +107,10 @@ export function SidebarSpecialItem({
 
   if (item.kind === "lead_date_header") {
     return (
-      <div className="flex items-center gap-1 px-1 pb-1 pt-1.5 text-zinc-500">
+      <div className="mb-0.5 flex items-center gap-1 px-1" style={{ marginLeft: Math.min(item.depth, 6) * 12 }}>
         <button
           type="button"
-          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1 py-1 text-left hover:bg-zinc-900/80 hover:text-zinc-300"
+          className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1 py-1.5 text-left text-zinc-400 transition-colors hover:bg-zinc-900/80 hover:text-zinc-200"
           onClick={() => onToggleLeadDate?.(item.groupId)}
           aria-expanded={!item.collapsed}
         >
@@ -118,11 +119,11 @@ export function SidebarSpecialItem({
           ) : (
             <ChevronDown className="h-3 w-3 shrink-0" />
           )}
-          <CalendarDays className="h-3 w-3 shrink-0" />
-          <span className="truncate text-[10px] font-semibold uppercase tracking-wide">
+          <Folder className="h-3.5 w-3.5 shrink-0 text-zinc-500" />
+          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
             {item.label}
           </span>
-          <span className="text-[10px] font-normal tabular-nums text-zinc-600">
+          <span className="shrink-0 text-xs font-normal tabular-nums text-zinc-500">
             {item.total}
           </span>
         </button>
