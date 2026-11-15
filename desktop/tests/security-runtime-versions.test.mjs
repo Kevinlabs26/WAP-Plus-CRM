@@ -23,7 +23,7 @@ test('Windows media conversion uses the pinned project FFmpeg rather than PATH',
   assert.match(version.stdout, /^ffmpeg version 9\.0\.2/);
 });
 
-test('Bun compiler and CI Node pins include the October 2026 runtime security fixes', async () => {
+test('Bun, Node and Gradle pins include the required runtime security fixes', async () => {
   const pkg = JSON.parse(await readFile(new URL('../baileys-bridge/package.json', import.meta.url), 'utf8'));
   assert.ok(atLeast(version(pkg.devDependencies.bun), [1, 4, 4]), 'Bun compiler embeds its runtime in the shipped sidecar');
   for (const file of ['../../package-lock.json', '../baileys-bridge/package-lock.json']) {
@@ -36,6 +36,6 @@ test('Bun compiler and CI Node pins include the October 2026 runtime security fi
   assert.ok(atLeast(version(node), [22, 23, 4]));
   const wrapper = await readFile(new URL('../../android/gradle/wrapper/gradle-wrapper.properties', import.meta.url), 'utf8');
   const gradle = /gradle-(\d+\.\d+\.\d+)-bin\.zip/.exec(wrapper)?.[1];
-  assert.ok(atLeast(version(gradle || ''), [8, 14, 6]));
-  if (gradle === '8.14.6') assert.match(wrapper, /distributionSha256Sum=7988ed071b2a07900e2ec715fca15c6ab72bce6db433af301fa7fa7e9407bd24/);
+  assert.ok(atLeast(version(gradle || ''), [8, 14, 7]));
+  if (gradle === '8.14.7') assert.match(wrapper, /distributionSha256Sum=903bfc4bc7622323124054c10f509246212a1902948bdaf26c379cca8735e856/);
 });

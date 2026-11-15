@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import { basename, join } from "node:path";
 import { detachMessageBuffers } from "./messageStore.mjs";
 import { encodeRawMessage, decodeRawMessage, decodeLegacyRawMessage } from "./rawMessageCodec.mjs";
+import { readBoundedStream } from "./httpUtil.mjs";
 
 const MAX_ENTRY_BYTES = 4 * 1024 * 1024;
 
@@ -107,7 +109,8 @@ export function createRawMediaStore(
     if (!id) return null;
     try {
       await ensureDir();
-      const data = await readFile(fileFor(id));
+      // Bound the actual read too: a damaged or replaced cache can exceed the write limit.
+      const data = await readBoundedStream(createReadStream(fileFor(id)), MAX_ENTRY_BYTES);
       let decoded;
       try { decoded = decodeRawMessage(data); }
       catch { decoded = await decodeLegacyRawMessage(data); }

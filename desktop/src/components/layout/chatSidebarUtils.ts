@@ -22,6 +22,12 @@ export const CHAT_SORT_OPTIONS: { id: ChatSortMode; label: string }[] = [
   { id: "name_desc", label: "名称 Z → A" },
 ];
 
+const SIDEBAR_VISIBLE_SYSTEM_KINDS = new Set([
+  "broadcast_campaign",
+  "scheduled_message",
+  "scheduled_plan",
+]);
+
 function phoneDigits(value: unknown) {
   return String(value || "").replace(/\D/g, "");
 }
@@ -64,8 +70,8 @@ export function buildChatActivityMaps(messages: Message[]) {
     Message["deliveryStatus"]
   >();
   for (const m of messages) {
-    // 系统事件不参与「最后聊天时间」（官方列表也不靠进群通知顶序）
-    if (m.mediaType === "system" || m.systemKind) continue;
+    // 自动标记的群发和定时消息仍是实际聊天内容；其他系统事件不参与侧栏最新消息。
+    if (m.mediaType === "system" || m.systemKind && !SIDEBAR_VISIBLE_SYSTEM_KINDS.has(m.systemKind)) continue;
     const at = messageOrderTime(m);
     const prev = lastOrderAtByChat.get(m.chatId);
     if (!prev || at >= prev) {

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, rm, stat, utimes } from "node:fs/promises";
+import { mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRawMediaStore } from "../baileys-bridge/rawMediaStore.mjs";
@@ -19,6 +20,11 @@ try {
   assert.equal(restored.key.id, "media-1");
   assert.deepEqual(restored.message.audioMessage.mediaKey, Buffer.from([1, 2, 3]));
   assert.equal(await store.load("missing"), null);
+
+  const oversizedCache = join(dir, createHash('sha256').update('tampered').digest('hex') + '.bin');
+  await writeFile(oversizedCache, 'WAP-RAW-JSON-1\n' + JSON.stringify({ text: 'x'.repeat(4 * 1024 * 1024) }));
+  assert.equal(await store.load('tampered'), null, 'reject oversized persisted objects before decoding');
+  assert.equal((await store.load('media-1')).key.id, 'media-1', 'a bad entry must not break other media');
 
   const historyPacket = Buffer.alloc(8 * 1024 * 1024, 7);
   const protocol = { key: { id: 'small-key' }, message: { audioMessage: {

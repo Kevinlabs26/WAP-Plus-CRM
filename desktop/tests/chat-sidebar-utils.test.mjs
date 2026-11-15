@@ -18,6 +18,18 @@ const mod = await import(
   `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`
 );
 
+test("sidebar activity includes sent campaigns and schedules but excludes system notices", () => {
+  for (const systemKind of ['broadcast_campaign', 'scheduled_message', 'scheduled_plan']) {
+    const message = { id: 'sent', chatId: 'chat', direction: 'out', body: 'sent text',
+      sentAt: '2026-11-15T10:00:00Z', systemKind };
+    const maps = mod.buildChatActivityMaps([message,
+      { ...message, id: 'notice', body: 'notice', sentAt: '2026-11-15T11:00:00Z', systemKind: 'group_join' },
+      { ...message, id: 'system', body: 'system', sentAt: '2026-11-15T12:00:00Z', mediaType: 'system' },
+    ]);
+    assert.equal(maps.lastBodyByChat.get('chat'), 'sent text');
+  }
+});
+
 test("sidebar chat filtering reuses the supplied contact index", () => {
   const contact = {
     id: "c1",
