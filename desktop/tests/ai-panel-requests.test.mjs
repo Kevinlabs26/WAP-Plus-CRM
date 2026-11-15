@@ -23,7 +23,7 @@ const built = await build({
     b.onLoad({ filter: /.*/, namespace: "stub" }, args => ({ contents: args.path === "react/jsx-runtime"
       ? "export const jsx = (type, props, key) => ({type, props, key}); export const jsxs = jsx; export const Fragment = 'fragment';"
       : args.path === "react"
-        ? "export const {useEffect,useLayoutEffect,useMemo,useRef,useState} = globalThis.panelHooks;"
+        ? "export const {useEffect,useLayoutEffect,useMemo,useRef,useState} = globalThis.panelHooks;export const useSyncExternalStore=(_subscribe,getSnapshot)=>getSnapshot();"
         : (exportsByModule.get(args.path) || []).map(name => `export const ${name} = globalThis.panelBindings[${JSON.stringify(name)}] || (() => null);`).join("\n") }));
   } }],
 });

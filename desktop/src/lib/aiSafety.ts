@@ -55,8 +55,7 @@ export function normalizeAutoReplyPolicy(
   fallback: AiAutoReplyPolicy = DEFAULT_AUTO_REPLY_POLICY
 ): AiAutoReplyPolicy {
   const source = raw && typeof raw === "object" ? raw as Partial<AiAutoReplyPolicy> : {};
-  const storedMinutes = Number(source.takeoverMinutes ?? fallback.takeoverMinutes);
-  const minutes = storedMinutes === 30 ? 1 : storedMinutes;
+  const minutes = Number(source.takeoverMinutes ?? fallback.takeoverMinutes);
   return {
     activeStart: normalizeTime(source.activeStart ?? fallback.activeStart),
     activeEnd: normalizeTime(source.activeEnd ?? fallback.activeEnd),

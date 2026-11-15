@@ -119,15 +119,16 @@ impl BridgeState {
         }
     }
 
-    fn emit_raw(&self, event: &str, payload: &impl Serialize) {
+    fn emit_raw(&self, event: &str, payload: &impl Serialize) -> bool {
         #[cfg(not(test))]
         if let Ok(g) = self.app.lock() {
             if let Some(app) = g.as_ref() {
-                let _ = app.emit(event, payload);
+                return app.emit(event, payload).is_ok();
             }
         }
         #[cfg(test)]
         let _ = (event, payload);
+        false
     }
 
     pub fn emit_status(&self) {
@@ -136,8 +137,12 @@ impl BridgeState {
     }
 
     fn push_event_queue(events: &Mutex<BufferedBridgeEvents>, value: serde_json::Value) {
+        Self::buffer_event(events, value, false);
+    }
+
+    fn buffer_event(events: &Mutex<BufferedBridgeEvents>, value: serde_json::Value, failed_push: bool) {
         if let Ok(mut buffer) = events.lock() {
-            if buffer.active_generation.is_some() {
+            if buffer.active_generation.is_some() && !failed_push {
                 return;
             }
             if buffer.queue.len() >= MAX_BUFFERED_BRIDGE_EVENTS {
@@ -150,7 +155,8 @@ impl BridgeState {
 
     pub fn attach_event_listener(&self, generation: u64) -> BridgeEventDrain {
         let mut buffer = self.events.lock().unwrap_or_else(|error| error.into_inner());
-        if generation <= buffer.listener_generation {
+        if generation < buffer.listener_generation ||
+            (generation == buffer.listener_generation && buffer.active_generation != Some(generation)) {
             return BridgeEventDrain {
                 events: Vec::new(),
                 dropped_events: 0,
@@ -382,7 +388,11 @@ impl BridgeState {
         }
         if let Some(hello) = info.last_hello.clone() {
             Self::push_event_queue(&self.events, hello.clone());
-            self.emit_raw(BRIDGE_EVENT, &hello);
+            if !self.emit_raw(BRIDGE_EVENT, &hello) {
+                // The inactive listener already buffered this event.
+                let active = self.events.lock().map(|b| b.active_generation.is_some()).unwrap_or(false);
+                if active { Self::buffer_event(&self.events, hello, true); }
+            }
         }
 
         let reader_handle = std::thread::spawn(move || {
@@ -411,7 +421,10 @@ impl BridgeState {
                                     Self::push_event_queue(&events, value.clone());
                                     #[cfg(not(test))]
                                     if let Some(ref handle) = app_for_thread {
-                                        let _ = handle.emit(BRIDGE_EVENT, &value);
+                                        if handle.emit(BRIDGE_EVENT, &value).is_err() {
+                                            let active = events.lock().map(|b| b.active_generation.is_some()).unwrap_or(false);
+                                            if active { Self::buffer_event(&events, value, true); }
+                                        }
                                     }
                                 }
                             }
@@ -552,6 +565,23 @@ impl BridgeState {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    #[test]
+    fn failed_push_is_recovered_once_and_overflow_is_reported() {
+        let state = BridgeState::default();
+        assert!(state.attach_event_listener(1).active);
+        BridgeState::buffer_event(&state.events, serde_json::json!({"id":"failed"}), true);
+        assert_eq!(state.attach_event_listener(1).events.len(), 1);
+        assert!(state.attach_event_listener(1).events.is_empty());
+        for i in 0..MAX_BUFFERED_BRIDGE_EVENTS + 2 {
+            BridgeState::buffer_event(&state.events, serde_json::json!({"id":i}), true);
+        }
+        let recovered = state.attach_event_listener(1);
+        assert_eq!(recovered.events.len(), MAX_BUFFERED_BRIDGE_EVENTS);
+        assert_eq!(recovered.dropped_events, 2);
+        state.detach_event_listener(1);
+        assert!(!state.attach_event_listener(1).active);
+    }
 
     #[test]
     fn oversized_line_is_rejected_before_unbounded_allocation() {

@@ -6,7 +6,7 @@ import {normalizePlaybooks, resolvePlaybook} from '../src/lib/aiPlaybooks.ts';
 
 const src=fileURLToPath(new URL('../src',import.meta.url));
 const mocks={
-  './museWeb':'export const museWebStatus=async()=>globalThis.pbSyncStatus;export const generateMuseWeb=(...args)=>globalThis.pbSyncRequest(...args);',
+  './museWeb':'export const museWebAccounts=async()=>({accounts:[],selectedId:"",primaryId:""});export const museWebStatus=async()=>globalThis.pbSyncStatus;export const generateMuseWeb=(...args)=>globalThis.pbSyncRequest(...args);',
   '@/store/appStore':'export const useAppStore={getState:()=>globalThis.pbSyncState};',
   './aiUsage':'export const trackAiRequest=async(_meta,work)=>work();',
   '@/store/restoreGuard':'export const getDataRestoreGeneration=()=>globalThis.pbSyncEpoch;export const isDataRestoreActive=()=>globalThis.pbSyncRestoring;',

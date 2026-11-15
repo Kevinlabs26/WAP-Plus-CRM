@@ -8,8 +8,8 @@ const mocks = {
   '@/store/appStore':'export const useAppStore=selector=>{const value=selector(globalThis.playbookState);if(!Object.is(value,selector(globalThis.playbookState)))throw Error("Unstable store snapshot");return value;};useAppStore.getState=()=>globalThis.playbookState;',
   '@/i18n':'export const useI18n=()=>({t:(key,params)=>key+(params?JSON.stringify(params):"")});',
   '@/components/ui/primitives':'export const Button="button",Input="input",Textarea="textarea";',
-  '@/lib/musePlaybookSync':'export const syncMusePlaybooks=async root=>{globalThis.playbookSyncRoot=root;return 0;};export const discoverMusePlaybookSources=async()=>globalThis.playbookSources||[];',
-  '@/lib/museWeb':'export const openMuseWeb=async()=>{};',
+  '@/lib/musePlaybookSync':'export const normalizeMuseFolder=v=>v.trim();export const syncMusePlaybooks=async root=>{globalThis.playbookSyncRoot=root;return 0;};export const discoverMusePlaybookSources=async()=>globalThis.playbookSources||[];',
+  '@/lib/museWeb':'export const museWebAccounts=async()=>({accounts:[],selectedId:"",primaryId:""});export const openMuseWeb=async()=>{};',
 };
 const src=fileURLToPath(new URL('../src',import.meta.url));
 const bundle=await build({stdin:{contents:`export {PlaybookLibrary} from './components/settings/PlaybookLibrary';export {PlaybookPlans} from './components/settings/PlaybookPlans';export {PlaybookSelect,PlaybookBinding} from './components/crm/PlaybookBinding';`,resolveDir:src},bundle:true,write:false,format:'esm',platform:'node',jsx:'automatic',alias:{'@':src},plugins:[{name:'playbook-ui',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});

@@ -98,14 +98,12 @@ test("account auto-reply policy inherits defaults and normalizes overrides", () 
     activeStart: "09:00",
     activeEnd: "18:00",
     takeoverMinutes: 45,
-    allowPricing: false,
   };
   const overrides = {
     personal: {
       activeStart: "22:00",
       activeEnd: "06:00",
       takeoverMinutes: 15,
-      allowPricing: true,
     },
   };
   assert.deepEqual(
@@ -146,7 +144,7 @@ test("active hours support daytime, overnight, and all-day policies", () => {
   );
 });
 
-test("pricing can be enabled without relaxing other safety boundaries", () => {
+test("legacy pricing overrides cannot bypass current safety boundaries", () => {
   const now = new Date(2026, 0, 1, 10, 0).getTime();
   const pricingMessage = {
     direction: "in",
@@ -159,17 +157,17 @@ test("pricing can be enabled without relaxing other safety boundaries", () => {
       ...DEFAULT_AUTO_REPLY_POLICY,
       allowPricing: true,
     }).allow,
-    true
+    false
   );
-  assert.equal(
+  assert.match(
     getAutoReplyOutputBlockReason("The price is $10.", { allowPricing: true }),
-    null
+    /价格/
   );
   assert.match(
     getAutoReplyOutputBlockReason("We guarantee this price.", {
       allowPricing: true,
     }),
-    /承诺/
+    /价格|承诺/
   );
   assert.match(
     getAutoReplyOutputBlockReason("Please pay now.", { allowPricing: true }),
@@ -242,13 +240,14 @@ test("manual reply pauses automation for the configured duration across conversa
         inbound,
       ],
       inbound,
-      Date.parse("2026-01-01T00:10:00.000Z")
+      Date.parse("2026-01-01T00:10:00.000Z"),
+      30 * 60_000
     )?.id,
     "manual-1"
   );
   const next={...inbound,id:'in-3',sentAt:'2026-01-01T00:07:00.000Z'};
-  assert.equal(getRecentManualTakeover([manual,inbound,next],next,Date.parse('2026-01-01T00:10:00.000Z'))?.id,'manual-1');
-  assert.equal(getRecentManualTakeover([{...manual,deliveryStatus:'queued'},inbound],inbound,Date.parse('2026-01-01T00:10:00.000Z'))?.id,'manual-1');
+  assert.equal(getRecentManualTakeover([manual,inbound,next],next,Date.parse('2026-01-01T00:10:00.000Z'),30*60_000)?.id,'manual-1');
+  assert.equal(getRecentManualTakeover([{...manual,deliveryStatus:'queued'},inbound],inbound,Date.parse('2026-01-01T00:10:00.000Z'),30*60_000)?.id,'manual-1');
   assert.equal(
     getRecentManualTakeover(
       [manual, inbound],
@@ -379,3 +378,5 @@ test("manual reply after inbound takes over before AI generation completes", () 
   const manual = { id: "manual", direction: "out", body: "hello", sentAt: new Date(now - 1000).toISOString() };
   assert.equal(evaluateAutoReplyDecision([inbound, manual], inbound, now).kind, "manual_takeover");
 });
+
+ test("manual pause values survive global and account normalization",()=>{for(const takeoverMinutes of [1,15,30,45,60,1440]){assert.equal(normalizeAutoReplyPolicy({takeoverMinutes}).takeoverMinutes,takeoverMinutes);assert.equal(resolveAutoReplyPolicy({}, {account:{takeoverMinutes}},"account").takeoverMinutes,takeoverMinutes);}assert.equal(normalizeAutoReplyPolicy({}).takeoverMinutes,1);});

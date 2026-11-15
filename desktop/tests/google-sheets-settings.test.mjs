@@ -6,7 +6,7 @@ const mocks={
  '@/store/appStore':'export const useAppStore=selector=>selector({requestConfirm:async opts=>{globalThis.sheetDisconnectPrompt=opts;return !!globalThis.sheetDisconnectApproved;}});',
  react:'export const useState=(v)=>globalThis.sheetSettingsHooks.state(v);export const useEffect=(f,d)=>globalThis.sheetSettingsHooks.effect(f,d);',
  'react/jsx-runtime':'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;export const Fragment="fragment";',
- 'lucide-react':'export const Check="icon",ExternalLink="icon",Link2="icon",RefreshCw="icon",TableProperties="icon";',
+ 'lucide-react':'export const Pencil="icon",Star="icon",Trash2="icon",Check="icon",ExternalLink="icon",Link2="icon",RefreshCw="icon",TableProperties="icon";',
  '@/components/ui/primitives':'export const Button="button",SectionLabel="label";',
  '@/i18n':'export const useI18n=()=>({t:k=>k});',
  '@/lib/googleSheetApi':'export const spreadsheetId=v=>v.includes("abc")?"abc":null;',

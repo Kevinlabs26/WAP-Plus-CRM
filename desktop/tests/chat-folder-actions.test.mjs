@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createChatFolderActions } from "../src/store/chatFolderActions.ts";
+import {build} from 'esbuild';
+import {fileURLToPath} from 'node:url';
+const folderActionsBundle=await build({entryPoints:[fileURLToPath(new URL('../src/store/chatFolderActions.ts',import.meta.url))],bundle:true,write:false,platform:'node',format:'esm',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))}});
+const {createChatFolderActions}=await import('data:text/javascript;base64,'+Buffer.from(folderActionsBundle.outputFiles[0].text).toString('base64'));
 
 let settings = {
   chatFolders: [

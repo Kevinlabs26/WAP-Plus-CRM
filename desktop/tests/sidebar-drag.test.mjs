@@ -14,7 +14,7 @@ const mocks = {
   "@/store/appStore": "export const useAppStore=Object.assign(f=>f(globalThis.dragStore),{getState:()=>globalThis.dragStore});",
   "zustand/react/shallow": "export const useShallow=f=>f;",
   "@/i18n": "export const useI18n=()=>({t:(k,p)=>globalThis.dragTranslate(k,p)});",
-  "lucide-react": ["Clock3", "Check", "BellOff", "Copy", "MoreVertical", "Pin", "ChevronDown", "ChevronRight", "Folder", "FolderPlus", "Link2", "GripVertical", "LayoutGrid", "MoreHorizontal", "Pencil", "Trash2", "Upload", "Users", "UserRoundX", "Archive", "CalendarDays", "Inbox"].map(n=>`export const ${n}=()=>null;`).join(""),
+  "lucide-react": ["CornerDownRight", "UserRoundPlus", "Clock3", "Check", "BellOff", "Copy", "MoreVertical", "Pin", "ChevronDown", "ChevronRight", "Folder", "FolderPlus", "Link2", "GripVertical", "LayoutGrid", "MoreHorizontal", "Pencil", "Trash2", "Upload", "Users", "UserRoundX", "Archive", "CalendarDays", "Inbox"].map(n=>`export const ${n}=()=>null;`).join(""),
   "@/components/ui/Avatar": "export const Avatar=()=>null;",
   "@/components/chat/Ticks": "export const Ticks=()=>null;",
   "@/components/ui/primitives": "export const Badge='badge', ListRow='button';",
@@ -53,7 +53,7 @@ function fixture() {
   };
   globalThis.dragTranslate=(key,params)=>translate("zh-CN",key,params);
   const folders=[{id:"a",name:"A",chatIds:["one"],scope:{type:"all"}}, {id:"b",name:"B",chatIds:[],scope:{type:"all"}}];
-  globalThis.dragStore={settings:{chatFolders:folders},chats:[{id:"one"},{id:"two"}],peerPresenceByKey:{},
+  globalThis.dragStore={settings:{leadInbox:{enabled:false,collectedChatIds:[],dismissedChatIds:[],dateGrouping:"none"},chatFolders:folders},chats:[{id:"one"},{id:"two"}],peerPresenceByKey:{},
     moveChatToFolder:(...args)=>moves.push(args),pushToast:(...args)=>toasts.push(args),reorderChatFolder:(...args)=>reorders.push(args)};
   const rect={left:0,right:280,top:100,bottom:500,height:400};
   const scroller={scrollTop:0,isConnected:true,getBoundingClientRect:()=>rect};

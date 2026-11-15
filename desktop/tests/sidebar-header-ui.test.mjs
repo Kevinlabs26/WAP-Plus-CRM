@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 const mocks = {
   react: "export const useState = value => globalThis.sidebarHooks.state(value); export const useRef = value => globalThis.sidebarHooks.ref(value); export const useEffect = (fn, deps) => globalThis.sidebarHooks.effect(fn, deps);",
   "react/jsx-runtime": "export const jsx=(type,props,key)=>({type,props,key}); export const jsxs=jsx; export const Fragment='fragment';",
-  "lucide-react": "export const ArrowUpDown=()=>null, Trash2=ArrowUpDown, Bookmark=ArrowUpDown, Check=ArrowUpDown, ChevronDown=ArrowUpDown, MessageCircle=ArrowUpDown, MoreHorizontal=ArrowUpDown, RefreshCw=ArrowUpDown, Search=ArrowUpDown, UserPlus=ArrowUpDown, Users=ArrowUpDown, UsersRound=ArrowUpDown, CheckCheck=ArrowUpDown, Settings2=ArrowUpDown, UserRoundPlus=ArrowUpDown;",
+  "lucide-react": "export const Sparkles=()=>null, ArrowUpDown=()=>null, Trash2=ArrowUpDown, Bookmark=ArrowUpDown, Check=ArrowUpDown, ChevronDown=ArrowUpDown, MessageCircle=ArrowUpDown, MoreHorizontal=ArrowUpDown, RefreshCw=ArrowUpDown, Search=ArrowUpDown, UserPlus=ArrowUpDown, Users=ArrowUpDown, UsersRound=ArrowUpDown, CheckCheck=ArrowUpDown, Settings2=ArrowUpDown, UserRoundPlus=ArrowUpDown;",
   "@/i18n": "export const useI18n=()=>({t:key=>key,locale:'en'});",
   "@/lib/syncDebug": "export const isSyncDebugEnabled=()=>false; export const syncLog=()=>{};",
   "@/components/ui/primitives": "export const SectionLabel='header';",

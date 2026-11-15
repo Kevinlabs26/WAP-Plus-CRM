@@ -2,7 +2,6 @@ import { AI_OUTPUT_TRUNCATED, readAiJson } from "./aiResponse.ts";
 import { trackAiRequest } from "./aiUsage.ts";
 import { vertexAiConfig } from "./vertexAi.ts";
 import { generateMuseWeb, museWebAccounts, nextMuseAutoReplyAccount, readyMuseAutoReplyAccounts } from "./museWeb.ts";
-import { useAppStore } from "@/store/appStore";
 import type { Contact, Message } from "@/types/crm";
 import type { AppSettings } from "@/store/appStore";
 import { geminiGenerate } from "./gemini.ts";
@@ -12,7 +11,6 @@ import { resolveAiReplyProfile, MAX_EFFECTIVE_PROMPT_CHARS } from "./aiPromptSco
 import { buildAiTimeContext, resolveAiTimeZones } from "./aiTimeContext.ts";
 import { resolveAiReplyConstraints, getAiOutputConstraintError } from "./aiReplyConstraints.ts";
 import { createMuseChatRedactor, museChatMessages } from "./museChatPrivacy.ts";
-import { forgetMuseAccountPlaybookCopies, shareMusePlaybooks, trainMuseAccountPlaybooks } from "./musePlaybookSync.ts";
 
 export interface SuggestResult {
   id: string;
@@ -122,6 +120,8 @@ export async function generateSuggestions(
   );
   if(provider==="muse"&&profile.readMuseFiles){
     try{
+      const { shareMusePlaybooks } = await import("./musePlaybookSync.ts");
+      const { useAppStore } = await import("../store/appStore");
       await shareMusePlaybooks(profile.musePlaybookPaths||[],opts?.signal);
       settings=useAppStore.getState().settings;
       profile=resolveAiReplyProfile(settings,opts?.accountId||contact?.accountId,opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId,undefined,contact?.aiChatInstructions);
@@ -132,6 +132,8 @@ export async function generateSuggestions(
   let museAccountId:string|undefined;
   if(provider==="muse"){
     try{
+      const { trainMuseAccountPlaybooks } = await import("./musePlaybookSync.ts");
+      const { useAppStore } = await import("../store/appStore");
       const workspaceMode=settings.aiPlaybookMuseMode!=="shared";
       museAccountId=opts?.auto?await nextMuseAutoReplyAccount():(await museWebAccounts()).selectedId;
       if(workspaceMode&&profile.museMaterials?.length){
@@ -228,7 +230,10 @@ export async function generateSuggestions(
         opts?.onMuseQueue?.(false);
         const raw=await generateMuseWeb(musePrompt,opts?.signal,conversationKey,context,opts?.outreach?0:opts?.auto?1:2,()=>opts?.onMuseQueue?.(true),museAccountId);
         if(raw.includes('PLAYBOOK_SOURCE_UNAVAILABLE')){
-          if(museAccountId)await forgetMuseAccountPlaybookCopies(museAccountId,profile.museMaterials?.map(item=>item.id)||[]);
+          if(museAccountId) {
+            const { forgetMuseAccountPlaybookCopies } = await import("./musePlaybookSync.ts");
+            await forgetMuseAccountPlaybookCopies(museAccountId,profile.museMaterials?.map(item=>item.id)||[]);
+          }
           throw Error('所选 Muse Workspace 文件无法读取（404），已清除该副本记录，下次会自动重新训练');
         }
         return parseSuggestionsJson(raw,"Muse",opts?.auto||opts?.replyTo||opts?.count===1?1:3);

@@ -10,7 +10,7 @@ const mocks={
  '@/store/appStore':'export const useAppStore=f=>f(globalThis.infoState);',
  '@/lib/googleSheets':`export const useGoogleSheets=()=>globalThis.infoSheets;useGoogleSheets.getState=()=>globalThis.infoSheets;
  export const sheetConnections=(state=globalThis.infoSheets)=>state.entries;
- export const letter=i=>String.fromCharCode(65+i);export const tabRange=tab=>"'"+tab+"'";
+ export const primarySheetTagForPhone=()=>null;export const letter=i=>String.fromCharCode(65+i);export const tabRange=tab=>"'"+tab+"'";
  export const sheetHeaders=async()=>['Phone','Value'];export const readGoogleDoc=async()=>[];
  export const readSheet=async id=>({valueRanges:[{values:[['+12025550100']]},{values:[[id==='book-b'?'from B':'from A']]}]});
  export const updateSheetCell=async(...args)=>globalThis.infoWrites.push(args);export const refreshSheets=async(...args)=>globalThis.infoRefreshes.push(args);`,

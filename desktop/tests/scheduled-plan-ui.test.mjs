@@ -7,7 +7,7 @@ const mocks={
  react:'export const useState=i=>globalThis.planHooks.state(i);export const useRef=i=>globalThis.planHooks.ref(i);export const useMemo=f=>f();export const useEffect=()=>{};',
  'react/jsx-runtime':'export const Fragment="fragment";export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
  '@/components/ui/primitives':'export const Input="input",Button="button",Textarea="textarea";',
- 'lucide-react':'export const Mic="mic",Square="square",X="x",Clock3="clock",Trash2="trash",XCircle="cancel";',
+ 'lucide-react':'export const Bookmark="icon",MessageSquareText="icon",Users="icon",Mic="mic",Square="square",X="x",Clock3="clock",Trash2="trash",XCircle="cancel";',
  '@/store/appStore':'export const useAppStore=f=>f(globalThis.planState);useAppStore.getState=()=>globalThis.planState;useAppStore.setState=patch=>Object.assign(globalThis.planState,patch);export const flushPersist=async()=>{if(globalThis.planState.failPersist)throw Error("disk full");globalThis.planState.persisted++;};',
  '@/i18n':'export const useI18n=()=>({t:(k,p)=>k+(p?JSON.stringify(p):""),locale:"en"});export const translateCurrent=k=>k;',
 };
@@ -239,7 +239,7 @@ for(const mode of ['audio','file']) test(`audio can explicitly be sent as ${mode
 test('reusing old audio plans preserves their original file or ordinary-audio mode',async()=>{
  for(const nativeMedia of [false,true]){
  const h=harness(ScheduledPlanDialog,{chatIds:['one']});
- h.state.settings.scheduledPlans=[{id:'old',title:'Old audio',text:'',media:{...media,kind:'audio',mimeType:'audio/mpeg',dataUrl:'data:audio/mpeg;base64,AA=='},status:'done',nativeMedia}];
+ h.state.settings.scheduledPlans=[{id:'old',items:[],title:'Old audio',text:'',media:{...media,kind:'audio',mimeType:'audio/mpeg',dataUrl:'data:audio/mpeg;base64,AA=='},status:'done',nativeMedia}];
  h.nodes().find(n=>n.type==='select').props.onChange({target:{value:'plan:old'}});h.render();
  assert.equal(h.find('planQueue.audioMode').props.value,nativeMedia?'audio':'file');
  await h.submit();await h.submit();assert.equal(h.state.settings.scheduledPlans[1].audioMode,nativeMedia?'audio':'file');
@@ -285,7 +285,7 @@ test('deadlines and quiet hours are persisted and invalid deadlines cannot be su
 
 test('reusing an existing sequence copies content without copying its recipient progress',async()=>{
  const h=harness(ScheduledPlanDialog,{chatIds:['one']});
- h.state.settings.scheduledPlans=[{id:'template-plan',title:'Sequence',text:'first',steps:[{text:'second'}],status:'done',nativeMedia:true}];
+ h.state.settings.scheduledPlans=[{id:'template-plan',items:[],title:'Sequence',text:'first',steps:[{text:'second'}],status:'done',nativeMedia:true}];
  h.nodes().find(n=>n.type==='select').props.onChange({target:{value:'plan:template-plan'}});h.render();await h.submit();await h.submit();
  const p=h.state.settings.scheduledPlans[1];assert.equal(p.text,'first');assert.equal(p.steps[0].text,'second');assert.equal(p.items[0].stepIndex,0);assert.equal(p.status,'pending');
 });

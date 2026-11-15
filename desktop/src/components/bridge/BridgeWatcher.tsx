@@ -132,6 +132,15 @@ export function BridgeWatcher() {
       try {
         let s = await getBridgeStatus();
         if (cancelled) return;
+        if (eventListenerGeneration !== null && unlistenEvent) {
+          const buffered = await attachBridgeEventListener(eventListenerGeneration);
+          if (cancelled) return;
+          if (buffered.events.length) enqueueGatedIngest(buffered.events, ingestBridgeEvents);
+          if (buffered.dropped_events > 0) {
+            overflowWarning = t("androidBridge.eventBufferOverflow", { count: buffered.dropped_events });
+            pushToast(overflowWarning, "error");
+          }
+        }
         let fromAuto = false;
         if (
           allowAuto &&

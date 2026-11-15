@@ -254,7 +254,7 @@ test('handoff context can accompany the full original prompt without truncating 
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const bundled=await build({stdin:{contents:`export {generateSuggestions} from './src/lib/aiSuggest.ts';export {extractChatSheetFields} from './src/lib/aiCustomerCard.ts';export {defaultSettings} from './src/store/settingsDefaults.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',alias:{'@':root+'src'},plugins:[{name:'muse-boundary',setup(b){
- b.onResolve({filter:/museWeb\.ts$/},()=>({path:'muse',namespace:'mock'}));b.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:'export const generateMuseWeb=(...args)=>globalThis.museTest(...args);'}));
+ b.onResolve({filter:/museWeb\.ts$/},()=>({path:'muse',namespace:'mock'}));b.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:'export const museWebAccounts=async()=>({accounts:[],selectedId:"",primaryId:""});export const nextMuseAutoReplyAccount=async()=>"";export const readyMuseAutoReplyAccounts=async()=>[];export const generateMuseWeb=(...args)=>globalThis.museTest(...args);'}));
 }}]});
 const ai=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text).toString('base64'));
 test('Muse reuses configured prompts, context, JSON parsing and output constraints without an API key',async()=>{

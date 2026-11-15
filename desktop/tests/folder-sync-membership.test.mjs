@@ -4,7 +4,7 @@ import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 
 const mocks = {
-  "react": "export const useMemo = fn => fn(); export const useCallback = fn => fn;",
+  "react": "export const useEffect=()=>{};export const useMemo = fn => fn(); export const useCallback = fn => fn;",
   "zustand/react/shallow": "export const useShallow = selector => selector;",
   "@/store/appStore": "export const useAppStore = Object.assign(selector => selector(globalThis.folderSidebarState), { getState: () => globalThis.folderSidebarState });",
   "./persist": "export const persist = async () => {}; export const scheduleStatsRecompute = () => {};",

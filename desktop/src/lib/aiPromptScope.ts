@@ -64,8 +64,8 @@ export function resolveFolderAiProfile(settings: PromptSettings, folderId: strin
 function resolveBaseReplyProfile(settings: PromptSettings, accountId?: string, chatId?: string): AiReplyProfile {
   const id = accountId?.trim();
   const primary = (settings.chatFolders || []).filter(folder => chatId && folder.chatIds.includes(chatId));
-  const root = settings.chatFolders.find(folder => folder.systemType === "leadInbox");
-  if (chatId && !primary.length && root && settings.leadInbox.collectedChatIds.includes(chatId) &&
+  const root = (settings.chatFolders || []).find(folder => folder.systemType === "leadInbox");
+  if (chatId && !primary.length && root && settings.leadInbox?.collectedChatIds.includes(chatId) &&
       !settings.leadInbox.dismissedChatIds.includes(chatId)) primary.push(root);
   const scopes = id ? [`account:${id}`, "all"] : ["all"];
   const primaryFolderIds = primary.filter(folder => scopes.includes(scopeKey(settings, folder))).map(folder => folder.id).sort();
