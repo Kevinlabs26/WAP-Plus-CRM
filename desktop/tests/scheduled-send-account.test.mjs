@@ -14,7 +14,7 @@ const result = await build({
     b.onLoad({ filter: /.*/, namespace: "mock" }, (a) => ({ contents:
       a.path === "react" ? "export default {};export const useRef = (current) => ({current}); export const useEffect = (effect) => { globalThis.__watcherCleanup = effect(); }; export const useCallback = (fn) => fn;" :
       a.path === "@/store/appStore" ? "export const useAppStore = {getState: () => globalThis.__watcherState};" :
-      'export const normalizeChannelId = (id) => id; export const dispatchSendText = async (request, runtime) => { await globalThis.__beforeDispatch?.(); if (runtime?.canSend && !runtime.canSend()) return {ok:false,error:"automation_cancelled"}; globalThis.__sentRequests.push(request); await globalThis.__waitSend?.(request); return {ok:true}; };'
+      'export const gateConfigFromRuntime=config=>config;export const sendRuntimeFromSettings=(s,messages)=>({...s,channelId:s.sendChannel,messages,rateLimits:{minIntervalSec:s.rateMinIntervalSec,perPhonePerMinute:s.ratePerMinute,perPhonePerHour:s.ratePerHour}});export const normalizeChannelId = (id) => id; export const dispatchSendText = async (request, runtime) => { await globalThis.__beforeDispatch?.(); if (runtime?.canSend && !runtime.canSend()) return {ok:false,error:"automation_cancelled"}; globalThis.__sentRequests.push(request); await globalThis.__waitSend?.(request); return {ok:true}; };'
     }));
   } }],
 });

@@ -53,7 +53,7 @@ function fixture() {
   };
   globalThis.dragTranslate=(key,params)=>translate("zh-CN",key,params);
   const folders=[{id:"a",name:"A",chatIds:["one"],scope:{type:"all"}}, {id:"b",name:"B",chatIds:[],scope:{type:"all"}}];
-  globalThis.dragStore={settings:{leadInbox:{enabled:false,collectedChatIds:[],dismissedChatIds:[],dateGrouping:"none"},chatFolders:folders},chats:[{id:"one"},{id:"two"}],peerPresenceByKey:{},
+  globalThis.dragStore={settings:{leadInbox:{enabled:false,collectedChatIds:[],dismissedChatIds:[],dateGrouping:"none"},chatFolders:folders},chats:[{id:"one"},{id:"two"}],peerPresenceByKey:{},baileysUi:{labelsByAccountId:{}},
     moveChatToFolder:(...args)=>moves.push(args),pushToast:(...args)=>toasts.push(args),reorderChatFolder:(...args)=>reorders.push(args)};
   const rect={left:0,right:280,top:100,bottom:500,height:400};
   const scroller={scrollTop:0,isConnected:true,getBoundingClientRect:()=>rect};

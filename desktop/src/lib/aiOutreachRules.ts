@@ -63,7 +63,7 @@ export function nextOutreachWindow(rule:Pick<AiOutreachRule,"time"|"timeZone"|"r
   if(!skipToday&&current.time>=rule.time)return now;
   for(let at=Math.ceil(now/60_000)*60_000;at<=now+27*3600_000;at+=60_000){
     const clock=outreachClock(rule.timeZone,at);
-    if(clock.time===rule.time&&(!skipToday||clock.day>today))return at;
+    if(clock.time>=rule.time&&(!skipToday||clock.day>today))return at;
   }
   return null;
 }

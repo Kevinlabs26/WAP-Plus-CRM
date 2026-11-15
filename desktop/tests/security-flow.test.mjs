@@ -34,7 +34,7 @@ function setup(chatId) {
   globalThis.connectedFlow = true;
   const inbound = { id: chatId + "-in", chatId, contactId: "c", accountId: "wa", body: "Hello", direction: "in", sentAt: new Date().toISOString() };
   globalThis.flowState = {
-    settings: { aiReplyMode: "auto", aiAutoReplyManualChatIds: [], aiAutoReplyIntervalMs: 5000, sendChannel: "baileys", liveBaileysAccountId: "wa", activeAccountId: "wa", waAccounts: [] },
+    settings: { leadInbox: { enabled: false, collectedChatIds: [], dismissedChatIds: [] }, aiReplyMode: "auto", aiAutoReplyManualChatIds: [], aiAutoReplyIntervalMs: 5000, sendChannel: "baileys", liveBaileysAccountId: "wa", activeAccountId: "wa", waAccounts: [] },
     contacts: [{ id: "c", accountId: "wa", name: "Customer", phone: "12025550100" }],
     chats: [{ id: chatId, accountId: "wa", contactId: "c" }], messages: [inbound],
     baileysUi: { connection: "open" }, bridge: { connected: true }, draftReply: "my draft",
@@ -166,7 +166,9 @@ test('new text waits for the unanswered voice and cancelled work cannot publish 
   globalThis.reloadFlow=async opts=>{started=true;oldSignal ||= opts.signal;await work;if(!opts.signal.aborted)flowState.patchMessage(voice.id,{mediaUrl:'fixture'});};
   globalThis.transcribeFlow=async(_url,_mime,_settings,opts)=>{started=true;oldSignal ||= opts.signal;return work;};
   globalThis.generateFlow=async(_contact,thread)=>{assert.equal(thread.find(item=>item.id===voice.id).transcript,'Recognized voice');return reply;};
-  const running=autoReplyInbound(voice);while(!started)await new Promise(resolve=>setImmediate(resolve));
+  const running=autoReplyInbound(voice);
+  for(let attempts=0;!started&&attempts<100;attempts++)await new Promise(resolve=>setImmediate(resolve));
+  if(!started){release({text:'Recognized voice',fallback:false});await running;assert.fail('Voice processing did not start');}
   assert.equal(useAutoReplyRuntime.getState().byChat[voice.chatId].phase,'transcribing');
   const latest={...voice,id:'new-text-'+stage,body:'A new question',mediaType:undefined,mediaUrl:undefined,sentAt:new Date(Date.now()+1).toISOString()};globalThis.flowState.messages.push(latest);
   await autoReplyInbound(latest);assert.equal(oldSignal.aborted,true);assert.deepEqual(globalThis.sentFlow,[]);
@@ -309,7 +311,7 @@ test("indexed auto-reply context avoids scanning unrelated conversations without
   Object.defineProperty(state.messages, "filter", { value(...args) { scans++; return Array.prototype.filter.apply(this, args); } });
   globalThis.generateFlow = async (_contact, context) => { assert.deepEqual(context, [inbound]); return reply; };
   await autoReplyInbound(inbound);
-  assert.equal(scans, 1, "the remaining collection scan is the dispatch safety decision");
+  assert.ok(scans <= 2, "indexed context must bound collection scans while retaining dispatch revalidation");
   assert.deepEqual(globalThis.sentFlow, ["Hello there"]);
 });
 

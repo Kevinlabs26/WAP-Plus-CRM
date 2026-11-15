@@ -26,7 +26,7 @@ test('Google Sheet tabs map original and translation columns into editable bilin
   {title:'Salut',body:'你好',category:'问候',translation:'Bonjour'},
  ]);
 });
-test('Google Sheet rows trim whitespace, skip empty rows and reject overlong content', () => {
+test('Google Sheet rows trim whitespace, skip empty rows and preserve long content', () => {
  const rows = quickReplySheetRows([
   {
    name: 'TestTab',
@@ -40,9 +40,7 @@ test('Google Sheet rows trim whitespace, skip empty rows and reject overlong con
  assert.equal(parsed.invalidRows.length, 0);
  assert.equal(parsed.rows.length, 1);
  assert.equal(parsed.rows[0].body, 'Normal Original');
- assert.throws(() => quickReplySheetRows([
-  { name: 'TestTab', columns: [['x'.repeat(2500)], ['y'.repeat(2500)]] }
- ], 'Group'), /contentTooLong/);
+ const longRows=quickReplySheetRows([{name:'TestTab',columns:[['x'.repeat(2500)],['y'.repeat(2500)]]}],'Group');const long=parseQuickReplyTable(quickReplyRowsToTsv(longRows));assert.equal(long.rows[0].body,'x'.repeat(2500));assert.equal(long.rows[0].translation,'y'.repeat(2500));
 });
 test('swapping A/B preserves the selected language and skips the header', () => {
  assert.deepEqual(quickReplySheetRows([{name:'Tab',columns:[['中文原文','你好'],['法语译文','Bonjour']]}], 'Book', {

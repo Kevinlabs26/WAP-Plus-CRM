@@ -61,7 +61,7 @@ test('account hours and risk restrictions use the same safety policy as automati
   const pricing = message('in', 1, '多少钱？');
   assert.equal(status(config, [pricing]).status, 'risk');
   config.aiAutoReplyPolicy.allowPricing = true;
-  assert.equal(status(config, [pricing]).status, 'auto');
+  assert.equal(status(config, [pricing]).status, 'risk');
   assert.equal(status(config, [message('in', 2, '退款'), message('out', 1, 'handled', { systemKind: 'ai_auto_reply' })]).status, 'auto');
 });
 

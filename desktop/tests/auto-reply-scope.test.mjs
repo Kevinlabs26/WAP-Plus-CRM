@@ -110,11 +110,11 @@ test('moving, adding and removing folder members changes only the matching conve
 });
 test('stored rules survive restart, reject invalid values, and preserve legacy manual exceptions',()=>{
  const settings=normalizeLoadedSettings({aiReplyMode:'semi',aiAutoReplyPaused:true,aiAutoReplyModeByChatId:{a:'auto',b:'manual',bad:'oops'},aiAutoReplyManualChatIds:['legacy'],chatFolders:[folder('f','auto') ]});
- assert.deepEqual(settings.aiAutoReplyModeByChatId,{a:'auto',b:'manual'});assert.equal(settings.chatFolders[0].autoReplyMode,'auto');
+ assert.deepEqual(settings.aiAutoReplyModeByChatId,{a:'auto',b:'manual'});assert.equal(settings.chatFolders.find(f=>f.id==='f').autoReplyMode,'auto');
  const restored=normalizeLoadedSettings(JSON.parse(JSON.stringify(settings)));assert.equal(restored.aiAutoReplyPaused,true);assert.deepEqual(restored.aiAutoReplyManualChatIds,['legacy']);
  assert.equal(resolveAutoReplyScope({...restored,aiAutoReplyPaused:false},'legacy').mode,'manual');
  assert.equal(normalizeLoadedSettings({aiAutoReplyPaused:'true',chatFolders:[folder('f','wrong')]}).aiAutoReplyPaused,false);
- assert.equal(normalizeLoadedSettings({chatFolders:[folder('f','wrong')]}).chatFolders[0].autoReplyMode,undefined);
+ assert.equal(normalizeLoadedSettings({chatFolders:[folder('f','wrong')]}).chatFolders.find(f=>f.id==='f').autoReplyMode,undefined);
 });
 test('backup restore cannot silently enable individual or folder automation',()=>{
  const settings=normalizeLoadedSettings({aiAutoReplyModeByChatId:{a:'auto'},chatFolders:[folder('f','auto')]});
@@ -130,6 +130,6 @@ test('multilevel folder parent links and leaf membership survive restart and bac
  const restarted=normalizeLoadedSettings(JSON.parse(JSON.stringify(settings)));
  const restored=parseBackupJson({version:2,contacts:[{id:'a',name:'A',phone:'12025550100'}],settingsSafe:buildSettingsSafe(settings)});
  for(const value of [restarted.chatFolders,restored.settingsSafe.chatFolders]) {
-  assert.deepEqual(value.map(f=>[f.id,f.parentId,f.chatIds]),folders.map(f=>[f.id,f.parentId,f.chatIds]));
+  assert.deepEqual(value.filter(f=>!f.systemType).map(f=>[f.id,f.parentId,f.chatIds]),folders.map(f=>[f.id,f.parentId,f.chatIds]));
  }
 });

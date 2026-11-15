@@ -34,7 +34,7 @@ test('switching recipient source retains both selections and always exposes thei
  h.nodes().find(n=>n.type==='textarea').props.onChange({target:{value:'+12025550101\n+12025550102'}});h.render();
  h.button('broadcast.chooseContacts').props.onClick();h.render();
  assert.equal(h.props.selected.has('a'),true);assert.equal(h.props.phoneText,changes[0]);assert.match(text(h.button('broadcast.directPhones')),/2$/);
- assert.match(text(h.nodes().find(n=>n.props.role==='status')),/"count":2/);
+ assert.equal(h.props.recipientCount,2);assert.match(text(h.button('broadcast.chooseContacts')),/1$/);
  h.button('broadcast.directPhones').props.onClick();h.render();assert.equal(h.nodes().find(n=>n.type==='textarea').props.value,changes[0]);
 });
 

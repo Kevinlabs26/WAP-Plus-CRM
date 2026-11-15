@@ -26,7 +26,7 @@ function setup(t,minutes=1){
   t.mock.timers.enable({apis:['Date','setTimeout'],now:Date.parse('2026-11-12T12:00:00Z')});
   const manual={id:'manual',chatId:'chat',contactId:'contact',accountId:'account',direction:'out',body:'hello',sentAt:new Date(Date.now()-30000).toISOString()};
   const inbound={...manual,id:'inbound',direction:'in',body:'bonjour',sentAt:new Date().toISOString()};
-  const state={settings:{aiReplyMode:'auto',sendChannel:'baileys',aiProvider:'muse',aiAutoReplyPolicy:{takeoverMinutes:minutes}},
+  const state={settings:{leadInbox:{enabled:false,collectedChatIds:[],dismissedChatIds:[]},aiReplyMode:'auto',sendChannel:'baileys',aiProvider:'muse',aiAutoReplyPolicy:{takeoverMinutes:minutes}},
     baileysUi:{connection:'connected'},messages:[manual,inbound],contacts:[{id:'contact',phone:'+12025550100'}],chats:[{id:'chat',contactId:'contact',accountId:'account'}],logActivity(){},
     updateSettings(patch){this.settings={...this.settings,...patch};},updateMessageDelivery(id,patch){this.messages=this.messages.map(message=>message.id===id?{...message,...patch}:message);}};
   globalThis.__takeoverTest={state,generated:0};

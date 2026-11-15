@@ -34,13 +34,13 @@ async function fixture(draftIds=[]) {
   globalThis.broadcastBindings={...template,BROADCAST_HARD_CAP,BROADCAST_DEFAULT_EXTRA_GAP_SEC,BROADCAST_DEFAULT_EXTRA_GAP_MAX_SEC,BROADCAST_MAX_VARIANTS,
     cacheMediaUrl:async(...args)=>{if(flags.cacheFails)throw Error('disk full');metrics.cached.push(args);},
     useAppStore:selector=>selector(state),useShallow:fn=>fn,useI18n:()=>({t:(key,params)=>key+(params?JSON.stringify(params):'')}),
-    cn:(...parts)=>parts.filter(Boolean).join(' '),Button:'button',Input:'input',Textarea:'textarea',SectionLabel:'h4',BroadcastPickStep:'picker',BroadcastMediaPicker:'media-picker',CampaignRunPanel:'run-panel',
+    cn:(...parts)=>parts.filter(Boolean).join(' '),Button:'button',Input:'input',Textarea:'textarea',SectionLabel:'h4',SettingsNumberInput:'number-input',BroadcastPickStep:'picker',BroadcastMediaPicker:'media-picker',CampaignRunPanel:'run-panel',
     DEFAULT_RATE_LIMITS:{},applyAccountWarmup:()=>({active:flags.warmup,hoursLeft:24}),isWaAccountConnected:()=>flags.connected,lastContactedAccounts:()=>new Map(),recipientKey:(_account,phone)=>phone,salesStagesWithLabels:()=>[],formatAccountDisplay:account=>account.label,
     buildContactLookup:()=>{metrics.indexes++;return new Map();},contactSendablePhone:contact=>{metrics.phones++;return template.contactSendablePhone(contact);},
   };
   const {BroadcastView}=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text+'\n//# sourceURL=broadcast-setup.js').toString('base64')+'#'+Math.random());
   const h={state,flags,metrics,render(){cursor=0;tree=BroadcastView();return tree;},picker(){return nodes(tree).find(n=>n.type==='picker').props;},
-    launch(){return nodes(tree).find(n=>n.type==='button'&&n.props.className?.includes('sm:min-w-48'));},
+    recipientCount(){const counter=nodes(tree).find(n=>n.type==='div'&&n.props.className==='mt-1 tabular-nums text-brand');return Number(text(counter).split('/')[0]);},launch(){return nodes(tree).find(n=>n.type==='button'&&n.props.className?.includes('sm:min-w-48'));},
     account(){return nodes(tree).find(n=>n.type==='select');},all(){return nodes(tree);},close(){globalThis.sessionStorage=oldStorage;}};
   h.render();return h;
 }
@@ -49,7 +49,7 @@ test('ordinary entry defaults to number paste and never builds the 20,000-contac
   const h=await fixture();try{
     assert.equal(h.picker().source,'numbers');assert.deepEqual(h.picker().pool,[]);assert.equal(h.metrics.indexes,0);assert.equal(h.metrics.phones,0);
     h.picker().onPhoneTextChange('+12025550101\n+12025550102\n+12025550101\ninvalid');h.render();
-    assert.equal(h.picker().directPhoneCount,2);assert.equal(h.picker().recipientCount,2);assert.equal(h.metrics.indexes,0);assert.equal(h.metrics.phones,0);
+    assert.equal(h.picker().directPhoneCount,2);assert.equal(h.recipientCount(),2);assert.equal(h.metrics.indexes,0);assert.equal(h.metrics.phones,0);
     h.picker().onSourceChange('contacts');h.render();assert.equal(h.picker().pool.length,20000);assert.equal(h.metrics.indexes,1);
     h.picker().onSourceChange('numbers');h.render();const calls=h.metrics.phones;
     h.picker().onPhoneTextChange('+12025550103');h.render();assert.equal(h.metrics.indexes,1);assert.equal(h.metrics.phones,calls);
@@ -60,14 +60,14 @@ test('source switching preserves pasted numbers, filters and selections; changin
   const h=await fixture();try{
     h.picker().onSourceChange('contacts');h.render();h.picker().onToggle('c0');h.picker().onQChange('Contact 0');h.render();
     h.picker().onSourceChange('numbers');h.picker().onPhoneTextChange(contacts[0].phone+'\n+12025550102');h.render();
-    assert.equal(h.picker().recipientCount,2,'overlap between list and pasted phones is deduplicated');assert.ok(h.picker().selected.has('c0'));assert.equal(h.picker().q,'Contact 0');
+    assert.equal(h.recipientCount(),2,'overlap between list and pasted phones is deduplicated');assert.ok(h.picker().selected.has('c0'));assert.equal(h.picker().q,'Contact 0');
     h.picker().onSourceChange('contacts');h.render();assert.equal(h.picker().phoneText,contacts[0].phone+'\n+12025550102');assert.ok(h.picker().selected.has('c0'));
     h.account().props.onChange({target:{value:'b'}});h.render();assert.equal(h.picker().selected.size,1);assert.equal(h.picker().directPhoneCount,2);
   }finally{h.close();}
 });
 
 test('explicit selections imported from the CRM still open the contact list instead of hiding the chosen people',async()=>{
-  const h=await fixture(['c0','missing']);try{assert.equal(h.picker().source,'contacts');assert.equal(h.picker().selected.size,1);assert.equal(h.picker().recipientCount,1);}finally{h.close();}
+  const h=await fixture(['c0','missing']);try{assert.equal(h.picker().source,'contacts');assert.equal(h.picker().selected.size,1);assert.equal(h.recipientCount(),1);}finally{h.close();}
 });
 
 test('random version tabs keep independent text and media, validate every version, and submit no inline data URLs', async()=>{
@@ -133,9 +133,9 @@ test('recipient cap, minimum sending intervals, connection and warmup guards rem
   const h=await fixture();try{
     assert.equal(h.launch().props.disabled,true);
     h.picker().onPhoneTextChange(Array.from({length:BROADCAST_HARD_CAP+1},(_,i)=>'+1202'+String(2000000+i)).join('\n'));h.render();
-    assert.equal(h.picker().recipientCount,BROADCAST_HARD_CAP+1);assert.equal(h.launch().props.disabled,true);await h.launch().props.onClick();assert.equal(h.metrics.confirmations,0);
+    assert.equal(h.recipientCount(),BROADCAST_HARD_CAP+1);assert.equal(h.launch().props.disabled,true);await h.launch().props.onClick();assert.equal(h.metrics.confirmations,0);
     h.picker().onPhoneTextChange('+12025550101');h.render();assert.equal(h.launch().props.disabled,false);
-    const intervals=h.all().filter(n=>n.type==='input'&&n.props.type==='number');assert.equal(intervals[0].props.min,20);assert.equal(intervals[0].props.value,20);assert.equal(intervals[1].props.value,30);
+    const intervals=h.all().filter(n=>n.type==='number-input');assert.equal(intervals[0].props.min,20);assert.equal(intervals[0].props.value,20);assert.equal(intervals[1].props.value,30);
     h.flags.connected=false;h.render();assert.equal(h.launch().props.disabled,true);h.flags.connected=true;h.flags.warmup=true;h.render();assert.equal(h.launch().props.disabled,true);
     assert.equal(h.metrics.created,0,'test never creates or sends a live campaign');
   }finally{h.close();}

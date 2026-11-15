@@ -12,112 +12,41 @@ const mocks={
   '@/store/restoreGuard':'export const getDataRestoreGeneration=()=>globalThis.pbSyncEpoch;export const isDataRestoreActive=()=>globalThis.pbSyncRestoring;',
 };
 const bundle=await build({entryPoints:[fileURLToPath(new URL('../src/lib/musePlaybookSync.ts',import.meta.url))],bundle:true,write:false,format:'esm',platform:'node',alias:{'@':src},plugins:[{name:'muse-sync-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
-const {parsePlaybookManifest,parsePlaybookSummaries,mergeMusePlaybooks,syncMusePlaybooks,shouldAutoSyncPlaybooks}=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
-const source=(name,role='stage',hash='a')=>({path:`/workspace/${name}.md`,name,sha256:hash.repeat(64),role});
-const manifest=(files)=>({root:'/workspace',files});
-const summaries=files=>({files:files.map(file=>({path:file.path,sha256:file.sha256,summary:`Real concise rules for ${file.name}`}))});
-const local={id:'local',name:'Local',sourceName:'local.md',content:'Local full source',summary:'Local rules'};
-function fixture(outputs=[]){
-  globalThis.pbSyncStatus={ready:true}; globalThis.pbSyncEpoch=0;globalThis.pbSyncRestoring=false;
-  const calls=[];
-  globalThis.pbSyncState={settings:{aiPlaybooks:[{...local}],aiPlaybookMuseRoot:'',aiPlaybookMuseWorkspaceLinked:false,aiPlaybookOverviewId:'',aiPlaybookMuseSyncedAt:42},updateSettings(patch){this.settings={...this.settings,...patch};}};
-  globalThis.pbSyncRequest=async(...args)=>{calls.push(args);const output=outputs.shift();if(output instanceof Error)throw output;if(typeof output==='function')return output();return JSON.stringify(output);};
-  return {calls,outputs};
+
+const {parsePlaybookManifest,mergeMusePlaybooks,syncMusePlaybooks,shouldAutoSyncPlaybooks}=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
+const local={id:'local',name:'Local',sourceName:'local.md',content:'Local source',summary:'Local rules'};
+const manifest=paths=>({root:'/workspace',paths});
+function fixture(output){
+ globalThis.pbSyncStatus={ready:true};globalThis.pbSyncEpoch=0;globalThis.pbSyncRestoring=false;
+ const calls=[];globalThis.pbSyncState={settings:{aiPlaybooks:[{...local}],aiPlaybookMuseRoot:'',aiPlaybookMuseFolder:'playbooks',aiPlaybookOverviewId:'',aiPlaybookMuseSyncedAt:42},updateSettings(patch){this.settings={...this.settings,...patch};}};
+ globalThis.pbSyncRequest=async(...args)=>{calls.push(args);return typeof output==='function'?output():JSON.stringify(output);};return calls;
 }
-
-test('workspace manifests include Playbooks in different projects and reject unsafe paths or invalid revisions',()=>{
-  const file=source('stage');
-  assert.equal(parsePlaybookManifest(JSON.stringify(manifest([file]))).files[0].path,file.path);
-  const crossProject=manifest([{...file,path:'/workspace/解决观念/overview.md',role:'overview'},{...source('stage-two'),path:'/workspace/prompt-split-alexandre/playbooks/stage-two.md'}]);
-  assert.equal(parsePlaybookManifest(JSON.stringify(crossProject)).files.length,2);
-  for(const invalid of [manifest([]),manifest([file,file]),manifest([{...file,path:'/workspace/../secret.md'}]),manifest([{...file,path:'/other/file.md'}]),manifest([{...file,sha256:'fake'}])])assert.throws(()=>parsePlaybookManifest(JSON.stringify(invalid)));
-  assert.throws(()=>parsePlaybookManifest(JSON.stringify(manifest([file])),'/different/workspace'));
-  assert.throws(()=>parsePlaybookSummaries(JSON.stringify({files:[{path:file.path,sha256:'b'.repeat(64),summary:'wrong version'}]}),[file]));
-  assert.throws(()=>parsePlaybookSummaries(JSON.stringify({files:[{path:file.path,sha256:file.sha256,summary:''}]}),[file]));
+test('selected-folder manifests reject traversal, duplicate, outside and empty paths',()=>{
+ const path='/workspace/playbooks/stage.md';assert.equal(parsePlaybookManifest(JSON.stringify(manifest([path])),'','playbooks').files[0].path,path);
+ for(const paths of [[],[path,path],['/workspace/playbooks/../secret.md'],['/other/file.md'],['/workspace/other/file.md']])assert.throws(()=>parsePlaybookManifest(JSON.stringify(manifest(paths)),'','playbooks'));
+ assert.throws(()=>parsePlaybookManifest(JSON.stringify(manifest([path])),'/different','playbooks'));
 });
-
-test('first sync discovers the whole workspace, then imports actual files and updates only changed summaries',async()=>{
-  const files=[source('actual-overview','overview'),source('arbitrary-title')];
-  const ui=fixture([manifest(files),summaries(files)]);
-  assert.equal(await syncMusePlaybooks(),2);
-  assert.equal(ui.calls.length,2);
-  assert.match(ui.calls[0][0],/Read-only workspace file retrieval/);
-  assert.match(ui.calls[0][0],/all project folders/);
-  assert.doesNotMatch(ui.calls[0][0],/Local full source|Local rules/);
-  assert.equal(ui.calls[0][2],undefined,'sync has no customer conversation binding');
-  assert.equal(ui.calls[0][4],-1,'reply tasks have queue priority');
-  const books=pbSyncState.settings.aiPlaybooks;
-  assert.equal(pbSyncState.settings.aiPlaybookMuseRoot,'/workspace');
-  assert.equal(pbSyncState.settings.aiPlaybookMuseWorkspaceLinked,true);
-  const remote=books.find(book=>book.musePath===files[1].path);
-  assert.equal(remote.name,'arbitrary-title');assert.equal(remote.content,'');
-  assert.equal(pbSyncState.settings.aiPlaybookOverviewId,books.find(book=>book.musePath===files[0].path).id);
-  assert.equal(normalizePlaybooks(books).length,3,'remote provenance survives reload');
-  ui.outputs.push(manifest(files));
-  assert.equal(await syncMusePlaybooks(),0);assert.equal(ui.calls.length,3);
-  assert.equal(pbSyncState.settings.aiPlaybooks.find(book=>book.musePath===files[1].path).id,remote.id);
-  assert.equal(pbSyncState.settings.aiPlaybooks.find(book=>book.id==='local').content,'Local full source');
+test('sync lists only the selected folder without retrieving contents or using a customer thread',async()=>{
+ const calls=fixture(manifest(['/workspace/playbooks/stage.md']));assert.equal(await syncMusePlaybooks(),1);
+ assert.equal(calls.length,1);assert.match(calls[0][0],/playbooks/);assert.match(calls[0][0],/Do not list paths outside/);assert.doesNotMatch(calls[0][0],/Local source|Local rules/);assert.equal(calls[0][2],undefined);assert.equal(calls[0][4],-1);
+ const books=pbSyncState.settings.aiPlaybooks,remote=books.find(b=>b.musePath);assert.equal(remote.content,'');assert.equal(pbSyncState.settings.aiPlaybookMuseRoot,'/workspace');assert.equal(normalizePlaybooks(books).length,2);
+ const id=remote.id;await syncMusePlaybooks();assert.equal(pbSyncState.settings.aiPlaybooks.find(b=>b.musePath).id,id);assert.equal(pbSyncState.settings.aiPlaybooks.find(b=>b.id==='local').content,local.content);
 });
-
-test('legacy project-level roots are replaced by a workspace-wide rescan',async()=>{
-  const file={...source('welcome'),path:'/workspace/解决观念/welcome.md'};
-  const ui=fixture([manifest([file]),summaries([file])]);
-  pbSyncState.settings.aiPlaybookMuseRoot='/workspace/prompt-split-alexandre/playbooks';
-  assert.equal(await syncMusePlaybooks(''),1);
-  assert.equal(pbSyncState.settings.aiPlaybookMuseRoot,'/workspace');
-  assert.equal(pbSyncState.settings.aiPlaybookMuseWorkspaceLinked,true);
-  assert.match(ui.calls[0][0],/Locate the current Muse workspace root/);
-  assert.doesNotMatch(ui.calls[0][0],/Use ONLY this already linked Muse workspace root/);
+test('failed sync keeps the successful cache and records the error',async()=>{
+ fixture(()=>{throw Error('request outcome unknown');});const before=structuredClone(pbSyncState.settings.aiPlaybooks);await assert.rejects(syncMusePlaybooks(),/unknown/);assert.deepEqual(pbSyncState.settings.aiPlaybooks,before);assert.equal(pbSyncState.settings.aiPlaybookMuseSyncedAt,42);
 });
-
-test('failed later batches and unknown submissions never partially replace the successful cache',async()=>{
-  const files=Array.from({length:7},(_,i)=>source(`stage-${i}`));
-  const ui=fixture([manifest(files),summaries(files.slice(0,6)),new Error('request outcome unknown')]);
-  const before=JSON.stringify(pbSyncState.settings.aiPlaybooks);
-  await assert.rejects(()=>syncMusePlaybooks('/workspace/playbooks'),/unknown/);
-  assert.equal(ui.calls.length,3);assert.equal(JSON.stringify(pbSyncState.settings.aiPlaybooks),before);
-  assert.equal(pbSyncState.settings.aiPlaybookMuseSyncedAt,42);
-  assert.match(pbSyncState.settings.aiPlaybookMuseError,/unknown/);
+test('concurrent calls share one request and never overwrite an intervening local edit',async()=>{
+ let release;const pending=new Promise(r=>{release=r});const calls=fixture(()=>pending);const first=syncMusePlaybooks();assert.equal(syncMusePlaybooks(),first);await new Promise(r=>setImmediate(r));assert.equal(calls.length,1);pbSyncState.settings.aiPlaybooks=[{...local,summary:'User edit'}];release(JSON.stringify(manifest(['/workspace/playbooks/stage.md'])));await assert.rejects(first,/修改/);assert.equal(pbSyncState.settings.aiPlaybooks[0].summary,'User edit');
 });
-
-test('concurrent sync calls share one request and a local edit prevents another remote request or overwrite',async()=>{
-  let release;const pending=new Promise(resolve=>{release=resolve;});
-  const ui=fixture([()=>pending]);
-  const first=syncMusePlaybooks(),second=syncMusePlaybooks();assert.equal(first,second);
-  await Promise.resolve();await Promise.resolve();
-  pbSyncState.settings.aiPlaybooks=[{...local,summary:'User edit'}];
-  release(JSON.stringify(manifest([source('stage')])));
-  await assert.rejects(()=>first,/修改/);
-  assert.equal(ui.calls.length,1);assert.equal(pbSyncState.settings.aiPlaybooks[0].summary,'User edit');
+test('restore invalidates pending sync without writing into restored data',async()=>{
+ let release;const pending=new Promise(r=>{release=r});fixture(()=>pending);const task=syncMusePlaybooks();await new Promise(r=>setImmediate(r));pbSyncEpoch++;pbSyncState.settings={aiPlaybooks:[{...local,summary:'Restored'}]};release(JSON.stringify(manifest(['/workspace/playbooks/stage.md'])));await assert.rejects(task,/恢复/);assert.equal(pbSyncState.settings.aiPlaybookMuseError,undefined);assert.equal(pbSyncState.settings.aiPlaybooks[0].summary,'Restored');
 });
-
-test('restore invalidates pending synchronization without writing status or data into the restored settings',async()=>{
-  let release;const pending=new Promise(resolve=>{release=resolve;});
-  fixture([()=>pending]);const task=syncMusePlaybooks();
-  await Promise.resolve();await Promise.resolve();
-  pbSyncEpoch++;pbSyncState.settings={aiPlaybooks:[{...local,summary:'Restored'}],aiPlaybookMuseRoot:''};
-  release(JSON.stringify(manifest([source('stage')])));
-  await assert.rejects(()=>task,/恢复/);
-  assert.equal(pbSyncState.settings.aiPlaybooks[0].summary,'Restored');assert.equal(pbSyncState.settings.aiPlaybookMuseError,undefined);
+test('missing files retain stable bindings and local sources while blocking use',()=>{
+ const parsed=parsePlaybookManifest(JSON.stringify(manifest(['/workspace/playbooks/one.md','/workspace/playbooks/two.md'])),'','playbooks');let books=mergeMusePlaybooks([local],parsed,false,'playbooks');const removed=books.find(b=>b.musePath?.endsWith('one.md'));
+ books=mergeMusePlaybooks(books,{root:'/workspace',files:parsed.files.slice(1)},false,'playbooks');assert.equal(books.find(b=>b.id===removed.id).museMissing,true);assert.equal(books.find(b=>b.id==='local').content,local.content);assert.ok(resolvePlaybook({aiPlaybooks:books,aiPlaybookBindings:{'["account","chat"]':removed.id}},'account','chat').error);
 });
-
-test('remote missing files remain cached but block their old bindings; unrelated local documents remain intact',()=>{
-  const files=[source('first'),source('second')];
-  let books=mergeMusePlaybooks([local],manifest(files),parsePlaybookSummaries(JSON.stringify(summaries(files)),files));
-  const removedId=books.find(book=>book.musePath===files[0].path).id;
-  books=mergeMusePlaybooks(books,manifest([files[1]]),new Map());
-  assert.equal(books.find(book=>book.id===removedId).museMissing,true);
-  assert.equal(books.find(book=>book.id==='local').content,local.content);
-  assert.match(resolvePlaybook({aiPlaybooks:books,aiPlaybookBindings:{'["account","chat"]':removedId}},'account','chat').error,/同步清单/);
-});
-
-test('automatic checks require Muse, a linked source, explicit enablement, visible ready UI, idle text queue and hourly spacing',()=>{
-  const config={aiProvider:'muse',aiPlaybookMuseWorkspaceLinked:true,aiPlaybookAutoSync:true,aiPlaybookMuseRoot:'/workspace',aiPlaybookMuseAttemptAt:1000};
-  assert.equal(shouldAutoSyncPlaybooks(config,3_601_001,true,true,true),true);
-  assert.equal(shouldAutoSyncPlaybooks(config,2000,true,true,true),false);
-  for(const args of [[false,true,true],[true,false,true],[true,true,false]])assert.equal(shouldAutoSyncPlaybooks(config,4_000_000,...args),false);
-  assert.equal(shouldAutoSyncPlaybooks({...config,aiPlaybookAutoSync:false},4_000_000,true,true,true),false);
-  assert.equal(shouldAutoSyncPlaybooks({...config,aiProvider:'openai'},4_000_000,true,true,true),false);
-  assert.equal(shouldAutoSyncPlaybooks({...config,aiPlaybookMuseWorkspaceLinked:false},4_000_000,true,true,true),false);
-  assert.equal(shouldAutoSyncPlaybooks({...config,aiPlaybookMuseRoot:''},4_000_000,true,true,true),false);
+test('automatic sync requires an explicit folder, opt-in, readiness and idle queue',()=>{
+ const settings={aiProvider:'muse',aiPlaybookMuseWorkspaceLinked:true,aiPlaybookAutoSync:true,aiPlaybookMuseRoot:'/workspace',aiPlaybookMuseFolder:'playbooks',aiPlaybookMuseAttemptAt:1000};assert.equal(shouldAutoSyncPlaybooks(settings,3601001,true,true,true),true);assert.equal(shouldAutoSyncPlaybooks(settings,2000,true,true,true),false);
+ for(const args of [[false,true,true],[true,false,true],[true,true,false]])assert.equal(shouldAutoSyncPlaybooks(settings,4000000,...args),false);
+ for(const patch of [{aiPlaybookAutoSync:false},{aiProvider:'openai'},{aiPlaybookMuseWorkspaceLinked:false},{aiPlaybookMuseFolder:''},{aiPlaybookMuseRoot:''}])assert.equal(shouldAutoSyncPlaybooks({...settings,...patch},4000000,true,true,true),false);
 });

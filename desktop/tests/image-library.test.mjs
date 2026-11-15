@@ -117,7 +117,7 @@ const mocks={
   'lucide-react':'export const ImagePlus="image-plus",Plus="plus",Sparkles="sparkles",Star="star",CheckSquare="check-square",ListChecks="list-checks",X="x";',
   '@/components/ui/primitives':'export const Button="button";',
   '@/i18n':'export const useI18n=()=>({t:(key)=>key});',
-  '@/store/appStore':'export const useAppStore=f=>f({...globalThis.libraryState,settings:{aiProvider:"openai",openaiKey:"",geminiKey:"",...globalThis.libraryState.settings}});useAppStore.getState=()=>globalThis.libraryState;',
+  '@/store/appStore':'export const useAppStore=f=>f({chats:[],contacts:[],...globalThis.libraryState,settings:{waAccounts:[],quickReplies:[],aiPlaybooks:[],aiProvider:"openai",openaiKey:"",geminiKey:"",...globalThis.libraryState.settings}});useAppStore.getState=()=>globalThis.libraryState;',
   '@/lib/bridge':'export const isTauri=()=>true;',
   '@tauri-apps/api/core':'export const invoke=async()=>{};',
   '@/lib/quickReplyMedia':'export const emitQuickReplyMedia=value=>{globalThis.libraryEmitted.push(value);return true;};export const quickReplyMediaToFile=()=>null;',

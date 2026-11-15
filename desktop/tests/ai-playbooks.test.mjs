@@ -58,29 +58,29 @@ test('chat merges retain account-scoped bindings and conflicting stages require 
   assert.deepEqual(remapPlaybookBindings(moved,new Map([['chat',null]])),{});
 });
 
-test('missing material and unreviewed summaries block generation; whole sources never enter prompts', () => {
+test('missing or empty material blocks generation and only selected original sources enter prompts', () => {
   const s = config();
   let result = resolveAiReplyProfile(s, 'a', 'chat');
   assert.match(result.prompt, /SENDER IDENTITY/); assert.match(result.prompt, /stage-a/); assert.match(result.prompt, /overview/);
-  assert.doesNotMatch(result.prompt, /stage-b|FULL SOURCE/);
+  assert.match(result.prompt, /FULL SOURCE stage-a/);assert.doesNotMatch(result.prompt, /stage-b/);
   s.aiPlaybooks = s.aiPlaybooks.filter(item => item.id !== 'stage-a');
   assert.ok(resolveAiReplyProfile(s,'a','chat').error);
-  s.aiPlaybooks.push(book('stage-a', ''));
-  assert.match(resolveAiReplyProfile(s,'a','chat').error, /精简/);
+  s.aiPlaybooks.push({...book('stage-a', ''),content:''});
+  assert.match(resolveAiReplyProfile(s,'a','chat').error, /内容为空/);
   s.aiPlaybooks.find(item => item.id === 'stage-a').summary = 'valid'; s.aiPlaybookOverviewId = 'deleted';
   assert.ok(resolveAiReplyProfile(s,'a','chat').error);
 });
 
-test('actual AI requests contain only the selected concise material and updates invalidate cached suggestions', async t => {
+test('actual AI requests contain only selected original material and content edits invalidate cached suggestions', async t => {
   const s = {...config(), aiProvider:'custom', customAiKey:'test', customAiBaseUrl:'https://example.invalid/v1', customAiModel:'model'};
   const contact = {id:'person',accountId:'a',name:'Customer',tags:[]};
   const messages = [{id:'message',chatId:'chat',accountId:'a',direction:'in',body:'Hello',sentAt:'2026-11-10T00:00:00Z'}];
   let body;
   t.mock.method(globalThis, 'fetch', async (_url, init) => {body=JSON.parse(init.body);return Response.json({choices:[{message:{content:'[{"text":"Hello"}]'}}]});});
   assert.equal((await generateSuggestions(contact,messages,s,{accountId:'a',chatId:'chat',count:1})).fallback,false);
-  assert.match(body.messages[0].content,/stage-a/); assert.doesNotMatch(body.messages[0].content,/stage-b|FULL SOURCE/);
+  assert.match(body.messages[0].content,/stage-a/); assert.doesNotMatch(body.messages[0].content,/stage-b/);
   const before = getSuggestionContextKey(contact,messages,s,'a',{chatId:'chat'});
-  s.aiPlaybooks.find(item=>item.id==='stage-a').summary = 'UPDATED RULES';
+  s.aiPlaybooks.find(item=>item.id==='stage-a').content = 'UPDATED RULES';
   assert.notEqual(getSuggestionContextKey(contact,messages,s,'a',{chatId:'chat'}),before);
 });
 
@@ -107,7 +107,7 @@ test('library and account-scoped bindings survive settings reload and backup res
 
 test('conversation plans and folder schedules survive normalization and backup restore',()=>{
  const schedule={planId:'plan',startDate:'2026-11-11',timeZone:'Europe/Paris',switchTime:'09:00'};
- const settings=normalizeLoadedSettings({...defaultSettings,aiPlaybookPlans:[{id:'plan',name:'Welcome',days:['one','two']}],chatFolders:[{id:'f',name:'F',sort:0,chatIds:[],scope:{type:'all'},aiPlaybookSchedule:schedule}]});
+ const settings=normalizeLoadedSettings({...defaultSettings,aiPlaybooks:[book('one'),book('two')],aiPlaybookPlans:[{id:'plan',name:'Welcome',days:['one','two']}],chatFolders:[{id:'f',name:'F',sort:0,chatIds:[],scope:{type:'all'},aiPlaybookSchedule:schedule}]});
  const restored=normalizeLoadedSettings(parseBackupJson({version:2,settingsSafe:buildSettingsSafe(settings),contacts:[{id:"person",name:"Customer",phone:"+15551234567",tags:[]}],chats:[],messages:[]}).settingsSafe);
- assert.deepEqual(restored.aiPlaybookPlans,settings.aiPlaybookPlans);assert.deepEqual(restored.chatFolders[0].aiPlaybookSchedule,schedule);
+ assert.deepEqual(restored.aiPlaybookPlans,settings.aiPlaybookPlans);assert.deepEqual(restored.chatFolders.find(f=>f.id==='f').aiPlaybookSchedule,schedule);
 });

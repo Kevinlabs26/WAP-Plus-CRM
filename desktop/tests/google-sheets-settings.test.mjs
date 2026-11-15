@@ -42,7 +42,7 @@ test('reopening a saved connection and reloading headers preserves custom labels
   let tree=render();
   assert.ok(tree.some(node=>node.type==='table'));
   assert.ok(!tree.some(node=>node.type==='input'&&node.props.placeholder?.includes('spreadsheets')));
-  tree.find(node=>node.type==='button'&&node.props.children==='sheets.edit').props.onClick();await new Promise(resolve=>setImmediate(resolve));render();effects.splice(0).forEach(fn=>fn());tree=render();
+  tree.find(node=>node.type==='button'&&node.props['aria-label']==='sheets.edit').props.onClick();await new Promise(resolve=>setImmediate(resolve));render();effects.splice(0).forEach(fn=>fn());tree=render();
   assert.ok(tree.some(node=>node.type==='input'&&node.props.value==='https://docs.google.com/spreadsheets/d/abc/edit'));
   const columns=tree.find(node=>node.type==='button'&&node.props.children==='sheets.columns');
   columns.props.onClick();await new Promise(resolve=>setImmediate(resolve));
@@ -55,7 +55,7 @@ test('reopening a saved connection and reloading headers preserves custom labels
   assert.equal(globalThis.sheetSaved.headerRow,2);
   assert.deepEqual(globalThis.sheetSavedTarget,{id:'default',name:'Main table'});
   tree=render();effects.splice(0).forEach(fn=>fn());tree=render();
-  tree.find(node=>node.type==='button'&&node.props.children==='sheets.edit').props.onClick();await new Promise(resolve=>setImmediate(resolve));render();effects.splice(0).forEach(fn=>fn());tree=render();
+  tree.find(node=>node.type==='button'&&node.props['aria-label']==='sheets.edit').props.onClick();await new Promise(resolve=>setImmediate(resolve));render();effects.splice(0).forEach(fn=>fn());tree=render();
   tree.find(node=>node.type==='button'&&node.props.children==='sheets.columns').props.onClick();await new Promise(resolve=>setImmediate(resolve));tree=render();
   const disconnect=tree.find(node=>node.type==='button'&&node.props.children==='sheets.disconnect');
   disconnect.props.onClick();await new Promise(resolve=>setImmediate(resolve));

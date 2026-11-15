@@ -121,7 +121,7 @@ export async function generateSuggestions(
   if(provider==="muse"&&profile.readMuseFiles){
     try{
       const { shareMusePlaybooks } = await import("./musePlaybookSync.ts");
-      const { useAppStore } = await import("../store/appStore");
+      const { useAppStore } = await import("@/store/appStore");
       await shareMusePlaybooks(profile.musePlaybookPaths||[],opts?.signal);
       settings=useAppStore.getState().settings;
       profile=resolveAiReplyProfile(settings,opts?.accountId||contact?.accountId,opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId,undefined,contact?.aiChatInstructions);
@@ -132,16 +132,16 @@ export async function generateSuggestions(
   let museAccountId:string|undefined;
   if(provider==="muse"){
     try{
-      const { trainMuseAccountPlaybooks } = await import("./musePlaybookSync.ts");
-      const { useAppStore } = await import("../store/appStore");
       const workspaceMode=settings.aiPlaybookMuseMode!=="shared";
       museAccountId=opts?.auto?await nextMuseAutoReplyAccount():(await museWebAccounts()).selectedId;
       if(workspaceMode&&profile.museMaterials?.length){
+        const { trainMuseAccountPlaybooks } = await import("./musePlaybookSync.ts");
+        const { useAppStore } = await import("@/store/appStore");
         const materials=profile.museMaterials;
         for(const accountId of await readyMuseAutoReplyAccounts())if(accountId!==museAccountId)void trainMuseAccountPlaybooks(accountId,materials).catch(()=>undefined);
         await trainMuseAccountPlaybooks(museAccountId,materials,opts?.signal);
+        settings=useAppStore.getState().settings;
       }
-      settings=useAppStore.getState().settings;
       profile=resolveAiReplyProfile(settings,opts?.accountId||contact?.accountId,opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId,workspaceMode?museAccountId:undefined,contact?.aiChatInstructions);
     }catch(error){
       return {suggestions:[],source:"muse",fallback:true,error:error instanceof Error?error.message:String(error)};

@@ -4,6 +4,7 @@ import {build} from 'esbuild';
 import {fileURLToPath} from 'node:url';
 const root=fileURLToPath(new URL('../',import.meta.url));
 const mocks={
+ 'lucide-react':'export const Star="star";',
  react:'export const useState=value=>globalThis.infoHooks.state(value);export const useEffect=()=>{};',
  'react/jsx-runtime':'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;export const Fragment="fragment";',
  '@/i18n':'export const useI18n=()=>({t:key=>key});',

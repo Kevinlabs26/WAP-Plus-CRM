@@ -8,7 +8,7 @@ const mocks = {
   '@/store/appStore':'export const useAppStore=selector=>{const value=selector(globalThis.playbookState);if(!Object.is(value,selector(globalThis.playbookState)))throw Error("Unstable store snapshot");return value;};useAppStore.getState=()=>globalThis.playbookState;',
   '@/i18n':'export const useI18n=()=>({t:(key,params)=>key+(params?JSON.stringify(params):"")});',
   '@/components/ui/primitives':'export const Button="button",Input="input",Textarea="textarea";',
-  '@/lib/musePlaybookSync':'export const normalizeMuseFolder=v=>v.trim();export const syncMusePlaybooks=async root=>{globalThis.playbookSyncRoot=root;return 0;};export const discoverMusePlaybookSources=async()=>globalThis.playbookSources||[];',
+  '@/lib/musePlaybookSync':'export const normalizeMuseFolder=v=>v.trim();export const syncMusePlaybooks=async(_refresh,folder)=>{globalThis.playbookSyncRoot=folder;return 0;};export const discoverMusePlaybookSources=async()=>globalThis.playbookSources||[];',
   '@/lib/museWeb':'export const museWebAccounts=async()=>({accounts:[],selectedId:"",primaryId:""});export const openMuseWeb=async()=>{};',
 };
 const src=fileURLToPath(new URL('../src',import.meta.url));
@@ -34,32 +34,19 @@ test('library imports actual filenames for selection without exposing content ed
   assert.equal(playbookState.settings.aiPlaybooks[0].name,'My custom stage');
   assert.ok(nodes(PlaybookSelect({value:'',onChange(){}})).some(node=>node.type==='option'&&JSON.stringify(node.props.children).includes('My custom stage')));
   assert.equal(tree.some(node=>node.type==='textarea'),false);
-  assert.equal(tree.some(node=>node.type==='input'&&node.props.type!=='file'),false);
+  assert.equal(tree.some(node=>node.type==='input'&&node.props.type!=='file'&&node.props.placeholder!=='playbook.scopePlaceholder'),false);
   assert.equal(tree.some(node=>node.type==='button'&&['dialog.save','common.delete'].includes(node.props.children)),false);
 });
 
-test('long local Markdown requires Muse sync when summaries can no longer be edited here',async()=>{
+test('local Markdown retains its full original content within the import capacity',async()=>{
   const ui=fixture();
   const input=ui.render().find(node=>node.type==='input'&&node.props.type==='file');
   input.props.onChange({target:{files:[{name:'Long stage.md',size:6001,text:async()=> 'x'.repeat(6001)}],value:'file'}});
   await settle();
-  assert.equal(playbookState.settings.aiPlaybooks.length,0);
-  assert.ok(ui.render().some(node=>node.props.role==='alert'&&node.props.children==='playbook.localTooLong'));
+  assert.equal(playbookState.settings.aiPlaybooks.length,1);assert.equal(playbookState.settings.aiPlaybooks[0].content.length,6001);assert.ok(!ui.render().some(node=>node.props.role==='alert'));
 });
+test('Muse sync imports only the user-entered relative folder',async()=>{const ui=fixture();const folder='解决观念/playbooks';let tree=ui.render();tree.find(n=>n.type==='input'&&n.props.placeholder==='playbook.scopePlaceholder').props.onChange({target:{value:folder}});tree=ui.render();tree.find(n=>n.type==='button'&&n.props.children==='playbook.findSources').props.onClick();await settle();assert.equal(playbookSyncRoot,folder);assert.equal(playbookState.settings.aiPlaybookAutoSync,true);delete globalThis.playbookSyncRoot;});
 
-test('Muse Playbook paths are discovered first and the selected folder is the one imported',async()=>{
-  const ui=fixture(),root='/workspace/解决观念/playbooks';
-  globalThis.playbookSources=[{name:'解决观念',root}];
-  try{
-    let tree=ui.render();
-    tree.find(node=>node.type==='button'&&node.props.children==='playbook.findSources').props.onClick();
-    await settle();tree=ui.render();
-    assert.ok(tree.some(node=>node.type==='select'&&nodes(node).some(option=>option.type==='option'&&option.props.value===root)));
-    tree.find(node=>node.type==='button'&&node.props.children==='playbook.importMuseSource').props.onClick();
-    await settle();
-    assert.equal(playbookSyncRoot,root);
-  }finally{delete globalThis.playbookSources;delete globalThis.playbookSyncRoot;}
-});
 
 test('customer picker saves only the current account conversation, and inherit clears the override',()=>{
   fixture();
@@ -88,7 +75,7 @@ test('removed Muse files disappear from binding and overview choices, while old 
  assert.equal(opts.find(n=>n.props.value==='old').props.disabled,true);
  assert.ok(opts.some(n=>n.props.value==='current'));
  assert.equal(playbookState.settings.aiPlaybookOverviewId,'old','never silently change an existing binding');
- assert.equal(ui.render().filter(n=>n.type==='select').length,2,'overview and conversation-plan selectors remain available');
+ assert.equal(ui.render().filter(n=>n.type==='select').length,1);assert.ok(ui.render().some(n=>n.type===PlaybookPlans));
  assert.equal(playbookState.settings.aiPlaybooks.length,2,'hiding expired entries does not destroy cached data');
 });
 

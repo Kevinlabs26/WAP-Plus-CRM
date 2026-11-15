@@ -24,7 +24,7 @@ assert.equal(
   2
 );
 assert.equal(
-  [...customerCard.matchAll(/signal: AbortSignal\.timeout\(60_000\)/g)].length,
+  [...customerCard.matchAll(/signal: [^\n]*AbortSignal\.timeout\(60_000\)/g)].length,
   4
 );
 

@@ -324,7 +324,7 @@ test('Muse supplies bounded structured history with exactly the same full contex
 
 const clientBuild=await build({stdin:{contents:`export * from './src/lib/museWeb.ts';export {setMusePrivacyIdentityProvider} from './src/lib/museChatPrivacy.ts';export {getAiUsageSnapshot} from './src/lib/aiUsage.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',plugins:[{name:'native-boundary',setup(b){
  b.onResolve({filter:/bridge\.ts$/},()=>({path:'bridge',namespace:'native-mock'}));b.onResolve({filter:/^@tauri-apps\/api\/core$/},()=>({path:'tauri',namespace:'native-mock'}));
- b.onLoad({filter:/.*/,namespace:'native-mock'},args=>({contents:args.path==='bridge'?'export const isTauri=()=>true;':'export const invoke=(...args)=>globalThis.museNative(...args);'}));
+ b.onLoad({filter:/.*/,namespace:'native-mock'},args=>({contents:args.path==='bridge'?'export const isTauri=()=>true;':'export const invoke=(cmd,...args)=>cmd==="muse_web_accounts"&&!globalThis.museUseCustomPool?Promise.resolve({accounts:[{id:"primary",name:"Primary",selected:true,primary:true}],selectedId:"primary",primaryId:"primary"}):globalThis.museNative(cmd,...args);'}));
 }}]});
 const client=await import('data:text/javascript;base64,'+Buffer.from(clientBuild.outputFiles[0].text).toString('base64'));
 client.setMusePrivacyIdentityProvider(()=>{
@@ -418,14 +418,14 @@ test('handoff generations are counted separately with unknown tokens, including 
  assert.equal(await client.generateMuseWeb('No handoff'),'Ordinary reply');assert.equal(client.getAiUsageSnapshot().buckets.find(row=>row.feature==='context').requests,2);
 });
 test('the native adapter lists, adds, selects and checks individual Muse accounts',async()=>{
- const calls=[];const pool={accounts:[{id:'one',name:'Muse 1',selected:true},{id:'two',name:'Muse 2',selected:false}],selectedId:'one'};
+ globalThis.museUseCustomPool=true;const calls=[];const pool={accounts:[{id:'one',name:'Muse 1',selected:true},{id:'two',name:'Muse 2',selected:false}],selectedId:'one'};
  globalThis.museNative=async(cmd,args)=>{calls.push([cmd,args]);if(cmd==='muse_web_accounts')return pool;if(cmd==='muse_web_account_add')return{...pool,accounts:[...pool.accounts,{id:'three',name:'Muse 3',selected:true}],selectedId:'three'};if(cmd==='muse_web_account_select')return{...pool,selectedId:args.accountId};if(cmd==='muse_web_status')return{opened:true,ready:args.accountId==='two',state:args.accountId==='two'?'ready':'login',message:'Sign in'};};
  assert.equal((await client.museWebAccounts()).accounts.length,2);
  assert.equal((await client.addMuseWebAccount()).selectedId,'three');
  assert.equal((await client.selectMuseWebAccount('two')).selectedId,'two');
  assert.equal((await client.museWebStatus(false,'two')).ready,true);
  assert.deepEqual(calls.map(([cmd])=>cmd),['muse_web_accounts','muse_web_account_add','muse_web_account_select','muse_web_status']);
- assert.equal(calls.at(-1)[1].accountId,'two');
+ assert.equal(calls.at(-1)[1].accountId,'two');delete globalThis.museUseCustomPool;
 });
 test('account creation and selection refuse an active generation',async()=>{
  await new Promise(resolve=>setImmediate(resolve));

@@ -11,7 +11,7 @@ const mocks = {
   "./PlaybookLibrary": "export const PlaybookLibrary=()=>null;",
   react: "export const memo=fn=>fn; export const useState=initial=>globalThis.settingsHookState?globalThis.settingsHookState(initial):[typeof initial==='function'?initial():initial,()=>{}]; export const useRef=value=>globalThis.settingsHookRef?globalThis.settingsHookRef(value):({current:null}); export const useEffect=fn=>globalThis.settingsEffects.push(fn);",
   "react/jsx-runtime": "export const jsx=(type,props,key)=>({type,props,key}); export const jsxs=jsx;",
-  "lucide-react": "export const AudioLines=()=>null, CloudUpload=AudioLines, Bell=AudioLines, TableProperties=AudioLines, Bot=AudioLines, Clock3=AudioLines, Database=AudioLines, Info=AudioLines, MessageSquareText=AudioLines, Palette=AudioLines, Radio=AudioLines, ShieldBan=AudioLines, Workflow=AudioLines, X=AudioLines, Zap=AudioLines, Activity=AudioLines, BookOpen=AudioLines, AlertTriangle=AudioLines, CheckCircle2=AudioLines, Flame=AudioLines;",
+  "lucide-react": "export const Check=()=>null,ArrowLeft=Check,Save=Check,AudioLines=()=>null, CloudUpload=AudioLines, Bell=AudioLines, TableProperties=AudioLines, Bot=AudioLines, Clock3=AudioLines, Database=AudioLines, Info=AudioLines, MessageSquareText=AudioLines, Palette=AudioLines, Radio=AudioLines, ShieldBan=AudioLines, Workflow=AudioLines, X=AudioLines, Zap=AudioLines, Activity=AudioLines, BookOpen=AudioLines, AlertTriangle=AudioLines, CheckCircle2=AudioLines, Flame=AudioLines;",
   "@/store/appStore": "export const useAppStore=selector=>selector(globalThis.settingsState);",
   "@/i18n": "export const useI18n=()=>({t:globalThis.settingsTranslate});",
   ...Object.fromEntries(panels.map(name => [`./Settings${name}Panel`, `export const Settings${name}Panel=()=>null;`])),
@@ -54,13 +54,13 @@ test("unsaved sheet settings guard close, keep editing, failed save and successf
   const register=guard=>{const tree=render();nodes(tree).find(node=>node.props.onCloseGuardChange).props.onCloseGuardChange(guard);};
   try {
     register({dirty:true,busy:false,canSave:true,save:async()=>false});
-    let tree=render();tree.props.onClick();tree=render();
+    let tree=render();find(tree,'settings.back').props.onClick();tree=render();
     assert.ok(nodes(tree).some(node=>node.props.role==='alertdialog'));assert.deepEqual(changes,[]);
     find(tree,'settings.keepEditing').props.onClick();tree=render();
     assert.ok(!nodes(tree).some(node=>node.props.role==='alertdialog'));
-    tree.props.onClick();tree=render();await find(tree,'settings.saveClose').props.onClick();
+    find(tree,'settings.back').props.onClick();tree=render();await find(tree,'settings.saveClose').props.onClick();
     assert.deepEqual(changes,[], 'a failed save keeps settings open');
-    register({dirty:true,busy:true,canSave:true,save:async()=>true});tree=render();tree.props.onClick();tree=render();
+    register({dirty:true,busy:true,canSave:true,save:async()=>true});tree=render();find(tree,'settings.back').props.onClick();tree=render();
     assert.equal(find(tree,'settings.discardClose').props.disabled,true);
     register({dirty:true,busy:false,canSave:true,save:async()=>true});tree=render();
     assert.equal(find(tree,'settings.discardClose').props.disabled,false, 'buttons recover after background work completes');
@@ -76,7 +76,7 @@ test("Google Sheets has its own settings category and opens its dedicated panel"
   globalThis.settingsState = { settingsOpen: true, settingsCategory: "google-sheets", setSettingsCategory: value => selected.push(value) };
   try {
     const all = nodes(SettingsModal());
-    const categories = all.filter(node => node.type === "button" && text(node).includes(zh["settings.googleSheetsDesc"]));
+    const categories = all.filter(node => node.type === "button" && text(node).includes(zh["settings.googleSheets"]));
     assert.equal(categories.length, 1);
     assert.equal(categories[0].props["aria-current"], "page");
     categories[0].props.onClick();
@@ -154,7 +154,7 @@ test("disconnected, pairing, reconnecting and idle accounts have no misleading h
   } finally { delete globalThis.settingsTranslate; }
 });
 
-test("settings wrap keyboard focus, dismiss on Escape, restore the trigger and leave nested dialogs alone", () => {
+test("settings page permits normal focus navigation, dismisses on Escape and preserves nested dialogs", () => {
   const originalDocument = globalThis.document, originalElement = globalThis.HTMLElement;
   class Control {
     isConnected = true; tabIndex = 0;
@@ -171,7 +171,7 @@ test("settings wrap keyboard focus, dismiss on Escape, restore the trigger and l
   globalThis.settingsState = { settingsOpen: true, settingsCategory: "connection", setSettingsOpen: value => changes.push(value) };
   let cleanup;
   try {
-    const tree = SettingsModal(), all = nodes(tree), dialog = all.find(node => node.props.role === "dialog");
+    const tree = SettingsModal(), all = nodes(tree), dialog = all.find(node => node.props.role === "region");
     all.find(node => node.props.ref).props.ref.current = first;
     const content = { scrollTop: 500 };
     all.find(node => node.type === "main").props.ref.current = content;
@@ -179,8 +179,8 @@ test("settings wrap keyboard focus, dismiss on Escape, restore the trigger and l
     cleanup = settingsEffects[0]();
     assert.equal(document.activeElement, first);
     const element = { querySelectorAll: () => [first, last, hidden] };
-    const event = (key, extra = {}) => ({ key, currentTarget: element, target: { closest: () => element }, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {}, ...extra });
-    dialog.props.onKeyDown(event("Tab", { shiftKey: true })); assert.equal(document.activeElement, last);
+    const event = (key, extra = {}) => ({ key, currentTarget: element, target: { closest: () => null }, preventDefault() { this.defaultPrevented = true; }, stopPropagation() {}, ...extra });
+    dialog.props.onKeyDown(event("Tab", { shiftKey: true })); assert.equal(document.activeElement, first);
     dialog.props.onKeyDown(event("Tab")); assert.equal(document.activeElement, first);
     dialog.props.onKeyDown(event("Escape", { target: { closest: () => ({}) } })); assert.deepEqual(changes, []);
     dialog.props.onKeyDown(event("Escape", { defaultPrevented: true })); assert.deepEqual(changes, []);

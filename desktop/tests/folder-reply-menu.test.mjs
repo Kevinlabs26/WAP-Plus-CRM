@@ -48,7 +48,7 @@ function fixture(mode,rect={left:700,right:940,top:650,bottom:682}) {
    }
    while(effects.length)effects.shift()();return list;
   },
-  element(node){const key=node.props.role+JSON.stringify(node.props.children);let el=elements.get(key);if(!el){el={focus(){document.activeElement=this;},getBoundingClientRect:()=>rect};elements.set(key,el);}el.node=node;return node.props.ref?.current||el;},
+  element(node){const key=node.props.role+JSON.stringify(node.props.children, (key,value)=>key==='ref'?undefined:value);let el=elements.get(key);if(!el){el={focus(){document.activeElement=this;},getBoundingClientRect:()=>rect};elements.set(key,el);}el.node=node;return node.props.ref?.current||el;},
   get tree(){return nodes(tree);},
   get root(){return this.tree.find(n=>n.props.role==='menu'&&!n.props.id);},
   get submenu(){return this.tree.find(n=>n.props.id==='folder-reply-f');},

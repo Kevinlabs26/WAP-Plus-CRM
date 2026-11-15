@@ -117,16 +117,16 @@ test('contact management is a direct tab next to contacts and uses the contact c
  }finally{ui.close();}
 });
 
-test("saved items and leads move into more without losing callbacks, active state or exact lead counts",()=>{
+test("saved items and lead settings remain available with their current menu callbacks",()=>{
   const ui=fixture({savedActive:true,leadCount:1234});try{
     let tree=ui.render();assert.ok(!tree.some(n=>n.type==="button"&&n.props["aria-label"]==="sidebar.saved"));
-    assert.ok(tree.some(n=>n.props["aria-label"]==="leadInbox.filterActive"&&n.props.children==="99+"));
+    assert.ok(tree.some(n=>n.props['aria-label']==='sidebar.actions'));
     const open=()=>{ui.render().find(n=>n.type==="button"&&n.props["aria-label"]==="sidebar.actions").props.onClick();return ui.render()};
     tree=open();const saved=tree.find(n=>n.type==="button"&&n.props["aria-label"]==="sidebar.saved");
     assert.equal(saved.props["aria-pressed"],true);saved.props.onClick();assert.deepEqual(ui.calls,["saved"]);
-    tree=open();const leads=tree.find(n=>n.type==="button"&&n.props["aria-label"]==="leadInbox.title");
-    assert.ok(nodes(leads).some(n=>n.props.children==="1,234"));leads.props.onClick();
-    assert.deepEqual(ui.calls,["saved","leads"]);assert.ok(!ui.render().some(n=>n.props.id==="sidebar-actions"));
+    tree=open();const leads=tree.find(n=>n.type==="button"&&n.props["aria-label"]==="leadInbox.settings");
+    assert.ok(leads);leads.props.onClick();
+    assert.deepEqual(ui.calls,["saved","lead-settings"]);assert.ok(!ui.render().some(n=>n.props.id==="sidebar-actions"));
   }finally{ui.close();}
 });
 
