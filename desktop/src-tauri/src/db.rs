@@ -42,6 +42,8 @@ pub struct AppSnapshot {
     #[serde(default)]
     pub chat_message_remaps: Vec<ChatMessageRemap>,
     #[serde(default)]
+    pub chat_account_remaps: Vec<ChatAccountRemap>,
+    #[serde(default)]
     pub row_deltas: Option<RowDeltas>,
 }
 
@@ -59,6 +61,14 @@ pub struct ChatMessageRemap {
     pub to_chat_id: String,
     pub contact_id: String,
     pub account_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatAccountRemap {
+    pub chat_id: String,
+    pub from_account_id: String,
+    pub to_account_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -600,6 +610,38 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
     let mut total_written = 0usize;
     let mut total_skipped = 0usize;
     let mut total_deleted = 0usize;
+
+    if !snap.replace_messages {
+        for remap in &snap.chat_account_remaps {
+            if remap.chat_id.is_empty()
+                || remap.to_account_id.is_empty()
+                || remap.from_account_id == remap.to_account_id
+            {
+                return Err("聊天归属纠偏参数无效".into());
+            }
+            let foreign_messages: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.deviceId'), ''), '') NOT IN ('', ?2, ?3)",
+                params![remap.chat_id, remap.from_account_id, remap.to_account_id],
+                |row| row.get(0),
+            ).map_err(|e| e.to_string())?;
+            let foreign_chat: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM chats WHERE id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.phoneId'), ''), '') NOT IN ('', ?2, ?3)",
+                params![remap.chat_id, remap.from_account_id, remap.to_account_id],
+                |row| row.get(0),
+            ).map_err(|e| e.to_string())?;
+            if foreign_messages > 0 || foreign_chat > 0 {
+                return Err("已阻止跨账号迁移聊天历史".into());
+            }
+            tx.execute(
+                "UPDATE messages SET json = json_set(json, '$.accountId', ?3), content_hash = NULL WHERE chat_id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.deviceId'), ''), '') IN ('', ?2)",
+                params![remap.chat_id, remap.from_account_id, remap.to_account_id],
+            ).map_err(|e| e.to_string())?;
+            tx.execute(
+                "UPDATE chats SET json = json_set(json, '$.accountId', ?3) WHERE id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.phoneId'), ''), '') IN ('', ?2)",
+                params![remap.chat_id, remap.from_account_id, remap.to_account_id],
+            ).map_err(|e| e.to_string())?;
+        }
+    }
 
     for remap in &snap.chat_message_remaps {
         let target = snap
@@ -1492,6 +1534,7 @@ pub fn load_snapshot(conn: &Connection) -> Result<Option<AppSnapshot>, String> {
         deleted_message_ids: Vec::new(),
         replace_messages: false,
         chat_message_remaps: Vec::new(),
+        chat_account_remaps: Vec::new(),
         row_deltas: None,
     }))
 }
@@ -2911,6 +2954,88 @@ mod tests {
         let message = get_message_by_id(&conn, "cold-0").unwrap().unwrap();
         assert_eq!(message["chatId"], "kept");
         assert_eq!(message["contactId"], "customer");
+    }
+
+    #[test]
+    fn orphan_chat_owner_is_repaired_before_cold_history_merge() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let target = json!({"id":"kept", "contactId":"customer", "accountId":"wa-live"});
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: vec![
+                    json!({"id":"old", "contactId":"duplicate", "accountId":"wa-removed"}),
+                    target.clone(),
+                ],
+                messages: vec![json!({"id":"cold", "chatId":"old", "contactId":"duplicate", "accountId":"wa-removed", "body":"history"})],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: vec![target],
+                chat_account_remaps: vec![ChatAccountRemap {
+                    chat_id: "old".into(),
+                    from_account_id: "wa-removed".into(),
+                    to_account_id: "wa-live".into(),
+                }],
+                chat_message_remaps: vec![ChatMessageRemap {
+                    from_chat_id: "old".into(),
+                    to_chat_id: "kept".into(),
+                    contact_id: "customer".into(),
+                    account_id: "wa-live".into(),
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let message = get_message_by_id(&conn, "cold").unwrap().unwrap();
+        assert_eq!(message["chatId"], "kept");
+        assert_eq!(message["accountId"], "wa-live");
+    }
+
+    #[test]
+    fn orphan_chat_owner_repair_still_rejects_another_valid_account() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let target = json!({"id":"kept", "contactId":"customer", "accountId":"wa-live"});
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: vec![
+                    json!({"id":"old", "contactId":"duplicate", "accountId":"wa-removed"}),
+                    target.clone(),
+                ],
+                messages: vec![json!({"id":"foreign", "chatId":"old", "accountId":"wa-other"})],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: vec![target],
+                chat_account_remaps: vec![ChatAccountRemap {
+                    chat_id: "old".into(),
+                    from_account_id: "wa-removed".into(),
+                    to_account_id: "wa-live".into(),
+                }],
+                chat_message_remaps: vec![ChatMessageRemap {
+                    from_chat_id: "old".into(),
+                    to_chat_id: "kept".into(),
+                    contact_id: "customer".into(),
+                    account_id: "wa-live".into(),
+                }],
+                ..Default::default()
+            }
+        )
+        .is_err());
+        assert_eq!(count_messages_for_chat(&conn, "old").unwrap(), 1);
+        let message = get_message_by_id(&conn, "foreign").unwrap().unwrap();
+        assert_eq!(message["accountId"], "wa-other");
     }
 
     #[test]

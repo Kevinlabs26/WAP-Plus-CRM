@@ -17,7 +17,7 @@ const built = await build({
   stdin: { contents: `export * from './src/lib/baileysCore.ts';
     export { baileysRestart, baileysLogout } from './src/lib/baileysChatActions.ts';
     export { resolveAccountIdentity, reconcileAccountLogin } from './src/lib/accountIdentity.ts';
-    export { ensureAccounts } from './src/lib/accounts.ts';
+    export { ensureAccounts, healSingleSessionOwnership, applyChatAccountReplacements } from './src/lib/accounts.ts';
     export { applyMessagesSync } from './src/store/messagesIngest.ts';
     export { buildPersonThreadRows } from './src/lib/personThreads.ts';
     export { collapseAllAccountFolderChats } from './src/components/layout/folderChatDisplay.ts';
@@ -109,6 +109,22 @@ test('duplicate logins and partially swapped slots cannot keep swapping ownershi
   assert.equal(mod.reconcileAccountLogin(accounts,'wa-a',b,bothB),accounts);
   assert.equal(mod.reconcileAccountLogin(accounts,'wa-a',b,new Map()),accounts);
   assert.throws(()=>mod.reconcileAccountLogin([...accounts,{id:'wa-empty'}],'wa-empty',b,bothB),/已有历史账号/);
+});
+
+test('orphan chat ownership repair carries matching messages and preserves other account history', () => {
+  const healed = mod.healSingleSessionOwnership({
+    contacts: [], chats: [{id:'orphan', accountId:'wa-removed', phoneId:'wa-removed'}, {id:'current', accountId:'wa-live'}],
+    folders: [], accounts: [{id:'wa-live'}], liveAccountId:'wa-live', activeAccountId:'wa-live',
+  });
+  assert.deepEqual(healed.chatAccountReplacements, [{chatId:'orphan', fromAccountId:'wa-removed', toAccountId:'wa-live'}]);
+  const messages = mod.applyChatAccountReplacements([
+    {id:'old', chatId:'orphan', accountId:'wa-removed'},
+    {id:'legacy', chatId:'orphan'},
+    {id:'foreign', chatId:'orphan', accountId:'wa-other'},
+  ], healed.chatAccountReplacements);
+  assert.equal(messages[0].accountId, 'wa-live');
+  assert.equal(messages[1].accountId, 'wa-live');
+  assert.equal(messages[2].accountId, 'wa-other');
 });
 
 test('changing a session during a read drops the old response', async () => {

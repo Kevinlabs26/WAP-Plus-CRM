@@ -6,15 +6,19 @@ import { updateAiReplyTaskRecords } from "@/lib/aiTaskRecords";
 import { latestMessagesPerChat } from "@/lib/aiSafety";
 import { tickAiOutreach, stopAiOutreach, noteOutreachOptOut } from "@/lib/aiOutreach";
 import { isAppLockActive } from "@/lib/appLockRuntime";
+import { createAutoReplyBacklogScheduler } from "@/lib/aiAutoReplyBacklog";
+import { retainMessageChats } from "@/store/messageMemory";
 
 /**
- * AI 全自动回复：订阅实时入站私聊消息，按设置生成并自动发送回复。
+ * AI 全自动回复：处理实时入站私聊消息，并在开启自动时补扫待回复会话。
  * 判定/限流/连接检查都在 lib/aiAutoReply 里，组件只做挂载。
  */
 export function AiAutoReplier() {
   useEffect(() => {
+    const backlog = createAutoReplyBacklogScheduler();
     const unsubscribeRecords=useAutoReplyRuntime.subscribe((current,previous)=>{
       if(current.byChat===previous.byChat)return;
+      retainMessageChats("ai-auto-reply", Object.keys(current.byChat).filter(chatId => current.byChat[chatId].phase !== "human"));
       const state=useAppStore.getState();
       state.updateSettings({aiReplyTaskRecords:updateAiReplyTaskRecords(state.settings.aiReplyTaskRecords||[],current.byChat,previous.byChat,state.messages)});
     });
@@ -43,8 +47,16 @@ export function AiAutoReplier() {
           state.settings.chatFolders !== previous.settings.chatFolders ||
           state.settings.chatFolderClones !== previous.settings.chatFolderClones ||
           state.settings.leadInbox !== previous.settings.leadInbox) cancelInactiveAiAutoFollowUps();
+      if (state.hydrated && previous.hydrated && (
+          state.settings.aiAutoReplyPaused !== previous.settings.aiAutoReplyPaused ||
+          state.settings.aiReplyMode !== previous.settings.aiReplyMode ||
+          state.settings.aiAutoReplyModeByChatId !== previous.settings.aiAutoReplyModeByChatId ||
+          state.settings.aiAutoReplyManualChatIds !== previous.settings.aiAutoReplyManualChatIds ||
+          state.settings.chatFolders !== previous.settings.chatFolders ||
+          state.settings.chatFolderClones !== previous.settings.chatFolderClones ||
+          state.settings.leadInbox !== previous.settings.leadInbox)) void backlog.schedule(previous.settings);
     });
-    return () => { window.clearInterval(timer);stopAiOutreach();stopAiAutoFollowUps();unsubscribeRecords();unsubscribeSettings();unsubscribe(); stopAutoReplies(); };
+    return () => { backlog.stop();retainMessageChats("ai-auto-reply", []);window.clearInterval(timer);stopAiOutreach();stopAiAutoFollowUps();unsubscribeRecords();unsubscribeSettings();unsubscribe(); stopAutoReplies(); };
   }, []);
 
   return null;

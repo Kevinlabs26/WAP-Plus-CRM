@@ -107,7 +107,7 @@ export function getStorageEngine(): StorageEngine {
 
 export function canPersistRowDeltas(): boolean {
   // 历史合并需要完整会话列表校验归属，并与冷历史迁移一起提交。
-  return snapshotRowDeltas && pendingChatMessageRemaps.size === 0;
+  return snapshotRowDeltas && pendingChatMessageRemaps.size === 0 && pendingChatAccountRemaps.size === 0;
 }
 
 export async function resolveStorageEngine(): Promise<StorageEngine> {
@@ -164,10 +164,13 @@ export interface PersistedAppState {
   /** 备份恢复等完整快照：消息表以本次快照为准。 */
   replaceMessages?: boolean;
   chatMessageRemaps?: ChatMessageRemap[];
+  chatAccountRemaps?: ChatAccountRemap[];
 }
 
 type ChatMessageRemap = { fromChatId: string; toChatId: string; contactId: string; accountId: string };
+type ChatAccountRemap = { chatId: string; fromAccountId: string; toAccountId: string };
 const pendingChatMessageRemaps = new Map<string, ChatMessageRemap>();
+const pendingChatAccountRemaps = new Map<string, ChatAccountRemap>();
 // 保存失败后增量基线会重置，删除意图必须留到真正落盘。
 const pendingDeletedMessageIds = new Set<string>();
 
@@ -185,6 +188,16 @@ export function registerChatMessageReplacements(
       if (pending.toChatId === fromChatId) pendingChatMessageRemaps.set(source, { ...remap, fromChatId: source });
     }
     pendingChatMessageRemaps.set(fromChatId, remap);
+  }
+}
+
+export function registerChatAccountReplacements(replacements: readonly ChatAccountRemap[]): void {
+  for (const replacement of replacements) {
+    const previous = pendingChatAccountRemaps.get(replacement.chatId);
+    pendingChatAccountRemaps.set(replacement.chatId, {
+      ...replacement,
+      fromAccountId: previous?.fromAccountId ?? replacement.fromAccountId,
+    });
   }
 }
 
@@ -244,6 +257,7 @@ function toRust(data: PersistedAppState): Record<string, unknown> {
     deletedMessageIds: data.deletedMessageIds ?? [],
     replaceMessages: data.replaceMessages === true,
     chatMessageRemaps: data.chatMessageRemaps ?? [],
+    chatAccountRemaps: data.chatAccountRemaps ?? [],
     rowDeltas: data.replaceMessages ? undefined : data.rowDeltas,
     dirty: d
       ? {
@@ -462,6 +476,7 @@ async function saveAppStateNow(
           dirty: last ? data.dirty : { messages: true },
           deletedMessageIds: last ? data.deletedMessageIds : [],
           chatMessageRemaps: last ? data.chatMessageRemaps : [],
+          chatAccountRemaps: last ? data.chatAccountRemaps : [],
           rowDeltas: last ? data.rowDeltas : undefined,
           replaceMessages: false,
         };
@@ -476,7 +491,9 @@ async function saveAppStateNow(
   }
 
   const drafts = data.draftReplyByChatId ?? (await idbLoad<PersistedAppState>())?.draftReplyByChatId ?? {};
-  await idbSave({ ...data, draftReplyByChatId: drafts, settings: publicSettings(data.settings) });
+  const persisted = { ...data };
+  delete persisted.chatAccountRemaps;
+  await idbSave({ ...persisted, draftReplyByChatId: drafts, settings: publicSettings(data.settings) });
   rememberSavedWeight(data);
 }
 
@@ -542,6 +559,8 @@ export function saveAppState(
   const chatIds = new Set(data.chats.map((chat) => (chat as { id?: string }).id));
   const remaps = data.replaceMessages || (data.dirty && !data.dirty.chats) ? [] : [...pendingChatMessageRemaps.values()]
     .filter((remap) => chatIds.has(remap.toChatId) && !chatIds.has(remap.fromChatId));
+  const accountRemaps = data.replaceMessages || (data.dirty && !data.dirty.chats) ? [] : [...pendingChatAccountRemaps.values()]
+    .filter((remap) => chatIds.has(remap.chatId));
   const run = saveQueue.then(async () => {
     const writesMessages = !data.dirty || data.dirty.messages;
     const restoredIds = new Set(writesMessages && pendingDeletedMessageIds.size
@@ -551,7 +570,7 @@ export function saveAppState(
       ? [...new Set([...pendingDeletedMessageIds].filter(id => !restoredIds.has(id)).concat(data.deletedMessageIds || []))]
       : data.deletedMessageIds || [];
     try {
-      await saveAppStateNow({ ...data, chatMessageRemaps: remaps.length ? remaps : data.chatMessageRemaps, deletedMessageIds: deletedIds }, opts);
+      await saveAppStateNow({ ...data, chatMessageRemaps: remaps.length ? remaps : data.chatMessageRemaps, chatAccountRemaps: accountRemaps.length ? accountRemaps : data.chatAccountRemaps, deletedMessageIds: deletedIds }, opts);
     } catch (error) {
       if (writesMessages) for (const id of deletedIds) pendingDeletedMessageIds.add(id);
       throw error;
@@ -564,6 +583,10 @@ export function saveAppState(
     if (data.replaceMessages) pendingChatMessageRemaps.clear();
     for (const remap of remaps) {
       if (pendingChatMessageRemaps.get(remap.fromChatId) === remap) pendingChatMessageRemaps.delete(remap.fromChatId);
+    }
+    if (data.replaceMessages) pendingChatAccountRemaps.clear();
+    for (const remap of accountRemaps) {
+      if (pendingChatAccountRemaps.get(remap.chatId) === remap) pendingChatAccountRemaps.delete(remap.chatId);
     }
   });
   saveQueue = run.catch(() => undefined);
@@ -589,6 +612,7 @@ async function clearAppStateNow(): Promise<void> {
   lastSavedChatCount = 0;
   lastSavedContactCount = 0;
   pendingChatMessageRemaps.clear();
+  pendingChatAccountRemaps.clear();
   pendingDeletedMessageIds.clear();
 }
 
@@ -718,6 +742,9 @@ export async function loadMessagesPage(opts: {
   await saveQueue;
   if ([...pendingChatMessageRemaps.values()].some((remap) => remap.toChatId === opts.chatId)) {
     throw new Error("会话历史合并尚未保存，请稍后重试");
+  }
+  if (pendingChatAccountRemaps.has(opts.chatId)) {
+    throw new Error("会话账号归属修复尚未保存，请稍后重试");
   }
   const page = await tryInvoke<MessagesPageResult>("db_load_messages_page", {
     chatId: opts.chatId,

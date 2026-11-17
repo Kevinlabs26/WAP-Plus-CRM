@@ -4,6 +4,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { useAppStore } from "@/store/appStore";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { DuplicateScheduledPlanError, saveScheduledPlan } from "@/lib/scheduledPlanActions";
+import { parsePhoneEntries } from "@/lib/phoneEntries";
 import { PlanVoiceRecorder } from "./PlanVoiceRecorder";
 import { lastContactedAccounts, recipientKey, scheduledAudioMode, scheduledFolderChatIds, scheduledPlanTargets, MAX_SCHEDULED_PLAN_ITEMS, MIN_SCHEDULED_GAP_SEC, MAX_PLAN_STEPS, type ScheduledPlan, type ScheduledPlanStep } from "@/lib/scheduledPlans";
 
@@ -26,6 +27,7 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
   const [selected, setSelected] = useState(() => new Set(chatIds || (folderId ? scheduledFolderChatIds(settings, folderId, false) : [])));
   const [defaultAccountId, setDefaultAccountId] = useState(() => settings.waAccounts.find(account => account.id === settings.liveBaileysAccountId)?.id || settings.waAccounts.find(account => account.id === settings.activeAccountId)?.id || settings.waAccounts[0]?.id || "");
   const [query, setQuery] = useState("");
+  const [numberQuery, setNumberQuery] = useState("");
   const [templateQuery, setTemplateQuery] = useState("");
   const [title, setTitle] = useState("");
   const [text, setText] = useState(initialText);
@@ -78,6 +80,10 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
     });
   }, [settings, chats, contacts, messages, chatIds, folderId, includeChildren, defaultAccountId]);
   const chosen = candidates.filter(item => selected.has(item.chatId));
+  const numberEntries = useMemo(() => new Set(parsePhoneEntries(numberQuery)), [numberQuery]);
+  const numberMatchIds = useMemo(() => new Set(candidates.filter(item =>
+    /^\+?\d{7,15}$/.test(item.recipient) && numberEntries.has(item.recipient.replace(/\D/g, ""))
+  ).map(item => item.chatId)), [candidates, numberEntries]);
   const visible = candidates.filter(item => (!review || selected.has(item.chatId)) && `${item.contactName}\n${item.recipient}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   const currentPage = Math.min(page, Math.max(0, Math.ceil(visible.length / 50) - 1));
   const pageItems = visible.slice(currentPage * 50, currentPage * 50 + 50);
@@ -184,10 +190,22 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
             const include = event.target.checked; setIncludeChildren(include); setSelected(new Set(scheduledFolderChatIds(settings, folderId, include))); setPage(0);
           }} />{t("planQueue.includeChildren")}</label>}
           <Input aria-label={t("planQueue.searchTargets")} placeholder={t("planQueue.searchTargets")} value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} />
+          {!review && <details>
+            <summary className="cursor-pointer text-xs text-zinc-500 hover:text-zinc-300">{t("planQueue.phoneSelection")} · {t("planQueue.phoneMatchCount", { count: numberMatchIds.size })}</summary>
+            <div className="mt-2 space-y-1">
+              <Textarea rows={2} aria-label={t("planQueue.phoneNumbers")} placeholder={t("planQueue.phoneNumbers")} value={numberQuery} onChange={event => setNumberQuery(event.target.value)} />
+              <p className="text-2xs text-zinc-500">{t("planQueue.phoneMatchHint")}</p>
+              <div className="flex flex-wrap gap-1">
+                <Button variant="ghost" size="xs" className="text-brand" disabled={!numberMatchIds.size} onClick={() => setSelected(previous => new Set([...previous, ...numberMatchIds]))}>{t("planQueue.addPhoneMatches")}</Button>
+                <Button variant="ghost" size="xs" className="text-brand" disabled={!numberMatchIds.size} onClick={() => setSelected(new Set(numberMatchIds))}>{t("planQueue.onlyPhoneMatches")}</Button>
+                <Button variant="ghost" size="xs" className="text-brand" disabled={!numberMatchIds.size} onClick={() => setSelected(previous => new Set([...previous].filter(id => !numberMatchIds.has(id))))}>{t("planQueue.removePhoneMatches")}</Button>
+              </div>
+            </div>
+          </details>}
           {!review && !!pageItems.length && <label className="flex items-center gap-2 text-xs text-zinc-400"><input type="checkbox" checked={pageItems.every(item => selected.has(item.chatId))} onChange={event => {
             const next = new Set(selected); pageItems.forEach(item => event.target.checked ? next.add(item.chatId) : next.delete(item.chatId)); setSelected(next);
           }} />{t("quickLibrary.selectPage")}</label>}
-          <div className="min-h-24 max-h-64 flex-1 space-y-1 overflow-y-auto rounded-lg md:max-h-none border border-zinc-800 p-2">
+          <div className="min-h-24 max-h-64 flex-1 space-y-1 overflow-y-auto md:max-h-none">
             {pageItems.map((item, index) => { const contact = contactsById.get(item.contactId); return <label key={item.id} className="flex items-start gap-2 rounded p-2 hover:bg-zinc-800">
               {!review && <input type="checkbox" className="mt-1" checked={selected.has(item.chatId)} onChange={event => { const next = new Set(selected); event.target.checked ? next.add(item.chatId) : next.delete(item.chatId); setSelected(next); }} />}
               <Avatar name={item.contactName} seed={item.contactId} src={contact?.avatarFullUrl || contact?.avatarUrl} size="sm" />
@@ -205,7 +223,7 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
             {!startNow && <label className="col-span-2 block space-y-1 text-xs text-zinc-400"><span>{t("planQueue.startTime")}</span><Input ref={dueAtInput} aria-label={t("planQueue.startTime")} type="datetime-local" required value={dueAt} onInput={event => setDueAt(event.currentTarget.value)} /></label>}
             <label className="col-span-2 block space-y-1 text-xs text-zinc-400"><span>{t("planQueue.gap")}</span><Input ref={gapInput} type="number" min={20} max={3600} required value={gapSec} onInput={event => setGapSec(Number(event.currentTarget.value))} /></label>
           </div> : <p className="text-sm text-brand">{startNow ? t("planQueue.queueNow") : new Date(dueAt).toLocaleString(locale, { timeZone }) + " · " + timeZone}<br />{t(sequence.length>1?"planQueue.defaultPace":"planQueue.pace", { seconds: gapSec })}</p>}
-          {!review?<details className="rounded-lg border border-zinc-800 p-2.5"><summary className="cursor-pointer text-xs text-zinc-500">{t("planQueue.advanced")}{(endAt || quiet) && <span className="ml-1 text-brand">· {[!!endAt, quiet].filter(Boolean).length}</span>}</summary><div className="mt-2 space-y-2 text-xs text-zinc-400"><label className="block">{t("planQueue.deadline")}<Input type="datetime-local" value={endAt} onInput={e=>setEndAt(e.currentTarget.value)}/></label><label className="flex gap-2"><input type="checkbox" checked={quiet} onChange={e=>setQuiet(e.target.checked)}/>{t("planQueue.quietHours")}</label>{quiet&&<div className="flex gap-2"><Input type="time" aria-label={t("planQueue.quietStart")} value={quietStart} onInput={e=>setQuietStart(e.currentTarget.value)}/><Input type="time" aria-label={t("planQueue.quietEnd")} value={quietEnd} onInput={e=>setQuietEnd(e.currentTarget.value)}/></div>}</div></details>:<p className="text-xs text-zinc-400">{endAt&&t("planQueue.deadline")+": "+new Date(endAt).toLocaleString(locale)} {quiet&&`${quietStart}–${quietEnd} · ${timeZone}`}</p>}
+          {!review?<details className="border-t border-zinc-800 pt-2.5"><summary className="cursor-pointer text-xs text-zinc-500">{t("planQueue.advanced")}{(endAt || quiet) && <span className="ml-1 text-brand">· {[!!endAt, quiet].filter(Boolean).length}</span>}</summary><div className="mt-2 space-y-2 text-xs text-zinc-400"><label className="block">{t("planQueue.deadline")}<Input type="datetime-local" value={endAt} onInput={e=>setEndAt(e.currentTarget.value)}/></label><label className="flex gap-2"><input type="checkbox" checked={quiet} onChange={e=>setQuiet(e.target.checked)}/>{t("planQueue.quietHours")}</label>{quiet&&<div className="flex gap-2"><Input type="time" aria-label={t("planQueue.quietStart")} value={quietStart} onInput={e=>setQuietStart(e.currentTarget.value)}/><Input type="time" aria-label={t("planQueue.quietEnd")} value={quietEnd} onInput={e=>setQuietEnd(e.currentTarget.value)}/></div>}</div></details>:<p className="text-xs text-zinc-400">{endAt&&t("planQueue.deadline")+": "+new Date(endAt).toLocaleString(locale)} {quiet&&`${quietStart}–${quietEnd} · ${timeZone}`}</p>}
 
             {review && hasAudio && <p className="text-xs text-zinc-400">{t("planQueue.audioMode")} · {t(`planQueue.audioMode.${audioMode}`)}</p>}
             <details className="text-xs text-zinc-500"><summary className="cursor-pointer">{t("planQueue.notes")}</summary><div className="mt-2 space-y-2">

@@ -57,7 +57,7 @@ function OutreachTasks({active}:{active:boolean}) {
   });
   const utcDay=outreachClock("UTC",now).day;
   const today=scoped.filter(run=>run.day===(days.get(run.folderId)||utcDay));
-  const counts={pending:scoped.filter(run=>pending(run.status)).length,sent:today.filter(run=>run.status==="sent").length,failed:today.filter(run=>run.status==="failed").length};
+  const counts={pending:scoped.filter(run=>pending(run.status)).length,sent:today.filter(run=>run.status==="sent").length,failed:today.filter(run=>run.status==="failed").length,skipped:today.filter(run=>run.status==="skipped").length};
   const order:Record<string,number>={generating:0,queued:1,draft:2,waiting:3};
   const visible=(todayOnly?scoped.filter(run=>pending(run.status)||today.includes(run)):scoped).filter(run=>filter==="all"||(filter==="pending"?pending(run.status):run.status===filter)).slice().sort((a,b)=>{
     if(pending(a.status)!==pending(b.status))return pending(a.status)?-1:1;
@@ -113,8 +113,8 @@ function OutreachTasks({active}:{active:boolean}) {
       }}/></label>
     </div>
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
-      {(["pending","sent","failed"] as const).map(key=><button key={key} type="button" aria-pressed={filter===key} onClick={()=>{setFilter(filter===key?"all":key);setLimit(30);}} className={`rounded-md px-2 py-1 ${filter===key?"bg-brand/10 text-brand":"text-zinc-500 hover:bg-zinc-800"}`}>
-        {t(key==="pending"?"aiOutreach.queue":`aiTasks.${key}`)} <strong className="ml-1 tabular-nums">{counts[key]}</strong>
+      {(["pending","sent","failed","skipped"] as const).map(key=><button key={key} type="button" aria-pressed={filter===key} onClick={()=>{setFilter(filter===key?"all":key);setLimit(30);}} className={`rounded-md px-2 py-1 ${filter===key?"bg-brand/10 text-brand":"text-zinc-500 hover:bg-zinc-800"}`}>
+        {t(key==="pending"?"aiOutreach.queue":key==="skipped"?"aiOutreach.status.skipped":`aiTasks.${key}`)} <strong className="ml-1 tabular-nums">{counts[key]}</strong>
       </button>)}
       <span role="status" className="ml-auto text-zinc-500" title={`${t("aiOutreach.scheduler")}${scheduler.at?` · ${new Date(scheduler.at).toLocaleTimeString()}`:""}`}>{t(`aiOutreach.scheduler.${scheduler.phase}`)}</span>
     </div>
@@ -163,6 +163,7 @@ function OutreachTasks({active}:{active:boolean}) {
       </button><span role="status" className="shrink-0">{t(personExcluded&&pending(run.status)?"aiOutreach.personExcluded":paused&&pending(run.status)?"aiTasks.folderPaused":`aiOutreach.status.${run.status}`)}</span></div>
       <div className="mt-1 text-zinc-500">{folder?.name} · {settings.waAccounts.find(account=>account.id===run.accountId)?.label||run.accountId} · {run.day}</div>
       {run.text&&<details className="mt-2"><summary className="cursor-pointer text-zinc-500">{t("aiTasks.message")}</summary><p className="mt-2 whitespace-pre-wrap">{run.text}</p></details>}
+      {run.skipReason&&<p role="status" className="mt-2 text-zinc-500">{run.skipReason}</p>}
       {run.error&&<p role="alert" className="mt-2 text-amber-500">{run.error}</p>}
       <div className="mt-2 flex flex-wrap items-center gap-2">{run.status==="draft"&&<Button size="xs" variant="primary" disabled={!!busy||!!paused} onClick={()=>void execute(run.id,true)}>{t("aiOutreach.confirm")}</Button>}
         {["failed","cancelled"].includes(run.status)&&<Button size="xs" disabled={!!busy||!!paused} onClick={()=>void execute(run.id,"retry")}>{t(run.messageId?"aiTasks.retrySend":"aiOutreach.retry")}</Button>}

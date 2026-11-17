@@ -40,7 +40,7 @@ export function inspectOutreachCandidate(state: OutreachState, folderId: string,
   if(settings.aiAutoReplyPaused)return {candidate:null,reason:"all_paused"};
   if(settings.aiOutreachPaused)return {candidate:null,reason:"master_paused"};
   if(settings.sendChannel!=="baileys")return {candidate:null,reason:"unsupported_channel"};
-  if(!hasRealAiKey(settings))return {candidate:null,reason:"missing_ai"};
+  if(!hasRealAiKey(settings)&&!settings.aiOutreachMuseAccountId)return {candidate:null,reason:"missing_ai"};
   const rule=lookup?.rule||normalizeOutreachRule(folder.aiOutreach);
   const chat=lookup?.chat||state.chats.find(item=>item.id===chatId),contact=lookup?.contact||state.contacts.find(item=>item.id===chat?.contactId);
   if (!chat||!contact||chat.id!==chatId||contact.id!==chat.contactId||chat.isGroup||contact.isGroup||chat.localOnly) return {candidate:null,reason:"invalid_contact"};
@@ -86,7 +86,8 @@ export function outreachContextKey(state: OutreachState, folderId:string,chatId:
   const candidate=outreachCandidate(state,folderId,chatId,now,runId,ownMessage,undefined,!!ownMessage);
   if (!candidate) return null;
   return JSON.stringify([folderId,chatId,candidate.accountId,candidate.recipient,candidate.day,candidate.basisAt,candidate.rule,
-    getSuggestionContextKey(candidate.contact,candidate.thread,state.settings,candidate.accountId,{auto:true,chatId,outreach:outreachGoal(candidate.rule)})]);
+    state.settings.aiOutreachMuseAccountId,
+    getSuggestionContextKey(candidate.contact,candidate.thread,state.settings,candidate.accountId,{auto:true,chatId,outreach:outreachGoal(candidate.rule),outreachDecision:state.settings.aiProvider==="muse"||!!state.settings.aiOutreachMuseAccountId,allowSidebarData:candidate.rule.allowSidebarData===true})]);
 }
 
 export function currentOutreachContext(state: OutreachState,message: Message) {

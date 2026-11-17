@@ -108,7 +108,7 @@ export async function tickAiOutreach(now=Date.now()) {
     const state=useAppStore.getState();
     if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return;
     // shortcut: Stop at 10k audit entries rather than evict deduplication history; archive before larger deployments.
-    if (state.settings.aiAutoReplyPaused||state.settings.aiOutreachPaused||state.settings.sendChannel!=="baileys"||!hasRealAiKey(state.settings)) return;
+    if (state.settings.aiAutoReplyPaused||state.settings.aiOutreachPaused||state.settings.sendChannel!=="baileys"||!hasRealAiKey(state.settings)&&!state.settings.aiOutreachMuseAccountId) return;
     const folders=state.settings.chatFolders.filter(folder=>folder.aiOutreach?.enabled&&!folder.aiOutreach.paused);
     const lastRunByFolder=new Map<string,number>();
     for(const run of state.settings.aiOutreachRuns||[])lastRunByFolder.set(run.folderId,Math.max(lastRunByFolder.get(run.folderId)||0,Date.parse(run.at)||0));
@@ -183,15 +183,25 @@ async function generateOutreach(folderId:string,chatId:string,id:string,now=Date
   scheduler={at:Date.now(),phase:"generating",error:""};
   controller=new AbortController();
   try {
-    const result=await generateSuggestions(candidate.contact,candidate.thread,useAppStore.getState().settings,
-      {auto:true,accountId:candidate.accountId,chatId,outreach:outreachGoal(candidate.rule),signal:controller.signal});
-    const text=result.suggestions[0]?.text.trim();
+    const currentSettings=useAppStore.getState().settings;
+    const useDecision=currentSettings.aiProvider==="muse"||!!currentSettings.aiOutreachMuseAccountId;
+    const result=await generateSuggestions(candidate.contact,candidate.thread,currentSettings,
+      {auto:true,accountId:candidate.accountId,chatId,outreach:outreachGoal(candidate.rule),outreachDecision:useDecision,allowSidebarData:candidate.rule.allowSidebarData===true,signal:controller.signal});
+    if(result.outreachDecision?.action==="skip"){
+      if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return false;
+      if(controller.signal.aborted||useAppStore.getState().settings.aiOutreachRuns.find(item=>item.id===id)?.status!=="generating"||outreachContextKey(useAppStore.getState(),folderId,chatId,id)!==key){
+        await saveRun({...run,status:"cancelled",error:"生成期间上下文或规则发生变化"});return false;
+      }
+      await saveRun({...run,status:"skipped",skipReason:result.outreachDecision.reason});
+      return true;
+    }
+    const text=(result.outreachDecision?.action==="send"?result.outreachDecision.text:result.suggestions[0]?.text)?.trim();
     if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return false;
     if(controller.signal.aborted||useAppStore.getState().settings.aiTaskDismissedIds?.includes(`outreach:${id}`)||useAppStore.getState().settings.aiOutreachRuns.find(item=>item.id===id)?.status!=="generating"||outreachContextKey(useAppStore.getState(),folderId,chatId,id)!==key){
       await saveRun({...run,status:"cancelled",error:"生成期间上下文或规则发生变化"});return false;
     }
     const block=text&&getAutoReplyOutputBlockReason(text);
-    if(result.fallback||result.source==="mock"||!text||block){await saveRun({...run,status:"failed",error:result.error||block||"AI 没有返回有效内容"});return false;}
+    if(result.fallback||result.source==="mock"||!text||block||useDecision&&!result.outreachDecision){await saveRun({...run,status:"failed",error:result.error||block||"AI 没有返回有效内容"});return false;}
     const hash=await hashAiReplyContext(key);
     if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return false;
     if(useAppStore.getState().settings.aiOutreachRuns.find(item=>item.id===id)?.status!=="generating"||outreachContextKey(useAppStore.getState(),folderId,chatId,id)!==key)return false;

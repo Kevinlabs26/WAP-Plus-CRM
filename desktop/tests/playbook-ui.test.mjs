@@ -8,7 +8,7 @@ const mocks = {
   '@/store/appStore':'export const useAppStore=selector=>{const value=selector(globalThis.playbookState);if(!Object.is(value,selector(globalThis.playbookState)))throw Error("Unstable store snapshot");return value;};useAppStore.getState=()=>globalThis.playbookState;',
   '@/i18n':'export const useI18n=()=>({t:(key,params)=>key+(params?JSON.stringify(params):"")});',
   '@/components/ui/primitives':'export const Button="button",Input="input",Textarea="textarea";',
-  '@/lib/musePlaybookSync':'export const normalizeMuseFolder=v=>v.trim();export const syncMusePlaybooks=async(_refresh,folder)=>{globalThis.playbookSyncRoot=folder;return 0;};export const discoverMusePlaybookSources=async()=>globalThis.playbookSources||[];',
+  '@/lib/musePlaybookSync':'export const inferredMuseFolder=()=>"";export const normalizeMuseFolder=v=>v.trim();export const syncMusePlaybooks=async(_refresh,folder)=>{globalThis.playbookSyncRoot=folder;return 0;};export const discoverMusePlaybookSources=async()=>globalThis.playbookSources||[];',
   '@/lib/museWeb':'export const museWebAccounts=async()=>({accounts:[],selectedId:"",primaryId:""});export const openMuseWeb=async()=>{};',
 };
 const src=fileURLToPath(new URL('../src',import.meta.url));
@@ -19,7 +19,7 @@ const settle=async()=>{for(let i=0;i<50;i++)await Promise.resolve();};
 function fixture(){
   let cells=[],cursor=0;
   globalThis.playbookHooks={state(value){const i=cursor++;if(!(i in cells))cells[i]=value;return[cells[i],next=>{cells[i]=next;}];},ref(value){const i=cursor++;if(!(i in cells))cells[i]={current:value};return cells[i];}};
-  globalThis.playbookState={settings:{aiPlaybooks:[],aiPlaybookOverviewId:'',aiPlaybookBindings:{},chatFolders:[]},updateSettings(patch){this.settings={...this.settings,...patch};},pushToast(){},requestConfirm:async()=>true};
+  globalThis.playbookState={settings:{aiPlaybooks:[],aiPlaybookBindings:{},chatFolders:[]},updateSettings(patch){this.settings={...this.settings,...patch};},pushToast(){},requestConfirm:async()=>true};
   return {render(Component=PlaybookLibrary){cursor=0;return nodes(Component());}};
 }
 
@@ -62,20 +62,15 @@ test('customer picker saves only the current account conversation, and inherit c
   assert.ok(!nodes(PlaybookBinding({chatId:'chat'})).some(node=>node.type===PlaybookSelect),'unknown account cannot create a global override');
 });
 
-test('removed Muse files disappear from binding and overview choices, while old bindings stay visible as invalid',()=>{
+test('removed Muse files disappear from binding choices and the library has no shared overview selector',()=>{
  const ui=fixture();
  playbookState.settings.aiPlaybooks=[{id:'old',name:'Old stage',content:'',summary:'Old rules',musePath:'/books/old.md',museMissing:true},{id:'current',name:'Current stage',content:'',summary:'Current rules',musePath:'/books/current.md'}];
  const options=value=>nodes(PlaybookSelect({value,onChange(){}})).filter(n=>n.type==='option');
  assert.ok(!options('').some(n=>n.props.value==='old'));
  assert.ok(options('').some(n=>n.props.value==='current'));
  assert.equal(options('old').find(n=>n.props.value==='old').props.disabled,true);
- playbookState.settings.aiPlaybookOverviewId='old';
- const overview=ui.render().find(n=>n.type==='select');
- const opts=nodes(overview).filter(n=>n.type==='option');
- assert.equal(opts.find(n=>n.props.value==='old').props.disabled,true);
- assert.ok(opts.some(n=>n.props.value==='current'));
- assert.equal(playbookState.settings.aiPlaybookOverviewId,'old','never silently change an existing binding');
- assert.equal(ui.render().filter(n=>n.type==='select').length,1);assert.ok(ui.render().some(n=>n.type===PlaybookPlans));
+ assert.equal(ui.render().filter(n=>n.type==='select').length,0);
+ assert.ok(ui.render().some(n=>n.type===PlaybookPlans));
  assert.equal(playbookState.settings.aiPlaybooks.length,2,'hiding expired entries does not destroy cached data');
 });
 

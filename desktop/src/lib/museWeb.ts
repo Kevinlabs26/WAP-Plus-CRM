@@ -1,11 +1,15 @@
 import { isTauri } from './bridge.ts';
 import { trackAiRequest } from './aiUsage.ts';
 import { enqueueMuseTask, museQueueSnapshot } from './museQueue.ts';
-import { createMuseChatRedactor, musePrivacyIdentities } from './museChatPrivacy.ts';
+import { createMuseChatRedactor, musePrivacyGateMessage, musePrivacyIdentities, museTrainingDisabledConfirmed } from './museChatPrivacy.ts';
 
 export type MuseWebStatus = { opened:boolean; ready:boolean; state:string; message:string; mediaProtocol?:number;parallelMedia?:boolean };
-export type MuseWebAccount = {id:string;name:string;selected:boolean;primary:boolean};
+export type MuseWebAccount = {id:string;name:string;note:string;selected:boolean;primary:boolean};
 export type MuseWebAccountPool = {accounts:MuseWebAccount[];selectedId:string;primaryId:string};
+export type MuseAccountRemoveResult = {pool:MuseWebAccountPool;cleanupWarning:string|null};
+export type MuseSideChat = {id:string;title:string;stable:boolean;ambiguous:boolean};
+export type MuseSideChatCleanup = {id:string;accountId:string;dueAtMs:number;chats:MuseSideChat[];error:string|null;repeatEveryDays?:number;identityScheme?:number;excludedChatIds?:string[]};
+export type MuseSideChatDeleteResult = {deleted:string[];error:string|null};
 export type MuseWebContext = {profile:string;prefix:string;history:{id:string;text:string}[];suffix:string};
 const checkedReadyAccounts=new Set<string>();
 let nextAutoReplyAccount=0;
@@ -19,6 +23,9 @@ async function native<T>(command:string,args:Record<string,unknown>={}) {
   }
 }
 export const openMuseWeb=(media=false,accountId?:string)=>native<void>('muse_web_open',{media,accountId});
+export const museWebWorkspaceAccount=()=>native<string>('muse_web_workspace_account');
+export const setMuseWorkspaceContentVisible=(visible:boolean)=>native<void>('muse_web_workspace_content_visible',{visible});
+export const setMuseWorkspaceSidebarCollapsed=(collapsed:boolean)=>native<void>('muse_web_workspace_sidebar_set_collapsed',{collapsed});
 export const museWebAccounts=()=>native<MuseWebAccountPool>('muse_web_accounts');
 function requireMuseQueueIdle(){
   const queue=museQueueSnapshot();
@@ -28,6 +35,25 @@ export async function addMuseWebAccount():Promise<MuseWebAccountPool>{
   requireMuseQueueIdle();
   return native<MuseWebAccountPool>('muse_web_account_add');
 }
+export async function updateMuseWebAccount(accountId:string,name:string,note:string):Promise<MuseWebAccountPool>{
+  return native<MuseWebAccountPool>('muse_web_account_update',{accountId,name,note});
+}
+export async function removeMuseWebAccount(accountId:string):Promise<MuseAccountRemoveResult>{
+  requireMuseQueueIdle();
+  return native<MuseAccountRemoveResult>('muse_web_account_remove',{accountId});
+}
+export async function museWebSideChats(accountId:string):Promise<MuseSideChat[]>{
+  return native<MuseSideChat[]>('muse_web_side_chats',{accountId});
+}
+export async function deleteMuseWebSideChats(accountId:string,chats:MuseSideChat[]):Promise<MuseSideChatDeleteResult>{
+  requireMuseQueueIdle();
+  return native<MuseSideChatDeleteResult>('muse_web_delete_side_chats',{accountId,chats});
+}
+export const museWebCleanupSchedules=()=>native<MuseSideChatCleanup[]>('muse_web_cleanup_schedules');
+export const scheduleMuseWebSideChatCleanup=(task:MuseSideChatCleanup)=>native<MuseSideChatCleanup[]>('muse_web_cleanup_schedule_add',{task});
+export const updateMuseWebSideChatCleanup=(taskId:string,remainingChats:MuseSideChat[],error?:string)=>native<MuseSideChatCleanup[]>('muse_web_cleanup_schedule_update',{taskId,remainingChats,error});
+export const advanceMuseWebSideChatCleanup=(taskId:string)=>native<MuseSideChatCleanup[]>('muse_web_cleanup_schedule_advance',{taskId});
+export const cancelMuseWebSideChatCleanup=(taskId:string)=>native<MuseSideChatCleanup[]>('muse_web_cleanup_schedule_cancel',{taskId});
 export async function selectMuseWebAccount(accountId:string):Promise<MuseWebAccountPool>{
   requireMuseQueueIdle();
   return native<MuseWebAccountPool>('muse_web_account_select',{accountId});
@@ -41,17 +67,27 @@ export async function museWebStatus(media=false,accountId?:string):Promise<MuseW
   if(!media&&accountId){if(status.ready)checkedReadyAccounts.add(accountId);else checkedReadyAccounts.delete(accountId);}
   return status;
 }
-export async function nextMuseAutoReplyAccount():Promise<string>{
+export async function nextMuseAutoReplyAccount(accountIds?:readonly string[]):Promise<string>{
   const pool=await museWebAccounts();
-  const ready=pool.accounts.filter(account=>checkedReadyAccounts.has(account.id));
-  if(!ready.length)return pool.selectedId;
+  const allowed=accountIds?new Set(accountIds):undefined;
+  const eligible=()=>pool.accounts.filter(account=>museTrainingDisabledConfirmed(account.id)&&(!allowed||allowed.has(account.id)));
+  let ready=eligible().filter(account=>checkedReadyAccounts.has(account.id));
+  if(!ready.length){
+    // Readiness is cached per webview, so the separate Muse workspace may not have populated this renderer's cache.
+    await Promise.all(eligible().map(async account=>{
+      try{await museWebStatus(false,account.id);}catch{checkedReadyAccounts.delete(account.id);}
+    }));
+    ready=eligible().filter(account=>checkedReadyAccounts.has(account.id));
+  }
+  if(!ready.length)return '';
   const account=ready[nextAutoReplyAccount%ready.length]!;
   nextAutoReplyAccount=(nextAutoReplyAccount+1)%ready.length;
   return account.id;
 }
-export async function readyMuseAutoReplyAccounts():Promise<string[]>{
+export async function readyMuseAutoReplyAccounts(accountIds?:readonly string[]):Promise<string[]>{
   const pool=await museWebAccounts();
-  return pool.accounts.filter(account=>checkedReadyAccounts.has(account.id)).map(account=>account.id);
+  const allowed=accountIds?new Set(accountIds):undefined;
+  return pool.accounts.filter(account=>checkedReadyAccounts.has(account.id)&&museTrainingDisabledConfirmed(account.id)&&(!allowed||allowed.has(account.id))).map(account=>account.id);
 }
 export type MuseGeneratedMedia = { mimeType: "image/png"|"image/jpeg"|"image/webp"|"video/mp4"|"video/webm"; data: string };
 export type MuseWebOutput = { text?: string; media?: MuseGeneratedMedia };
@@ -66,8 +102,10 @@ export function collectMuseWebMedia(accountId?:string):Promise<MuseGeneratedMedi
 }
 export async function generateMuseWebOutput(prompt:string,signal?:AbortSignal,conversationKey?:string,context?:MuseWebContext,referenceImage?:MuseReferenceImage | MuseReferenceImage[],expectMedia=false,priority=0,onStart?:()=>void,accountId?:string):Promise<MuseWebOutput> {
   const targetAccount=accountId||(await museWebAccounts()).selectedId;
+  if(!museTrainingDisabledConfirmed(targetAccount))throw Error(musePrivacyGateMessage());
   return enqueueMuseTask(expectMedia?'media':'text',async()=>{
     signal?.throwIfAborted();
+    if(!museTrainingDisabledConfirmed(targetAccount))throw Error(musePrivacyGateMessage());
     onStart?.();
     if(context || conversationKey?.startsWith('["sheet-extract",') || conversationKey?.startsWith('["customer-insight",')){
       const redact=createMuseChatRedactor(musePrivacyIdentities());
@@ -87,7 +125,7 @@ export async function generateMuseWebOutput(prompt:string,signal?:AbortSignal,co
     if(expectMedia){
       const status=await museWebStatus(true);
       signal?.throwIfAborted();
-      if(status.mediaProtocol!==7||!status.parallelMedia)throw Error('桌面后台仍是旧版 Muse 连接，请退出并重启桌面开发版；本次未提交生图');
+      if(status.mediaProtocol!==8||!status.parallelMedia)throw Error('桌面后台仍是旧版 Muse 连接，请退出并重启桌面开发版；本次未提交媒体任务');
       if(!status.ready)throw Error(status.message||'Muse 页面尚未连接就绪');
     }
     const requestId=crypto.randomUUID();

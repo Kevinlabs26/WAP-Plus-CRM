@@ -36,12 +36,6 @@ export interface SettingsQuickReply {
   };
 }
 
-export interface AiReportTemplate {
-  id: string;
-  name: string;
-  body: string;
-}
-
 import type { AccountViewMode, FolderScope, WaAccount } from "@/types/account";
 import type { ScheduledMessage, SalesStage } from "@/types/crm";
 import { BROADCAST_MAX_THEMES, BROADCAST_MAX_VARIANTS, type BroadcastMedia, type BroadcastMediaMode, type BroadcastTheme } from "@/types/broadcast";
@@ -157,9 +151,6 @@ export interface SettingsShape {
   openaiKey: string;
   groqKey: string;
   geminiKey: string;
-  vertexProjectId:string;
-  vertexLocation:string;
-  vertexCredentialId:string;
   openrouterKey: string;
   ollamaUrl: string;
   bridgeHost: string;
@@ -171,7 +162,6 @@ export interface SettingsShape {
     | "groq"
     | "openrouter"
     | "gemini"
-    | "vertex"
     | "muse"
     | "ollama"
     | "custom";
@@ -218,10 +208,8 @@ export interface SettingsShape {
   /** WhatsApp 账号级身份覆盖；空值或无条目时继承 aiSystemPrompt */
   aiSystemPromptByAccountId: Record<string, string>;
   aiPromptTemplates: AiPromptTemplate[];
-  aiReportTemplates: AiReportTemplate[];
   aiPlaybooks: AiPlaybook[];
   aiPlaybookPlans: PlaybookPlan[];
-  aiPlaybookOverviewId: string;
   aiPlaybookBindings: Record<string, string>;
   aiPlaybookMuseRoot: string;
   aiPlaybookMuseFolder: string;
@@ -232,15 +220,21 @@ export interface SettingsShape {
   aiPlaybookMuseSyncedAt: number;
   aiPlaybookMuseAttemptAt: number;
   aiPlaybookMuseError: string;
-  /** Per-Muse-account identity source; syncing updates only the account's SOUL file. */
-  museIdentityModeByAccountId: Record<string, "follow-primary" | "independent">;
-  museIdentitySyncByAccountId: Record<string, { primaryId: string; sha256: string; syncedAt: number }>;
+  museAccountChecks: Record<string, { ready: boolean; state: string; checkedAt: number; message?: string }>;
+  /** User-confirmed Muse privacy state; this is not remotely verified by Muse. */
+  musePrivacyByAccountId: Record<string, { trainingDisabledConfirmedAt?: number; memoryReviewedAt?: number }>;
   broadcastThemes: BroadcastTheme[];
   imagePromptTemplates: AiPromptTemplate[];
   aiContextMode: "compact" | "full";
   aiOutreachRuns: AiOutreachRun[];
   aiOutreachPaused: boolean;
   aiOutreachExcludedRecipients: string[];
+  /** Optional pinned Muse account for proactive outreach; empty keeps legacy rotation. */
+  aiOutreachMuseAccountId: string;
+  /** null keeps all Muse accounts in the auto-reply pool; an array selects accounts explicitly. */
+  museAutoReplyAccountIds: string[] | null;
+  /** Optional Muse account used to interpret local CRM agent requests. */
+  crmAgentMuseAccountId: string;
   aiTaskDismissedIds: string[];
   aiReplyTaskRecords: AiReplyTaskRecord[];
   /** AI 回复的本人时区；空值跟随电脑时区。 */
@@ -401,9 +395,6 @@ export const defaultSettings: SettingsShape = {
   openaiKey: "",
   groqKey: "",
   geminiKey: "",
-  vertexProjectId:"",
-  vertexLocation:"global",
-  vertexCredentialId:"",
   openrouterKey: "",
   ollamaUrl: "http://127.0.0.1:11434",
   bridgeHost: "127.0.0.1",
@@ -439,10 +430,8 @@ export const defaultSettings: SettingsShape = {
   aiSystemPrompt: "",
   aiSystemPromptByAccountId: {},
   aiPromptTemplates: [],
-  aiReportTemplates: [],
   aiPlaybooks: [],
   aiPlaybookPlans: [],
-  aiPlaybookOverviewId: "",
   aiPlaybookBindings: {},
   aiPlaybookMuseRoot: "",
   aiPlaybookMuseFolder: "",
@@ -453,14 +442,17 @@ export const defaultSettings: SettingsShape = {
   aiPlaybookMuseSyncedAt: 0,
   aiPlaybookMuseAttemptAt: 0,
   aiPlaybookMuseError: "",
-  museIdentityModeByAccountId: {},
-  museIdentitySyncByAccountId: {},
+  museAccountChecks: {},
+  musePrivacyByAccountId: {},
   broadcastThemes: [],
   imagePromptTemplates: [],
   aiContextMode: "full",
   aiOutreachRuns: [],
   aiOutreachPaused: false,
   aiOutreachExcludedRecipients: [],
+  aiOutreachMuseAccountId: "",
+  museAutoReplyAccountIds: null,
+  crmAgentMuseAccountId: "",
   aiTaskDismissedIds: [],
   aiReplyTaskRecords: [],
   aiTimeZone: "",
@@ -575,6 +567,12 @@ export function normalizeLoadedSettings(
   delete src.wahaBaseUrl;
   delete src.wahaApiKey;
   delete src.wahaSession;
+  delete (src as Record<string, unknown>).vertexProjectId;
+  delete (src as Record<string, unknown>).vertexLocation;
+  delete (src as Record<string, unknown>).vertexCredentialId;
+  delete (src as Record<string, unknown>).aiPlaybookOverviewId;
+  delete (src as Record<string, unknown>).museIdentityModeByAccountId;
+  delete (src as Record<string, unknown>).museIdentitySyncByAccountId;
   stripRetiredAiSettings(src);
   const merged: SettingsShape = {
     ...defaultSettings,
@@ -821,9 +819,6 @@ export function normalizeLoadedSettings(
   merged.translationApiKey = translation.apiKey;
   merged.translationModel = translation.model;
   merged.aiModel = String(merged.aiModel || "").trim();
-  merged.vertexProjectId=String(merged.vertexProjectId||"").trim().slice(0,63);
-  merged.vertexLocation=String(merged.vertexLocation||"global").trim().slice(0,40);
-  merged.vertexCredentialId=typeof merged.vertexCredentialId==="string"&&/^[a-f0-9]{64}$/.test(merged.vertexCredentialId)?merged.vertexCredentialId:"";
   merged.bridgeToken = String(merged.bridgeToken || "").trim().slice(0, 256);
   merged.aiAutoReplyManualChatIds = Array.isArray(merged.aiAutoReplyManualChatIds)
     ? [...new Set(merged.aiAutoReplyManualChatIds.map((id) => String(id || "").trim()).filter(Boolean))]
@@ -839,20 +834,8 @@ export function normalizeLoadedSettings(
     merged.aiAutoFollowUpEnabledAt > 0 && merged.aiAutoFollowUpDelaysMinutes.length > 0 &&
     merged.aiAutoFollowUpDelaysMinutes.every(value => value > 0);
   merged.aiPromptTemplates = normalizePromptTemplates(merged.aiPromptTemplates);
-  merged.aiReportTemplates = Array.isArray(merged.aiReportTemplates)
-    ? merged.aiReportTemplates.reduce<AiReportTemplate[]>((items, value) => {
-        if (!value || typeof value !== "object") return items;
-        const item = value as Partial<AiReportTemplate>;
-        const id = typeof item.id === "string" ? item.id.trim().slice(0, 120) : "";
-        const name = typeof item.name === "string" ? item.name.trim().slice(0, 120) : "";
-        const body = typeof item.body === "string" ? item.body.slice(0, 12000) : "";
-        if (id && name && body.trim() && !items.some(existing => existing.id === id) && items.length < 50) items.push({ id, name, body });
-        return items;
-      }, [])
-    : [];
   merged.aiPlaybookPlans = normalizePlaybookPlans(merged.aiPlaybookPlans);
   merged.aiPlaybooks = normalizePlaybooks(merged.aiPlaybooks);
-  merged.aiPlaybookOverviewId = typeof merged.aiPlaybookOverviewId === "string" ? merged.aiPlaybookOverviewId.slice(0,120) : "";
   merged.aiPlaybookBindings = normalizePlaybookBindings(merged.aiPlaybookBindings);
   merged.aiPlaybookMuseRoot = typeof merged.aiPlaybookMuseRoot === "string" && merged.aiPlaybookMuseRoot.length <= 500 ? merged.aiPlaybookMuseRoot : "";
   merged.aiPlaybookMuseFolder = typeof merged.aiPlaybookMuseFolder === "string" && merged.aiPlaybookMuseFolder.length <= 500 ? merged.aiPlaybookMuseFolder : "";
@@ -864,24 +847,35 @@ export function normalizeLoadedSettings(
   merged.aiPlaybookMuseAttemptAt = Number.isFinite(merged.aiPlaybookMuseAttemptAt) && merged.aiPlaybookMuseAttemptAt > 0 ? merged.aiPlaybookMuseAttemptAt : 0;
   merged.aiPlaybookMuseError = typeof merged.aiPlaybookMuseError === "string" ? merged.aiPlaybookMuseError.slice(0,400) : "";
   {
-    const rawModes = merged.museIdentityModeByAccountId && typeof merged.museIdentityModeByAccountId === "object" ? merged.museIdentityModeByAccountId : {};
-    const modes: SettingsShape["museIdentityModeByAccountId"] = {};
-    for (const [rawId, mode] of Object.entries(rawModes).slice(0, 12)) {
-      const id = rawId.trim().slice(0, 120);
-      if (id && (mode === "follow-primary" || mode === "independent")) modes[id] = mode;
-    }
-    merged.museIdentityModeByAccountId = modes;
-    const rawSyncs = merged.museIdentitySyncByAccountId && typeof merged.museIdentitySyncByAccountId === "object" ? merged.museIdentitySyncByAccountId : {};
-    const syncs: SettingsShape["museIdentitySyncByAccountId"] = {};
-    for (const [rawId, value] of Object.entries(rawSyncs).slice(0, 12)) {
+    const raw = merged.museAccountChecks && typeof merged.museAccountChecks === "object" ? merged.museAccountChecks : {};
+    const checks: SettingsShape["museAccountChecks"] = {};
+    for (const [rawId, value] of Object.entries(raw).slice(0, 12)) {
       const id = rawId.trim().slice(0, 120);
       if (!id || !value || typeof value !== "object") continue;
-      const record = value as Partial<SettingsShape["museIdentitySyncByAccountId"][string]>;
-      if (typeof record.primaryId === "string" && record.primaryId.length <= 120 && typeof record.sha256 === "string" && /^[a-f0-9]{64}$/.test(record.sha256) && Number.isFinite(record.syncedAt) && Number(record.syncedAt) > 0) {
-        syncs[id] = { primaryId: record.primaryId, sha256: record.sha256, syncedAt: Number(record.syncedAt) };
+      const record = value as Partial<SettingsShape["museAccountChecks"][string]>;
+      if (typeof record.ready === "boolean" && typeof record.state === "string" && record.state.length <= 40 &&
+          Number.isFinite(record.checkedAt) && Number(record.checkedAt) > 0) {
+        checks[id] = { ready: record.ready, state: record.state, checkedAt: Number(record.checkedAt), ...(typeof record.message === "string" ? { message: record.message.slice(0, 240) } : {}) };
       }
     }
-    merged.museIdentitySyncByAccountId = syncs;
+    merged.museAccountChecks = checks;
+  }
+  {
+    const raw = merged.musePrivacyByAccountId && typeof merged.musePrivacyByAccountId === "object" ? merged.musePrivacyByAccountId : {};
+    const privacy: SettingsShape["musePrivacyByAccountId"] = {};
+    for (const [rawId, value] of Object.entries(raw).slice(0, 12)) {
+      const id = rawId.trim().slice(0, 120);
+      if (!id || !value || typeof value !== "object") continue;
+      const record = value as Partial<SettingsShape["musePrivacyByAccountId"][string]>;
+      const trainingDisabledConfirmedAt = Number.isFinite(record.trainingDisabledConfirmedAt) && Number(record.trainingDisabledConfirmedAt) > 0
+        ? Number(record.trainingDisabledConfirmedAt) : undefined;
+      const memoryReviewedAt = Number.isFinite(record.memoryReviewedAt) && Number(record.memoryReviewedAt) > 0
+        ? Number(record.memoryReviewedAt) : undefined;
+      if (trainingDisabledConfirmedAt || memoryReviewedAt) {
+        privacy[id] = { ...(trainingDisabledConfirmedAt ? { trainingDisabledConfirmedAt } : {}), ...(memoryReviewedAt ? { memoryReviewedAt } : {}) };
+      }
+    }
+    merged.musePrivacyByAccountId = privacy;
   }
   merged.broadcastThemes = normalizeBroadcastThemes(merged.broadcastThemes);
   merged.imagePromptTemplates = normalizePromptTemplates(merged.imagePromptTemplates).map(item => ({ ...item, prompt: item.prompt.slice(0, 4000) }));
@@ -889,6 +883,11 @@ export function normalizeLoadedSettings(
   merged.aiOutreachRuns = normalizeOutreachRuns(merged.aiOutreachRuns);
   merged.aiOutreachPaused = merged.aiOutreachPaused === true;
   merged.aiOutreachExcludedRecipients = Array.isArray(merged.aiOutreachExcludedRecipients)?[...new Set(merged.aiOutreachExcludedRecipients.filter((value):value is string=>typeof value==="string"&&!!value.trim()&&value.length<=240).map(value=>value.trim()))].slice(0,50_000):[];
+  merged.aiOutreachMuseAccountId = typeof merged.aiOutreachMuseAccountId === "string" ? merged.aiOutreachMuseAccountId.trim().slice(0,120) : "";
+  merged.museAutoReplyAccountIds = merged.museAutoReplyAccountIds === null ? null : Array.isArray(merged.museAutoReplyAccountIds)
+    ? [...new Set(merged.museAutoReplyAccountIds.filter((value): value is string => typeof value === "string" && !!value.trim() && value.length <= 120).map(value => value.trim()))].slice(0, 12)
+    : [];
+  merged.crmAgentMuseAccountId = typeof merged.crmAgentMuseAccountId === "string" ? merged.crmAgentMuseAccountId.trim().slice(0,120) : "";
   merged.aiTaskDismissedIds = Array.isArray(merged.aiTaskDismissedIds)?[...new Set(merged.aiTaskDismissedIds.filter((value):value is string=>typeof value==="string"&&value.length>0&&value.length<=600))].slice(-50_000):[];
   merged.aiReplyTaskRecords = normalizeAiReplyTaskRecords(merged.aiReplyTaskRecords);
   merged.aiAutoReplyModeByChatId = Object.fromEntries(

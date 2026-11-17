@@ -1,11 +1,11 @@
-export type AiUsageFeature = "suggestion" | "autoReply" | "outreach" | "translation" | "insight" | "transcription" | "context" | "image";
+export type AiUsageFeature = "suggestion" | "autoReply" | "outreach" | "crmAgent" | "translation" | "insight" | "transcription" | "context" | "image" | "tts";
 export type AiUsageContext = {provider:string;model:string;feature:AiUsageFeature;endpoint?:string};
 import {officialAiPriceInfo,officialAiUsageRate} from "./aiPricing.ts";
 export type AiTokenUsage = {input:number;output:number;cached:number;total:number;cost?:number;cacheWrite?:number;billingTier?:string};
 export type AiUsageBucket = {day:string;provider:string;model:string;service:string;feature:AiUsageFeature;requests:number;failed:number;unknown:number;input:number;output:number;cached:number;total:number;reportedCost:number;reportedRequests:number;unpricedInput:number;unpricedOutput:number;unpricedCached:number;unpricedCacheWrite?:number;longContext?:boolean;billingTier?:string};
 export type AiUsageRate = {input:number;output:number;cached?:number;cacheWrite?:number};
 type UsageData = {buckets:AiUsageBucket[];rates:Record<string,AiUsageRate>;since:string;error:boolean;limited:boolean};
-const KEY="wap-plus-ai-usage-v1",features=["suggestion","autoReply","outreach","translation","insight","transcription","context","image"];
+const KEY="wap-plus-ai-usage-v1",features=["suggestion","autoReply","outreach","crmAgent","translation","insight","transcription","context","image","tts"];
 const listeners=new Set<()=>void>();
 let loaded=false,snapshot:UsageData={buckets:[],rates:{},since:new Date().toISOString(),error:false,limited:false};
 const number=(value:unknown)=>typeof value==="number"&&Number.isFinite(value)&&value>=0&&value<=1e12;

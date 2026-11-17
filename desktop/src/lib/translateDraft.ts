@@ -1,6 +1,5 @@
 import { readAiJson } from "./aiResponse.ts";
 import { trackAiRequest } from "./aiUsage.ts";
-import { vertexAiConfig } from "./vertexAi.ts";
 import { getTranslationSettings } from "./translationConfig.ts";
 import type { Contact } from "@/types/crm";
 import type { AppSettings } from "@/store/appStore";
@@ -329,7 +328,6 @@ export interface TranslateResult {
     | "groq"
     | "openrouter"
     | "gemini"
-    | "vertex"
     | "ollama"
     | "google"
     | "custom";
@@ -407,7 +405,7 @@ export function getTranslationContextKey(text: string, to: string, settings: App
   return JSON.stringify([to, text, service, google ? "google" : settings.aiProvider,
     google ? "" : config?.model || settings.aiModel || "",
     google ? "" : config?.baseUrl || (settings.aiProvider === "ollama" ? settings.ollamaUrl : ""),
-    google || ready, opts?.googleFirst && service === "auto" ? "google-first" : "", !google&&settings.aiProvider==="vertex"?[settings.vertexProjectId,settings.vertexLocation,settings.vertexCredentialId]:null,
+    google || ready, opts?.googleFirst && service === "auto" ? "google-first" : "",
     !google && settings.emojiEnabled !== false]);
 }
 
@@ -459,7 +457,7 @@ async function chatComplete(opts: {
   user: string;
   signal?: AbortSignal;
 }): Promise<string> {
-  if (opts.provider === "gemini"||opts.provider==="vertex") {
+  if (opts.provider === "gemini") {
     return geminiGenerate({
       apiKey: opts.settings.geminiKey,
       model: opts.settings.aiModel.trim() || undefined,
@@ -468,7 +466,6 @@ async function chatComplete(opts: {
       temperature:0.2,
       signal: opts.signal,
       feature:"translation",
-      vertex:vertexAiConfig(opts.settings),
     });
   }
   if (opts.provider === "ollama") {

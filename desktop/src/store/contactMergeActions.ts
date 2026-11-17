@@ -43,10 +43,6 @@ export function createContactMergeActions({
         aiIntent: keep.aiIntent || drops.find((d) => d.aiIntent)?.aiIntent,
         aiNextStep:
           keep.aiNextStep || drops.find((d) => d.aiNextStep)?.aiNextStep,
-        aiReport: keep.aiReport || drops.find((d) => d.aiReport)?.aiReport,
-        aiReportTemplateId: keep.aiReportTemplateId || drops.find((d) => d.aiReportTemplateId)?.aiReportTemplateId,
-        aiReportTemplateName: keep.aiReportTemplateName || drops.find((d) => d.aiReportTemplateName)?.aiReportTemplateName,
-        aiReportAt: keep.aiReportAt || drops.find((d) => d.aiReportAt)?.aiReportAt,
         tags: Array.from(
           new Set([...(keep.tags || []), ...drops.flatMap((d) => d.tags || [])])
         ),

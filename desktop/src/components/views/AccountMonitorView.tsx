@@ -9,7 +9,6 @@ import {
   Gauge,
   Megaphone,
   PauseCircle,
-  PlayCircle,
   ShieldAlert,
 } from "lucide-react";
 import { useAppStore } from "@/store/appStore";
@@ -25,7 +24,7 @@ import {
 } from "@/lib/accountConnection";
 import { applyAccountWarmup } from "@/lib/accountWarmup";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/primitives";
+import { Button, Switch } from "@/components/ui/primitives";
 import type { HealthLevel } from "@/lib/accountHealth";
 import { DEFAULT_RATE_LIMITS } from "@/channels";
 import { useI18n, type TranslationKey } from "@/i18n";
@@ -33,34 +32,22 @@ import { useI18n, type TranslationKey } from "@/i18n";
 const LEVEL_UI: Record<
   HealthLevel,
   {
-    border: string;
-    bg: string;
-    text: string;
     bar: string;
     label: TranslationKey;
     Icon: typeof CheckCircle2;
   }
 > = {
   green: {
-    border: "border-emerald-500/20 dark:border-emerald-500/30",
-    bg: "monitor-card-green",
-    text: "text-emerald-700 dark:text-emerald-300",
     bar: "bg-emerald-500",
     label: "monitor.good",
     Icon: CheckCircle2,
   },
   yellow: {
-    border: "border-amber-500/25 dark:border-amber-500/35",
-    bg: "monitor-card-yellow",
-    text: "text-amber-700 dark:text-amber-300",
     bar: "bg-amber-500",
     label: "monitor.attention",
     Icon: AlertTriangle,
   },
   red: {
-    border: "border-rose-500/30 dark:border-rose-500/40",
-    bg: "monitor-card-red",
-    text: "text-rose-700 dark:text-rose-300",
     bar: "bg-rose-500",
     label: "monitor.overheated",
     Icon: Flame,
@@ -231,11 +218,13 @@ export function AccountMonitorView() {
 
   return (
     <div className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-zinc-950">
-      <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-zinc-800/90 px-4">
+      <div className="flex min-h-14 shrink-0 items-center justify-between gap-3 border-b border-zinc-800/90 px-5 py-2.5">
         <div className="flex items-center gap-2">
-          <Gauge className="h-4 w-4 text-brand" />
+          <div className="rounded-lg bg-brand/10 p-2 text-brand">
+            <Gauge className="h-4 w-4" />
+          </div>
           <div>
-            <div className="text-[13px] font-semibold">{t("monitor.title")}</div>
+            <div className="text-[15px] font-semibold tracking-tight">{t("monitor.title")}</div>
             <div className="text-2xs text-zinc-500">
               {t("monitor.subtitle")}
             </div>
@@ -266,17 +255,17 @@ export function AccountMonitorView() {
         </div>
       </div>
 
-      <div className="p-4">
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
-          <StatChip label={t("monitor.accounts")} value={accounts.length} />
-          <StatChip label={t("monitor.good")} value={totals.green} tone="ok" />
-          <StatChip label={t("monitor.attention")} value={totals.yellow} tone="warn" />
-          <StatChip label={t("monitor.overheated")} value={totals.red} tone="bad" />
-          <StatChip label={t("monitor.paused")} value={totals.paused} />
-          <StatChip label={t("monitor.warmup")} value={totals.warmupN} />
-          <StatChip label={t("monitor.outbound24")} value={totals.sentDay} />
+      <div className="space-y-4 p-4 lg:p-5">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">
+          <StatChip Icon={Gauge} label={t("monitor.accounts")} value={accounts.length} />
+          <StatChip Icon={CheckCircle2} label={t("monitor.good")} value={totals.green} tone="ok" />
+          <StatChip Icon={AlertTriangle} label={t("monitor.attention")} value={totals.yellow} tone="warn" />
+          <StatChip Icon={Flame} label={t("monitor.overheated")} value={totals.red} tone="bad" />
+          <StatChip Icon={PauseCircle} label={t("monitor.paused")} value={totals.paused} />
+          <StatChip Icon={ShieldAlert} label={t("monitor.warmup")} value={totals.warmupN} />
+          <StatChip Icon={Megaphone} label={t("monitor.outbound24")} value={totals.sentDay} />
         </div>
-        <p className="mt-2 text-2xs text-zinc-500 dark:text-zinc-400">
+        <div className="rounded-lg border border-zinc-800/80 bg-zinc-900/35 px-3 py-2 text-2xs text-zinc-500">
           {t("monitor.connectedAccounts", {
             connected: totals.connectedCount,
             total: accounts.length,
@@ -301,10 +290,10 @@ export function AccountMonitorView() {
               {t("monitor.accountGap", { seconds: globalMinGapSec ?? 2 })}
             </>
           )}
-        </p>
+        </div>
 
         {(totals.red > 0 || totals.paused > 0) && (
-          <div className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-100/90">
+          <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2.5 text-[11px] text-rose-100/90">
             {t("monitor.recommendation")}
           </div>
         )}
@@ -313,7 +302,7 @@ export function AccountMonitorView() {
           <button
             type="button"
             onClick={() => setActiveNav("broadcast")}
-            className="mt-3 flex w-full items-center gap-2 rounded-lg border border-brand/30 bg-brand/10 px-3 py-2 text-left text-[11px] text-brand hover:bg-brand/15"
+            className="flex w-full items-center gap-2 rounded-xl border border-brand/30 bg-brand/10 px-3 py-2.5 text-left text-[11px] text-brand transition-colors hover:bg-brand/15"
           >
             <Megaphone className="h-3.5 w-3.5 shrink-0" />
             <span className="min-w-0 flex-1 truncate">
@@ -341,174 +330,200 @@ export function AccountMonitorView() {
             </Button>
           </div>
         ) : (
-          <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {healthItems.map((row) => {
-              const h = row.health;
-              if (!h) return null;
-              const acc = row.acc;
-              const ui = LEVEL_UI[h.level];
-              const Icon = ui.Icon;
-              const healthText = localizeAccountHealth(h, t);
-              const title = formatAccountDisplay({
-                label: acc?.label,
-                userName: acc?.userName,
-                index1: row.index1,
-              });
-              const isPaused = sendPausedAccountIds.includes(h.accountId);
-              const hourPct = Math.min(
-                100,
-                Math.round((h.sentLastHour / Math.max(1, h.caps.perHour)) * 100)
-              );
-              const dayPct = Math.min(
-                100,
-                Math.round(
-                  (h.sentLastDay / Math.max(1, h.caps.perDaySoft)) * 100
-                )
-              );
-              const live = resolveWaAccountConnection(
-                accounts,
-                h.accountId,
-                liveBaileysAccountId,
-                baileysUi.connection
-              );
-
-              return (
-                <div
-                  key={h.accountId}
-                  className={cn(
-                    "relative overflow-hidden rounded-lg border p-4 shadow-sm shadow-black/20",
-                    ui.border,
-                    ui.bg,
-                    isPaused && "opacity-90 ring-1 ring-zinc-500/40"
-                  )}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-[14px] font-semibold text-zinc-900 dark:text-zinc-100">
-                        {title}
-                      </div>
-                      <div className="mt-0.5 truncate text-2xs text-zinc-500 dark:text-zinc-400">
-                        {acc?.phoneE164 || h.accountId}
-                        {" · "}
-                        <span className="text-zinc-600 dark:text-zinc-300 font-medium">
-                          {t("monitor.connection")} {t(
-                            live === "connected"
-                              ? "monitor.connected"
-                              : live === "connecting"
-                                ? "monitor.connecting"
-                                : "monitor.disconnected"
-                          )}
-                        </span>
-                      </div>
-                    </div>
-                    <div
-                      className={cn(
-                        "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-2xs font-bold",
-                        ui.text,
-                        "bg-white/80 dark:bg-black/40 shadow-xs ring-1 ring-white/10"
-                      )}
-                    >
-                      <Icon className="h-3.5 w-3.5" />
-                      {t(ui.label)}
-                      <span className="tabular-nums opacity-90">{h.score}</span>
-                    </div>
-                  </div>
-
-                  <p className="mt-2 text-[12px] font-medium leading-4 text-zinc-600 dark:text-zinc-300">
-                    {isPaused ? t("monitor.sendingPaused") : healthText.summary}
-                  </p>
-                  {row.warmup.active && (
-                    <p className="mt-1 text-2xs text-sky-300/90">
-                      {t("monitor.warmupActive", {
-                        hours: row.warmup.hoursLeft,
-                      })}
-                      {" · "}
-                      {t("monitor.limits", {
-                        minute: row.warmup.limits.perPhonePerMinute,
-                        hour: row.warmup.limits.perPhonePerHour,
-                      })}
-                    </p>
-                  )}
-                  {!acc?.createdAt && (
-                    <p className="mt-1 text-2xs text-zinc-600">
-                      {t("monitor.noCreatedAt")}
-                    </p>
-                  )}
-
-                  <div className="mt-3 space-y-2">
-                    <Meter
-                      label={t("monitor.lastHour", {
-                        sent: h.sentLastHour,
-                        cap: h.caps.perHour,
-                      })}
-                      pct={hourPct}
-                      barClass={ui.bar}
-                    />
-                    <Meter
-                      label={t("monitor.lastDay", {
-                        sent: h.sentLastDay,
-                        cap: h.caps.perDaySoft,
-                      })}
-                      pct={dayPct}
-                      barClass="bg-zinc-400"
-                    />
-                    <div className="text-2xs text-zinc-500">
-                      {t("monitor.chatsToday", { count: h.newChatsLastDay })}
-                    </div>
-                  </div>
-
-                  {healthText.hints.length > 0 && (
-                    <ul className="mt-3 space-y-1 border-t border-white/5 pt-2">
-                      {healthText.hints.slice(0, 3).map((hint) => (
-                        <li
-                          key={hint}
-                          className="flex gap-1.5 text-2xs leading-4 text-zinc-500"
-                        >
-                          <Activity className="mt-0.5 h-3 w-3 shrink-0 opacity-50" />
-                          <span>{hint}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    <Button
-                      variant={isPaused ? "primary" : "secondary"}
-                      className="!min-h-7 gap-1 !px-2 text-2xs"
-                      onClick={() => togglePause(h.accountId)}
-                    >
-                      {isPaused ? (
-                        <>
-                          <PlayCircle className="h-3.5 w-3.5" />
-                          {t("monitor.resumeSending")}
-                        </>
-                      ) : (
-                        <>
-                          <PauseCircle className="h-3.5 w-3.5" />
-                          {t("monitor.pauseSending")}
-                        </>
-                      )}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      className="!min-h-7 !px-2 text-2xs"
-                      onClick={() => {
-                        updateSettings({
-                          activeAccountId: h.accountId,
-                          accountViewMode: {
-                            type: "account",
-                            accountId: h.accountId,
-                          },
-                        });
-                        setActiveNav("chats");
-                      }}
-                    >
-                      {t("monitor.openChats")}
-                    </Button>
-                  </div>
+          <div className="overflow-hidden rounded-xl border border-zinc-800/90 bg-zinc-900/30 shadow-sm shadow-black/10">
+            <div className="flex items-center justify-between gap-3 border-b border-zinc-800/90 px-4 py-3">
+              <div>
+                <h2 className="text-[13px] font-semibold text-zinc-100">
+                  {t("monitor.accounts")}
+                </h2>
+                <p className="mt-0.5 text-2xs text-zinc-500">
+                  {t("monitor.connectedAccounts", {
+                    connected: totals.connectedCount,
+                    total: accounts.length,
+                  })}
+                </p>
+              </div>
+              <span className="rounded-md bg-zinc-800/80 px-2 py-1 text-2xs font-medium tabular-nums text-zinc-300">
+                {accounts.length}
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <div className="min-w-[760px]">
+                <div className="grid grid-cols-[minmax(9rem,1.25fr)_minmax(6rem,0.7fr)_minmax(8rem,1fr)_minmax(8rem,1fr)_minmax(8rem,0.9fr)] gap-4 border-b border-zinc-800/80 bg-zinc-900/55 px-4 py-2.5 text-2xs font-medium text-zinc-500">
+                  <span>{t("monitor.accountColumn")}</span>
+                  <span>{t("monitor.statusColumn")}</span>
+                  <span>{t("monitor.hourColumn")}</span>
+                  <span>{t("monitor.dayColumn")}</span>
+                  <span className="text-right">{t("monitor.actionsColumn")}</span>
                 </div>
-              );
-            })}
+                {healthItems.map((row) => {
+                  const h = row.health;
+                  if (!h) return null;
+                  const acc = row.acc;
+                  const ui = LEVEL_UI[h.level];
+                  const Icon = ui.Icon;
+                  const healthText = localizeAccountHealth(h, t);
+                  const title = formatAccountDisplay({
+                    label: acc?.label,
+                    userName: acc?.userName,
+                    index1: row.index1,
+                  });
+                  const isPaused = sendPausedAccountIds.includes(h.accountId);
+                  const hourPct = Math.min(
+                    100,
+                    Math.round((h.sentLastHour / Math.max(1, h.caps.perHour)) * 100)
+                  );
+                  const dayPct = Math.min(
+                    100,
+                    Math.round((h.sentLastDay / Math.max(1, h.caps.perDaySoft)) * 100)
+                  );
+                  const live = resolveWaAccountConnection(
+                    accounts,
+                    h.accountId,
+                    liveBaileysAccountId,
+                    baileysUi.connection
+                  );
+
+                  return (
+                    <div key={h.accountId} className="border-b border-zinc-800/70 last:border-b-0">
+                      <div className="grid grid-cols-[minmax(9rem,1.25fr)_minmax(6rem,0.7fr)_minmax(8rem,1fr)_minmax(8rem,1fr)_minmax(8rem,0.9fr)] items-center gap-4 px-4 py-3.5 transition-colors hover:bg-zinc-800/20">
+                        <div className="min-w-0">
+                          <div className="truncate text-[12px] font-semibold text-zinc-100">
+                            {title}
+                          </div>
+                          <div className="mt-1 flex min-w-0 items-center gap-1.5 text-2xs text-zinc-500">
+                            <span
+                              className={cn(
+                                "h-1.5 w-1.5 shrink-0 rounded-full",
+                                live === "connected"
+                                  ? "bg-emerald-500"
+                                  : live === "connecting"
+                                    ? "animate-pulse bg-amber-400"
+                                    : "bg-zinc-600"
+                              )}
+                            />
+                            <span className="shrink-0">
+                              {t(
+                                live === "connected"
+                                  ? "monitor.connected"
+                                  : live === "connecting"
+                                    ? "monitor.connecting"
+                                    : "monitor.disconnected"
+                              )}
+                            </span>
+                            <span className="truncate">· {acc?.phoneE164 || h.accountId}</span>
+                          </div>
+                        </div>
+
+                        <div>
+                          <span
+                            className={cn(
+                              "inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-2xs font-semibold",
+                              isPaused
+                                ? "bg-zinc-800 text-zinc-300"
+                                : h.level === "green"
+                                  ? "bg-emerald-500/10 text-emerald-300"
+                                  : h.level === "yellow"
+                                    ? "bg-amber-500/10 text-amber-300"
+                                    : "bg-rose-500/10 text-rose-300"
+                            )}
+                          >
+                            {isPaused ? <PauseCircle className="h-3 w-3" /> : <Icon className="h-3 w-3" />}
+                            {isPaused ? t("monitor.paused") : t(ui.label)}
+                          </span>
+                          <div className="mt-1 text-2xs text-zinc-500">
+                            {t("monitor.score", { score: h.score })}
+                          </div>
+                        </div>
+
+                        <div className="min-w-0">
+                          <Meter
+                            label={t("monitor.lastHour", {
+                              sent: h.sentLastHour,
+                              cap: h.caps.perHour,
+                            })}
+                            pct={hourPct}
+                            barClass={ui.bar}
+                          />
+                        </div>
+
+                        <div className="min-w-0">
+                          <Meter
+                            label={t("monitor.lastDay", {
+                              sent: h.sentLastDay,
+                              cap: h.caps.perDaySoft,
+                            })}
+                            pct={dayPct}
+                            barClass="bg-zinc-400"
+                          />
+                          <div className="mt-1 text-2xs text-zinc-500">
+                            {t("monitor.chatsToday", { count: h.newChatsLastDay })}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col items-end gap-1">
+                          <label className="flex cursor-pointer items-center gap-2 text-2xs text-zinc-400">
+                            <span>
+                              {isPaused
+                                ? t("monitor.resumeSending")
+                                : t("monitor.pauseSending")}
+                            </span>
+                            <Switch
+                              checked={!isPaused}
+                              aria-label={
+                                isPaused
+                                  ? t("monitor.resumeSending")
+                                  : t("monitor.pauseSending")
+                              }
+                              onChange={() => togglePause(h.accountId)}
+                            />
+                          </label>
+                          <Button
+                            variant="ghost"
+                            className="!min-h-7 !px-2 text-2xs"
+                            onClick={() => {
+                              updateSettings({
+                                activeAccountId: h.accountId,
+                                accountViewMode: {
+                                  type: "account",
+                                  accountId: h.accountId,
+                                },
+                              });
+                              setActiveNav("chats");
+                            }}
+                          >
+                            {t("monitor.openChats")}
+                          </Button>
+                        </div>
+                      </div>
+
+                      {(row.warmup.active || !acc?.createdAt || healthText.hints.length > 0 || isPaused) && (
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-zinc-800/50 bg-zinc-950/20 px-4 py-2 text-2xs text-zinc-500">
+                          {row.warmup.active && (
+                            <span className="text-sky-300/90">
+                              {t("monitor.warmupActive", { hours: row.warmup.hoursLeft })}
+                              {" · "}
+                              {t("monitor.limits", {
+                                minute: row.warmup.limits.perPhonePerMinute,
+                                hour: row.warmup.limits.perPhonePerHour,
+                              })}
+                            </span>
+                          )}
+                          {!acc?.createdAt && <span>{t("monitor.noCreatedAt")}</span>}
+                          {healthText.hints.slice(0, 2).map((hint) => (
+                            <span key={hint} className="inline-flex items-start gap-1">
+                              <Activity className="mt-px h-3 w-3 shrink-0 opacity-50" />
+                              {hint}
+                            </span>
+                          ))}
+                          {isPaused && <span>{t("monitor.sendingPaused")}</span>}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         )}
 
@@ -541,27 +556,44 @@ export function AccountMonitorView() {
 }
 
 function StatChip({
+  Icon,
   label,
   value,
   tone,
 }: {
+  Icon: typeof CheckCircle2;
   label: string;
   value: number;
   tone?: "ok" | "warn" | "bad";
 }) {
   return (
-    <div className="stat-chip-card rounded-lg border border-zinc-800/90 bg-zinc-900/60 px-3 py-2.5 shadow-2xs">
-      <div className="text-2xs font-medium text-zinc-400 dark:text-zinc-400">{label}</div>
+    <div className="stat-chip-card flex items-center justify-between gap-3 rounded-xl border border-zinc-800/90 bg-zinc-900/60 px-3.5 py-3 shadow-sm shadow-black/10">
+      <div className="min-w-0">
+        <div className="truncate text-2xs font-medium text-zinc-400">
+          {label}
+        </div>
+        <div
+          className={cn(
+            "mt-1 text-xl font-bold tabular-nums tracking-tight",
+            tone === "ok" && "text-emerald-400",
+            tone === "warn" && "text-amber-400",
+            tone === "bad" && "text-rose-400",
+            !tone && "text-zinc-100"
+          )}
+        >
+          {value}
+        </div>
+      </div>
       <div
         className={cn(
-          "mt-0.5 text-xl font-bold tabular-nums tracking-tight",
-          tone === "ok" && "text-emerald-500 dark:text-emerald-400",
-          tone === "warn" && "text-amber-500 dark:text-amber-400",
-          tone === "bad" && "text-rose-500 dark:text-rose-400",
-          !tone && "text-zinc-800 dark:text-zinc-100"
+          "shrink-0 rounded-lg p-2",
+          tone === "ok" && "bg-emerald-500/10 text-emerald-300",
+          tone === "warn" && "bg-amber-500/10 text-amber-300",
+          tone === "bad" && "bg-rose-500/10 text-rose-300",
+          !tone && "bg-brand/10 text-brand"
         )}
       >
-        {value}
+        <Icon aria-hidden="true" className="h-4 w-4" />
       </div>
     </div>
   );

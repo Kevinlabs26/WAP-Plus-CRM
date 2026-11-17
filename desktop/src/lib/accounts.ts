@@ -226,7 +226,7 @@ type FolderLike = {
  */
 export function healSingleSessionOwnership<
   C extends { accountId?: string },
-  H extends { accountId?: string },
+  H extends { id: string; accountId?: string; phoneId?: string },
   F extends FolderLike,
 >(opts: {
   contacts: C[];
@@ -238,6 +238,7 @@ export function healSingleSessionOwnership<
 }): {
   contacts: C[];
   chats: H[];
+  chatAccountReplacements: { chatId: string; fromAccountId: string; toAccountId: string }[];
   folders: F[];
   accounts: WaAccount[];
   liveAccountId: string;
@@ -248,6 +249,7 @@ export function healSingleSessionOwnership<
   let accounts = ensureAccounts(opts.accounts);
   let liveId = (opts.liveAccountId || "").trim();
   let changed = false;
+  const chatAccountReplacements: { chatId: string; fromAccountId: string; toAccountId: string }[] = [];
 
   // 允许空列表（新装 / 用户删光）——不要偷偷塞回「WhatsApp」占位槽
   if (accounts.length && liveId && !accounts.some((a) => a.id === liveId)) {
@@ -293,9 +295,11 @@ export function healSingleSessionOwnership<
   });
 
   const chats = opts.chats.map((c) => {
-    const { next, move } = migrateOwner(c.accountId);
+    const fromAccountId = (c.accountId || c.phoneId || "").trim();
+    const { next, move } = migrateOwner(fromAccountId);
     if (!move) return c;
     changed = true;
+    chatAccountReplacements.push({ chatId: c.id, fromAccountId, toAccountId: next });
     return { ...c, accountId: next };
   });
 
@@ -361,6 +365,7 @@ export function healSingleSessionOwnership<
   return {
     contacts,
     chats,
+    chatAccountReplacements,
     folders,
     accounts,
     liveAccountId: liveId,
@@ -368,4 +373,21 @@ export function healSingleSessionOwnership<
     viewAccountId: activeAccountId,
     changed,
   };
+}
+
+export function applyChatAccountReplacements<
+  M extends { chatId: string; accountId?: string | null; deviceId?: string | null },
+>(
+  messages: M[],
+  replacements: readonly { chatId: string; fromAccountId: string; toAccountId: string }[],
+): M[] {
+  if (!replacements.length) return messages;
+  const byChat = new Map(replacements.map((replacement) => [replacement.chatId, replacement]));
+  return messages.map((message): M => {
+    const replacement = byChat.get(message.chatId);
+    const owner = message.accountId || message.deviceId || "";
+    return replacement && (!owner || owner === replacement.fromAccountId || owner === replacement.toAccountId)
+      ? ({ ...message, accountId: replacement.toAccountId } as M)
+      : message;
+  });
 }

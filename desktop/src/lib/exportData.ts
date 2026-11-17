@@ -116,7 +116,6 @@ export type SettingsSafeExport = {
   aiPromptTemplates: AppSettings["aiPromptTemplates"];
   aiPlaybooks: AppSettings["aiPlaybooks"];
   aiPlaybookPlans?: AppSettings["aiPlaybookPlans"];
-  aiPlaybookOverviewId: string;
   aiPlaybookBindings: AppSettings["aiPlaybookBindings"];
   aiPlaybookMuseMode: AppSettings["aiPlaybookMuseMode"];
   aiPlaybookAutoSync: boolean;
@@ -237,7 +236,6 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     aiPromptTemplates: settings.aiPromptTemplates || [],
     aiPlaybooks,
     aiPlaybookPlans,
-    aiPlaybookOverviewId: settings.aiPlaybookOverviewId && playbookIds.has(settings.aiPlaybookOverviewId) ? settings.aiPlaybookOverviewId : "",
     aiPlaybookBindings: Object.fromEntries(Object.entries(settings.aiPlaybookBindings || {}).filter(([,id]) => id === "off" || playbookIds.has(id))),
     aiPlaybookMuseMode: settings.aiPlaybookMuseMode || "workspace",
     aiPlaybookAutoSync: false,
@@ -738,7 +736,7 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
   if (settingsSafe) {
     const allowed = [
       "quickReplies", "quickReplyCustomCategories", "quickReplyRemovedCategories", "quickReplyCategoryLabels", "quickReplyCategoryOrder", "quickReplyPinnedIds", "quickReplyRecentIds", "translateTargetLang", "enterTranslateSend", "myLang",
-      "voiceInputLang", "aiTimeZone", "leadInbox", "chatFolders", "chatFolderClones", "aiPromptTemplates", "aiPlaybooks", "aiPlaybookPlans", "aiPlaybookOverviewId", "aiPlaybookBindings", "aiPlaybookMuseMode", "broadcastThemes", "imagePromptTemplates", "aiContextMode", "aiOutreachRuns", "aiOutreachPaused", "aiOutreachExcludedRecipients",
+      "voiceInputLang", "aiTimeZone", "leadInbox", "chatFolders", "chatFolderClones", "aiPromptTemplates", "aiPlaybooks", "aiPlaybookPlans", "aiPlaybookBindings", "aiPlaybookMuseMode", "broadcastThemes", "imagePromptTemplates", "aiContextMode", "aiOutreachRuns", "aiOutreachPaused", "aiOutreachExcludedRecipients",
       "aiReplyTaskRecords", "aiTaskDismissedIds", "scheduledMessages", "scheduledPlans", "waAccounts", "accountViewMode", "historySyncNote",
       "aiAutoFollowUpDelaysMinutes",
       "historySyncNoteByAccountId", "internalNotesByKey", "chatBackground",

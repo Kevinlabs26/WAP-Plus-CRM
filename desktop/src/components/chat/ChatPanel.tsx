@@ -76,7 +76,6 @@ import { ImagePreviewDialog } from "./ImagePreviewDialog";
 import { useVoiceRecording } from "./useVoiceRecording";
 import { useSavedMessages } from "./useSavedMessages";
 import { useChatSearch } from "./useChatSearch";
-import { useCatalog } from "./useCatalog";
 import { useGroupMembers } from "./useGroupMembers";
 import { useMediaSend } from "./useMediaSend";
 import { useTextSend } from "./useTextSend";
@@ -85,12 +84,6 @@ import { useSaveContact } from "./useSaveContact";
 import { useForwardMessage } from "./useForwardMessage";
 import { useMessageActions } from "./useMessageActions";
 import { useAiMessageReply } from "./useAiMessageReply";
-const ProductPicker = lazy(() =>
-  import("./ProductPicker").then((m) => ({ default: m.ProductPicker }))
-);
-const ProductManager = lazy(() =>
-  import("./ProductManager").then((m) => ({ default: m.ProductManager }))
-);
 import { usePeerPresence } from "./usePeerPresence";
 import { retryMessage as retryMessageAction } from "./retryMessageAction";
 import { reloadMedia as reloadMediaAction } from "./reloadMediaAction";
@@ -609,38 +602,70 @@ export function ChatPanel() {
   );
 
   // A chat preview can arrive from WhatsApp before its transcript does (for
-  // example after sending from the official app). Request one history sync so
-  // opening that chat does not leave the center panel on the empty state.
+  // example after sending from the official app). Retry once if the transcript
+  // is still missing after the initial history request.
   const emptyHistoryRequestRef = useRef(new Set<string>());
+  const emptyHistoryRetryRef = useRef(new Set<string>());
+  const emptyHistoryRetryTimerRef = useRef(new Map<string, number>());
   useEffect(() => {
     if (
       !isBaileys ||
       !selectedChatId ||
       !chatConnected ||
-      chatMessages.length > 0 ||
       !activeChat
     ) {
       return;
     }
     if (!(activeChat.lastMessage || activeChat.updatedAt)) return;
     const requestKey = `${chatAccountId}:${selectedChatId}`;
-    if (emptyHistoryRequestRef.current.has(requestKey)) return;
-    emptyHistoryRequestRef.current.add(requestKey);
-    void baileysSync(chatAccountId, { requestHistory: true }).catch((error) => {
-      emptyHistoryRequestRef.current.delete(requestKey);
-      syncLog("ui.chat", "empty chat history sync failed", {
-        chatId: selectedChatId,
-        accountId: chatAccountId,
-        error: String(error),
+    if (chatMessages.length > 0) {
+      const timer = emptyHistoryRetryTimerRef.current.get(requestKey);
+      if (timer !== undefined) window.clearTimeout(timer);
+      emptyHistoryRetryTimerRef.current.delete(requestKey);
+      return;
+    }
+    if (!emptyHistoryRequestRef.current.has(requestKey)) {
+      emptyHistoryRequestRef.current.add(requestKey);
+      void baileysSync(chatAccountId, { requestHistory: true }).catch((error) => {
+        emptyHistoryRequestRef.current.delete(requestKey);
+        syncLog("ui.chat", "empty chat history sync failed", {
+          chatId: selectedChatId,
+          accountId: chatAccountId,
+          error: String(error),
+        });
       });
-    });
+    }
+    if (emptyHistoryRetryRef.current.has(requestKey) || emptyHistoryRetryTimerRef.current.has(requestKey)) return;
+    emptyHistoryRetryTimerRef.current.set(requestKey, window.setTimeout(() => {
+      emptyHistoryRetryTimerRef.current.delete(requestKey);
+      const latest = useAppStore.getState();
+      const currentChat = latest.chats.find(chat => chat.id === selectedChatId);
+      const currentMessages = filterMessagesForAccount(
+        latest.messagesByChatId[selectedChatId] || latest.messages.filter(message => message.chatId === selectedChatId),
+        chatAccountId,
+        latest.settings.liveBaileysAccountId,
+      );
+      if (latest.selectedChatId !== selectedChatId || !currentChat || currentMessages.length > 0 ||
+          !isWaAccountConnected(latest.settings.waAccounts, chatAccountId, latest.settings.liveBaileysAccountId, latest.baileysUi.connection)) return;
+      // One bounded retry per account and chat; Bridge queues it behind the account-wide cooldown.
+      emptyHistoryRetryRef.current.add(requestKey);
+      void baileysSync(chatAccountId, { requestHistory: true }).catch(error => {
+        syncLog("ui.chat", "empty chat history retry failed", {
+          chatId: selectedChatId,
+          accountId: chatAccountId,
+          error: String(error),
+        });
+      });
+    }, 30_000));
   }, [
-    activeChat,
+    activeChat?.lastMessage,
+    activeChat?.updatedAt,
     chatAccountId,
     chatConnected,
     chatMessages.length,
     isBaileys,
     selectedChatId,
+    settings.liveBaileysAccountId,
   ]);
 
   const { exportingChat, exportChat } = useChatExport({
@@ -1292,31 +1317,6 @@ export function ChatPanel() {
     pushToast(t("chat.scheduleSaved"), "success");
   };
 
-  const {
-    catalogOpen,
-    setCatalogOpen,
-    catalogManageOpen,
-    setCatalogManageOpen,
-    catalogLoading,
-    products,
-    refreshCatalog,
-    openCatalog,
-    openProductManager,
-    handleSendProduct,
-  } = useCatalog({
-    isBaileys,
-    chatConnected,
-    chatAccountId,
-    channelId,
-    selectedPhoneId,
-    setSending,
-    enqueueOutgoingMessage,
-    patchMessage,
-    pushToast,
-    resolveRecipient,
-    guardBlockedSend,
-  });
-
   const handleSendContactCard = async (sharedContact: Contact) => {
     if (!guardBlockedSend()) return;
     if (!isBaileys) {
@@ -1507,7 +1507,6 @@ export function ChatPanel() {
   const composerOnRemoveFavoriteSticker = useEventCallback(removeFavoriteSticker);
   const composerOnSendFile = useEventCallback(sendFile);
   const composerOnSendAudio = useEventCallback(sendAudio);
-  const composerOnOpenCatalog = useEventCallback(openCatalog);
   const composerOnOpenContactPicker = useEventCallback(() =>
     setContactPickerOpen(true)
   );
@@ -1885,7 +1884,6 @@ export function ChatPanel() {
           onRemoveFavoriteSticker={composerOnRemoveFavoriteSticker}
           onSendAudio={composerOnSendAudio}
           onSendFile={composerOnSendFile}
-          onOpenCatalog={composerOnOpenCatalog}
           onOpenContactPicker={composerOnOpenContactPicker}
           onBeginVoice={composerOnBeginVoice}
           readVoiceLevel={composerReadVoiceLevel}
@@ -1902,25 +1900,6 @@ export function ChatPanel() {
         </div>
         </div>
       </div>
-      {catalogOpen && (
-        <ProductPicker
-          products={products}
-          loading={catalogLoading}
-          onClose={() => setCatalogOpen(false)}
-          onRefresh={() => void refreshCatalog()}
-          onSend={handleSendProduct}
-          onManageProducts={openProductManager}
-        />
-      )}
-      {catalogManageOpen && (
-        <ProductManager
-          products={products}
-          loading={catalogLoading}
-          accountId={chatAccountId}
-          onClose={() => setCatalogManageOpen(false)}
-          onRefresh={refreshCatalog}
-        />
-      )}
       {contactPickerOpen && (
         <ContactCardPicker
           contacts={useAppStore.getState().contacts}

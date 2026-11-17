@@ -28,11 +28,13 @@ import {
   nextAccountLabel,
 } from "@/lib/accountLabels";
 import {
+  applyChatAccountReplacements,
   createAccountSlot,
   ensureAccounts,
   healSingleSessionOwnership,
   pruneGhostDefaultAccounts,
 } from "@/lib/accounts";
+import { registerChatAccountReplacements } from "@/lib/storage";
 import type { AccountViewMode, WaAccount } from "@/types/account";
 import { DEFAULT_ACCOUNT_ID } from "@/types/account";
 import { useI18n } from "@/i18n";
@@ -154,9 +156,13 @@ export function AccountSwitcherMenu({
         activeAccountId: s.activeAccountId || live,
       });
       if (!healed.changed) return;
+      if (healed.chatAccountReplacements.length) {
+        registerChatAccountReplacements(healed.chatAccountReplacements);
+      }
       useAppStore.setState({
         contacts: healed.contacts,
         chats: healed.chats,
+        messages: applyChatAccountReplacements(state.messages, healed.chatAccountReplacements),
       });
       // 保留用户当前 active / view，只更新 accounts 结构与 live 纠正
       updateSettings({

@@ -145,7 +145,7 @@ export interface AppState extends PersistSlice {
   /** 聊天页右侧客户工作台是否收起 */
   crmPanelCollapsed: boolean;
   /** 客户工作台当前页签 */
-  crmPanelTab: "customer" | "quick-replies" | "images";
+  crmPanelTab: "customer" | "quick-replies" | "images" | "agent";
   chatListFilter: ChatListFilter;
   toasts: ToastItem[];
   /** 应用内确认框（替代 window.confirm） */
@@ -310,7 +310,7 @@ export interface AppState extends PersistSlice {
   ensureMessageInMemory: (id: string) => Promise<unknown>;
   importBackup: (bundle: unknown) => Promise<{ ok: boolean; reason?: string }>;
   setCrmPanelCollapsed: (v: boolean) => void;
-  setCrmPanelTab: (tab: "customer" | "quick-replies" | "images") => void;
+  setCrmPanelTab: (tab: "customer" | "quick-replies" | "images" | "agent") => void;
   setChatListFilter: (f: ChatListFilter) => void;
   goToChats: (filter?: ChatListFilter) => void;
   openContacts: (tab?: "contacts" | "manage") => void;
@@ -412,6 +412,7 @@ export interface AppState extends PersistSlice {
   reorderChatFolder: (folderId: string, targetFolderId: string, after?: boolean) => void;
   /** 主归属移入分组（从其它组移除）；folderId=null 则回未分组 */
   moveChatToFolder: (chatId: string, folderId: string | null, options?: { removeClones?: boolean }) => void;
+  removeChatFromFolder: (chatId: string, folderId: string) => boolean;
   moveChatsToFolders: (assignments: { chatId: string; folderId: string }[]) => number;
   /** 分身到另一分组（主归属不变） */
   cloneChatToFolder: (chatId: string, folderId: string) => void;

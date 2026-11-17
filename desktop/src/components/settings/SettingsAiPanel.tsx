@@ -12,7 +12,6 @@ import { useI18n } from "@/i18n";
 import { TimeZoneSelect } from "@/components/ui/TimeZoneSelect";
 import { systemTimeZone } from "@/lib/timeZone";
 import { isChatModel, type ModelPurpose } from "@/lib/modelCapabilities";
-import { VertexAiFields } from "./VertexAiFields";
 import { MuseWebFields } from "./MuseWebFields";
 
 export function SettingsAiPanel() {
@@ -56,7 +55,6 @@ export function AiServiceFields({ settings, updateSettings, showMockHint = true,
               <option value="groq">Groq</option>
               <option value="openrouter">OpenRouter</option>
               <option value="gemini">Gemini</option>
-              <option value="vertex">Gemini · Vertex AI</option>
               {allowMuse&&<option value="muse">Muse · {t("muse.web")}</option>}
               <option value="custom">{t("settingsAi.provider.custom")}</option>
               <option value="ollama">{t("settingsAi.provider.ollama")}</option>
@@ -80,7 +78,6 @@ export function AiServiceFields({ settings, updateSettings, showMockHint = true,
           {settings.aiProvider === "gemini" && (
             <SecretInput full label="Gemini API Key" value={settings.geminiKey} placeholder="AIza…" onChange={(value) => updateSettings({ geminiKey: value })} />
           )}
-          {settings.aiProvider==="vertex"&&<VertexAiFields settings={settings} updateSettings={updateSettings}/>}
           {settings.aiProvider==="muse"&&<MuseWebFields/>}
           {settings.aiProvider === "custom" && (
             <>

@@ -1,6 +1,5 @@
 import { AI_OUTPUT_TRUNCATED, readAiJson } from "./aiResponse.ts";
 import { trackAiRequest, type AiUsageFeature } from "./aiUsage.ts";
-import { vertexAccessToken,vertexBaseUrl,type VertexAiConfig } from "./vertexAi.ts";
 /**
  * Gemini API 调用（Google 官方 generateContent 接口，非 OpenAI 兼容）。
  * 供回复建议 / 客户卡洞察 / 草稿翻译 / 语音转写共用。
@@ -18,21 +17,17 @@ async function geminiPost(
   body: Record<string, unknown>,
   signal?: AbortSignal,
   onText?: (text: string) => void,
-  feature:AiUsageFeature="suggestion",
-  vertex?:VertexAiConfig
+  feature:AiUsageFeature="suggestion"
 ): Promise<string> {
   if(!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,159}$/.test(model))throw Error("无效的 Gemini 模型 ID");
-  const base=vertex?vertexBaseUrl(vertex):`${GEMINI_BASE}/models`;
   signal?.throwIfAborted();
-  const token=vertex?await vertexAccessToken(vertex.vertexCredentialId):"";
-  signal?.throwIfAborted();
-  return trackAiRequest({provider:vertex?"vertex":"gemini",model,feature,endpoint:vertex?base:undefined},async observe=>{
-  const url = `${base}/${model}:${onText ? "streamGenerateContent?alt=sse" : "generateContent"}`;
+  return trackAiRequest({provider:"gemini",model,feature},async observe=>{
+  const url = `${GEMINI_BASE}/models/${model}:${onText ? "streamGenerateContent?alt=sse" : "generateContent"}`;
   const res = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(vertex?{Authorization:`Bearer ${token}`}:{"x-goog-api-key":apiKey}),
+      "x-goog-api-key": apiKey,
     },
     body: JSON.stringify(body),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
@@ -119,9 +114,8 @@ export async function geminiGenerate(opts: {
   signal?: AbortSignal;
   onText?: (text: string) => void;
   feature?:AiUsageFeature;
-  vertex?:VertexAiConfig;
 }): Promise<string> {
-  const model = opts.model || (opts.vertex?"":GEMINI_DEFAULT_MODEL);
+  const model = opts.model || GEMINI_DEFAULT_MODEL;
   const generationConfig: Record<string, unknown> = {
     temperature: opts.temperature ?? 0.7,
   };
@@ -136,7 +130,7 @@ export async function geminiGenerate(opts: {
   if (opts.system?.trim()) {
     body.systemInstruction = { parts: [{ text: opts.system }] };
   }
-  return geminiPost(opts.apiKey, model, body, opts.signal, opts.onText,opts.feature,opts.vertex);
+  return geminiPost(opts.apiKey, model, body, opts.signal, opts.onText,opts.feature);
 }
 
 /** 语音转写：把音频 base64 内联给 Gemini，输出纯文本转写 */
@@ -172,7 +166,6 @@ export async function geminiGenerateImage(opts: {
   referenceImage?: { mimeType: string; data: string };
   referenceImages?: { mimeType: string; data: string }[];
   signal?: AbortSignal;
-  vertex?: VertexAiConfig;
 }): Promise<{ mimeType: string; data: string }> {
   const model = opts.model || GEMINI_IMAGE_MODEL;
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,159}$/.test(model)) throw Error("无效的 Gemini 图片模型 ID");
@@ -180,12 +173,10 @@ export async function geminiGenerateImage(opts: {
   if (!prompt || prompt.length > 6000) throw Error("图片描述超出长度限制");
   const references = opts.referenceImages || (opts.referenceImage ? [opts.referenceImage] : []);
   if (references.length > 2 || references.some(image => !/^image\/(?:jpeg|png|webp)$/.test(image.mimeType) || !/^[A-Za-z0-9+/]+={0,2}$/.test(image.data) || image.data.length > 4_000_000)) throw Error("参考图片格式无效或过大");
-  const base = opts.vertex ? vertexBaseUrl(opts.vertex) : GEMINI_IMAGE_BASE;
-  const token = opts.vertex ? await vertexAccessToken(opts.vertex.vertexCredentialId) : "";
-  return trackAiRequest({ provider: opts.vertex ? "vertex" : "gemini", model, feature: "image", endpoint: opts.vertex ? base : undefined }, async observe => {
-    const res = await fetch(`${base}/${model}:generateContent`, {
+  return trackAiRequest({ provider: "gemini", model, feature: "image" }, async observe => {
+    const res = await fetch(`${GEMINI_IMAGE_BASE}/${model}:generateContent`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(opts.vertex ? { Authorization: `Bearer ${token}` } : { "x-goog-api-key": opts.apiKey }) },
+      headers: { "Content-Type": "application/json", "x-goog-api-key": opts.apiKey },
       body: JSON.stringify({ contents: [{ role: "user", parts: [...references.map(image => ({ inlineData: { mimeType: image.mimeType, data: image.data } })), { text: prompt }] }], generationConfig: { responseModalities: ["IMAGE"], imageConfig: { aspectRatio: opts.aspectRatio || "1:1" } } }),
       signal: opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000),
     });

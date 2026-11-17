@@ -1,12 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
-import { idbGet, idbSet, idbDel } from "./idb";
-import { isTauri } from "./bridge";
-import { MAX_SHEET_DISPLAY_COLUMNS, resolveSheetColumn, sheetInternationalPhone, sheetRefreshDue, type SheetColumn, type SheetSchedule } from "./googleSheetMatch";
-import { sheetErrorHint } from "./googleSheetErrors";
+import { idbGet, idbSet, idbDel } from "./idb.ts";
+import { isTauri } from "./bridge.ts";
+import { MAX_SHEET_DISPLAY_COLUMNS, resolveSheetColumn, sheetInternationalPhone, sheetRefreshDue, type SheetColumn, type SheetSchedule } from "./googleSheetMatch.ts";
+import { sheetErrorHint } from "./googleSheetErrors.ts";
 
 export type SheetAction = "edit" | "link" | "content";
-export interface SheetField { id: string; label: string; column: SheetColumn; schedule: SheetSchedule; action?: SheetAction }
+export const SHEET_TAG_COLORS = ["amber", "emerald", "red", "blue", "violet", "zinc"] as const;
+export type SheetTagColor = typeof SHEET_TAG_COLORS[number];
+export interface SheetTagRule { contains: string; color: SheetTagColor }
+export interface SheetTagStyle { defaultColor: SheetTagColor; rules: SheetTagRule[] }
+export interface SheetField { id: string; label: string; column: SheetColumn; schedule: SheetSchedule; action?: SheetAction; primaryTagStyle?: SheetTagStyle }
 export interface SheetConfig { spreadsheet: string; tab: string; headerRow: number; phone: SheetColumn; fields: SheetField[]; primaryTagFieldId?: string; actions?: Record<string, SheetAction> }
 export interface SheetCell { value: string; row: number; links: string[]; formula?: boolean }
 interface FieldData { at: number; columnIndex?: number; values: Record<string, (SheetCell | string)[]> }
@@ -18,14 +22,27 @@ export const useGoogleSheets = create<SheetState>(() => ({ ready: false, configu
 export function sheetConnections(state=useGoogleSheets.getState()):SheetConnection[]{
   return [...(state.config?[{id:DEFAULT_SHEET_ID,name:state.defaultName||state.config.tab,config:state.config,data:state.data,error:state.error,failures:state.failures,retryAt:state.retryAt,pauseReason:state.pauseReason}]:[]),...Object.values(state.connections||{})];
 }
-export function primarySheetTagForPhone(connection:SheetConnection|undefined,phone:string):string|null{
+export function normalizeSheetTagStyle(value:unknown):SheetTagStyle{
+  const style=value&&typeof value==="object"?value as Partial<SheetTagStyle>:{};
+  const validColor=(color:unknown):color is SheetTagColor=>SHEET_TAG_COLORS.includes(color as SheetTagColor);
+  const rules=Array.isArray(style.rules)?style.rules.slice(0,10).flatMap(rule=>{
+    if(!rule||typeof rule!=="object")return[];
+    const item=rule as Partial<SheetTagRule>;
+    return typeof item.contains==="string"&&item.contains.trim()&&validColor(item.color)?[{contains:item.contains.trim().slice(0,100),color:item.color}]:[];
+  }):[];
+  return {defaultColor:validColor(style.defaultColor)?style.defaultColor:"amber",rules};
+}
+export function primarySheetTagForPhone(connection:SheetConnection|undefined,phone:string):{text:string;color:SheetTagColor}|null{
   const config=connection?.config;
   const primaryTagFieldId=config?.primaryTagFieldId;
   const field=config?.fields.find(item=>item.id===primaryTagFieldId);
   const target=sheetInternationalPhone(phone),values=field&&target?connection?.data[field.id]?.values[target]:undefined;
   const cell=values?.find(item=>(typeof item==="string"?item:item.value).trim());
   const value=typeof cell==="string"?cell.trim():cell?.value.trim();
-  return field&&value?`${field.label}: ${value}`:null;
+  if(!field||!value)return null;
+  const style=normalizeSheetTagStyle(field.primaryTagStyle);
+  const match=style.rules.find(rule=>value.toLowerCase().includes(rule.contains.toLowerCase()));
+  return {text:`${field.label}: ${value}`,color:match?.color||style.defaultColor};
 }
 function updateConnection(id:string,patch:Partial<Omit<SheetConnection,"id"|"name">>){
   if(id===DEFAULT_SHEET_ID)useGoogleSheets.setState(patch);
@@ -74,29 +91,48 @@ export async function clearSheetConfig() {
   await idbDel(KEY);
   useGoogleSheets.setState({ config: null, data: {},connections:{},defaultName:"", error: "", ...resetRetry });
 }
-export async function saveSheetConfig(config: SheetConfig,connectionId=DEFAULT_SHEET_ID,name?:string) {
-  if(!/^[\w-]{1,120}$/.test(connectionId))throw Error("Invalid sheet connection ID");
-  if(name!==undefined&&!name.trim())throw Error("Sheet name is required");
-  if (config.fields.length > MAX_SHEET_DISPLAY_COLUMNS) throw new Error(`Invalid column selection: maximum ${MAX_SHEET_DISPLAY_COLUMNS} display columns`);
+export async function saveSheetConfigs(entries:{config:SheetConfig;connectionId:string;name?:string}[],refreshIds:ReadonlySet<string>=new Set()) {
+  if(!entries.length)return;
+  const ids=new Set<string>();
+  for(const {config,connectionId,name} of entries){
+    if(!/^[\w-]{1,120}$/.test(connectionId))throw Error("Invalid sheet connection ID");
+    if(ids.has(connectionId))throw Error("Duplicate sheet connection ID");
+    ids.add(connectionId);
+    if(name!==undefined&&!name.trim())throw Error("Sheet name is required");
+    if(config.fields.length>MAX_SHEET_DISPLAY_COLUMNS)throw new Error(`Invalid column selection: maximum ${MAX_SHEET_DISPLAY_COLUMNS} display columns`);
+  }
   while(configWrite||task){if(configWrite)await configWrite;if(task)await task;}
   const previous = useGoogleSheets.getState();
-  const oldConnection=sheetConnections(previous).find(item=>item.id===connectionId);
-  const oldConfig=oldConnection?.config,oldData=oldConnection?.data||{};
-  const sameSource = oldConfig?.spreadsheet === config.spreadsheet && oldConfig?.tab === config.tab && oldConfig?.headerRow === config.headerRow && JSON.stringify(oldConfig?.phone) === JSON.stringify(config.phone);
-  const data = Object.fromEntries(config.fields.flatMap(field => {
-    const old = oldConfig?.fields.find(item => item.id === field.id);
-    return sameSource && old && JSON.stringify(old.column) === JSON.stringify(field.column) && old.action === field.action && oldData[field.id]
-      ? [[field.id, oldData[field.id]]] : [];
-  }));
+  const previousConnections=sheetConnections(previous);
+  const connections={...previous.connections};
+  let config=previous.config,data=previous.data,defaultName=previous.defaultName,hasDefault=false,hasNamed=false;
+  for(const entry of entries){
+    const {config:nextConfig,connectionId,name}=entry;
+    const oldConnection=previousConnections.find(item=>item.id===connectionId);
+    const oldConfig=oldConnection?.config,oldData=oldConnection?.data||{};
+    const sameSource=oldConfig?.spreadsheet===nextConfig.spreadsheet&&oldConfig?.tab===nextConfig.tab&&oldConfig?.headerRow===nextConfig.headerRow&&JSON.stringify(oldConfig?.phone)===JSON.stringify(nextConfig.phone);
+    const nextData=Object.fromEntries(nextConfig.fields.flatMap(field=>{
+      const old=oldConfig?.fields.find(item=>item.id===field.id);
+      return sameSource&&old&&JSON.stringify(old.column)===JSON.stringify(field.column)&&old.action===field.action&&oldData[field.id]?[[field.id,oldData[field.id]]]:[];
+    }));
+    const connection:SheetConnection={id:connectionId,name:(name?.trim()||oldConnection?.name||nextConfig.tab).slice(0,120),config:nextConfig,data:nextData,error:"",...resetRetry};
+    if(connectionId===DEFAULT_SHEET_ID){config=nextConfig;data=nextData;defaultName=connection.name;hasDefault=true;}
+    else{connections[connectionId]=connection;hasNamed=true;}
+  }
+  const patch={
+    ...(hasDefault?{config,data,defaultName,error:"",...resetRetry}:{}),
+    ...(hasNamed?{connections}:{}),
+  };
+  const next={...previous,...patch};
   configWrite = (async () => {
-    const connection:SheetConnection={id:connectionId,name:(name?.trim()||oldConnection?.name||config.tab).slice(0,120),config,data,error:"",...resetRetry};
-    const patch=connectionId===DEFAULT_SHEET_ID?{config,data,defaultName:connection.name,error:"",...resetRetry}:{connections:{...previous.connections,[connectionId]:connection}};
-    const next={...previous,...patch};
     await idbSet(KEY,{email:next.email,config:next.config,data:next.data,connections:next.connections,defaultName:next.defaultName});
     useGoogleSheets.setState(patch);
   })();
   try { await configWrite; } finally { configWrite = null; }
-  await refreshSheets(true,connectionId);
+  for(const {connectionId} of entries)if(refreshIds.has(connectionId))await refreshSheets(true,connectionId);
+}
+export async function saveSheetConfig(config:SheetConfig,connectionId=DEFAULT_SHEET_ID,name?:string,refresh=true){
+  return saveSheetConfigs([{config,connectionId,name}],refresh?new Set([connectionId]):new Set());
 }
 export async function removeSheetConnection(id:string){
   while(configWrite||task){if(configWrite)await configWrite;if(task)await task;}
@@ -177,7 +213,7 @@ export function refreshSheets(force = false,connectionId=DEFAULT_SHEET_ID): Prom
   const current=(async()=>{if(write)await write;if(previous)await previous;await refreshConnection(force,connectionId);})().finally(()=>{refreshes.delete(connectionId);if(task===current)task=null;});
   refreshes.set(connectionId,current);task=current;return current;
 }
-export async function refreshAllSheets(){for(const connection of sheetConnections())await refreshSheets(false,connection.id);}
+export async function refreshAllSheets(activeConnectionIds?:ReadonlySet<string>){for(const connection of sheetConnections())if(!activeConnectionIds||activeConnectionIds.has(connection.id))await refreshSheets(false,connection.id);}
 async function refreshConnection(force:boolean,connectionId:string):Promise<void>{
   const state=useGoogleSheets.getState(),connection=sheetConnections(state).find(item=>item.id===connectionId);
   if(!connection||!state.email)return;

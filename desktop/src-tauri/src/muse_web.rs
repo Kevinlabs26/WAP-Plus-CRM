@@ -4,15 +4,97 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::{Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{
+    Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
+};
 use tokio::sync::{oneshot, Mutex as AsyncMutex, OwnedMutexGuard};
 
 const LABEL: &str = "muse-web";
 const MEDIA_LABEL: &str = "muse-web-media";
+const WORKSPACE_LABEL: &str = "muse-workspace-ui";
+const WORKSPACE_CONTENT_LABEL: &str = "muse-workspace-content";
+const WORKSPACE_SIDEBAR_WIDTH: f64 = 260.0;
+const WORKSPACE_HEADER_HEIGHT: f64 = 76.0;
 const ACCOUNT_POOL_FILE: &str = "muse-web-account-pool.json";
-const MAX_MUSE_ACCOUNTS: usize = 12;
+const SIDE_CHAT_CLEANUPS_FILE: &str = "muse-web-side-chat-cleanups.json";
+const MUSE_WORKSPACE_COPY_PATH_SCRIPT: &str = r#"(()=>{
+const install=()=>{
+if(window.__museWorkspaceCopyPathInstalled||!document.documentElement)return;window.__museWorkspaceCopyPathInstalled=true;
+const attrs=['data-path','data-file-path','data-full-path','data-relative-path','data-item-path','data-node-path','data-resource-path','data-filepath','data-fullpath','data-relativepath','data-storage-path','path'];
+const fields=['path','filePath','fullPath','relativePath','storagePath','absolutePath','file_path','full_path','relative_path','storage_path'];
+const pathIn=data=>{for(const source of [data,data?.file,data?.item,data?.entry,data?.node,data?.resource,data?.data]){for(const field of fields){const value=source?.[field];if(typeof value==='string'&&value.trim())return value.trim();}}return null;};
+const directPathFor=target=>{for(let node=target;node&&node!==document.documentElement;node=node.parentElement){for(const attr of attrs){const value=node.getAttribute(attr);if(value&&value.trim())return value.trim();}const key=Object.keys(node).find(key=>key.startsWith('__reactProps$'));const props=key&&node[key];const path=pathIn(props)||Object.values(props||{}).map(pathIn).find(Boolean);if(path)return path;}return null;};
+const rowFor=target=>{const semantic=target.closest('tr,[role="row"],[role="treeitem"],li,[data-testid*="row"]');if(semantic){const rect=semantic.getBoundingClientRect();if(rect.width>300&&rect.height>=28&&rect.height<=120)return semantic;}for(let node=target;node&&node!==document.body;node=node.parentElement){const rect=node.getBoundingClientRect();const text=(node.innerText||'').trim();if(rect.width>300&&rect.height>=32&&rect.height<=120&&text&&text.length<300&&node.parentElement){const peers=Array.from(node.parentElement.children).filter(peer=>{const box=peer.getBoundingClientRect();return box.width>=rect.width-8&&box.height>=28&&box.height<=120;});if(peers.length>=2)return node;}}return null;};
+const listRows=row=>{let node=row;for(let depth=0;node&&depth<6;depth++,node=node.parentElement){const rect=node.getBoundingClientRect();const rows=Array.from(node.parentElement?.children||[]).filter(peer=>{const box=peer.getBoundingClientRect();return box.width>=rect.width-8&&box.height>=28&&box.height<=120;});if(rows.includes(node)&&rows.length>1)return rows;}return[row];};
+const rowInfo=node=>{const box=node.getBoundingClientRect();const walker=document.createTreeWalker(node,NodeFilter.SHOW_TEXT);let name='',left=Infinity;for(let text=walker.nextNode();text;text=walker.nextNode()){const value=text.nodeValue?.replace(/\s+/g,' ').trim();if(!value)continue;const range=document.createRange();range.selectNodeContents(text);const rect=range.getBoundingClientRect();if(rect.width&&rect.height&&rect.left<box.left+box.width*.8&&rect.left<left){name=value;left=rect.left;}}if(!name)name=(node.getAttribute('aria-label')||node.title||node.innerText||'').trim().split(/\n/)[0];return name?{node,name,left,text:(node.innerText||node.textContent||'').trim()}:null;};
+// shortcut: paths are inferred from visible tree indentation when Muse exposes no path field; use its file API if the row layout changes.
+const treePathFor=row=>{const entries=listRows(row).map(rowInfo).filter(Boolean).sort((a,b)=>a.node.getBoundingClientRect().top-b.node.getBoundingClientRect().top);const parents=[];for(const entry of entries){while(parents.length&&entry.left<=parents[parents.length-1].left+8)parents.pop();const path=[...parents.map(parent=>parent.name),entry.name].join('/');if(entry.node===row)return path;if(/文件夹|\bfolder\b|\bdossier\b/i.test(entry.text)||entry.node.querySelector('[aria-label*="folder" i],[title*="folder" i]'))parents.push(entry);}return null;};
+const pathFor=target=>{const path=directPathFor(target);if(path)return path;const row=rowFor(target);if(!row)return null;const inferred=treePathFor(row);const text=(row.innerText||row.textContent||'').trim();return inferred&&(/文件夹|\bfolder\b|\bdossier\b/i.test(text)||/\.[a-z0-9]{1,12}(?:\s|$)/i.test(inferred))?inferred:null;};
+const style=document.createElement('style');style.textContent='#muse-copy-path-menu{position:fixed;z-index:2147483647;min-width:140px;padding:4px;background:#fff;border:1px solid #d9dee8;border-radius:8px;box-shadow:0 8px 24px #0002;font:14px system-ui,sans-serif;color:#20242c}#muse-copy-path-menu[hidden]{display:none!important}#muse-copy-path-menu button{width:100%;padding:8px 12px;border:0;border-radius:5px;background:transparent;text-align:left;color:inherit;font:inherit;cursor:pointer}#muse-copy-path-menu button:hover{background:#f1f5fb}';(document.head||document.documentElement).appendChild(style);
+const menu=document.createElement('div');menu.id='muse-copy-path-menu';menu.setAttribute('role','menu');menu.hidden=true;const item=document.createElement('button');item.type='button';item.setAttribute('role','menuitem');item.textContent='复制路径';menu.appendChild(item);(document.body||document.documentElement).appendChild(menu);
+const hide=()=>{menu.hidden=true;menu.removeAttribute('data-path');item.textContent='复制路径';};
+document.addEventListener('contextmenu',event=>{const target=event.target instanceof Element?event.target:event.target?.parentElement;const path=target&&pathFor(target);if(!path)return;event.preventDefault();event.stopImmediatePropagation();menu.dataset.path=path;menu.style.left=Math.max(8,Math.min(event.clientX,innerWidth-160))+'px';menu.style.top=Math.max(8,Math.min(event.clientY,innerHeight-48))+'px';menu.hidden=false;},true);
+menu.addEventListener('click',async event=>{if(!event.target.closest('button'))return;const path=menu.dataset.path;let copied=false;try{await navigator.clipboard.writeText(path);copied=true;}catch{const input=document.createElement('textarea');input.value=path;input.style.cssText='position:fixed;opacity:0;pointer-events:none';document.body.appendChild(input);input.select();copied=document.execCommand('copy');input.remove();}item.textContent=copied?'已复制路径':'复制失败';setTimeout(hide,900);});
+document.addEventListener('click',event=>{if(!menu.contains(event.target))hide();},true);document.addEventListener('keydown',event=>{if(event.key==='Escape')hide();});window.addEventListener('scroll',hide,true);
+};
+if(document.documentElement)install();else document.addEventListener('DOMContentLoaded',install,{once:true});
+})()"#;
+const MUSE_SIDE_CHAT_DOM_HELPERS: &str = r#"
+const museCleanText = value => String(value || '').replace(/\s+/g, ' ').trim();
+const museButtonText = button => museCleanText(button.innerText || button.getAttribute('aria-label') || button.title);
+const museVisible = element => { const rect = element.getBoundingClientRect(); return rect.width > 0 && rect.height > 0 && getComputedStyle(element).visibility !== 'hidden'; };
+const museElementText = element => museCleanText(element.innerText || element.getAttribute('aria-label') || element.title);
+const museMainNames = ['主要聊天', 'Main chat', 'Chat principal'];
+const museSideChatNames = ['旁聊', 'Side chats', 'Chats secondaires', 'Discussions secondaires'];
+const museControls = ['旁聊选项', 'Side chat options', 'Side chats options', '选项', 'Options', '新旁聊', '新建旁聊', '创建旁聊', 'New side chat', 'Create side chat', 'Nouveau chat secondaire'];
+const museMatchesName = (value, names) => names.some(name => value === name || value.startsWith(name + ' '));
+function museFindHeading(names) {
+  const matches = Array.from(document.body.querySelectorAll('*')).filter(element => museVisible(element) && museMatchesName(museElementText(element), names));
+  return matches.find(element => !Array.from(element.children).some(child => museMatchesName(museElementText(child), names))) || matches[0];
+}
+function museSideChatElements() {
+  const heading = museFindHeading(museSideChatNames);
+  if (!heading) return { error: '无法找到 Muse 的“旁聊”分区；为保护聊天记录，已停止清理。' };
+  const mainHeading = museFindHeading(museMainNames);
+  const ancestors = new Set();
+  for (let element = heading; element; element = element.parentElement) ancestors.add(element);
+  let scope = mainHeading;
+  while (scope && !ancestors.has(scope)) scope = scope.parentElement;
+  if (!scope) {
+    scope = heading.parentElement;
+    for (let depth = 0; scope && depth < 8 && !['NAV', 'ASIDE'].includes(scope.tagName) && !['navigation', 'complementary'].includes(scope.getAttribute('role')); depth++) scope = scope.parentElement;
+    scope ||= document.body;
+  }
+  const headingRect = heading.getBoundingClientRect();
+  const afterHeading = element => Boolean(heading.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const candidates = Array.from(scope.querySelectorAll('button, a[href], [role="button"], [role="link"]')).filter(element => {
+    const name = museButtonText(element);
+    const rect = element.getBoundingClientRect();
+    return museVisible(element)
+      && afterHeading(element)
+      && name
+      && !museMatchesName(name, museControls)
+      && !museMatchesName(name, museMainNames)
+      && rect.top >= headingRect.bottom - 4
+      && Math.abs(rect.left - headingRect.left) <= 180;
+  });
+  const rows = candidates.filter(element => !candidates.some(parent => parent !== element && parent.contains(element) && museButtonText(parent) === museButtonText(element)));
+  if (!rows.length) return { error: '已找到“旁聊”分区，但没有识别到侧聊条目；为保护聊天记录，已停止清理。' };
+  const items = rows.map(button => {
+    const title = String(button.innerText || '').split(/\r?\n/).map(museCleanText).find(Boolean) || museButtonText(button);
+    const dataNode = button.closest('[data-chat-id], [data-thread-id], [data-conversation-id]');
+    const href = button.closest('a[href]')?.getAttribute('href');
+    const stableId = dataNode?.getAttribute('data-chat-id') || dataNode?.getAttribute('data-thread-id') || dataNode?.getAttribute('data-conversation-id') || href;
+    return { element: button, title, stable: Boolean(stableId), id: stableId ? `route:${stableId}` : `title:${title}` };
+  });
+  const counts = new Map();
+  items.forEach(item => counts.set(item.title, (counts.get(item.title) || 0) + 1));
+  return { items: items.map(({ element, title, stable, id }) => ({ element, title, stable, id, ambiguous: [...title].length > 300 || (!stable && counts.get(title) > 1) })) };
+}
+"#;
 const DRIVER: &str = include_str!("muse_web_driver.js");
 const MAX_SUMMARY_CHARS: usize = 6000;
 #[cfg(windows)]
@@ -258,6 +340,10 @@ pub struct MuseWebState {
     text_operations: Mutex<BTreeMap<String, Arc<AsyncMutex<()>>>>,
     media_operations: Mutex<BTreeMap<String, Arc<AsyncMutex<()>>>>,
     account_pool_operation: AsyncMutex<()>,
+    workspace_operation: AsyncMutex<()>,
+    side_chat_cleanup_operation: AsyncMutex<()>,
+    workspace_account: Mutex<Option<String>>,
+    workspace_sidebar_collapsed: Mutex<bool>,
     cancelled: Mutex<BTreeSet<String>>,
 }
 fn muse_operation(
@@ -334,6 +420,8 @@ fn thread_file(root: &Path, id: &str) -> PathBuf {
 struct MuseAccountRecord {
     id: String,
     name: String,
+    #[serde(default)]
+    note: String,
     legacy_profile: bool,
     legacy_threads: bool,
 }
@@ -350,6 +438,7 @@ struct MuseAccountPool {
 pub struct MuseAccountView {
     id: String,
     name: String,
+    note: String,
     selected: bool,
     primary: bool,
 }
@@ -360,8 +449,100 @@ pub struct MuseAccountPoolView {
     selected_id: String,
     primary_id: String,
 }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MuseAccountRemoveResult {
+    pool: MuseAccountPoolView,
+    cleanup_warning: Option<String>,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MuseSideChat {
+    id: String,
+    title: String,
+    stable: bool,
+    ambiguous: bool,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MuseSideChatCleanup {
+    id: String,
+    account_id: String,
+    due_at_ms: i64,
+    chats: Vec<MuseSideChat>,
+    error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    repeat_every_days: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    identity_scheme: Option<u8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    excluded_chat_ids: Vec<String>,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MuseSideChatDeleteResult {
+    deleted: Vec<String>,
+    error: Option<String>,
+}
+fn validate_muse_side_chat_cleanup(task: &MuseSideChatCleanup) -> Result<(), String> {
+    uuid::Uuid::parse_str(&task.id).map_err(|_| "定时清理编号无效")?;
+    uuid::Uuid::parse_str(&task.account_id).map_err(|_| "定时清理账号无效")?;
+    let recurring = task.repeat_every_days.is_some();
+    if task.due_at_ms <= 0 || task.chats.len() > 50
+        || (recurring && (task.repeat_every_days.map_or(true, |days| !(1..=365).contains(&days)) || !task.chats.is_empty()))
+        || task.identity_scheme.is_some_and(|scheme| scheme != 2)
+        || (!recurring && (task.chats.is_empty() || !task.excluded_chat_ids.is_empty()))
+        || task.excluded_chat_ids.len() > 500
+        || task.error.as_ref().is_some_and(|error| error.chars().count() > 500 || error.chars().any(char::is_control))
+    {
+        return Err("定时清理计划无效".into());
+    }
+    let mut excluded_ids = BTreeSet::new();
+    if task.excluded_chat_ids.iter().any(|id| id.is_empty() || id.len() > 2048 || id.chars().any(char::is_control) || !excluded_ids.insert(id.as_str())) {
+        return Err("定期清理排除名单无效".into());
+    }
+    let mut ids = BTreeSet::new();
+    if task.chats.iter().any(|chat| chat.id.is_empty() || chat.id.len() > 2048
+        || chat.id.chars().any(char::is_control) || chat.title.trim().is_empty()
+        || chat.title.chars().count() > 300 || chat.title.chars().any(char::is_control)
+        || chat.ambiguous || !ids.insert(chat.id.as_str()))
+    {
+        return Err("定时清理名单无法唯一定位".into());
+    }
+    Ok(())
+}
+fn load_muse_side_chat_cleanups(root: &Path) -> Result<Vec<MuseSideChatCleanup>, String> {
+    let path = root.join(SIDE_CHAT_CLEANUPS_FILE);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => return Err("无法读取定时清理计划".into()),
+    };
+    if bytes.len() > 8 * 1024 * 1024 { return Err("定时清理计划过大".into()); }
+    let tasks: Vec<MuseSideChatCleanup> = serde_json::from_slice(&bytes).map_err(|_| "定时清理计划格式无效")?;
+    if tasks.len() > 100 { return Err("定时清理计划数量无效".into()); }
+    let mut ids = BTreeSet::new();
+    for task in &tasks {
+        validate_muse_side_chat_cleanup(task)?;
+        if !ids.insert(task.id.as_str()) { return Err("定时清理计划编号重复".into()); }
+    }
+    Ok(tasks)
+}
+fn save_muse_side_chat_cleanups(root: &Path, tasks: &[MuseSideChatCleanup]) -> Result<(), String> {
+    if tasks.len() > 100 { return Err("最多保存100个定时清理计划".into()); }
+    let mut ids = BTreeSet::new();
+    for task in tasks {
+        validate_muse_side_chat_cleanup(task)?;
+        if !ids.insert(task.id.as_str()) { return Err("定时清理计划编号重复".into()); }
+    }
+    std::fs::create_dir_all(root).map_err(|_| "无法建立定时清理目录")?;
+    let bytes = serde_json::to_vec(tasks).map_err(|_| "定时清理计划无法序列化")?;
+    if bytes.len() > 8 * 1024 * 1024 { return Err("定时清理计划过大".into()); }
+    crate::atomic_file::write_atomic(&root.join(SIDE_CHAT_CLEANUPS_FILE), &bytes)
+        .map_err(|_| "无法保存定时清理计划".into())
+}
 fn validate_muse_account_pool(pool: &MuseAccountPool) -> Result<(), String> {
-    if pool.accounts.is_empty() || pool.accounts.len() > MAX_MUSE_ACCOUNTS {
+    if pool.accounts.is_empty() {
         return Err("Muse 账号数量无效".into());
     }
     let mut ids = BTreeSet::new();
@@ -372,6 +553,8 @@ fn validate_muse_account_pool(pool: &MuseAccountPool) -> Result<(), String> {
             || account.name.trim().is_empty()
             || account.name.chars().count() > 80
             || account.name.chars().any(char::is_control)
+            || account.note.chars().count() > 160
+            || account.note.chars().any(char::is_control)
         {
             return Err("Muse 账号资料无效".into());
         }
@@ -421,6 +604,7 @@ fn load_muse_account_pool(root: &Path) -> Result<MuseAccountPool, String> {
                 accounts: vec![MuseAccountRecord {
                     id,
                     name: "Muse 1".into(),
+                    note: String::new(),
                     legacy_profile: true,
                     legacy_threads,
                 }],
@@ -468,6 +652,59 @@ fn account_window_label(account: &MuseAccountRecord, media: bool) -> String {
         format!("muse-web-{}", account.id)
     }
 }
+fn muse_account_data_dirs(root: &Path, account: &MuseAccountRecord) -> Vec<PathBuf> {
+    let mut directories = vec![root.join("muse-web-accounts").join(&account.id)];
+    if account.legacy_profile {
+        directories.push(root.join("muse-web-profile"));
+    }
+    if account.legacy_threads {
+        directories.push(root.join("muse-web-threads"));
+    }
+    directories.sort();
+    directories.dedup();
+    directories
+}
+async fn remove_muse_data_dirs(directories: Vec<PathBuf>) -> Result<(), String> {
+    let mut last_error = String::new();
+    for attempt in 0..8 {
+        last_error.clear();
+        for directory in &directories {
+            match std::fs::remove_dir_all(directory) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => last_error = error.to_string(),
+            }
+        }
+        if last_error.is_empty() {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(150 * (attempt + 1))).await;
+    }
+    Err(last_error)
+}
+async fn remove_muse_account_data(root: &Path, account: &MuseAccountRecord) -> Result<(), String> {
+    remove_muse_data_dirs(muse_account_data_dirs(root, account)).await
+}
+fn remove_orphaned_muse_account_data(root: &Path, pool: &MuseAccountPool) {
+    let active_ids: BTreeSet<&str> = pool.accounts.iter().map(|account| account.id.as_str()).collect();
+    if let Ok(entries) = std::fs::read_dir(root.join("muse-web-accounts")) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false)
+                && uuid::Uuid::parse_str(&name).is_ok()
+                && !active_ids.contains(name.as_str())
+            {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+    }
+    if !pool.accounts.iter().any(|account| account.legacy_profile) {
+        let _ = std::fs::remove_dir_all(root.join("muse-web-profile"));
+    }
+    if !pool.accounts.iter().any(|account| account.legacy_threads) {
+        let _ = std::fs::remove_dir_all(root.join("muse-web-threads"));
+    }
+}
 fn account_pool_view(pool: MuseAccountPool) -> MuseAccountPoolView {
     let selected_id = pool.selected_id;
     let primary_id = pool.primary_id;
@@ -476,6 +713,7 @@ fn account_pool_view(pool: MuseAccountPool) -> MuseAccountPoolView {
         primary: account.id == primary_id,
         id: account.id,
         name: account.name,
+        note: account.note,
     }).collect();
     MuseAccountPoolView {
         selected_id,
@@ -485,16 +723,13 @@ fn account_pool_view(pool: MuseAccountPool) -> MuseAccountPoolView {
 }
 fn add_muse_account(root: &Path) -> Result<MuseAccountPool, String> {
     let mut pool = load_muse_account_pool(root)?;
-    if pool.accounts.len() >= MAX_MUSE_ACCOUNTS {
-        return Err(format!("最多可添加 {MAX_MUSE_ACCOUNTS} 个 Muse 账号"));
-    }
     let account = MuseAccountRecord {
         id: uuid::Uuid::new_v4().to_string(),
         name: format!("Muse {}", pool.accounts.len() + 1),
+        note: String::new(),
         legacy_profile: false,
         legacy_threads: false,
     };
-    pool.selected_id = account.id.clone();
     pool.accounts.push(account);
     save_muse_account_pool(root, &pool)?;
     Ok(pool)
@@ -676,19 +911,565 @@ fn muse_window_for(
     }
     Ok(window)
 }
+
+fn resize_muse_workspace_content(app: &tauri::AppHandle) -> Result<(), String> {
+    let window = app.get_window(WORKSPACE_LABEL).ok_or("Muse 工作台窗口不存在")?;
+    let Some(content) = app.get_webview(WORKSPACE_CONTENT_LABEL) else {
+        return Ok(());
+    };
+    let collapsed = *app
+        .state::<MuseWebState>()
+        .workspace_sidebar_collapsed
+        .lock()
+        .map_err(|_| "Muse 工作台侧栏状态不可用")?;
+    let sidebar_width = if collapsed {
+        0.0
+    } else {
+        WORKSPACE_SIDEBAR_WIDTH
+    };
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let size = window
+        .inner_size()
+        .map_err(|error| error.to_string())?
+        .to_logical::<f64>(scale);
+    content
+        .set_position(LogicalPosition::new(
+            sidebar_width,
+            WORKSPACE_HEADER_HEIGHT,
+        ))
+        .map_err(|error| error.to_string())?;
+    content
+        .set_size(LogicalSize::new(
+            (size.width - sidebar_width).max(1.0),
+            (size.height - WORKSPACE_HEADER_HEIGHT).max(1.0),
+        ))
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn create_muse_workspace_window(
+    app: &tauri::AppHandle,
+    account: &MuseAccountRecord,
+) -> Result<tauri::Window, String> {
+    *app.state::<MuseWebState>()
+        .workspace_sidebar_collapsed
+        .lock()
+        .map_err(|_| "Muse 工作台侧栏状态不可用")? = false;
+    let account_id = serde_json::to_string(&account.id).map_err(|error| error.to_string())?;
+    let window = WebviewWindowBuilder::new(
+        app,
+        WORKSPACE_LABEL,
+        WebviewUrl::App("muse-workspace.html".into()),
+    )
+    .title("Muse 工作台 · WAP Plus CRM")
+    .inner_size(1320.0, 860.0)
+    .min_inner_size(980.0, 640.0)
+    .visible(false)
+    .focused(false)
+    .initialization_script(format!("window.__museWorkspaceAccount = {account_id};"))
+    .build()
+    .map(|window| window.as_ref().window())
+    .or_else(|error| {
+        app.get_webview(WORKSPACE_LABEL)
+            .map(|webview| webview.window())
+            .ok_or(error)
+    })
+    .map_err(|error| format!("无法打开 Muse 工作台：{error}"))?;
+    let resize_app = app.clone();
+    let hidden = window.clone();
+    window.on_window_event(move |event| {
+        match event {
+            tauri::WindowEvent::Resized(_) => { let _ = resize_muse_workspace_content(&resize_app); }
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                api.prevent_close();
+                let _ = hidden.hide();
+            }
+            _ => {}
+        }
+    });
+    Ok(window)
+}
+
+async fn open_or_update_muse_workspace(
+    app: &tauri::AppHandle,
+    root: &Path,
+    account: &MuseAccountRecord,
+    show: bool,
+) -> Result<(), String> {
+    let state = app.state::<MuseWebState>();
+    let _workspace = state.workspace_operation.lock().await;
+    let window = match app.get_webview(WORKSPACE_LABEL) {
+        Some(webview) => webview.window(),
+        None if show => create_muse_workspace_window(app, account)?,
+        None => return Ok(()),
+    };
+    let parent = window.clone();
+    let mut active = state.workspace_account.lock().map_err(|_| "Muse 工作台状态不可用")?;
+    if active.as_deref() != Some(&account.id)
+        || app.get_webview(WORKSPACE_CONTENT_LABEL).is_none()
+    {
+        if let Some(previous) = app.get_webview(WORKSPACE_CONTENT_LABEL) {
+            previous.close().map_err(|error| error.to_string())?;
+        }
+        let directory = account_profile_dir(root, account);
+        std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+        let content = tauri::webview::WebviewBuilder::new(
+            WORKSPACE_CONTENT_LABEL,
+            WebviewUrl::External("https://muse.ai/thread/new".parse().unwrap()),
+        )
+        .initialization_script(MUSE_WORKSPACE_COPY_PATH_SCRIPT)
+        .data_directory(directory)
+        .focused(false)
+        .on_navigation(|url| matches!(url.scheme(), "https" | "http"))
+        .on_new_window(|_, _| tauri::webview::NewWindowResponse::Allow);
+        parent.add_child(
+            content,
+            LogicalPosition::new(WORKSPACE_SIDEBAR_WIDTH, WORKSPACE_HEADER_HEIGHT),
+            LogicalSize::new(1060.0, 796.0),
+        )
+        .map_err(|error| format!("无法载入 Muse 页面：{error}"))?;
+        resize_muse_workspace_content(app)?;
+        *active = Some(account.id.clone());
+    }
+    drop(active);
+    if show {
+        window.show().map_err(|error| error.to_string())?;
+        window.unminimize().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+    }
+    let _ = app.emit_to(WORKSPACE_LABEL, "muse-workspace-active-account", account.id.clone());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn muse_web_workspace_content_visible(
+    app: tauri::AppHandle,
+    visible: bool,
+) -> Result<(), String> {
+    let state = app.state::<MuseWebState>();
+    let _workspace = state.workspace_operation.lock().await;
+    let content = app
+        .get_webview(WORKSPACE_CONTENT_LABEL)
+        .ok_or("Muse 页面尚未载入")?;
+    if visible {
+        content.show()
+    } else {
+        content.hide()
+    }
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn muse_web_workspace_sidebar_set_collapsed(
+    app: tauri::AppHandle,
+    collapsed: bool,
+) -> Result<(), String> {
+    let state = app.state::<MuseWebState>();
+    let _workspace = state.workspace_operation.lock().await;
+    *state
+        .workspace_sidebar_collapsed
+        .lock()
+        .map_err(|_| "Muse 工作台侧栏状态不可用")? = collapsed;
+    resize_muse_workspace_content(&app)
+}
+
 #[tauri::command]
 pub async fn muse_web_open(
     app: tauri::AppHandle,
     media: Option<bool>,
     account_id: Option<String>,
 ) -> Result<(), String> {
-    muse_window_for(&app, true, media.unwrap_or(false), account_id.as_deref()).map(|_| ())
+    if media.unwrap_or(false) {
+        return muse_window_for(&app, true, true, account_id.as_deref()).map(|_| ());
+    }
+    let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
+    let pool = load_muse_account_pool(&root)?;
+    let account = account_from_pool(&pool, account_id.as_deref())?;
+    open_or_update_muse_workspace(&app, &root, &account, true).await?;
+    for existing_account in &pool.accounts {
+        if let Some(window) = app.get_webview_window(&account_window_label(existing_account, false)) {
+            let _ = window.hide();
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn muse_web_workspace_account(app: tauri::AppHandle) -> Result<String, String> {
+    let state = app.state::<MuseWebState>();
+    if let Some(account_id) = state
+        .workspace_account
+        .lock()
+        .map_err(|_| "Muse 工作台状态不可用")?
+        .clone()
+    {
+        return Ok(account_id);
+    }
+    let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
+    Ok(load_muse_account_pool(&root)?.selected_id)
+}
+
+fn muse_workspace_script(statement: &str) -> String {
+    let mut script = String::from("(()=>{\n");
+    script.push_str(MUSE_SIDE_CHAT_DOM_HELPERS);
+    script.push('\n');
+    script.push_str(statement);
+    script.push_str("\n})()");
+    script
+}
+
+async fn evaluate_muse_workspace_page(
+    app: &tauri::AppHandle,
+    account_id: &str,
+    script: String,
+) -> Result<serde_json::Value, String> {
+    let state = app.state::<MuseWebState>();
+    let active_account = state
+        .workspace_account
+        .lock()
+        .map_err(|_| "Muse 工作台状态不可用")?
+        .clone();
+    if active_account.as_deref() != Some(account_id) {
+        return Err("工作台账号已切换，请重新打开清理面板".into());
+    }
+    let webview = app
+        .get_webview(WORKSPACE_CONTENT_LABEL)
+        .ok_or("Muse 页面尚未载入")?;
+    if !muse_origin(&webview.url().map_err(|error| error.to_string())?) {
+        return Err("当前页面不是 Muse，已停止操作".into());
+    }
+    let (tx, rx) = oneshot::channel();
+    let tx = Mutex::new(Some(tx));
+    webview
+        .eval_with_callback(script, move |value| {
+            if let Ok(mut sender) = tx.lock() {
+                if let Some(sender) = sender.take() {
+                    let _ = sender.send(value);
+                }
+            }
+        })
+        .map_err(|_| "无法读取 Muse 页面，请重新载入后重试".to_string())?;
+    let value = tokio::time::timeout(Duration::from_secs(5), rx)
+        .await
+        .map_err(|_| "Muse 页面响应超时，未继续操作".to_string())?
+        .map_err(|_| "Muse 页面已关闭，未继续操作".to_string())?;
+    serde_json::from_str(&value).map_err(|_| "Muse 页面返回格式无效，未继续操作".to_string())
+}
+
+fn muse_workspace_side_chat_list_script() -> String {
+    muse_workspace_script(
+        "const result = museSideChatElements(); if (result.error) return result; return { chats: result.items.map(({ id, title, stable, ambiguous }) => ({ id, title, stable, ambiguous })) };",
+    )
+}
+
+#[tauri::command]
+pub async fn muse_web_side_chats(
+    app: tauri::AppHandle,
+    account_id: String,
+) -> Result<Vec<MuseSideChat>, String> {
+    let state = app.state::<MuseWebState>();
+    let _workspace = state
+        .workspace_operation
+        .try_lock()
+        .map_err(|_| "Muse 正在切换账号，请稍后重试")?;
+    let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
+    account_from_pool(&load_muse_account_pool(&root)?, Some(&account_id))?;
+    let value = evaluate_muse_workspace_page(
+        &app,
+        &account_id,
+        muse_workspace_side_chat_list_script(),
+    )
+    .await?;
+    if let Some(error) = value.get("error").and_then(|value| value.as_str()) {
+        return Err(error.to_string());
+    }
+    let chats: Vec<MuseSideChat> = serde_json::from_value(
+        value
+            .get("chats")
+            .cloned()
+            .ok_or("Muse 页面没有返回侧聊列表")?,
+    )
+    .map_err(|_| "Muse 侧聊列表格式无效".to_string())?;
+    if chats.len() > 500 || chats.iter().any(|chat| chat.id.is_empty() || chat.title.is_empty()) {
+        return Err("Muse 侧聊列表无法安全处理".into());
+    }
+    Ok(chats)
+}
+
+async fn dismiss_muse_workspace_menu(app: &tauri::AppHandle, account_id: &str) {
+    let script = muse_workspace_script(
+        "document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return { ok: true };",
+    );
+    let _ = evaluate_muse_workspace_page(app, account_id, script).await;
+}
+
+#[tauri::command]
+pub async fn muse_web_delete_side_chats(
+    app: tauri::AppHandle,
+    account_id: String,
+    chats: Vec<MuseSideChat>,
+) -> Result<MuseSideChatDeleteResult, String> {
+    if chats.is_empty() || chats.len() > 50 {
+        return Err("一次只能清理 1 到 50 个侧聊".into());
+    }
+    let mut ids = BTreeSet::new();
+    if chats.iter().any(|chat| {
+        chat.id.is_empty()
+            || chat.id.len() > 2048
+            || chat.title.trim().is_empty()
+            || chat.title.chars().count() > 300
+            || chat.ambiguous
+            || !ids.insert(chat.id.as_str())
+    }) {
+        return Err("所选侧聊无法唯一定位，请刷新列表并重新选择".into());
+    }
+    let state = app.state::<MuseWebState>();
+    let _workspace = state
+        .workspace_operation
+        .try_lock()
+        .map_err(|_| "Muse 正在切换账号，请稍后重试")?;
+    let _text_operation = try_muse_operation(&state, &account_id, false)?;
+    let _media_operation = try_muse_operation(&state, &account_id, true)?;
+    let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
+    account_from_pool(&load_muse_account_pool(&root)?, Some(&account_id))?;
+
+    let mut deleted = Vec::new();
+    for chat in chats {
+        let target = serde_json::to_string(&chat).map_err(|error| error.to_string())?;
+        let start = muse_workspace_script(&format!(
+            "const target = {target}; const result = museSideChatElements(); if (result.error) return result; const matches = result.items.filter(item => item.id === target.id && item.title === target.title); if (matches.length !== 1 || matches[0].ambiguous) return {{ error: '侧聊已变化或无法唯一定位，未删除此项。' }}; matches[0].element.dispatchEvent(new MouseEvent('contextmenu', {{ bubbles: true, cancelable: true, button: 2, view: window }})); return {{ ok: true }};"
+        ));
+        match evaluate_muse_workspace_page(&app, &account_id, start).await {
+            Ok(value) if value.get("ok").and_then(|value| value.as_bool()) == Some(true) => {}
+            Ok(value) => {
+                dismiss_muse_workspace_menu(&app, &account_id).await;
+                return Ok(MuseSideChatDeleteResult {
+                    deleted,
+                    error: Some(value.get("error").and_then(|value| value.as_str()).unwrap_or("无法打开 Muse 侧聊菜单，已停止后续清理。 ").to_string()),
+                });
+            }
+            Err(error) => return Ok(MuseSideChatDeleteResult { deleted, error: Some(error) }),
+        }
+
+        let menu_action = muse_workspace_script(
+            "const visible = element => { const rect = element.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; }; const menus = Array.from(document.querySelectorAll('[role=\"menu\"]')).filter(visible); const menu = menus[menus.length - 1]; if (!menu) return { pending: true }; const remove = Array.from(menu.querySelectorAll('[role=\"menuitem\"], button')).find(item => ['删除', 'Delete', 'Supprimer'].includes(museButtonText(item))); if (!remove) return { error: 'Muse 侧聊菜单中没有可识别的删除操作。' }; remove.click(); return { ok: true };",
+        );
+        let mut menu_clicked = false;
+        let mut menu_error = None;
+        for _ in 0..20 {
+            match evaluate_muse_workspace_page(&app, &account_id, menu_action.clone()).await {
+                Ok(value) if value.get("ok").and_then(|value| value.as_bool()) == Some(true) => {
+                    menu_clicked = true;
+                    break;
+                }
+                Ok(value) if value.get("pending").and_then(|value| value.as_bool()) == Some(true) => {
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                }
+                Ok(value) => {
+                    menu_error = value.get("error").and_then(|value| value.as_str()).map(str::to_string);
+                    break;
+                }
+                Err(error) => {
+                    menu_error = Some(error);
+                    break;
+                }
+            }
+        }
+        if !menu_clicked {
+            dismiss_muse_workspace_menu(&app, &account_id).await;
+            return Ok(MuseSideChatDeleteResult {
+                deleted,
+                error: Some(menu_error.unwrap_or("Muse 侧聊菜单未出现，已停止后续清理。".into())),
+            });
+        }
+
+        let confirm_action = muse_workspace_script(
+            "const visible = element => { const rect = element.getBoundingClientRect(); return rect.width > 0 && rect.height > 0; }; const dialogs = Array.from(document.querySelectorAll('[role=\"alertdialog\"], [role=\"dialog\"]')).filter(visible); const dialog = dialogs.find(item => /删除|delete|supprimer/i.test(item.innerText || '')); if (!dialog) return { pending: true }; const confirm = Array.from(dialog.querySelectorAll('button')).find(button => ['删除', 'Delete', 'Supprimer'].includes(museButtonText(button))); if (!confirm) return { error: 'Muse 删除确认窗口无法识别，已停止操作。' }; confirm.click(); return { ok: true };",
+        );
+        let mut confirmed = false;
+        let mut confirm_error = None;
+        for _ in 0..20 {
+            match evaluate_muse_workspace_page(&app, &account_id, confirm_action.clone()).await {
+                Ok(value) if value.get("ok").and_then(|value| value.as_bool()) == Some(true) => {
+                    confirmed = true;
+                    break;
+                }
+                Ok(value) if value.get("pending").and_then(|value| value.as_bool()) == Some(true) => {
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                }
+                Ok(value) => {
+                    confirm_error = value.get("error").and_then(|value| value.as_str()).map(str::to_string);
+                    break;
+                }
+                Err(error) => {
+                    confirm_error = Some(error);
+                    break;
+                }
+            }
+        }
+        if !confirmed {
+            dismiss_muse_workspace_menu(&app, &account_id).await;
+            return Ok(MuseSideChatDeleteResult {
+                deleted,
+                error: Some(confirm_error.unwrap_or("Muse 删除确认窗口未出现，已停止后续清理。".into())),
+            });
+        }
+
+        let list_script = muse_workspace_side_chat_list_script();
+        let mut removed = false;
+        for _ in 0..30 {
+            match evaluate_muse_workspace_page(&app, &account_id, list_script.clone()).await {
+                Ok(value) => {
+                    if let Some(error) = value.get("error").and_then(|value| value.as_str()) {
+                        return Ok(MuseSideChatDeleteResult {
+                            deleted,
+                            error: Some(format!("已停止并保留后续项目：{error}")),
+                        });
+                    }
+                    let Some(chats) = value.get("chats").cloned() else {
+                        return Ok(MuseSideChatDeleteResult {
+                            deleted,
+                            error: Some("Muse 没有返回删除后的侧聊列表，已停止后续清理。".into()),
+                        });
+                    };
+                    let Ok(current): Result<Vec<MuseSideChat>, _> = serde_json::from_value(chats) else {
+                        return Ok(MuseSideChatDeleteResult {
+                            deleted,
+                            error: Some("Muse 返回的侧聊列表格式无效，已停止后续清理。".into()),
+                        });
+                    };
+                    if !current.iter().any(|item| item.id == chat.id && item.title == chat.title) {
+                        removed = true;
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+                Err(error) => {
+                    return Ok(MuseSideChatDeleteResult {
+                        deleted,
+                        error: Some(format!("Muse 已确认删除，但无法核对结果：{error}")),
+                    });
+                }
+            }
+        }
+        if !removed {
+            return Ok(MuseSideChatDeleteResult {
+                deleted,
+                error: Some("Muse 未确认侧聊已从列表移除，已停止后续清理。".into()),
+            });
+        }
+        deleted.push(chat.title);
+    }
+    Ok(MuseSideChatDeleteResult { deleted, error: None })
+}
+
+#[tauri::command]
+pub async fn muse_web_cleanup_schedules(app: tauri::AppHandle) -> Result<Vec<MuseSideChatCleanup>, String> {
+    let state = app.state::<MuseWebState>();
+    let _lock = state.side_chat_cleanup_operation.lock().await;
+    let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
+    load_muse_side_chat_cleanups(&root)
+}
+
+#[tauri::command]
+pub async fn muse_web_cleanup_schedule_add(
+    app: tauri::AppHandle,
+    task: MuseSideChatCleanup,
+) -> Result<Vec<MuseSideChatCleanup>, String> {
+    validate_muse_side_chat_cleanup(&task)?;
+    if task.repeat_every_days.is_some() && task.identity_scheme != Some(2) {
+        return Err("定期清理规则版本无效，请重新设置".into());
+    }
+    let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+    if task.due_at_ms <= now_ms || task.error.is_some() { return Err("请选择未来时间并检查清理计划".into()); }
+    let state = app.state::<MuseWebState>();
+    let _lock = state.side_chat_cleanup_operation.lock().await;
+    let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
+    let pool = load_muse_account_pool(&root)?;
+    account_from_pool(&pool, Some(&task.account_id))?;
+    let mut tasks = load_muse_side_chat_cleanups(&root)?;
+    if tasks.len() >= 100 || tasks.iter().any(|item| item.id == task.id) { return Err("定时清理计划已达上限或编号重复".into()); }
+    if task.repeat_every_days.is_some() && tasks.iter().any(|item| item.account_id == task.account_id && item.repeat_every_days.is_some()) {
+        return Err("该 Muse 账号已有定期清理计划，请先取消旧计划".into());
+    }
+    tasks.push(task);
+    save_muse_side_chat_cleanups(&root, &tasks)?;
+    Ok(tasks)
+}
+
+#[tauri::command]
+pub async fn muse_web_cleanup_schedule_update(
+    app: tauri::AppHandle,
+    task_id: String,
+    remaining_chats: Vec<MuseSideChat>,
+    error: Option<String>,
+) -> Result<Vec<MuseSideChatCleanup>, String> {
+    uuid::Uuid::parse_str(&task_id).map_err(|_| "定时清理编号无效")?;
+    let state = app.state::<MuseWebState>();
+    let _lock = state.side_chat_cleanup_operation.lock().await;
+    let root = app.path().app_local_data_dir().map_err(|reason| reason.to_string())?;
+    let mut tasks = load_muse_side_chat_cleanups(&root)?;
+    let Some(index) = tasks.iter().position(|task| task.id == task_id) else { return Err("定时清理计划不存在".into()); };
+    if tasks[index].repeat_every_days.is_some() {
+        if error.is_none() || !remaining_chats.is_empty() { return Err("定期清理仅可暂停或推进执行时间".into()); }
+        tasks[index].error = error.map(|value| value.chars().take(500).collect());
+        validate_muse_side_chat_cleanup(&tasks[index])?;
+    } else if remaining_chats.is_empty() {
+        tasks.remove(index);
+    } else {
+        if error.is_none() { return Err("未完成的清理计划需要暂停原因".into()); }
+        let original_ids: BTreeSet<&str> = tasks[index].chats.iter().map(|chat| chat.id.as_str()).collect();
+        if remaining_chats.iter().any(|chat| !original_ids.contains(chat.id.as_str())) { return Err("剩余名单与原计划不一致".into()); }
+        tasks[index].chats = remaining_chats;
+        tasks[index].error = error.map(|value| value.chars().take(500).collect());
+        validate_muse_side_chat_cleanup(&tasks[index])?;
+    }
+    save_muse_side_chat_cleanups(&root, &tasks)?;
+    Ok(tasks)
+}
+
+#[tauri::command]
+pub async fn muse_web_cleanup_schedule_advance(
+    app: tauri::AppHandle,
+    task_id: String,
+) -> Result<Vec<MuseSideChatCleanup>, String> {
+    uuid::Uuid::parse_str(&task_id).map_err(|_| "定时清理编号无效")?;
+    let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+    let state = app.state::<MuseWebState>();
+    let _lock = state.side_chat_cleanup_operation.lock().await;
+    let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
+    let mut tasks = load_muse_side_chat_cleanups(&root)?;
+    let Some(task) = tasks.iter_mut().find(|task| task.id == task_id) else { return Err("定时清理计划不存在".into()); };
+    let Some(days) = task.repeat_every_days else { return Err("该计划不是定期清理".into()); };
+    if task.error.is_some() { return Err("暂停的定期清理计划不能自动推进".into()); }
+    task.due_at_ms = now_ms + i64::from(days) * 24 * 60 * 60 * 1000;
+    save_muse_side_chat_cleanups(&root, &tasks)?;
+    Ok(tasks)
+}
+
+#[tauri::command]
+pub async fn muse_web_cleanup_schedule_cancel(
+    app: tauri::AppHandle,
+    task_id: String,
+) -> Result<Vec<MuseSideChatCleanup>, String> {
+    uuid::Uuid::parse_str(&task_id).map_err(|_| "定时清理编号无效")?;
+    let state = app.state::<MuseWebState>();
+    let _lock = state.side_chat_cleanup_operation.lock().await;
+    let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
+    let mut tasks = load_muse_side_chat_cleanups(&root)?;
+    tasks.retain(|task| task.id != task_id);
+    save_muse_side_chat_cleanups(&root, &tasks)?;
+    Ok(tasks)
 }
 
 #[tauri::command]
 pub async fn muse_web_accounts(app: tauri::AppHandle) -> Result<MuseAccountPoolView, String> {
+    let state = app.state::<MuseWebState>();
+    let _pool = state.account_pool_operation.lock().await;
     let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
-    load_muse_account_pool(&root).map(account_pool_view)
+    let pool = load_muse_account_pool(&root)?;
+    remove_orphaned_muse_account_data(&root, &pool);
+    Ok(account_pool_view(pool))
 }
 
 #[tauri::command]
@@ -696,7 +1477,109 @@ pub async fn muse_web_account_add(app: tauri::AppHandle) -> Result<MuseAccountPo
     let state=app.state::<MuseWebState>();
     let _pool=state.account_pool_operation.try_lock().map_err(|_|"Muse 账号池正在更新，请稍后重试")?;
     let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
-    add_muse_account(&root).map(account_pool_view)
+    let view = account_pool_view(add_muse_account(&root)?);
+    let _ = app.emit_to(WORKSPACE_LABEL, "muse-workspace-account-pool", &view);
+    Ok(view)
+}
+
+#[tauri::command]
+pub async fn muse_web_account_update(
+    app: tauri::AppHandle,
+    account_id: String,
+    name: String,
+    note: String,
+) -> Result<MuseAccountPoolView, String> {
+    let name = name.trim().to_string();
+    let note = note.trim().to_string();
+    if name.is_empty()
+        || name.chars().count() > 40
+        || name.chars().any(char::is_control)
+        || note.chars().count() > 160
+        || note.chars().any(char::is_control)
+    {
+        return Err("Muse 账号名称或备注无效".into());
+    }
+    let state = app.state::<MuseWebState>();
+    let _pool = state.account_pool_operation.try_lock().map_err(|_| "Muse 账号池正在更新，请稍后重试")?;
+    let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
+    let mut pool = load_muse_account_pool(&root)?;
+    let account = pool.accounts.iter_mut().find(|account| account.id == account_id).ok_or("Muse 账号不存在")?;
+    account.name = name;
+    account.note = note;
+    save_muse_account_pool(&root, &pool)?;
+    let view = account_pool_view(pool);
+    let _ = app.emit_to(WORKSPACE_LABEL, "muse-workspace-account-pool", &view);
+    Ok(view)
+}
+
+#[tauri::command]
+pub async fn muse_web_account_remove(
+    app: tauri::AppHandle,
+    account_id: String,
+) -> Result<MuseAccountRemoveResult, String> {
+    let state = app.state::<MuseWebState>();
+    let _pool = state.account_pool_operation.try_lock().map_err(|_| "Muse 账号池正在更新，请稍后重试")?;
+    let _text = try_muse_operation(&state, &account_id, false)?;
+    let _media = try_muse_operation(&state, &account_id, true)?;
+    let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
+    let mut pool = load_muse_account_pool(&root)?;
+    let removed = account_from_pool(&pool, Some(&account_id))?;
+    if pool.accounts.len() <= 1 {
+        return Err("至少保留一个 Muse 账号；不能删除最后一个账号".into());
+    }
+
+    let fallback_id = if pool.selected_id == account_id {
+        pool.accounts
+            .iter()
+            .find(|account| account.id != account_id && account.id == pool.primary_id)
+            .or_else(|| pool.accounts.iter().find(|account| account.id != account_id))
+            .map(|account| account.id.clone())
+            .ok_or("没有可切换的 Muse 账号")?
+    } else {
+        pool.selected_id.clone()
+    };
+    let workspace_active = state
+        .workspace_account
+        .lock()
+        .map_err(|_| "Muse 工作台状态不可用")?
+        .clone();
+    if workspace_active.as_deref() == Some(&account_id) {
+        let fallback = account_from_pool(&pool, Some(&fallback_id))?;
+        open_or_update_muse_workspace(&app, &root, &fallback, false).await?;
+        if let Some(content) = app.get_webview(WORKSPACE_CONTENT_LABEL) {
+            content.hide().map_err(|error| error.to_string())?;
+        }
+        *state.workspace_account.lock().map_err(|_| "Muse 工作台状态不可用")? = Some(fallback_id.clone());
+    }
+    for media in [false, true] {
+        if let Some(window) = app.get_webview_window(&account_window_label(&removed, media)) {
+            window.destroy().map_err(|error| error.to_string())?;
+        }
+    }
+
+    pool.accounts.retain(|account| account.id != account_id);
+    pool.selected_id = fallback_id.clone();
+    if pool.primary_id == account_id {
+        pool.primary_id = pool.selected_id.clone();
+    }
+    save_muse_account_pool(&root, &pool)?;
+
+    let view = account_pool_view(pool);
+    let _ = app.emit_to(WORKSPACE_LABEL, "muse-workspace-account-pool", &view);
+    let schedule_warning = {
+        let _cleanup = state.side_chat_cleanup_operation.lock().await;
+        load_muse_side_chat_cleanups(&root).and_then(|mut tasks| {
+            let original_count = tasks.len();
+            tasks.retain(|task| task.account_id != account_id);
+            if tasks.len() != original_count { save_muse_side_chat_cleanups(&root, &tasks)?; }
+            Ok(())
+        }).err()
+    };
+    let mut warnings = Vec::new();
+    if let Some(warning) = schedule_warning { warnings.push(format!("定时清理计划未能同步移除：{warning}")); }
+    if let Err(warning) = remove_muse_account_data(&root, &removed).await { warnings.push(warning); }
+    let cleanup_warning = (!warnings.is_empty()).then(|| warnings.join("；"));
+    Ok(MuseAccountRemoveResult { pool: view, cleanup_warning })
 }
 
 #[tauri::command]
@@ -705,10 +1588,13 @@ pub async fn muse_web_account_select(app: tauri::AppHandle, account_id: String) 
     let _pool=state.account_pool_operation.try_lock().map_err(|_|"Muse 账号池正在更新，请稍后重试")?;
     let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
     let mut pool = load_muse_account_pool(&root)?;
-    account_from_pool(&pool, Some(&account_id))?;
+    let account = account_from_pool(&pool, Some(&account_id))?;
     pool.selected_id = account_id;
     save_muse_account_pool(&root, &pool)?;
-    Ok(account_pool_view(pool))
+    open_or_update_muse_workspace(&app, &root, &account, false).await?;
+    let view = account_pool_view(pool);
+    let _ = app.emit_to(WORKSPACE_LABEL, "muse-workspace-account-pool", &view);
+    Ok(view)
 }
 
 #[tauri::command]
@@ -720,7 +1606,9 @@ pub async fn muse_web_account_set_primary(app: tauri::AppHandle, account_id: Str
     account_from_pool(&pool,Some(&account_id))?;
     pool.primary_id=account_id;
     save_muse_account_pool(&root,&pool)?;
-    Ok(account_pool_view(pool))
+    let view = account_pool_view(pool);
+    let _ = app.emit_to(WORKSPACE_LABEL, "muse-workspace-account-pool", &view);
+    Ok(view)
 }
 
 #[tauri::command]
@@ -834,7 +1722,7 @@ pub async fn muse_web_status(
             ready: false,
             state: "busy".into(),
             message: "Muse 正在连接或生成回复".into(),
-            media_protocol: 7,
+            media_protocol: 8,
             parallel_media: true,
         });
     };
@@ -859,7 +1747,7 @@ pub async fn muse_web_status(
             .and_then(|v| v.as_str())
             .unwrap_or("Muse 已连接")
             .to_string(),
-        media_protocol: 7,
+        media_protocol: 8,
         parallel_media: true,
     };
     Ok(result)
@@ -1197,7 +2085,7 @@ mod tests {
 
         let pool = add_muse_account(&root).unwrap();
         let second = pool.accounts.last().unwrap();
-        assert_eq!(pool.selected_id, second.id);
+        assert_eq!(pool.selected_id, first.accounts[0].id);
         assert_eq!(account_profile_dir(&root, second), root.join("muse-web-accounts").join(&second.id).join("profile"));
         assert_eq!(account_thread_root(&root, second), root.join("muse-web-accounts").join(&second.id));
         assert!(legacy_thread.exists());

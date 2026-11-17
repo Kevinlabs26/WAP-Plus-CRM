@@ -4,9 +4,12 @@ import {
   Copy,
   MoreVertical,
   Pin,
+  Star,
 } from "lucide-react";
 import { useAppStore } from "@/store/appStore";
 import { useShallow } from "zustand/react/shallow";
+import { primarySheetTagForPhone, sheetConnections, useGoogleSheets, type SheetTagColor } from "@/lib/googleSheets";
+import { resolveFolderSheetIds } from "@/lib/folderSheetBinding";
 import { contactTagColorClass, displayContactLabel, stripWhatsAppFormatting } from "@/lib/utils";
 import { Avatar } from "@/components/ui/Avatar";
 import { Badge, ListRow } from "@/components/ui/primitives";
@@ -24,6 +27,15 @@ import type {
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 import { openAvatarCloudMenu } from "@/lib/googleDrive";
+
+const SHEET_TAG_COLOR_CLASSES: Record<SheetTagColor, string> = {
+  amber: "border-amber-500/50 bg-amber-500/20 text-amber-800 dark:text-amber-300",
+  emerald: "border-emerald-500/50 bg-emerald-500/20 text-emerald-800 dark:text-emerald-300",
+  red: "border-red-500/50 bg-red-500/20 text-red-800 dark:text-red-300",
+  blue: "border-blue-500/50 bg-blue-500/20 text-blue-800 dark:text-blue-300",
+  violet: "border-violet-500/50 bg-violet-500/20 text-violet-800 dark:text-violet-300",
+  zinc: "border-zinc-500/50 bg-zinc-500/20 text-zinc-700 dark:text-zinc-300",
+};
 
 function formatSidebarTime(raw?: string, yesterdayLabel = "Yesterday") {
   if (!raw) return "";
@@ -107,6 +119,16 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
   const { t } = useI18n();
   const c = contact;
   const showContactTags = useAppStore(s => s.settings.showContactTagsInChatList === true);
+  const sheetScope = useAppStore(useShallow(s => ({ chatFolders: s.settings.chatFolders, chatFolderClones: s.settings.chatFolderClones, leadInbox: s.settings.leadInbox })));
+  const sheetPrimaryTag = useGoogleSheets(useShallow(state => {
+    if (!c?.phone || c.isGroup || chat.isGroup) return { text: "", color: "amber" as SheetTagColor, count: 0, title: "" };
+    const connections = sheetConnections(state);
+    const tags = resolveFolderSheetIds(sheetScope, chat.id).flatMap(id => {
+      const tag = primarySheetTagForPhone(connections.find(connection => connection.id === id), c.phone);
+      return tag ? [tag] : [];
+    });
+    return { text: tags[0]?.text || "", color: tags[0]?.color || "amber", count: tags.length, title: tags.map(tag => tag.text).join(" · ") };
+  }));
   const labelsByAccountId = useAppStore(s => s.baileysUi.labelsByAccountId);
   const contactTags = showContactTags ? (c?.tags || []).filter(Boolean) : [];
   const whatsappLabels = labelsByAccountId[chat.accountId || c?.accountId || ""] || [];
@@ -307,6 +329,15 @@ export const ChatSidebarRow = memo(function ChatSidebarRow({
               </span>}
             </div>
           </div>
+          {sheetPrimaryTag.count > 0 && (
+            <div className="mt-1 flex min-w-0 items-center gap-1 overflow-hidden" title={sheetPrimaryTag.title}>
+              <span className={`inline-flex min-w-0 max-w-full items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] leading-none ${SHEET_TAG_COLOR_CLASSES[sheetPrimaryTag.color]}`}>
+                <Star className="h-2.5 w-2.5 shrink-0" fill="currentColor" />
+                <span className="truncate">{sheetPrimaryTag.text}</span>
+              </span>
+              {sheetPrimaryTag.count > 1 && <span className="shrink-0 text-[9px] text-zinc-500">+{sheetPrimaryTag.count - 1}</span>}
+            </div>
+          )}
           {contactTags.length > 0 && (
             <div className="mt-1 flex min-w-0 items-center gap-0.5 overflow-hidden" title={contactTags.join(" · ")}>
               {contactTags.slice(0, 2).map(tag => (

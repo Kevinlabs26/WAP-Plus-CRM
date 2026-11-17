@@ -4,10 +4,10 @@ import {
   Image,
   Loader2,
   Link2,
+  Mic,
   Paperclip,
   Plus,
   Reply,
-  ShoppingBag,
   Smile,
   X,
   Zap,
@@ -115,7 +115,6 @@ type Props = {
   onImportStickerFiles: (files: File[]) => Promise<void>;
   onRemoveFavoriteSticker: (dataUrl: string) => void;
   onSendFile: (file: File, caption?: string) => boolean | Promise<boolean>;
-  onOpenCatalog: () => void;
   onOpenContactPicker: () => void;
   onBeginVoice: () => void | Promise<void>;
   readVoiceLevel: () => number;
@@ -170,7 +169,6 @@ function ComposerInner({
   onImportStickerFiles,
   onRemoveFavoriteSticker,
   onSendFile,
-  onOpenCatalog,
   onOpenContactPicker,
   onBeginVoice,
   readVoiceLevel,
@@ -264,6 +262,7 @@ function ComposerInner({
   const autoTranslateTimerRef = useRef<number | null>(null);
   const resizeTimerRef = useRef<number | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const audioInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const gifInputRef = useRef<HTMLInputElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -1034,6 +1033,18 @@ function ComposerInner({
         }}
       />
       <input
+        ref={audioInputRef}
+        type="file"
+        accept="audio/*,.m4a,.aac,.mp3,.wav,.flac,.ogg,.oga,.opus,.webm"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          const files = Array.from(e.target.files || []);
+          e.target.value = "";
+          stageMedia(files, "audio");
+        }}
+      />
+      <input
         ref={fileInputRef}
         type="file"
         multiple
@@ -1161,23 +1172,22 @@ function ComposerInner({
                     className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-zinc-200 hover:bg-zinc-800"
                     onClick={() => {
                       setAttachmentOpen(false);
+                      audioInputRef.current?.click();
+                    }}
+                  >
+                    <Mic className="h-4 w-4 text-emerald-400" />
+                    {t("composer.audio")}
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-zinc-200 hover:bg-zinc-800"
+                    onClick={() => {
+                      setAttachmentOpen(false);
                       fileInputRef.current?.click();
                     }}
                   >
                     <Paperclip className="h-4 w-4 text-violet-400" />
                     {t("composer.file")}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!isBaileys || !baileysConnected}
-                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
-                    onClick={() => {
-                      setAttachmentOpen(false);
-                      onOpenCatalog();
-                    }}
-                  >
-                    <ShoppingBag className="h-4 w-4 text-emerald-400" />
-                    {t("composer.product")}
                   </button>
                   <button
                     type="button"

@@ -10,7 +10,7 @@ const built = await build({entryPoints:[root+'src/lib/googleSheets.ts'],bundle:t
   build.onResolve({filter:/^@tauri-apps\/api\/core$/},()=>({path:'invoke',namespace:'mock'}));
   build.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:'export const invoke=(...args)=>globalThis.sheetInvoke(...args);',loader:'js'}));
 }}]});
-const {initializeSheets, saveSheetConfig, refreshSheets, refreshAllSheets, removeSheetConnection, sheetConnections, useGoogleSheets} = await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
+const {initializeSheets, saveSheetConfig, saveSheetConfigs, refreshSheets, refreshAllSheets, removeSheetConnection, sheetConnections, useGoogleSheets} = await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
 
 test('bare legacy Benin numbers index the same contact and show multiple selected columns',async()=>{
  const headers=['Numéro','Nom','Profession'];
@@ -135,4 +135,29 @@ test('a broken sheet does not block refreshing another sheet or replace its cach
   assert.match(useGoogleSheets.getState().error,/offline/);assert.equal(useGoogleSheets.getState().connections['sheet-b'].error,'');
   assert.equal(useGoogleSheets.getState().connections['sheet-b'].data.shared.values['+12025550100'][0],'source-b');
  }finally{delete globalThis.sheetInvoke;}
+});
+
+test('batch sheet configs persist together before refresh and remain unchanged on storage failure',async()=>{
+ const previous=useGoogleSheets.getState(),stored=globalThis.sheetStored;
+ const entries=[{config:multiConfig('batch-a'),'connectionId':'batch-a'},{config:multiConfig('batch-b'),'connectionId':'batch-b'}];
+ const refreshed=[];
+ globalThis.sheetInvoke=async(_command,args)=>{
+  refreshed.push(args.spreadsheetId);
+  assert.equal(args.spreadsheetId,'batch-a','only the active sheet should refresh');
+  assert.equal(globalThis.sheetStored.connections['batch-a'].config.spreadsheet,'batch-a');
+  assert.equal(globalThis.sheetStored.connections['batch-b'].config.spreadsheet,'batch-b');
+  return multiResponse(args);
+ };
+ try{
+  await saveSheetConfigs(entries,new Set(['batch-a']));
+  assert.ok(refreshed.length>0);
+  const committed=useGoogleSheets.getState(),disk=structuredClone(globalThis.sheetStored);
+  globalThis.sheetDiskFailure=true;
+  await assert.rejects(saveSheetConfigs(entries,new Set(['batch-b'])),/disk full/);
+  assert.equal(useGoogleSheets.getState(),committed);
+  assert.deepEqual(globalThis.sheetStored,disk);
+  assert.ok(refreshed.every(id=>id==='batch-a'),'failed persistence must not refresh another sheet');
+ }finally{
+  useGoogleSheets.setState(previous);globalThis.sheetStored=stored;delete globalThis.sheetDiskFailure;delete globalThis.sheetInvoke;
+ }
 });

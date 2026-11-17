@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "muse-workspace",
+  "description": "Tauri APIs are available to the local Muse workspace controls only.",
+  "webviews": ["muse-workspace-ui"],
+  "permissions": ["core:default"]
+}

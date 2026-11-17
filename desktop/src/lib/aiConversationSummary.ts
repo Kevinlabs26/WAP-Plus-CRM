@@ -72,7 +72,7 @@ async function generateSummary(contactId: string, chatId?: string, sourceMessage
       return { ok: false, error: "stale" };
     }
 
-    latest.updateContact(contactId, { aiSummary: result.insight.summary.slice(0, 2000), aiInsightAt: new Date().toISOString() });
+    latest.updateContact(contactId, { aiSummary: result.insight.summary.replaceAll("客户", "对方").slice(0, 2000), aiInsightAt: new Date().toISOString() });
     setSummaryStatus(contactId, null);
     return { ok: true };
   } catch (error) {

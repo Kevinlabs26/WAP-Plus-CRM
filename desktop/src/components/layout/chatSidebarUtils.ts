@@ -23,6 +23,7 @@ export const CHAT_SORT_OPTIONS: { id: ChatSortMode; label: string }[] = [
 ];
 
 const SIDEBAR_VISIBLE_SYSTEM_KINDS = new Set([
+  "ai_auto_reply",
   "broadcast_campaign",
   "scheduled_message",
   "scheduled_plan",
@@ -70,7 +71,7 @@ export function buildChatActivityMaps(messages: Message[]) {
     Message["deliveryStatus"]
   >();
   for (const m of messages) {
-    // 自动标记的群发和定时消息仍是实际聊天内容；其他系统事件不参与侧栏最新消息。
+    // 自动回复、群发和定时消息都是实际聊天内容；其他系统事件不参与侧栏最新消息。
     if (m.mediaType === "system" || m.systemKind && !SIDEBAR_VISIBLE_SYSTEM_KINDS.has(m.systemKind)) continue;
     const at = messageOrderTime(m);
     const prev = lastOrderAtByChat.get(m.chatId);

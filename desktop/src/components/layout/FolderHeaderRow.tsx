@@ -28,7 +28,8 @@ import EmojiPicker, { EmojiStyle, Theme, type EmojiClickData } from "emoji-picke
 import { useAppStore } from "@/store/appStore";
 import { canMoveChatFolderToParent } from "@/store/chatFolderActions";
 import { useShallow } from "zustand/react/shallow";
-import { sheetConnections, useGoogleSheets } from "@/lib/googleSheets";
+import { DEFAULT_SHEET_ID, refreshSheets, sheetConnections, useGoogleSheets } from "@/lib/googleSheets";
+import { activeFolderSheetIds } from "@/lib/folderSheetBinding";
 
 type FolderHeaderRowProps = {
   folderId: string;
@@ -455,7 +456,7 @@ export function FolderHeaderRow({
           </button>)}
           {submenu.kind === "reply" && <p className="border-t border-zinc-800 px-3 py-2 text-[11px] leading-4 text-zinc-500">{t("autoReplyScope.folderHint")}</p>}
           {submenu.kind==="sheet"&&<>
-            {[["",t("sheets.inherit")],["none",t("sheets.noBinding")],...Object.entries(sheetNames)].map(([id,label])=><button key={id} type="button" role="menuitem" aria-current={(sheetBinding||"")===id?"true":undefined} className={itemClass} onClick={()=>run(()=>{const state=useAppStore.getState();state.updateSettings({chatFolders:state.settings.chatFolders.map(folder=>folder.id===folderId?{...folder,sheetConnectionId:id||undefined}:folder)});})}><Check className={cn("h-3.5 w-3.5 shrink-0 text-brand",(sheetBinding||"")!==id&&"invisible")}/><span className="truncate">{label}</span></button>)}
+            {[["",t("sheets.inherit")],["none",t("sheets.noBinding")],...Object.entries(sheetNames)].map(([id,label])=><button key={id} type="button" role="menuitem" aria-current={(sheetBinding||"")===id?"true":undefined} className={itemClass} onClick={()=>run(()=>{const state=useAppStore.getState();state.updateSettings({chatFolders:state.settings.chatFolders.map(folder=>folder.id===folderId?{...folder,sheetConnectionId:id||undefined}:folder)});const current=useAppStore.getState();if(id!=="none"&&activeFolderSheetIds(current.settings,current.chats.filter(chat=>!chat.isGroup&&!chat.localOnly).map(chat=>chat.id)).has(id||DEFAULT_SHEET_ID))void refreshSheets(true,id||DEFAULT_SHEET_ID);})}><Check className={cn("h-3.5 w-3.5 shrink-0 text-brand",(sheetBinding||"")!==id&&"invisible")}/><span className="truncate">{label}</span></button>)}
           </>}
           {submenu.kind === "import" && <div>
           <button

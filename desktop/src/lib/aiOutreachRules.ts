@@ -1,11 +1,11 @@
 export type AiOutreachRule = {
-  enabled: boolean; paused?: boolean; mode: "draft" | "auto";
+  enabled: boolean; paused?: boolean; mode: "draft" | "auto"; allowSidebarData?: boolean;
   time: string; timeZone: string; goal: string; runNowAt?: number;
 };
 export type AiOutreachRun = {
   id: string; folderId: string; chatId: string; accountId: string; day: string; at: string;
-  status: "waiting" | "generating" | "draft" | "queued" | "sent" | "failed" | "cancelled";
-  text?: string; error?: string; messageId?: string; basisAt: string; contextHash?: string;
+  status: "waiting" | "generating" | "draft" | "queued" | "sent" | "skipped" | "failed" | "cancelled";
+  text?: string; error?: string; messageId?: string; basisAt: string; contextHash?: string; skipReason?: string;
   approved?: boolean;
   recipient?: string;
 };
@@ -14,7 +14,7 @@ export function normalizeOutreachRule(raw: unknown): AiOutreachRule {
   const value = raw && typeof raw === "object" ? raw as Partial<AiOutreachRule> : {};
   let zone = typeof value.timeZone === "string" ? value.timeZone : "UTC";
   try {new Intl.DateTimeFormat("en",{timeZone:zone});} catch {zone="UTC";}
-  return {...(typeof value.runNowAt === "number" && Number.isFinite(value.runNowAt) ? {runNowAt:value.runNowAt} : {}), enabled: value.enabled === true, ...(value.paused===true?{paused:true}:{}), mode: value.mode === "auto" ? "auto" : "draft",
+  return {...(typeof value.runNowAt === "number" && Number.isFinite(value.runNowAt) ? {runNowAt:value.runNowAt} : {}), ...(value.allowSidebarData===true?{allowSidebarData:true}:{}), enabled: value.enabled === true, ...(value.paused===true?{paused:true}:{}), mode: value.mode === "auto" ? "auto" : "draft",
     time: typeof value.time === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value.time) ? value.time : "09:00", timeZone: zone,
     goal: typeof value.goal === "string" ? value.goal.trim().slice(0,2000) : ""};
 }
@@ -22,11 +22,12 @@ export function normalizeOutreachRuns(raw: unknown): AiOutreachRun[] {
   const seen = new Set<string>();
   return (Array.isArray(raw) ? raw : []).slice(-10_000).flatMap(value => {
     if (!value || !["id","folderId","chatId","accountId","day","at","basisAt"].every(key => typeof value[key] === "string" && value[key].length <= 200) ||
-        !value.id || seen.has(value.id) || !["waiting","generating","draft","queued","sent","failed","cancelled"].includes(value.status)) return [];
+        !value.id || seen.has(value.id) || !["waiting","generating","draft","queued","sent","skipped","failed","cancelled"].includes(value.status)) return [];
     seen.add(value.id);
     return [{id:value.id, folderId:value.folderId, chatId:value.chatId, accountId:value.accountId, day:value.day, at:value.at, basisAt:value.basisAt,
       status:value.status, text:typeof value.text === "string" ? value.text.slice(0,4000) : undefined,
       error:typeof value.error === "string" ? value.error.slice(0,500) : undefined, messageId:typeof value.messageId === "string" ? value.messageId.slice(0,200) : undefined,
+      skipReason:typeof value.skipReason === "string" ? value.skipReason.slice(0,500) : undefined,
       contextHash:typeof value.contextHash === "string" && /^[a-f0-9]{64}$/.test(value.contextHash) ? value.contextHash : undefined,approved:value.approved===true,
       recipient:typeof value.recipient==="string"?value.recipient.slice(0,200):undefined}];
   });

@@ -255,10 +255,10 @@ export function ContactEditor({
         <label className="block text-2xs text-zinc-500">
           {t("contact.aiSummary")}
           <Textarea
-            value={contact.aiSummary ?? ""}
+            value={(contact.aiSummary ?? "").replaceAll("客户", "对方")}
             onChange={(event) =>
               updateContact(contact.id, {
-                aiSummary: event.target.value || undefined,
+                aiSummary: event.target.value.replaceAll("客户", "对方") || undefined,
               })
             }
             rows={compact ? 2 : 3}

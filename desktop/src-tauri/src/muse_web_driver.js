@@ -176,7 +176,11 @@
     if (candidate.video ? !['video/mp4', 'video/webm'].includes(mimeType) : !['image/png', 'image/jpeg', 'image/webp'].includes(mimeType)) throw new Error(`Muse 返回了不支持的媒体格式（${mimeType}）`);
     const dataUrl = await new Promise((resolve, reject) => {
       const reader = new FileReader();
-      reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('读取 Muse 媒体失败'));
+      reader.onload = () => {
+        if (typeof reader.result !== 'string') return reject(new Error('读取 Muse 媒体失败'));
+        const payload = reader.result.slice(reader.result.indexOf(',') + 1);
+        resolve(`data:${mimeType};base64,${payload}`);
+      };
       reader.onerror = () => reject(new Error('读取 Muse 媒体失败'));
       reader.readAsDataURL(blob);
     });
@@ -313,7 +317,7 @@
       void readMedia(candidate).then(media => { if (job === currentJob) { job.mediaData = media; job.changed = Date.now(); } }).catch(error => { if (job === currentJob) { job.mediaError = String(error); job.changed = Date.now(); } }).finally(() => { if (job === currentJob) job.mediaPending = false; });
     }
     const settled = !job.mediaPending && !stop() && status.state === 'ready' && Date.now()-job.changed >= 1800;
-    if (job.mediaPending && Date.now()-job.mediaReadStarted > 35_000) return fail('Muse 图片已定位，但读取附件超时；原图仍保留在 Muse，未重新生成');
+    if (job.mediaPending && Date.now()-job.mediaReadStarted > 35_000) return fail('Muse 媒体已定位，但读取附件超时；原图仍保留在 Muse，未重新生成');
     if (settled && job.mediaError && (job.expectMedia || !text)) return fail(`Muse 媒体读取失败：${job.mediaError}；原结果仍保留在 Muse，未重复生成`);
     if (settled && (job.mediaData || text && !job.expectMedia)) { job.state = 'done'; delete job.prompt; clearReference(); }
     else if (job.expectMedia && !job.mediaData && !job.mediaPending && Date.now() >= job.mediaDeadline) return fail(job.collecting ? '取回超时：已定位原对话，但未在本次回复范围内识别到可读取的图片；原图保留在 Muse，未重新生成' : text ? 'Muse 已回复文字，但等待图片或视频超时；请在 Muse 窗口查看原结果，未重复生成' : 'Muse 尚未返回图片或视频；请在 Muse 窗口查看原结果，未重复生成');

@@ -1,6 +1,7 @@
 import { gateConfigFromRuntime, sendRuntimeFromSettings } from "@/channels";
 import { setSendGateConfigProvider } from "@/channels/sendGate";
-import { setMusePrivacyIdentityProvider } from "@/lib/museChatPrivacy";
+import { setMusePrivacyGateMessageProvider, setMusePrivacyIdentityProvider, setMusePrivacySettingsProvider } from "@/lib/museChatPrivacy";
+import { normalizeLocale, translate } from "../i18n/core.ts";
 import { create } from "zustand";
 import type { AppState, AppSettings, SliceContext } from "./types";
 import { calcStats } from "./calcStats";
@@ -124,6 +125,8 @@ setMusePrivacyIdentityProvider(() => {
   }
   return privacyIdentities;
 });
+setMusePrivacySettingsProvider(() => useAppStore.getState().settings.musePrivacyByAccountId);
+setMusePrivacyGateMessageProvider(() => translate(normalizeLocale(useAppStore.getState().settings.uiLanguage), "muse.privacyGate"));
 
 export { flushPersist } from "./persist";
 

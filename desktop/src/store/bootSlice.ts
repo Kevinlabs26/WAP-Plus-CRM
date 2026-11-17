@@ -8,10 +8,11 @@ import {
   saveAppState,
   saveSecureSecrets,
   registerChatMessageReplacements,
+  registerChatAccountReplacements,
 } from "@/lib/storage";
 import { parseBackupJson, readJsonFile } from "@/lib/exportData";
 import { buildPersonKey, looksLikeMessageAsName } from "@/lib/utils";
-import { healSingleSessionOwnership } from "@/lib/accounts";
+import { applyChatAccountReplacements, healSingleSessionOwnership } from "@/lib/accounts";
 import { normalizeCampaigns } from "@/lib/broadcastCampaign";
 import { calcStats } from "./calcStats";
 import { cleanHydratedMessages, recoverInterruptedMessage } from "./hydrateMessageCleanup";
@@ -344,6 +345,10 @@ export function createBootSlice({
           DEFAULT_ACCOUNT_ID,
         activeAccountId: settingsNorm.activeAccountId || DEFAULT_ACCOUNT_ID,
       });
+      if (healed.chatAccountReplacements.length) {
+        registerChatAccountReplacements(healed.chatAccountReplacements);
+        messages = applyChatAccountReplacements(messages, healed.chatAccountReplacements);
+      }
       contacts = healed.contacts;
       chats = healed.chats;
       settingsNorm.chatFolders = healed.folders as AppSettings["chatFolders"];

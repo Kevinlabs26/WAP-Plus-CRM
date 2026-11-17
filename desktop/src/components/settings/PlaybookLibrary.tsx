@@ -4,7 +4,7 @@ import { useAppStore } from '@/store/appStore';
 import { useI18n } from '@/i18n';
 import { Button } from '@/components/ui/primitives';
 import { importPlaybooks, MAX_PLAYBOOK_CHARS, MAX_PLAYBOOK_TOTAL_CHARS } from '@/lib/aiPlaybooks';
-import { normalizeMuseFolder, syncMusePlaybooks } from '@/lib/musePlaybookSync';
+import { inferredMuseFolder, normalizeMuseFolder, syncMusePlaybooks } from '@/lib/musePlaybookSync';
 import { museWebAccounts, openMuseWeb } from '@/lib/museWeb';
 
 export function PlaybookLibrary() {
@@ -16,9 +16,7 @@ export function PlaybookLibrary() {
   const sharedMuseBooks = museBooks.filter(book => book.content.trim() || book.summary.trim()).length;
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const workspaceLinked = settings.aiPlaybookMuseWorkspaceLinked === true;
-  const overview = books.find(book => book.id === settings.aiPlaybookOverviewId);
-  const workspacePrefix = settings.aiPlaybookMuseRoot ? `${settings.aiPlaybookMuseRoot.replace(/\/$/, '')}/` : '';
-  const inferredFolder = workspacePrefix && overview?.musePath?.startsWith(workspacePrefix) ? overview.musePath.slice(workspacePrefix.length).split('/').slice(0, -1).join('/') : '';
+  const inferredFolder = inferredMuseFolder({aiPlaybooks: books, aiPlaybookMuseRoot: settings.aiPlaybookMuseRoot});
   const [folderPath, setFolderPath] = useState(settings.aiPlaybookMuseFolder || inferredFolder);
   useEffect(() => setFolderPath(settings.aiPlaybookMuseFolder || inferredFolder), [settings.aiPlaybookMuseAccountId, settings.aiPlaybookMuseFolder, settings.aiPlaybookMuseRoot, inferredFolder]);
   const input = useRef<HTMLInputElement>(null);
@@ -77,13 +75,6 @@ export function PlaybookLibrary() {
     <Button disabled={busy} onClick={() => input.current?.click()}>{t(busy ? 'cloud.stage.reading' : 'playbook.import')}</Button>
     </details>
     {!books.length && <p className="text-xs text-zinc-500">{t('playbook.empty')}</p>}
-    {!!books.length && <>
-      <label className="block text-xs">{t('playbook.overview')}<select className="ui-control mt-1 w-full px-2 py-2" value={settings.aiPlaybookOverviewId || ''} onChange={event => useAppStore.getState().updateSettings({aiPlaybookOverviewId: event.target.value})}>
-        <option value="">{t('playbook.noOverview')}</option>
-        {settings.aiPlaybookOverviewId && !available.some(book => book.id === settings.aiPlaybookOverviewId) && <option value={settings.aiPlaybookOverviewId} disabled>{t('playbook.missing')}</option>}
-        {available.map(book => <option key={book.id} value={book.id}>{book.musePath || book.name}</option>)}
-      </select></label>
-    </>}
     <PlaybookPlans/>
     {(error || settings.aiPlaybookMuseError) && <p role="alert" className="text-xs text-amber-500">{error || settings.aiPlaybookMuseError}</p>}
   </section>;

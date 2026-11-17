@@ -19,7 +19,6 @@ mod image_library_import;
 mod muse_web;
 mod protocol;
 mod speech_archive;
-mod vertex_ai;
 mod voice;
 
 use baileys::BaileysState;
@@ -94,7 +93,6 @@ pub fn run() {
         .manage(BridgeState::default())
         .manage(BaileysState::default())
         .manage(google_sheets::GoogleState::default())
-        .manage(vertex_ai::VertexState::default())
         .manage(clone_calls::CloneCallsState::default())
         .manage(muse_web::MuseWebState::default())
         .setup(|app| {
@@ -168,19 +166,27 @@ pub fn run() {
             clone_calls::clone_call_start,
             clone_calls::clone_call_cancel,
             muse_web::muse_web_open,
+            muse_web::muse_web_workspace_account,
+            muse_web::muse_web_workspace_content_visible,
+            muse_web::muse_web_workspace_sidebar_set_collapsed,
+            muse_web::muse_web_side_chats,
+            muse_web::muse_web_delete_side_chats,
+            muse_web::muse_web_cleanup_schedules,
+            muse_web::muse_web_cleanup_schedule_add,
+            muse_web::muse_web_cleanup_schedule_update,
+            muse_web::muse_web_cleanup_schedule_advance,
+            muse_web::muse_web_cleanup_schedule_cancel,
             muse_web::muse_web_switch_account,
             muse_web::muse_web_accounts,
             muse_web::muse_web_account_add,
+            muse_web::muse_web_account_update,
+            muse_web::muse_web_account_remove,
             muse_web::muse_web_account_select,
             muse_web::muse_web_account_set_primary,
             muse_web::muse_web_status,
             muse_web::muse_web_generate,
             muse_web::muse_web_collect_media,
             muse_web::muse_web_cancel,
-            vertex_ai::vertex_ai_status,
-            vertex_ai::vertex_ai_save,
-            vertex_ai::vertex_ai_remove,
-            vertex_ai::vertex_ai_access_token,
             baileys::baileys_runtime,
             baileys::baileys_stop_account,
             baileys::baileys_reset_account,

@@ -68,7 +68,6 @@ export function getOpenAiCompatibleConfig(
 export function hasAiCredentials(settings: AppSettings): boolean {
   if(settings.aiProvider==="muse")return true; // The native adapter checks the browser session on every request.
   if (isRetiredAiModel(settings.aiProvider === "custom" ? settings.customAiModel : settings.aiModel)) return false;
-  if(settings.aiProvider==="vertex")return !!settings.vertexCredentialId&&!!settings.vertexProjectId&&!!settings.vertexLocation&&!!settings.aiModel?.trim();
   if (settings.aiProvider === "gemini") return !!settings.geminiKey?.trim();
   if (settings.aiProvider === "ollama") return !!settings.ollamaUrl?.trim() && !isRetiredAiEndpoint(settings.ollamaUrl);
   const config = getOpenAiCompatibleConfig(settings);

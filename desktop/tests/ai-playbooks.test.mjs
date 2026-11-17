@@ -7,7 +7,7 @@ import {resolveAiReplyProfile} from '../src/lib/aiPromptScope.ts';
 import {generateSuggestions, getSuggestionContextKey} from '../src/lib/aiSuggest.ts';
 
 const book = (id, summary = id) => ({id, name: id, sourceName: `${id}.md`, content: `FULL SOURCE ${id}`, summary});
-const config = () => ({aiPlaybooks: [book('overview'), book('stage-a'), book('stage-b')], aiPlaybookOverviewId: 'overview', aiPlaybookBindings: {}, aiSystemPrompt: 'SENDER IDENTITY', aiSystemPromptByAccountId: {}, activeAccountId: 'a', liveBaileysAccountId: 'a', chatFolders: [
+const config = () => ({aiPlaybooks: [book('overview'), book('stage-a'), book('stage-b')], aiPlaybookBindings: {}, aiSystemPrompt: 'SENDER IDENTITY', aiSystemPromptByAccountId: {}, activeAccountId: 'a', liveBaileysAccountId: 'a', chatFolders: [
   {id: 'parent', chatIds: [], scope: {type: 'account', accountId: 'a'}, aiPlaybookId: 'stage-a'},
   {id: 'child', parentId: 'parent', chatIds: ['chat'], scope: {type: 'account', accountId: 'a'}},
   {id: 'other', chatIds: ['chat'], scope: {type: 'account', accountId: 'b'}, aiPlaybookId: 'stage-b'},
@@ -61,14 +61,14 @@ test('chat merges retain account-scoped bindings and conflicting stages require 
 test('missing or empty material blocks generation and only selected original sources enter prompts', () => {
   const s = config();
   let result = resolveAiReplyProfile(s, 'a', 'chat');
-  assert.match(result.prompt, /SENDER IDENTITY/); assert.match(result.prompt, /stage-a/); assert.match(result.prompt, /overview/);
+  assert.match(result.prompt, /SENDER IDENTITY/); assert.match(result.prompt, /stage-a/); assert.doesNotMatch(result.prompt, /overview/);
   assert.match(result.prompt, /FULL SOURCE stage-a/);assert.doesNotMatch(result.prompt, /stage-b/);
   s.aiPlaybooks = s.aiPlaybooks.filter(item => item.id !== 'stage-a');
   assert.ok(resolveAiReplyProfile(s,'a','chat').error);
   s.aiPlaybooks.push({...book('stage-a', ''),content:''});
   assert.match(resolveAiReplyProfile(s,'a','chat').error, /内容为空/);
-  s.aiPlaybooks.find(item => item.id === 'stage-a').summary = 'valid'; s.aiPlaybookOverviewId = 'deleted';
-  assert.ok(resolveAiReplyProfile(s,'a','chat').error);
+  s.aiPlaybooks.find(item => item.id === 'stage-a').summary = 'valid';
+  assert.equal(resolveAiReplyProfile(s,'a','chat').error, undefined);
 });
 
 test('actual AI requests contain only selected original material and content edits invalidate cached suggestions', async t => {
@@ -94,13 +94,22 @@ test('long base identities survive reload and inherit without a Playbook', () =>
   assert.equal(resolveAiReplyProfile(restored, 'a', 'unbound').prompt, prompt);
   assert.equal(resolveAiReplyProfile(restored, 'other', 'unbound').prompt, prompt);
 });
+test('Muse account checks survive settings reload while malformed check records are discarded',()=>{
+ const restored=normalizeLoadedSettings({...defaultSettings,museAccountChecks:{ready:{ready:true,state:'ready',checkedAt:123,message:'Available'},invalid:{ready:'yes',state:'ready',checkedAt:123},missing:{ready:false,state:'error'}}});
+ assert.deepEqual(restored.museAccountChecks,{ready:{ready:true,state:'ready',checkedAt:123,message:'Available'}});
+});
+test('obsolete Muse identity copy settings are discarded during settings restore',()=>{
+ const restored=normalizeLoadedSettings({...defaultSettings,museIdentityModeByAccountId:{muse3:'follow-primary'},museIdentitySyncByAccountId:{muse3:{primaryId:'muse1',sha256:'a'.repeat(64),syncedAt:123}}});
+ assert.equal(Object.hasOwn(restored,'museIdentityModeByAccountId'),false);
+ assert.equal(Object.hasOwn(restored,'museIdentitySyncByAccountId'),false);
+});
 test('library and account-scoped bindings survive settings reload and backup restoration', () => {
   const settings = {...defaultSettings, ...config(), aiPlaybookBindings:{[playbookBindingKey('a','chat')]:'stage-b'}};
   const safe = buildSettingsSafe(settings);
   const parsed = parseBackupJson({version:2, contacts:[{id:'person',name:'Customer',phone:'+15551234567',tags:[]}], settingsSafe:safe});
-  const restored = normalizeLoadedSettings(parsed.settingsSafe);
+  const restored = normalizeLoadedSettings({...parsed.settingsSafe, aiPlaybookOverviewId:'overview'});
   assert.equal(restored.aiPlaybooks.length,3);
-  assert.equal(restored.aiPlaybookOverviewId,'overview');
+  assert.equal(Object.hasOwn(restored,'aiPlaybookOverviewId'),false);
   assert.equal(restored.aiPlaybookBindings[playbookBindingKey('a','chat')],'stage-b');
   assert.equal(restored.chatFolders.find(folder=>folder.id==='parent').aiPlaybookId,'stage-a');
 });

@@ -200,7 +200,15 @@ async function requestFullHistorySync() {
   }
   const now = Date.now();
   const cooldownMs = Math.max(0, 120_000 - (now - lastFullHistoryRequestAt));
-  if (cooldownMs > 0) return { requested: false, cooldownMs };
+  if (cooldownMs > 0) {
+    scheduleDeferredFullHistorySync(cooldownMs);
+    return {
+      requested: false,
+      deferred: true,
+      cooldownMs,
+      warning: `历史同步请求处于冷却期，已排队，约 ${Math.ceil(cooldownMs / 1000)} 秒后重试。`,
+    };
+  }
   const requestId = `wap-${accountId}-${now}`;
   const peerMessageId = await socket.sendPeerDataOperationMessage({
     peerDataOperationRequestType:

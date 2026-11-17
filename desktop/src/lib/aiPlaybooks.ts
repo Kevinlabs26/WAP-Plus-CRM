@@ -10,7 +10,6 @@ export type PlaybookSettings = {
   aiProvider?: string;
   aiPlaybooks?: AiPlaybook[];
   aiPlaybookPlans?: PlaybookPlan[];
-  aiPlaybookOverviewId?: string;
   aiPlaybookBindings?: Record<string, string>;
   chatFolders?: { id: string; parentId?: string; chatIds: string[]; scope?: { type: string; accountId?: string }; aiPlaybookId?: string; aiPlaybookSchedule?: PlaybookSchedule; systemType?: string }[];
   leadInbox?: { collectedChatIds?: string[]; dismissedChatIds?: string[] };
@@ -113,12 +112,8 @@ export function resolvePlaybook(settings: PlaybookSettings, accountId?: string, 
   if (id === CONFLICT) return {id, source, prompt: '', name: '', error: '合并会话的 Playbook 绑定存在冲突，请重新选择后再生成'};
   const stage = settings.aiPlaybooks?.find(item => item.id === id);
   if (!stage) return {id, source, prompt: '', name: '', error: '绑定的 Playbook 已不存在，请重新选择；本次已停止生成'};
-  const selectedBooks = [settings.aiPlaybookOverviewId ? settings.aiPlaybooks?.find(item => item.id === settings.aiPlaybookOverviewId) : undefined, stage].filter((item): item is AiPlaybook => Boolean(item));
-  const museFiles = selectedBooks.filter(item => item.musePath);
-  if (museFiles.length && settings.aiProvider !== 'muse') return {id, source, prompt: '', name: stage.name, error: 'Workspace 文件 Playbook 需要使用 Muse 提供商才能读取'};
-  const overview = settings.aiPlaybookOverviewId ? settings.aiPlaybooks?.find(item => item.id === settings.aiPlaybookOverviewId) : undefined;
-  if (settings.aiPlaybookOverviewId && !overview) return {id, source, prompt: '', name: stage.name, error: 'Playbook 总纲已不存在，请重新选择'};
-  const books = overview && overview.id !== stage.id ? [overview, stage] : [stage];
+  if (stage.musePath && settings.aiProvider !== 'muse') return {id, source, prompt: '', name: stage.name, error: 'Workspace 文件 Playbook 需要使用 Muse 提供商才能读取'};
+  const books = [stage];
   if (books.some(item => item.museMissing)) return {id, source, prompt: '', name: stage.name, error: '绑定的 Muse 工作区文件已不在同步清单中，请检查来源或重新选择'};
   if (books.some(item => !item.musePath && !item.content.trim() && !item.summary.trim())) return {id, source, prompt: '', name: stage.name, error: 'Playbook 内容为空，请重新同步或导入资料'};
   const museMaterials = books.filter(item => item.content.trim() || item.summary.trim()).map(item => ({id:item.id,name:item.name,content:item.content.trim() ? item.content : item.summary.trim(),revision:item.museShareRevision || ''}));

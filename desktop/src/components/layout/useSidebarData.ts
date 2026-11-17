@@ -248,6 +248,7 @@ export function useSidebarData({
       viewMode,
       filterFallback,
       filterLive,
+      messagesByChatId,
     ]
   );
 

@@ -50,7 +50,7 @@ test('a sibling image card is collected only between the assistant reply and the
 });
 test('a hanging media download has a bounded stage timeout',()=>{
  const p=page({fetchMedia:()=>new Promise(()=>{})});p.api.start('job-1','Draw',null,null,null,true);p.api.poll('job-1');p.image();p.finish();p.api.poll('job-1');p.tick(35_001);
- assert.match(p.api.poll('job-1').error,/图片已定位.*读取附件超时/);assert.equal(p.clicks,1);
+ assert.match(p.api.poll('job-1').error,/媒体已定位.*读取附件超时/);assert.equal(p.clicks,1);
 });
 
 test('oversized media is cancelled before buffering the complete response, including missing or false lengths',async()=>{
@@ -254,7 +254,7 @@ test('handoff context can accompany the full original prompt without truncating 
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const bundled=await build({stdin:{contents:`export {generateSuggestions} from './src/lib/aiSuggest.ts';export {extractChatSheetFields} from './src/lib/aiCustomerCard.ts';export {defaultSettings} from './src/store/settingsDefaults.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',alias:{'@':root+'src'},plugins:[{name:'muse-boundary',setup(b){
- b.onResolve({filter:/museWeb\.ts$/},()=>({path:'muse',namespace:'mock'}));b.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:'export const museWebAccounts=async()=>({accounts:[],selectedId:"",primaryId:""});export const nextMuseAutoReplyAccount=async()=>"";export const readyMuseAutoReplyAccounts=async()=>[];export const generateMuseWeb=(...args)=>globalThis.museTest(...args);'}));
+b.onResolve({filter:/museWeb\.ts$/},()=>({path:'muse',namespace:'mock'}));b.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:'export const museWebAccounts=async()=>({accounts:[{id:"primary",name:"Primary"}],selectedId:"primary",primaryId:"primary"});export const nextMuseAutoReplyAccount=async()=>"primary";export const readyMuseAutoReplyAccounts=async()=>["primary"];export const generateMuseWeb=(...args)=>globalThis.museTest(...args);'}));
 }}]});
 const ai=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text).toString('base64'));
 test('Muse reuses configured prompts, context, JSON parsing and output constraints without an API key',async()=>{
@@ -322,11 +322,13 @@ test('Muse supplies bounded structured history with exactly the same full contex
  assert.match(context.profile,/Complete profile stays intact/);assert.doesNotMatch(context.prefix,/Complete profile stays intact/);assert.match(context.suffix,/Runtime clock/);assert.doesNotMatch(prompt,/Unsent draft/);
 });
 
-const clientBuild=await build({stdin:{contents:`export * from './src/lib/museWeb.ts';export {setMusePrivacyIdentityProvider} from './src/lib/museChatPrivacy.ts';export {getAiUsageSnapshot} from './src/lib/aiUsage.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',plugins:[{name:'native-boundary',setup(b){
+const clientBuild=await build({stdin:{contents:`export * from './src/lib/museWeb.ts';export {setMusePrivacyIdentityProvider,setMusePrivacySettingsProvider,setMusePrivacyGateMessageProvider} from './src/lib/museChatPrivacy.ts';export {getAiUsageSnapshot} from './src/lib/aiUsage.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',plugins:[{name:'native-boundary',setup(b){
  b.onResolve({filter:/bridge\.ts$/},()=>({path:'bridge',namespace:'native-mock'}));b.onResolve({filter:/^@tauri-apps\/api\/core$/},()=>({path:'tauri',namespace:'native-mock'}));
  b.onLoad({filter:/.*/,namespace:'native-mock'},args=>({contents:args.path==='bridge'?'export const isTauri=()=>true;':'export const invoke=(cmd,...args)=>cmd==="muse_web_accounts"&&!globalThis.museUseCustomPool?Promise.resolve({accounts:[{id:"primary",name:"Primary",selected:true,primary:true}],selectedId:"primary",primaryId:"primary"}):globalThis.museNative(cmd,...args);'}));
 }}]});
 const client=await import('data:text/javascript;base64,'+Buffer.from(clientBuild.outputFiles[0].text).toString('base64'));
+client.setMusePrivacySettingsProvider(()=>({primary:{trainingDisabledConfirmedAt:1}}));
+client.setMusePrivacyGateMessageProvider(()=> 'Privacy training confirmation required');
 client.setMusePrivacyIdentityProvider(()=>{
  if(globalThis.musePrivacyFailure)throw Error('Privacy state unavailable');
  const state=globalThis.musePrivacyState||{contacts:[],settings:{waAccounts:[]}};
@@ -358,16 +360,16 @@ test('retrieving existing media invokes only the collect command',async()=>{
 });
 test('media requests refuse an old desktop backend before submitting another generation',async()=>{
  const calls=[];globalThis.museNative=async(cmd,args)=>{calls.push([cmd,args]);return {ready:true,state:'ready',message:'Connected'};};
- await assert.rejects(client.generateMuseWebOutput('Draw',undefined,undefined,undefined,undefined,true),/旧版 Muse.*未提交生图/);
+ await assert.rejects(client.generateMuseWebOutput('Draw',undefined,undefined,undefined,undefined,true),/旧版 Muse.*未提交媒体任务/);
  assert.deepEqual(calls.map(([cmd])=>cmd),['muse_web_status']);
 });
 test('media requests pass the explicit wait flag and preserve the returned media',async()=>{
- const calls=[];globalThis.museNative=async(cmd,args)=>{calls.push([cmd,args]);return cmd==='muse_web_status'?{ready:true,mediaProtocol:7,parallelMedia:true}:{text:'Here it is',media:{mimeType:'image/png',dataUrl:'data:image/png;base64,aW1hZ2U='},error:null,summaryRequests:0};};
+ const calls=[];globalThis.museNative=async(cmd,args)=>{calls.push([cmd,args]);return cmd==='muse_web_status'?{ready:true,mediaProtocol:8,parallelMedia:true}:{text:'Here it is',media:{mimeType:'image/png',dataUrl:'data:image/png;base64,aW1hZ2U='},error:null,summaryRequests:0};};
  const result=await client.generateMuseWebOutput('Draw',undefined,undefined,undefined,undefined,true);
  assert.equal(result.media.data,'aW1hZ2U=');assert.equal(calls[0][1].media,true);assert.equal(calls[1][0],'muse_web_generate');assert.equal(calls[1][1].expectMedia,true);
 });
 test('the native adapter passes both reference images without collapsing the subject and style',async()=>{
- let submitted;globalThis.museNative=async(cmd,args)=>{if(cmd==='muse_web_status')return{ready:true,mediaProtocol:7,parallelMedia:true};submitted=args;return{text:null,media:{mimeType:'image/png',dataUrl:'data:image/png;base64,aW1hZ2U='},error:null,summaryRequests:0};};
+ let submitted;globalThis.museNative=async(cmd,args)=>{if(cmd==='muse_web_status')return{ready:true,mediaProtocol:8,parallelMedia:true};submitted=args;return{text:null,media:{mimeType:'image/png',dataUrl:'data:image/png;base64,aW1hZ2U='},error:null,summaryRequests:0};};
  const subject={mimeType:'image/jpeg',dataUrl:'data:image/jpeg;base64,c3ViamVjdA=='},style={mimeType:'image/jpeg',dataUrl:'data:image/jpeg;base64,c3R5bGU='};
  await client.generateMuseWebOutput('Compose two images',undefined,undefined,undefined,[subject,style],true);
  assert.deepEqual(submitted.referenceImages,[subject,style]);assert.equal(submitted.referenceImage,null);
@@ -376,7 +378,7 @@ test('the native adapter passes both reference images without collapsing the sub
 test('the native adapter can finish a text reply while a media generation is still running',async()=>{
  let finishImage;const imageReady=new Promise(resolve=>{finishImage=resolve;});const calls=[];
  globalThis.museNative=async(cmd,args)=>{
-  calls.push([cmd,args]);if(cmd==='muse_web_status')return{ready:true,mediaProtocol:7,parallelMedia:true};
+  calls.push([cmd,args]);if(cmd==='muse_web_status')return{ready:true,mediaProtocol:8,parallelMedia:true};
   if(args.expectMedia){await imageReady;return{media:{mimeType:'image/png',dataUrl:'data:image/png;base64,aW1hZ2U='}};}
   return{text:'Text finished'};
  };
@@ -417,11 +419,11 @@ test('handoff generations are counted separately with unknown tokens, including 
  globalThis.museNative=async()=>({text:'Ordinary reply',error:null,summaryRequests:0,summaryFailed:false});
  assert.equal(await client.generateMuseWeb('No handoff'),'Ordinary reply');assert.equal(client.getAiUsageSnapshot().buckets.find(row=>row.feature==='context').requests,2);
 });
-test('the native adapter lists, adds, selects and checks individual Muse accounts',async()=>{
+test('adding a Muse account preserves the current account, and explicit selection changes it',async()=>{
  globalThis.museUseCustomPool=true;const calls=[];const pool={accounts:[{id:'one',name:'Muse 1',selected:true},{id:'two',name:'Muse 2',selected:false}],selectedId:'one'};
- globalThis.museNative=async(cmd,args)=>{calls.push([cmd,args]);if(cmd==='muse_web_accounts')return pool;if(cmd==='muse_web_account_add')return{...pool,accounts:[...pool.accounts,{id:'three',name:'Muse 3',selected:true}],selectedId:'three'};if(cmd==='muse_web_account_select')return{...pool,selectedId:args.accountId};if(cmd==='muse_web_status')return{opened:true,ready:args.accountId==='two',state:args.accountId==='two'?'ready':'login',message:'Sign in'};};
+ globalThis.museNative=async(cmd,args)=>{calls.push([cmd,args]);if(cmd==='muse_web_accounts')return pool;if(cmd==='muse_web_account_add')return{...pool,accounts:[...pool.accounts,{id:'three',name:'Muse 3',selected:false}],selectedId:'one'};if(cmd==='muse_web_account_select')return{...pool,selectedId:args.accountId};if(cmd==='muse_web_status')return{opened:true,ready:args.accountId==='two',state:args.accountId==='two'?'ready':'login',message:'Sign in'};};
  assert.equal((await client.museWebAccounts()).accounts.length,2);
- assert.equal((await client.addMuseWebAccount()).selectedId,'three');
+ assert.equal((await client.addMuseWebAccount()).selectedId,'one');
  assert.equal((await client.selectMuseWebAccount('two')).selectedId,'two');
  assert.equal((await client.museWebStatus(false,'two')).ready,true);
  assert.deepEqual(calls.map(([cmd])=>cmd),['muse_web_accounts','muse_web_account_add','muse_web_account_select','muse_web_status']);

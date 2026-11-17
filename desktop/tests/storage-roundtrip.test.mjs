@@ -103,6 +103,30 @@ test("chat remaps accompany the merged snapshot, survive a failed save and retir
   assert.equal((await api.loadMessagesPage({ chatId: "kept" })).ok, true);
 });
 
+test("orphan chat ownership corrections are transactional and retryable", async () => {
+  const { api, calls } = await setup({ sqlite: true });
+  const snapshot = { phones: [], contacts: [], chats: [{ id: "chat", accountId: "wa-live" }], messages: [], followUps: [], settings: {} };
+  api.registerChatAccountReplacements([{ chatId: "chat", fromAccountId: "wa-removed", toAccountId: "wa-live" }]);
+  let fail = true;
+  const invoke = globalThis.__storageTestInvoke;
+  globalThis.__storageTestInvoke = async (cmd, args) => {
+    if (cmd === "db_save" && fail) throw new Error("Disk full");
+    return invoke(cmd, args);
+  };
+  try {
+    await assert.rejects(api.saveAppState(snapshot), /保存失败/);
+    await assert.rejects(api.loadMessagesPage({ chatId: "chat" }), /归属修复尚未保存/);
+    fail = false;
+    await api.saveAppState(snapshot);
+    assert.deepEqual(calls.filter(call => call.cmd === "db_save").at(-1).args.snapshot.chatAccountRemaps,
+      [{ chatId: "chat", fromAccountId: "wa-removed", toAccountId: "wa-live" }]);
+    await api.saveAppState(snapshot);
+    assert.deepEqual(calls.filter(call => call.cmd === "db_save").at(-1).args.snapshot.chatAccountRemaps, []);
+  } finally {
+    globalThis.__storageTestInvoke = invoke;
+  }
+});
+
 test("draft-only saves leave pending history remaps for the chat snapshot", async () => {
   const { api, calls } = await setup({ sqlite: true });
   const target = { id: "kept", contactId: "customer", accountId: "wa-a" };

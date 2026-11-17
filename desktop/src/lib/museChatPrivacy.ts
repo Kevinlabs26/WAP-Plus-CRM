@@ -1,8 +1,17 @@
 import type { Message } from "../types/crm";
 
 type Identity = { name?: string; label?: string; userName?: string; phone?: string; phoneE164?: string; historyPhoneE164?: string };
+type MusePrivacyByAccount = Record<string, { trainingDisabledConfirmedAt?: number; memoryReviewedAt?: number }>;
 let identityProvider: (() => Identity[]) | undefined;
+let privacyProvider: (() => MusePrivacyByAccount) | undefined;
+let privacyGateMessageProvider: (() => string) | undefined;
 export function setMusePrivacyIdentityProvider(provider: () => Identity[]) { identityProvider = provider; }
+export function setMusePrivacySettingsProvider(provider: () => MusePrivacyByAccount) { privacyProvider = provider; }
+export function setMusePrivacyGateMessageProvider(provider: () => string) { privacyGateMessageProvider = provider; }
+export function musePrivacyGateMessage(): string { return privacyGateMessageProvider?.() || "此 Muse 账号未确认关闭模型训练，CRM 已阻止本次请求。"; }
+export function museTrainingDisabledConfirmed(accountId: string): boolean {
+  return !!accountId && !!privacyProvider?.()?.[accountId]?.trainingDisabledConfirmedAt;
+}
 export function musePrivacyIdentities(): Identity[] {
   if (!identityProvider) throw Error("本机隐私检查尚未就绪，未发送给 Muse");
   return identityProvider();

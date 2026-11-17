@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { translate } from "../src/i18n/core.ts";
 
 const mocks = {
-  "@/lib/googleSheets": "export const sheetConnections=()=>[];export const useGoogleSheets=()=>({});",
+  "@/lib/googleSheets": "export const DEFAULT_SHEET_ID='default';export const refreshSheets=async()=>{};export const sheetConnections=()=>[];export const useGoogleSheets=()=>({});export const primarySheetTagForPhone=()=>null;",
   "@/lib/googleDrive": "export const openAvatarCloudMenu=()=>{};",
   "emoji-picker-react": "export default ()=>null;export const Theme={LIGHT:'light',DARK:'dark'},EmojiStyle={NATIVE:'native'};",
   react: "export const useState=v=>globalThis.dragHooks.state(v); export const useRef=v=>globalThis.dragHooks.ref(v); export const useEffect=(f,d)=>globalThis.dragHooks.effect(f,d); export const useLayoutEffect=()=>{}; export const useMemo=f=>f(); export const memo=f=>f;",
@@ -14,7 +14,7 @@ const mocks = {
   "@/store/appStore": "export const useAppStore=Object.assign(f=>f(globalThis.dragStore),{getState:()=>globalThis.dragStore});",
   "zustand/react/shallow": "export const useShallow=f=>f;",
   "@/i18n": "export const useI18n=()=>({t:(k,p)=>globalThis.dragTranslate(k,p)});",
-  "lucide-react": ["CornerDownRight", "UserRoundPlus", "Clock3", "Check", "BellOff", "Copy", "MoreVertical", "Pin", "ChevronDown", "ChevronRight", "Folder", "FolderPlus", "Link2", "GripVertical", "LayoutGrid", "MoreHorizontal", "Pencil", "Trash2", "Upload", "Users", "UserRoundX", "Archive", "CalendarDays", "Inbox"].map(n=>`export const ${n}=()=>null;`).join(""),
+  "lucide-react": ["CornerDownRight", "UserRoundPlus", "Clock3", "Check", "BellOff", "Copy", "MoreVertical", "Pin", "ChevronDown", "ChevronRight", "Folder", "FolderPlus", "Link2", "GripVertical", "LayoutGrid", "MoreHorizontal", "Pencil", "Trash2", "Upload", "Users", "UserRoundX", "Archive", "CalendarDays", "Inbox", "Star"].map(n=>`export const ${n}=()=>null;`).join(""),
   "@/components/ui/Avatar": "export const Avatar=()=>null;",
   "@/components/chat/Ticks": "export const Ticks=()=>null;",
   "@/components/ui/primitives": "export const Badge='badge', ListRow='button';",

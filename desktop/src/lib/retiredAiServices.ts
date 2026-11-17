@@ -16,7 +16,7 @@ export function stripRetiredAiSettings(settings: Partial<SettingsShape>): void {
   for (const key of ["deepseekKey", "qwenKey", "zhipuKey"]) delete (settings as Record<string, unknown>)[key];
   const customRemoved = isRetiredAiEndpoint(settings.customAiBaseUrl) || isRetiredAiModel(settings.customAiModel);
   const ollamaRemoved = isRetiredAiEndpoint(settings.ollamaUrl);
-  if (settings.aiProvider && (!["mock", "openai", "groq", "openrouter", "gemini", "vertex", "muse", "ollama", "custom"].includes(settings.aiProvider)
+  if (settings.aiProvider && (!["mock", "openai", "groq", "openrouter", "gemini", "muse", "ollama", "custom"].includes(settings.aiProvider)
       || settings.aiProvider === "custom" && customRemoved || settings.aiProvider === "ollama" && ollamaRemoved
       || settings.aiProvider !== "muse" && isRetiredAiModel(settings.aiModel))) {
     settings.aiProvider = "mock";
@@ -32,7 +32,7 @@ export function stripRetiredAiSettings(settings: Partial<SettingsShape>): void {
   }
   if (ollamaRemoved) settings.ollamaUrl = "http://127.0.0.1:11434";
   if (isRetiredAiEndpoint(settings.translationBaseUrl) || isRetiredAiModel(settings.translationModel)
-      || settings.translationProvider && !["mock", "openai", "groq", "openrouter", "gemini", "vertex", "ollama", "custom"].includes(settings.translationProvider)) {
+      || settings.translationProvider && !["mock", "openai", "groq", "openrouter", "gemini", "ollama", "custom"].includes(settings.translationProvider)) {
     settings.translationProvider = "mock";
     settings.translationBaseUrl = "";
     settings.translationModel = "";

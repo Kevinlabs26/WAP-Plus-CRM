@@ -6,7 +6,6 @@ const mocks={
  './PlaybookLibrary':'export const PlaybookLibrary="playbook-library";',
  './MuseWebFields':'export const MuseWebFields="muse-fields";',
  './AiUsagePanel':'export const AiUsagePanel="ai-usage";',
- './VertexAiFields':'export const VertexAiFields="vertex-fields";',
  react:'export const useState=v=>globalThis.modelHooks.state(v);export const useRef=v=>globalThis.modelHooks.ref(v);export const useEffect=(f,d)=>globalThis.modelHooks.effect(f,d);export const useCallback=(f,d)=>globalThis.modelHooks.callback(f,d);',
  'react/jsx-runtime':'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;export const Fragment="fragment";',
  '@/store/appStore':'export const useAppStore=f=>f(globalThis.modelStore);',

@@ -19,6 +19,10 @@ export function AiOutreachControls({value,onChange}:{value:AiOutreachRule;onChan
       <TimeZoneSelect value={value.timeZone} label={t("aiOutreach.zone")} automatic="UTC" onChange={zone=>patch({timeZone:zone||"UTC"})}/>
       </div>
       <label className="block text-2xs">{t("aiOutreach.goal")}<Textarea rows={3} maxLength={2000} placeholder={t("aiTasks.goalRequired")} value={value.goal} onChange={event=>onChange({...value,goal:event.target.value})}/></label>
+      <div>
+        <label className="flex items-center justify-between gap-3 text-2xs"><span>{t("aiOutreach.allowSidebarData")}</span><Switch checked={value.allowSidebarData===true} onChange={event=>patch({allowSidebarData:event.target.checked})}/></label>
+        <p className="mt-1 text-2xs text-zinc-500">{t("aiOutreach.allowSidebarDataHint")}</p>
+      </div>
       <p className="my-2 text-2xs text-zinc-500">{t("aiOutreach.hint")}</p>
     </div>}
   </section>;
