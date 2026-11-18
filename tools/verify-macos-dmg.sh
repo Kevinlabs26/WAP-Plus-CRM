@@ -5,7 +5,7 @@ set -euo pipefail
 : "${ARCH:?}"
 version=$(node -p "require('./desktop/src-tauri/tauri.conf.json').version")
 profile=debug
-if [[ ${PUBLISH:-false} == true ]]; then profile=release; fi
+if [[ ${RELEASE_BUILD:-false} == true ]]; then profile=release; fi
 shopt -s nullglob
 dmgs=(desktop/src-tauri/target/"$profile"/bundle/dmg/*.dmg)
 [[ ${#dmgs[@]} == 1 ]]
@@ -22,7 +22,7 @@ for name in wap-plus-crm wap-plus-baileys ffmpeg; do
 done
 "$executables/ffmpeg" -v error -f lavfi -i sine=duration=0.1 -c:a libopus "$RUNNER_TEMP/bundled-voice.ogg"
 test -s "$RUNNER_TEMP/bundled-voice.ogg"
-if [[ $profile == release ]]; then
+if [[ ${PUBLISH:-false} == true ]]; then
   codesign --verify --deep --strict "$app"
   xcrun stapler validate "$app"
   spctl --assess --type execute "$app"

@@ -4,7 +4,7 @@ GitHub Actions 的 `macOS build and DMG release` 工作流在 `codex/macos` 分�
 
 ## GitHub 仓库 Secrets
 
-进入 Settings → Secrets and variables → Actions → New repository secret，为正式发布配置：
+签名/公证发布需要以下 Apple Secrets；未签名发布不需要 `APPLE_*`，但正式构建仍使用 `GOOGLE_DESKTOP_CLIENT_JSON`：
 
 | Secret | 内容 |
 | --- | --- |
@@ -16,7 +16,7 @@ GitHub Actions 的 `macOS build and DMG release` 工作流在 `codex/macos` 分�
 | `APPLE_TEAM_ID` | Apple Developer Team ID |
 | `GOOGLE_DESKTOP_CLIENT_JSON` | 现有 Windows 发布已使用的 Google 桌面 OAuth 配置。如仓库已设置，可直接复用 |
 
-两个架构的测试构建通过后，可用同一提交创建 `macos-build-v0.1.79` 类型的触发标签，或在工作流可手动运行时选择 `publish`。正式发布会重新跑两种架构的全套检查，要求应用签名、公证票据和 Gatekeeper 检查通过，然后统一发布到 `macos-v0.1.79`。macOS Release 不标为 Latest，避免替换 Windows 更新器使用的发布入口。
+两个架构的测试构建通过后，可用同一提交创建 `macos-build-v0.1.79` 标签来签名、公证并发布；也可创建 `macos-unsigned-build-v0.1.79` 标签来发布正式模式的未签名/未公证 DMG。后者无需 Apple Secrets，会生成单独的 `macos-unsigned-v0.1.79` Release，DMG 文件名带 `-unsigned`，发布说明会提示 Gatekeeper 首次打开需手动允许。两种 macOS Release 都不标为 Latest，避免替换 Windows 更新器使用的发布入口。
 
 ## 本地构建
 
