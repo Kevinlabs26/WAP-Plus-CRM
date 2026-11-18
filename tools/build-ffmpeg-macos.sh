@@ -8,13 +8,19 @@ cd "$work"
 
 # Source versions and checksums match the upstream tarballs pinned by Homebrew.
 fetch() {
-  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
-    --max-time 180 --max-filesize 67108864 --output "$2" "$1"
-  printf '%s  %s\n' "$3" "$2" | shasum -a 256 -c -
+  if ! curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+    --retry 3 --retry-all-errors --retry-max-time 180 --max-time 90 --max-filesize 67108864 --output "$2" "$1"; then
+    echo "::error::Could not download $2 from $1" >&2
+    return 1
+  fi
+  if ! printf '%s  %s\n' "$3" "$2" | shasum -a 256 -c -; then
+    echo "::error::Source SHA-256 verification failed for $2" >&2
+    return 1
+  fi
 }
 fetch https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz ffmpeg-9.0.2.tar.xz \
   8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
-fetch https://github.com/xiph/opus/releases/download/v1.6.1/opus-1.6.1.tar.gz opus-1.6.1.tar.gz \
+fetch https://downloads.xiph.org/releases/opus/opus-1.6.1.tar.gz opus-1.6.1.tar.gz \
   6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1
 tar -xf opus-1.6.1.tar.gz
 tar -xf ffmpeg-9.0.2.tar.xz
