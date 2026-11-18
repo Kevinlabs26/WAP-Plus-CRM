@@ -56,8 +56,19 @@ jobs:
           node tools/mock-bridge-smoke.test.mjs
       - name: Test frontend and Rust
         run: |
-          npm test
-          cargo test --locked --lib --tests --manifest-path desktop/src-tauri/Cargo.toml
+          set -o pipefail
+          status=0
+          if ! npm test 2>&1 | tee "$RUNNER_TEMP/macos-node-tests.log"; then
+            grep -m 10 '^not ok ' "$RUNNER_TEMP/macos-node-tests.log" |
+              while IFS= read -r line; do printf '::error::%s\n' "${line//%/%25}"; done || true
+            status=1
+          fi
+          if ! cargo test --locked --lib --tests --manifest-path desktop/src-tauri/Cargo.toml 2>&1 | tee "$RUNNER_TEMP/macos-rust-tests.log"; then
+            grep -m 10 -E '^error|^test .*FAILED' "$RUNNER_TEMP/macos-rust-tests.log" |
+              while IFS= read -r line; do printf '::error::%s\n' "${line//%/%25}"; done || true
+            status=1
+          fi
+          exit "$status"
       - name: Prepare production Google OAuth configuration
         if: ${{ env.PUBLISH_MACOS == 'true' }}
         env:
