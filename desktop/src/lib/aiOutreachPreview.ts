@@ -23,7 +23,7 @@ export async function buildOutreachPreview(state:OutreachState,folderIds:readonl
     lastRun.set(run.folderId,Math.max(lastRun.get(run.folderId)||0,Date.parse(run.at)||0));
   }
   const rows:OutreachPreviewRow[]=[],recipients=new Set<string>(),windowCache=new Map<string,number|null>();
-  const next=(rule:ReturnType<typeof normalizeOutreachRule>,at:number,skip=false)=>{const key=`${rule.timeZone}:${rule.time}:${Math.floor(at/60_000)}:${skip}`;if(!windowCache.has(key))windowCache.set(key,nextOutreachWindow(rule,at,skip));return windowCache.get(key)!;};
+  const next=(rule:ReturnType<typeof normalizeOutreachRule>,at:number,skip=false)=>{const key=`${rule.timeZone}:${rule.time}:${rule.startMode}:${rule.runNowAt||""}:${rule.scheduleStartAt||""}:${Math.floor(at/60_000)}:${skip}`;if(!windowCache.has(key))windowCache.set(key,nextOutreachWindow(rule,at,skip));return windowCache.get(key)!;};
   const folders=settings.chatFolders.filter(folder=>wanted.has(folder.id)).slice().sort((a,b)=>(lastRun.get(a.id)||0)-(lastRun.get(b.id)||0));
   let readyNow=0;
   for(const folder of folders){

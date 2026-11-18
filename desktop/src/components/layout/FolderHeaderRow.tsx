@@ -146,7 +146,7 @@ export function FolderHeaderRow({
   const appearanceColor=color||(isLeadInbox?"#ef4444":defaultColor);
   const appearanceDepth=isLeadInbox?40:colorDepth;
   const sheetBinding=useAppStore(state=>state.settings.chatFolders.find(folder=>folder.id===folderId)?.sheetConnectionId);
-  const sheetNames=useGoogleSheets(useShallow(state=>Object.fromEntries(sheetConnections(state).map(item=>[item.id,item.name]))));
+  const sheetNames=useGoogleSheets(useShallow(state=>Object.fromEntries(sheetConnections(state).map(item=>[item.id,item.name===item.config.tab?item.name:`${item.name} · ${item.config.tab}`]))));
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [submenu, setSubmenu] = useState<{ kind: SubmenuKind; left: number; top: number; focus: boolean } | null>(null);
   const [choosingMoveTarget, setChoosingMoveTarget] = useState(false);

@@ -8,6 +8,8 @@ import { museQueueSnapshot, subscribeMuseQueue } from '@/lib/museQueue';
 import { useI18n } from '@/i18n';
 import { MuseQueueStatus } from './MuseQueueStatus';
 import { useDetailsMenu } from '@/components/ui/useDetailsMenu';
+import { backgroundPlaybookSyncStatus, subscribeBackgroundPlaybookSync, toggleBackgroundPlaybookSync } from '@/components/bridge/PlaybookSyncWatcher';
+import { cancelActiveMuseRequest, getActiveMuseRequests, subscribeActiveMuseRequests } from '@/lib/museWeb';
 
 type AccountState = Pick<MuseWebStatus, 'ready' | 'state' | 'message'> & {checkedAt?:number};
 
@@ -25,6 +27,8 @@ export function MuseWebFields(){
   const [busy,setBusy]=useState(false),[message,setMessage]=useState(''),[error,setError]=useState(false);
   const autoReplyMenuRef=useDetailsMenu();
   const queue=useSyncExternalStore(subscribeMuseQueue,museQueueSnapshot);
+  const playbookSync=useSyncExternalStore(subscribeBackgroundPlaybookSync,backgroundPlaybookSyncStatus);
+  const activeRequests=useSyncExternalStore(subscribeActiveMuseRequests,getActiveMuseRequests);
   const queueBusy=!!(queue.textRunning||queue.textWaiting||queue.mediaRunning||queue.mediaWaiting);
   useEffect(()=>{let active=true;void museWebAccounts().then(value=>{if(active)setPool(value);}).catch(e=>{if(active){setError(true);setMessage(e instanceof Error?e.message:String(e));}});return()=>{active=false;};},[]);
   const run=async(work:()=>Promise<string>)=>{
@@ -122,6 +126,21 @@ export function MuseWebFields(){
       </div>
     </div>
     <MuseQueueStatus/>
+    {activeRequests.map(request => <div key={request.id} className="flex items-center gap-2 text-xs">
+      <span title={request.id}>{pool?.accounts.find(account => account.id === request.accountId)?.name || request.accountId}
+        {' · '}{t(`muse.activeRequest.${request.kind}` as Parameters<typeof t>[0])}
+        {' · '}{new Date(request.startedAt).toLocaleTimeString()}</span>
+      <Button size="xs" variant="secondary" onClick={() => void run(async () => {
+        await cancelActiveMuseRequest(request.id);
+        return t('muse.activeRequest.cancelRequested');
+      })}>{t('muse.activeRequest.cancel')}</Button>
+    </div>)}
+    <div className="flex items-center gap-2 text-xs">
+      <span role="status">{t(`muse.playbookBackground.${playbookSync}` as const)}</span>
+      <Button size="xs" variant="secondary" onClick={toggleBackgroundPlaybookSync}>
+        {t(playbookSync === 'paused' ? 'muse.playbookBackground.resume' : 'muse.playbookBackground.pause')}
+      </Button>
+    </div>
     {pool?.accounts.map(account=>{
       const status=statusForAccount(account.id);
       const trainable=(playbooks||[]).filter(book=>!book.museMissing&&(book.musePath||book.content.trim()||book.summary.trim()));
@@ -137,7 +156,14 @@ export function MuseWebFields(){
             {account.primary&&<span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-400">{t('muse.primaryAccount')}</span>}
           </div>
           <span title={status?.message} className={`text-2xs ${status?.ready?'text-emerald-400':status?.state==='error'||status?.state==='quota'?'text-amber-400':'text-zinc-500'}`}>{status?.checkedAt?t('muse.statusLastChecked',{status:statusText(status),date:new Date(status.checkedAt).toLocaleString()}):statusText(status)}</span>
-          {playbookMode!=='shared'&&!!trainable.length&&<span className="text-2xs text-zinc-500" title={t('playbook.museModeWorkspaceHint')}>{t('muse.playbooksTrained',{trained,total:trainable.length})}</span>}
+          {playbookMode!=='shared'&&!account.primary&&!!trainable.length&&<details className="text-2xs text-zinc-400">
+            <summary className="cursor-pointer">{t('muse.playbooksTrained',{trained,total:trainable.length})}</summary>
+            <ul className="mt-1 space-y-1">
+              {trainable.map(book => <li key={book.id}>
+                {book.name} · {t('muse.playbooksTrained',{trained:hasMuseAccountPlaybook(book,account.id)?1:0,total:1})}
+              </li>)}
+            </ul>
+          </details>}
         </div>
         <div className="flex flex-wrap gap-2">
           <Button size="xs" variant="secondary" className={actionClass} aria-label={t('muse.open')} title={t('muse.open')} disabled={busy||queueBusy} onClick={()=>void run(async()=>{await openMuseWeb(false,account.id);return t('muse.loginHint');})}><LogIn className="h-3.5 w-3.5" aria-hidden="true" /></Button>

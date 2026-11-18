@@ -85,10 +85,10 @@ export async function queueOutreachDraft(id:string,approved=true) {
     return true;
   } finally {approvals.delete(id);}
 }
-export async function tickAiOutreach(now=Date.now()) {
+export async function tickAiOutreach(now=Date.now(),force=false) {
   const epoch=getDataRestoreGeneration();
   const initial=useAppStore.getState();
-  if (running||isAppLockActive()||isDataRestoreActive()||!initial.hydrated||!initial.uiReady||now-lastTick<30_000) return;
+  if (running||isAppLockActive()||isDataRestoreActive()||!initial.hydrated||!initial.uiReady||!force&&now-lastTick<30_000) return;
   lastTick=now;running=true;scheduler={at:now,phase:"checking",error:""};
   try {
     for (const run of initial.settings.aiOutreachRuns||[]) {
@@ -120,6 +120,7 @@ export async function tickAiOutreach(now=Date.now()) {
     for (const folder of folders) {
       if (!folder.aiOutreach?.enabled) continue;
       const rule=normalizeOutreachRule(folder.aiOutreach),clock=outreachRunClock(rule,now);
+      if((rule.startMode==="immediate"&&!isImmediateOutreach(rule,now))||(rule.startMode==="scheduled"&&rule.scheduleStartAt!==undefined&&now<rule.scheduleStartAt))continue;
       if(!isImmediateOutreach(rule,now)&&clock.time<rule.time)continue;
       const members=new Set(outreachFolderChatIds(planningState,folder.id));
       for (const chatId of members) {

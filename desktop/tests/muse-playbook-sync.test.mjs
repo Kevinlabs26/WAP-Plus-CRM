@@ -7,7 +7,7 @@ import {normalizePlaybooks, resolvePlaybook} from '../src/lib/aiPlaybooks.ts';
 
 const src=fileURLToPath(new URL('../src',import.meta.url));
 const mocks={
-  './museWeb':'export const museWebAccounts=async()=>globalThis.pbMuseAccounts;export const museWebStatus=async()=>globalThis.pbSyncStatus;export const generateMuseWeb=(...args)=>globalThis.pbSyncRequest(...args);',
+  './museWeb':'export const museWebAccounts=async()=>globalThis.pbMuseAccounts;export const museWebStatus=async()=>globalThis.pbSyncStatus;export const readyMuseAutoReplyAccounts=async(ids)=>ids||[];export const generateMuseWeb=(...args)=>globalThis.pbSyncRequest(...args);',
   '@/store/appStore':'export const useAppStore={getState:()=>globalThis.pbSyncState};',
   './aiUsage':'export const trackAiRequest=async(_meta,work)=>work();',
   '@/store/restoreGuard':'export const getDataRestoreGeneration=()=>globalThis.pbSyncEpoch;export const isDataRestoreActive=()=>globalThis.pbSyncRestoring;',
@@ -16,6 +16,7 @@ const bundle=await build({entryPoints:[fileURLToPath(new URL('../src/lib/musePla
 
 const {parsePlaybookManifest,mergeMusePlaybooks,shareMusePlaybooks,trainMuseAccountPlaybooks,syncMusePlaybooks,shouldAutoSyncPlaybooks}=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
 const local={id:'local',name:'Local',sourceName:'local.md',content:'Local source',summary:'Local rules'};
+const {syncSelectedMusePlaybookCopies}=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
 const manifest=paths=>({root:'/workspace',paths});
 function fixture(output){
  globalThis.pbSyncStatus={ready:true};globalThis.pbSyncEpoch=0;globalThis.pbSyncRestoring=false;
@@ -53,12 +54,58 @@ test('副号 Playbook 只有回读内容与来源完全一致才登记为已训�
  await assert.rejects(trainMuseAccountPlaybooks('sub',[material]),/副本内容校验失败/);
  assert.equal(failed[0][6],'sub');assert.equal(pbSyncState.settings.aiPlaybooks[0].museAccountCopies,undefined);
 });
+test('background sync copies an edited 25,017-character Playbook only to the selected secondary',async()=>{
+ const path='/workspace/playbooks/long.md';
+ const old='a'.repeat(25017), updated=old.slice(0,-1)+'b';
+ fixture({});
+ pbMuseAccounts={primaryId:'main',selectedId:'main',accounts:[{id:'main',primary:true},{id:'sub'},{id:'other'}]};
+ Object.assign(pbSyncState.settings,{aiProvider:'muse',aiPlaybookMuseAccountId:'main',museAutoReplyAccountIds:['sub'],
+  aiPlaybooks:[{...local,id:'long',musePath:path,content:old,museShareRevision:'old'}]});
+ const written=[];
+ pbSyncRequest=async(prompt,_signal,_key,_ctx,_priority,_start,account)=>{
+  if(account==='main'){
+   return JSON.stringify({files:[{path,contentBase64:Buffer.from(updated).toString('base64'),sha256:createHash('sha256').update(updated).digest('hex')}]});
+  }
+  assert.equal(account,'sub');
+  const [entry]=JSON.parse(prompt.split('Entries: ').at(-1));
+  assert.equal(pbSyncState.settings.aiPlaybooks[0].museAccountCopies?.sub,undefined);
+  written.push(entry.content.split('\n\n')[1]);
+  return JSON.stringify({root:'/workspace',files:[{...entry,path:'/workspace/WAP Plus CRM - Playbook/'+entry.id+'.md'}]});
+ };
+ await syncSelectedMusePlaybookCopies();
+ const [book]=pbSyncState.settings.aiPlaybooks;
+ assert.equal(written.join(''),updated);
+ assert.equal(book.museAccountCopies.sub.parts,9);
+ assert.equal(book.museAccountCopies.sub.revision,book.museShareRevision);
+ assert.equal(book.museAccountCopies.other,undefined);
+ const profile=resolvePlaybook({...pbSyncState.settings,aiPlaybookBindings:{'["wa","chat"]':'long'}},'wa','chat','sub');
+ assert.equal(profile.musePaths?.length,9);
+});
 test('Muse Base64 copy preserves source line endings and final newline exactly',async()=>{
  const path='/workspace/playbooks/stage.md',source='Line one\r\nLine two\r\n';
  fixture({files:[{path,contentBase64:Buffer.from(source).toString('base64'),sha256:createHash('sha256').update(source).digest('hex')}]});
  pbSyncState.settings.aiPlaybooks=[{id:'remote',name:'Stage',sourceName:'stage.md',content:'',summary:'',musePath:path}];
  await shareMusePlaybooks([path]);
  assert.equal(pbSyncState.settings.aiPlaybooks[0].content,source);
+});
+test('large Muse Playbooks split reads before Muse conversation handoff',async()=>{
+ const path='/workspace/playbooks/02.md',source='你'.repeat(68018)+'ab',bytes=Buffer.from(source),encoded=bytes.toString('base64'),sha256=createHash('sha256').update(bytes).digest('hex');
+ const calls=fixture({});pbSyncState.settings.aiPlaybooks=[{id:'remote',name:'02',sourceName:'02.md',content:'',summary:'',musePath:path}];
+ globalThis.pbSyncRequest=async(...args)=>{
+  calls.push(args);const prompt=args[0];
+  if(!prompt.includes('chunkIndex='))return JSON.stringify({files:[{path,sizeBytes:bytes.length,sha256}]});
+  const range=/\| cut -c (\d+)-(\d+)/.exec(prompt),indices=/chunkIndex=(\d+), chunkCount=(\d+)/.exec(prompt);
+  assert.ok(range&&indices);
+  const start=Number(range[1]),end=Number(range[2]);
+  return JSON.stringify({files:[{path,sizeBytes:bytes.length,sha256,chunkIndex:Number(indices[1]),chunkCount:Number(indices[2]),contentBase64:encoded.slice(start-1,end)}]});
+ };
+ await shareMusePlaybooks([path]);
+ assert.equal(pbSyncState.settings.aiPlaybooks.find(book=>book.musePath===path).content,source);
+ assert.equal(calls.length,24);
+ const keys=calls.map(call=>call[2]);
+ assert.equal(new Set(keys).size,3);
+ assert.equal(keys[0],keys[8]);assert.notEqual(keys[8],keys[9]);
+ assert.equal(keys[9],keys[16]);assert.notEqual(keys[16],keys[17]);
 });
 test('Muse source hash mismatch leaves the unsaved Playbook untouched',async()=>{
  const path='/workspace/playbooks/stage.md';fixture({files:[{path,contentBase64:Buffer.from('Unverified content').toString('base64'),sha256:createHash('sha256').update('different source').digest('hex')}]});
@@ -70,6 +117,9 @@ test('selected-folder manifests reject traversal, duplicate, outside and empty p
  const path='/workspace/playbooks/stage.md';assert.equal(parsePlaybookManifest(JSON.stringify(manifest([path])),'','playbooks').files[0].path,path);
  for(const paths of [[],[path,path],['/workspace/playbooks/../secret.md'],['/other/file.md'],['/workspace/other/file.md']])assert.throws(()=>parsePlaybookManifest(JSON.stringify(manifest(paths)),'','playbooks'));
  assert.throws(()=>parsePlaybookManifest(JSON.stringify(manifest([path])),'/different','playbooks'));
+});
+test('Muse rendered JSON code-card label is removed before parsing',()=>{
+ const path='/workspace/playbooks/stage.md';assert.equal(parsePlaybookManifest(`json\n${JSON.stringify(manifest([path]))}`,'','playbooks').files[0].path,path);
 });
 test('sync lists only the selected folder without retrieving contents or using a customer thread',async()=>{
  const calls=fixture(manifest(['/workspace/playbooks/stage.md']));assert.equal(await syncMusePlaybooks(),1);

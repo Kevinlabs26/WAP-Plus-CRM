@@ -96,13 +96,15 @@ test('outreach progress follows delivery immediately without waiting for the led
  h.state.messagesByChatId.chat=[{id:'out',deliveryStatus:'failed',lastError:'Delivery unknown',deliveryUncertain:true}];tree=h.render();assert.ok(tree.some(node=>node.props.role==='alert'&&text(node)==='Delivery unknown'));assert.equal(h.state.settings.aiOutreachRuns[0].status,'queued');
 });
 
-test('immediate round targets the selected folder and preserves its recurring time and quota',async()=>{
+test('immediate round switches the selected folder to one-time mode and preserves other folders',async()=>{
  const h=fixture();let tree=h.render();
  assert.equal(tree.find(node=>node.type==='button'&&text(node)==='aiOutreach.runNow').props.disabled,true);
  tree.find(node=>node.type==='select').props.onChange({target:{value:'f'}});tree=h.render();
  tree.find(node=>node.type==='button'&&text(node)==='aiOutreach.runNow').props.onClick();
  await new Promise(resolve=>setImmediate(resolve));
  assert.ok(h.state.settings.chatFolders[0].aiOutreach.runNowAt);
+ assert.equal(h.state.settings.chatFolders[0].aiOutreach.startMode,'immediate');
+ assert.equal(h.state.settings.chatFolders[0].aiOutreach.scheduleStartAt,undefined);
  assert.equal(h.state.settings.chatFolders[0].aiOutreach.time,'09:00');
  assert.equal(h.state.settings.chatFolders[0].aiOutreach.dailyLimit,10);
  assert.equal(h.state.settings.chatFolders[1].aiOutreach.runNowAt,undefined);

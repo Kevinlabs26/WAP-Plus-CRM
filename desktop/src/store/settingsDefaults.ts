@@ -51,7 +51,7 @@ import { resolveTranscriptionConfig, type TranscriptionProvider } from "@/lib/tr
 import { resolveTranslationConfig, type TranslationProvider } from "@/lib/translationConfig";
 import { DEFAULT_ACCOUNT_ID } from "@/types/account";
 import { normalizePromptTemplates, type AiPromptTemplate } from "@/lib/aiPromptScope";
-import { normalizeOutreachRule, normalizeOutreachRuns, type AiOutreachRule, type AiOutreachRun } from "@/lib/aiOutreachRules";
+import { isImmediateOutreach, nextScheduledOutreachAt, normalizeOutreachRule, normalizeOutreachRuns, type AiOutreachRule, type AiOutreachRun } from "@/lib/aiOutreachRules";
 import {
   DEFAULT_FOLLOW_UP_RULE_SETTINGS,
   type FollowUpRuleSetting,
@@ -1192,6 +1192,11 @@ export function normalizeLoadedSettings(
         seenPrimary.add(c);
         chatIds.push(c);
       }
+      const rawAiOutreach=f?.aiOutreach,aiOutreach=rawAiOutreach?normalizeOutreachRule(rawAiOutreach):undefined;
+      if(rawAiOutreach&&typeof rawAiOutreach==="object"&&!Array.isArray(rawAiOutreach)&&!("startMode" in rawAiOutreach)&&aiOutreach?.enabled){
+        if(isImmediateOutreach(aiOutreach)){aiOutreach.startMode="immediate";aiOutreach.scheduleStartAt=undefined;}
+        else{aiOutreach.runNowAt=undefined;aiOutreach.scheduleStartAt=nextScheduledOutreachAt(aiOutreach)??undefined;}
+      }
       return {
         id,
         name,
@@ -1211,7 +1216,7 @@ export function normalizeLoadedSettings(
         ...(typeof f?.aiPromptTemplateId === "string" && f.aiPromptTemplateId ? {aiPromptTemplateId: f.aiPromptTemplateId.slice(0,120)} : {}),
         ...(f?.aiPlaybookSchedule ? {aiPlaybookSchedule:normalizePlaybookSchedule(f.aiPlaybookSchedule)} : {}),
         ...(typeof f?.aiPlaybookId === "string" && f.aiPlaybookId ? {aiPlaybookId: f.aiPlaybookId.slice(0,120)} : {}),
-        ...(f?.aiOutreach ? {aiOutreach: normalizeOutreachRule(f.aiOutreach)} : {}),
+        ...(aiOutreach ? {aiOutreach} : {}),
         ...(typeof f?.aiReplyMaxChars==="number"&&Number.isFinite(f.aiReplyMaxChars)?{aiReplyMaxChars:Math.min(2000,Math.max(20,Math.round(f.aiReplyMaxChars)))}:{}),
         ...(Array.isArray(f?.aiReplyForbiddenTerms)?{aiReplyForbiddenTerms:[...new Set(f.aiReplyForbiddenTerms.filter((term):term is string=>typeof term==="string"&&!!term.trim()).map(term=>term.trim().slice(0,100)))].slice(0,50)}:{}),
         chatIds,

@@ -83,11 +83,12 @@ export function resolveAiReplyProfile(
   accountId?: string,
   chatId?: string,
   museAccountId?: string,
-  contactInstructions?: string
+  contactInstructions?: string,
+  useSourceFile = false
 ): AiReplyProfile {
   const profile = resolveBaseReplyProfile(settings, accountId, chatId);
   if (profile.error) return profile;
-  const playbook = resolvePlaybook(settings, accountId, chatId, museAccountId);
+  const playbook = resolvePlaybook(settings, accountId, chatId, museAccountId, useSourceFile);
   if (playbook.error) return {...profile, prompt: '', error: playbook.error};
   const instructions = contactInstructions?.trim();
   if (instructions && instructions.length > 4000) return {...profile, prompt: '', error: '联系人 AI 补充说明超过 4000 字符，请精简后重试'};
@@ -98,6 +99,7 @@ export function resolveAiReplyProfile(
   ]
     .filter(Boolean)
     .join("\n\n");
+  const resolved = {...profile, prompt, readMuseFiles: playbook.readMuseFiles, musePlaybookPaths:playbook.musePaths, museMaterials:playbook.museMaterials};
   return prompt.length > MAX_EFFECTIVE_PROMPT_CHARS
-    ? {...profile, prompt: '', error: '合并提示词和联系人补充说明后超过 24000 字符，请精简后重试'} : {...profile, prompt, readMuseFiles: playbook.readMuseFiles, musePlaybookPaths:playbook.musePaths, museMaterials:playbook.museMaterials};
+    ? {...resolved, prompt: '', error: '合并提示词和联系人补充说明后超过 24000 字符，请精简后重试'} : resolved;
 }

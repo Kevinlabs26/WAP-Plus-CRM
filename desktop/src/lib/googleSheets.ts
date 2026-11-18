@@ -221,7 +221,7 @@ async function refreshConnection(force:boolean,connectionId:string):Promise<void
   if (!force && (pauseReason || (retryAt && Date.now() < retryAt))) return;
   const fields = config.fields.filter(field => force || sheetRefreshDue(field.schedule, data[field.id]?.at || null, new Date()));
   if (!fields.length) return;
-    useGoogleSheets.setState({ busy: true });updateConnection(connectionId,{error:""});
+    updateConnection(connectionId,{error:""});
     try {
       const headers = config.headerRow ? await sheetHeaders(config.spreadsheet, config.tab, config.headerRow) : [];
       const indices = [config.phone, ...fields.map(field => field.column)].map(column => resolveSheetColumn(headers, column));
@@ -265,5 +265,4 @@ async function refreshConnection(force:boolean,connectionId:string):Promise<void
       const delay = Math.min(30 * 60_000, (hint === "sheets.error.quota" ? 5 * 60_000 : 60_000) * 2 ** Math.min(count - 1, 5));
       updateConnection(connectionId,{ error: message, failures: count, pauseReason, retryAt: pauseReason ? null : Date.now() + delay });
     }
-    finally { useGoogleSheets.setState({ busy: false }); }
 }

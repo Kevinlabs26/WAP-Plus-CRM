@@ -252,6 +252,10 @@ export function CampaignRunner() {
           state.pauseBroadcastCampaign(campaign.id);
           return;
         }
+        const selectionState = useAppStore.getState();
+        const selectedChat = selectionState.chats?.find(chat => chat.id === selectionState.selectedChatId);
+        // In the collapsed multi-account sidebar, keep the open transcript on this campaign's account.
+        if (selectedChat?.contactId === item.contactId) selectionState.setSelectedChat(chatId, accountId);
 
         const hasMedia = broadcastItemMedia(campaign, item).length > 0;
         const canSend = () => {

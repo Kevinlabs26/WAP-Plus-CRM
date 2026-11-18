@@ -7,7 +7,8 @@ import { useI18n } from "@/i18n";
 import { Textarea } from "@/components/ui/primitives";
 import { resolveFolderAiProfile } from "@/lib/aiPromptScope";
 import { AiOutreachControls } from "@/components/settings/AiOutreachControls";
-import { normalizeOutreachRule } from "@/lib/aiOutreachRules";
+import { nextScheduledOutreachAt, normalizeOutreachRule } from "@/lib/aiOutreachRules";
+import { tickAiOutreach } from "@/lib/aiOutreach";
 import { resolveAiReplyConstraints } from "@/lib/aiReplyConstraints";
 import { lastContactedAccounts, recipientKey } from "@/lib/scheduledPlans";
 import { resolveSendTarget } from "@/lib/utils";
@@ -18,6 +19,7 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
   const { t } = useI18n();
   const settings = useAppStore(state => state.settings);
   const folder = settings.chatFolders.find(item => item.id === folderId);
+  const originalOutreach=folder?.aiOutreach?normalizeOutreachRule(folder.aiOutreach):undefined;
   const [mode, setMode] = useState(folder?.aiPromptMode === "append" ? "append" : folder?.aiPromptMode === "inherit" ? "inherit" : folder?.aiSystemPrompt?.trim()||folder?.aiPromptTemplateId ? "custom" : "inherit");
   const [draft, setDraft] = useState(folder?.aiSystemPrompt || "");
   const [templateId,setTemplateId]=useState(folder?.aiPromptTemplateId||"");
@@ -51,17 +53,23 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
   const preview=resolveFolderAiProfile(draftSettings,folderId,accountId);
   const limits=resolveAiReplyConstraints(draftSettings,accountId,undefined,folderId);
   const invalid=!!(schedule&&scheduledPlaybook(settings.aiPlaybookPlans||[],schedule).error)||custom&&!draft.trim()&&!templateId||!!preview.error||forbiddenTerms.length>50||forbiddenTerms.some(term=>term.length>100)||!!maxChars&&(!Number.isInteger(Number(maxChars))||Number(maxChars)<20||Number(maxChars)>2000);
-  const save = (immediate = false) => {
-    if (invalid || immediate && (!outreach.enabled || outreach.paused || settings.aiAutoReplyPaused || settings.aiOutreachPaused)) return;
+  const immediate=outreach.enabled&&outreach.startMode==="immediate";
+  const save = () => {
+    if (invalid || immediate && (outreach.paused || settings.aiAutoReplyPaused || settings.aiOutreachPaused)) return;
     const current = useAppStore.getState();
+    const scheduleChanged=!originalOutreach||originalOutreach.enabled!==outreach.enabled||originalOutreach.paused!==outreach.paused||originalOutreach.startMode!==outreach.startMode||originalOutreach.time!==outreach.time||originalOutreach.timeZone!==outreach.timeZone;
+    const savedOutreach=!outreach.enabled?{...outreach,runNowAt:undefined,scheduleStartAt:undefined}
+      :immediate?{...outreach,runNowAt:Date.now(),scheduleStartAt:undefined}
+      :{...outreach,runNowAt:undefined,scheduleStartAt:scheduleChanged?nextScheduledOutreachAt(outreach)??undefined:outreach.scheduleStartAt};
     current.updateSettings({ chatFolders: current.settings.chatFolders.map(item => item.id === folderId
       ? { ...item, aiSystemPrompt: custom ? draft.trim().slice(0, 6000) : undefined,
-        aiPromptMode:mode==="custom"?"replace":mode as "append"|"inherit",aiPromptTemplateId:custom?templateId||undefined:undefined,aiPlaybookId:playbookId||undefined,aiPlaybookSchedule:schedule,aiOutreach:immediate?{...outreach,runNowAt:Date.now()}:outreach,...(hideReplyMode?{}:{autoReplyMode:replyMode==="inherit"?undefined:replyMode}),
+        aiPromptMode:mode==="custom"?"replace":mode as "append"|"inherit",aiPromptTemplateId:custom?templateId||undefined:undefined,aiPlaybookId:playbookId||undefined,aiPlaybookSchedule:schedule,aiOutreach:savedOutreach,...(hideReplyMode?{}:{autoReplyMode:replyMode==="inherit"?undefined:replyMode}),
         aiReplyMaxChars:maxChars?Number(maxChars):undefined,aiReplyForbiddenTerms:forbiddenTerms } : item) });
     if (immediate) {
       void flushPersist(useAppStore.getState).then(()=>{
         useAppStore.getState().pushToast(t("aiOutreach.runNowStarted"),"info");
         onClose();
+        void tickAiOutreach(Date.now(),true).catch(error=>useAppStore.getState().pushToast(String(error),"error"));
       }).catch(error=>useAppStore.getState().pushToast(String(error),"error"));
     } else onClose();
   };
@@ -133,7 +141,6 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
         {outreach.enabled&&<div className="space-y-2">
           {settings.aiAutoReplyPaused&&<p role="status" className="text-xs text-amber-500">{t("aiChat.paused")}</p>}
           {settings.aiOutreachPaused&&<p role="status" className="text-xs text-amber-500">{t("aiOutreach.masterPaused")}</p>}
-          <button type="button" disabled={invalid||!!outreach.paused||settings.aiAutoReplyPaused||settings.aiOutreachPaused} onClick={()=>save(true)} className="rounded-lg bg-brand px-3 py-2 text-xs text-[var(--brand-foreground)] disabled:opacity-40">{t("aiOutreach.saveRunNow")}</button>
         </div>}
         {outreach.enabled&&<AiOutreachPreview settings={draftSettings} folderIds={[folderId]} assumeRunning={settings.aiOutreachPaused}/>}
         <div className="grid gap-4 xl:grid-cols-2">
@@ -153,7 +160,7 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
         <footer className="flex shrink-0 justify-end gap-2 border-t border-zinc-800 px-6 py-3">
           <button type="button" className="rounded-lg px-3 py-2 text-xs text-zinc-400 hover:bg-zinc-800" onClick={onClose}>{t("dialog.cancel")}</button>
           <button type="button" className="rounded-lg bg-brand px-3 py-2 text-xs text-[var(--brand-foreground)] disabled:opacity-40"
-            disabled={invalid} onClick={()=>save()}>{t("dialog.save")}</button>
+            disabled={invalid||immediate&&(!!outreach.paused||settings.aiAutoReplyPaused||settings.aiOutreachPaused)} onClick={save}>{outreach.enabled?t(immediate?"aiOutreach.saveRunNow":"aiOutreach.saveScheduled"):t("dialog.save")}</button>
         </footer>
       </div>
     </div>

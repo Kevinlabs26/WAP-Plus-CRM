@@ -91,6 +91,25 @@ export async function readyMuseAutoReplyAccounts(accountIds?:readonly string[]):
 }
 export type MuseGeneratedMedia = { mimeType: "image/png"|"image/jpeg"|"image/webp"|"video/mp4"|"video/webm"; data: string };
 export type MuseWebOutput = { text?: string; media?: MuseGeneratedMedia };
+type ActiveMuseRequest = {id:string; accountId:string; startedAt:number; kind:string};
+let activeMuseRequests: ActiveMuseRequest[] = [];
+const activeMuseListeners = new Set<() => void>();
+const cancelledActiveMuseRequests = new Set<string>();
+export const getActiveMuseRequests = () => activeMuseRequests;
+export function subscribeActiveMuseRequests(listener: () => void) {
+  activeMuseListeners.add(listener);
+  return () => { activeMuseListeners.delete(listener); };
+}
+function setActiveMuseRequests(next: ActiveMuseRequest[]) {
+  activeMuseRequests = next;
+  activeMuseListeners.forEach(listener => listener());
+}
+export async function cancelActiveMuseRequest(requestId: string) {
+  if (activeMuseRequests.some(request => request.id === requestId)) {
+    cancelledActiveMuseRequests.add(requestId);
+    await native('muse_web_cancel', {requestId});
+  }
+}
 export type MuseReferenceImage = { mimeType: "image/jpeg"|"image/png"|"image/webp"; dataUrl: string };
 function parseMedia(media:{mimeType:string;dataUrl:string}):MuseGeneratedMedia {
   const match=/^data:(image\/(?:png|jpeg|webp)|video\/(?:mp4|webm));base64,([A-Za-z0-9+/]+={0,2})$/.exec(media.dataUrl||'');
@@ -103,7 +122,7 @@ export function collectMuseWebMedia(accountId?:string):Promise<MuseGeneratedMedi
 export async function generateMuseWebOutput(prompt:string,signal?:AbortSignal,conversationKey?:string,context?:MuseWebContext,referenceImage?:MuseReferenceImage | MuseReferenceImage[],expectMedia=false,priority=0,onStart?:()=>void,accountId?:string):Promise<MuseWebOutput> {
   const targetAccount=accountId||(await museWebAccounts()).selectedId;
   if(!museTrainingDisabledConfirmed(targetAccount))throw Error(musePrivacyGateMessage());
-  return enqueueMuseTask(expectMedia?'media':'text',async()=>{
+  return enqueueMuseTask(expectMedia?'media':'text',async(signal)=>{
     signal?.throwIfAborted();
     if(!museTrainingDisabledConfirmed(targetAccount))throw Error(musePrivacyGateMessage());
     onStart?.();
@@ -134,11 +153,15 @@ export async function generateMuseWebOutput(prompt:string,signal?:AbortSignal,co
     try {
       const referenceImages=Array.isArray(referenceImage)?referenceImage:referenceImage?[referenceImage]:[];
       if(referenceImages.length>2)throw Error('最多使用一张主体照片和一张风格参考图');
+      const kind = expectMedia ? 'media' : priority < 0 ? 'playbook' :
+        context ? (priority === 1 ? 'autoReply' : priority === 0 ? 'outreach' : 'suggestion') : 'other';
+      setActiveMuseRequests([...activeMuseRequests, {id:requestId, accountId:targetAccount, startedAt:Date.now(), kind}]);
       const result=await native<string|{text:string|null;media:{mimeType:string;dataUrl:string}|null;error:string|null;summaryRequests:number;summaryFailed:boolean}>('muse_web_generate',{accountId:targetAccount,requestId,prompt,conversationKey,context,referenceImage:null,referenceImages,expectMedia});
       if(typeof result==='object'&&result?.summaryRequests===1){
         await trackAiRequest({provider:'muse',model:'muse-web',feature:'context'},async()=>{if(result.summaryFailed)throw Error('Muse 续接摘要失败');}).catch(()=>undefined);
       }
       signal?.throwIfAborted();
+      if (cancelledActiveMuseRequests.has(requestId)) throw new DOMException('Muse 请求已取消', 'AbortError');
       if(typeof result==='object'&&result?.error)throw Error(result.error);
       const text=typeof result==='string'?result:result?.text;
       if(text!==null&&text!==undefined&&(typeof text!=='string'||text.length>512000))throw Error('Muse 返回内容无效');
@@ -148,7 +171,11 @@ export async function generateMuseWebOutput(prompt:string,signal?:AbortSignal,co
       }
       if(!(typeof text==='string'&&text.trim())&&!media)throw Error('Muse 没有返回文字或媒体');
       return { ...(typeof text==='string'&&text.trim()?{text}:{}), ...(media?{media}:{}) };
-    } finally {signal?.removeEventListener('abort',cancel);}
+    } finally {
+      cancelledActiveMuseRequests.delete(requestId);
+      signal?.removeEventListener('abort',cancel);
+      setActiveMuseRequests(activeMuseRequests.filter(request => request.id !== requestId));
+    }
   },signal,priority,targetAccount).catch(error=>{
     if(/login|登录/i.test(error instanceof Error?error.message:String(error)))checkedReadyAccounts.delete(targetAccount);
     throw error;

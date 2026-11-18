@@ -31,6 +31,7 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
   const chatFolders = useAppStore(s => s.settings.chatFolders);
   const [url, setUrl] = useState("");
   const [tabs, setTabs] = useState<string[]>([]);
+  const [tabListLoaded, setTabListLoaded] = useState(false);
   const [selectedTabs,setSelectedTabs]=useState<string[]>([]);
   const [tabDrafts,setTabDrafts]=useState<Record<string,TabDraft>>({});
   const [batchConnectionIds,setBatchConnectionIds]=useState<Record<string,string>>({});
@@ -47,17 +48,17 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
   const [busy, setBusy] = useState(false);
   const [draftReady, setDraftReady] = useState(false);
   useEffect(() => { void initializeSheets(); }, []);
-  useEffect(()=>{setConnectionId(null);setBatchAdd(false);setSelectedTabs([]);setTabDrafts({});setBatchConnectionIds({});setName("");},[allState.email]);
+  useEffect(()=>{setConnectionId(null);setBatchAdd(false);setSelectedTabs([]);setTabDrafts({});setBatchConnectionIds({});setName("");setTabListLoaded(false);},[allState.email]);
   useEffect(() => {
     setDraftReady(true);
     if (batchAdd) return;
     if (!state.config) {
-      setUrl(""); setTabs([]); setTab(""); setHeaders([]); setRow(1); setPhone(""); setFields([]); setPrimaryTagFieldId(""); setActions({});
+      setUrl(""); setTabs([]); setTabListLoaded(false); setTab(""); setHeaders([]); setRow(1); setPhone(""); setFields([]); setPrimaryTagFieldId(""); setActions({});
       setSelectedTabs([]); setTabDrafts({}); setBatchConnectionIds({});
       return;
     }
     setUrl(`https://docs.google.com/spreadsheets/d/${state.config.spreadsheet}/edit`);
-    setTabs([state.config.tab]); setTab(state.config.tab); setRow(state.config.headerRow);
+    setTabs([state.config.tab]); setTabListLoaded(false); setTab(state.config.tab); setRow(state.config.headerRow);
     setSelectedTabs([state.config.tab]); setTabDrafts({}); setBatchConnectionIds({});
     setFields(state.config.fields);
     setPrimaryTagFieldId(state.config.primaryTagFieldId || "");
@@ -67,6 +68,7 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
   const currentTabDraft: TabDraft = { name, row, phone, fields, primaryTagFieldId, actions, headers };
   const draft = { spreadsheet: spreadsheetId(url) || url.trim(), tab, headerRow: row, phone: { heading: phone }, fields, primaryTagFieldId: primaryTagFieldId || undefined, actions };
   const baseline = state.config ? { ...state.config, actions: state.config.actions || {} } : { spreadsheet: "", tab: "", headerRow: 1, phone: { heading: "" }, fields: [], actions: {} };
+  const existingConnectionForTab = (tabName: string) => connections.find(item => item.config.spreadsheet === spreadsheetId(url) && item.config.tab === tabName);
   const draftForTab = (tabName: string) => tabName === tab ? currentTabDraft : tabDrafts[tabName] || emptyTabDraft(tabName);
   const dirty = connectionId!==null&&draftReady && (JSON.stringify(draft) !== JSON.stringify(baseline)||name.trim()!==(connection?.name||"")||(batchAdd&&selectedTabs.length>0&&!connection)||(batchAdd&&!!connection&&selectedTabs.length>1));
   const canSave = draftReady && (batchAdd
@@ -81,14 +83,12 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
       if (batchAdd) {
         const drafts: Record<string, TabDraft> = { [tab]: currentTabDraft };
         const ids = { ...batchConnectionIds };
-        for (const tabName of selectedTabs) if (!ids[tabName]) ids[tabName] = tabName === tab ? connectionId || crypto.randomUUID() : crypto.randomUUID();
+        for (const tabName of selectedTabs) if (!ids[tabName]) ids[tabName] = existingConnectionForTab(tabName)?.id || (tabName === tab ? connectionId || crypto.randomUUID() : crypto.randomUUID());
         for (const tabName of selectedTabs) {
           if (tabName === tab) continue;
-          const targetHeaders = await sheetHeaders(spreadsheetId(url)!, tabName, row);
-          if (JSON.stringify(headers) !== JSON.stringify(targetHeaders)) throw new Error("Column headings changed. Please configure the mapping again.");
           const fieldIds = new Map(fields.map(field => [field.id, crypto.randomUUID()]));
           drafts[tabName] = {
-            ...(tabDrafts[tabName] || emptyTabDraft(tabName)), row, phone, headers: targetHeaders,
+            ...(tabDrafts[tabName] || emptyTabDraft(tabName)), row, phone,
             fields: fields.map(field => ({ ...field, id: fieldIds.get(field.id)!, column: { ...field.column }, schedule: { ...field.schedule } })),
             primaryTagFieldId: fieldIds.get(primaryTagFieldId) || "", actions: { ...actions },
           };
@@ -96,7 +96,7 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
         setBatchConnectionIds(ids);
         const configs=selectedTabs.map(tabName=>{
           const configDraft = drafts[tabName];
-          return {config:{spreadsheet:spreadsheetId(url)!,tab:tabName,headerRow:configDraft.row,phone:{heading:configDraft.phone},fields:configDraft.fields,primaryTagFieldId:configDraft.primaryTagFieldId||undefined,actions:configDraft.actions},connectionId:ids[tabName]!,name:configDraft.name||tabName};
+          return {config:{spreadsheet:spreadsheetId(url)!,tab:tabName,headerRow:configDraft.row,phone:{heading:configDraft.phone},fields:configDraft.fields,primaryTagFieldId:configDraft.primaryTagFieldId||undefined,actions:configDraft.actions},connectionId:ids[tabName]!,name:configDraft.name||connections.find(item=>item.id===ids[tabName])?.name||tabName};
         });
         await saveSheetConfigs(configs,new Set(configs.filter(config=>activeSheetIds.has(config.connectionId)).map(config=>config.connectionId)));
       } else {
@@ -145,7 +145,7 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
     setTagStyleEditor(null);
   }
   function tabsLoaded(names: string[]) {
-    setTabs(names);
+    setTabs(names); setTabListLoaded(true);
     if (!batchAdd) {
       const selected = names.includes(tab) ? tab : names[0] || "";
       setTab(selected); setHeaders([]);
@@ -153,13 +153,13 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
       return;
     }
     const retained = selectedTabs.filter(tabName => names.includes(tabName));
-    const nextSelected = retained.length || tabs.length ? retained : names.slice(0, 1);
+    const nextSelected = selectedTabs.length ? retained : names;
     const nextTab = nextSelected.includes(tab) ? tab : nextSelected[0] || "";
     const nextDrafts = { ...tabDrafts, ...(tab ? { [tab]: snapshotTabDraft() } : {}) };
     const nextIds = { ...batchConnectionIds };
     for (const [index, tabName] of nextSelected.entries()) {
       nextDrafts[tabName] ||= emptyTabDraft(tabName);
-      if (!nextIds[tabName]) nextIds[tabName] = !tab && index === 0 ? connectionId || crypto.randomUUID() : crypto.randomUUID();
+      if (!nextIds[tabName]) nextIds[tabName] = existingConnectionForTab(tabName)?.id || (!tab && index === 0 ? connectionId || crypto.randomUUID() : crypto.randomUUID());
     }
     setSelectedTabs(nextSelected); setTabDrafts(nextDrafts); setBatchConnectionIds(nextIds);
     if (nextTab && nextTab !== tab) restoreTabDraft(nextTab, nextDrafts[nextTab]);
@@ -181,7 +181,7 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
     const nextIds = { ...batchConnectionIds };
     for (const [index, tabName] of added.entries()) {
       nextDrafts[tabName] ||= emptyTabDraft(tabName);
-      if (!nextIds[tabName]) nextIds[tabName] = !tab && index === 0 ? connectionId || crypto.randomUUID() : crypto.randomUUID();
+      if (!nextIds[tabName]) nextIds[tabName] = existingConnectionForTab(tabName)?.id || (!tab && index === 0 ? connectionId || crypto.randomUUID() : crypto.randomUUID());
     }
     setTabDrafts(nextDrafts); setBatchConnectionIds(nextIds); setSelectedTabs(current => [...current, ...added]);
     if ((activate || !tab) && added[0]) restoreTabDraft(added[0], nextDrafts[added[0]]);
@@ -200,10 +200,15 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
   function clearBatchTabs() {
     setSelectedTabs([]); setTabDrafts({}); setBatchConnectionIds({}); setTab(""); setName(""); setRow(1); setPhone(""); setFields([]); setPrimaryTagFieldId(""); setActions({}); setHeaders([]);
   }
+  function selectCurrentTabOnly() {
+    if (!tab || !tabs.includes(tab)) return;
+    setSelectedTabs([tab]); setTabDrafts({ [tab]: snapshotTabDraft() });
+    setBatchConnectionIds(current => ({ [tab]: current[tab] || existingConnectionForTab(tab)?.id || connectionId || crypto.randomUUID() }));
+  }
   async function editConnection(id:string|null,label="",multiple=false){
     if(id===connectionId)return;
     if(dirty&&!await requestConfirm({title:t("sheets.discardTitle"),description:t("sheets.discardHint"),confirmLabel:t("sheets.discard"),tone:"danger"}))return;
-    setDraftReady(false);setConnectionId(id);setBatchAdd(multiple);setSelectedTabs([]);setTabDrafts({});setBatchConnectionIds({});setTabSearch("");setName(label);setError("");
+    setDraftReady(false);setConnectionId(id);setBatchAdd(multiple);setSelectedTabs([]);setTabDrafts({});setBatchConnectionIds({});setTabListLoaded(false);setTabSearch("");setName(label);setError("");
     const existing = multiple ? connections.find(item => item.id === id) : undefined;
     if(existing){
       const config=existing.config,selected=config.tab;
@@ -241,10 +246,16 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
       <fieldset disabled={busy || state.busy} className="space-y-4 border-t border-zinc-800 pt-4 disabled:opacity-60">
         <SectionLabel className="flex items-center gap-2"><Link2 className="h-3.5 w-3.5" />{t("sheets.sourceStep")}</SectionLabel>
         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-          <label className="block min-w-0 text-xs">{t("sheets.url")}<input className="ui-control mt-1 w-full min-w-0 px-3 py-2 text-sm leading-5 font-normal" value={url} onChange={e => { setUrl(e.target.value); setHeaders([]); setTabs([]); setFields([]); setPrimaryTagFieldId(""); setActions({}); if (batchAdd) { setSelectedTabs([]); setTabDrafts({}); setBatchConnectionIds({}); setTab(""); setName(""); setRow(1); setPhone(""); } }} placeholder="https://docs.google.com/spreadsheets/d/…" /></label>
+          <label className="block min-w-0 text-xs">{t("sheets.url")}<input className="ui-control mt-1 w-full min-w-0 px-3 py-2 text-sm leading-5 font-normal" value={url} onChange={e => { setUrl(e.target.value); setHeaders([]); setTabs([]); setTabListLoaded(false); setFields([]); setPrimaryTagFieldId(""); setActions({}); if (batchAdd) { setSelectedTabs([]); setTabDrafts({}); setBatchConnectionIds({}); setTab(""); setName(""); setRow(1); setPhone(""); } }} placeholder="https://docs.google.com/spreadsheets/d/…" /></label>
           <Button variant="secondary" className="sm:min-w-40" disabled={busy || state.busy || !spreadsheetId(url)} onClick={() => void run(async () => { const result = await readSheet(spreadsheetId(url)!); tabsLoaded(result.sheets?.map(sheet => sheet.properties.title) || []); })}>{t("sheets.load")}</Button>
         </div>
         {tabs.length > 0 && (batchAdd ? <div className="space-y-3 border-t border-zinc-800/70 pt-3">
+          <div className="flex flex-wrap gap-2" role="group" aria-label={t("sheets.selectedTabs", { count: selectedTabs.length })}>
+            <Button size="xs" variant={selectedTabs.length === 1 && selectedTabs[0] === tab ? "primary" : "secondary"} aria-pressed={selectedTabs.length === 1 && selectedTabs[0] === tab} onClick={selectCurrentTabOnly}>{t("sheets.onlyCurrentTab")}</Button>
+            {(!connection || tabListLoaded)
+              ? <Button size="xs" variant={selectedTabs.length === tabs.length ? "primary" : "secondary"} aria-pressed={selectedTabs.length === tabs.length} onClick={() => { setTabSearch(""); addBatchTabs(tabs); }}>{t("sheets.allTabs")}</Button>
+              : <span className="self-center text-xs text-zinc-500">{t("sheets.loadTabsFirst")}</span>}
+          </div>
           <details className="border-b border-zinc-800/70 pb-3">
             <summary className="cursor-pointer py-2 text-xs font-medium">{t("sheets.selectedTabs", { count: selectedTabs.length })}</summary>
             <div className="space-y-2 pt-2">
@@ -265,7 +276,7 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
           {selectedTabs.length > 0 && <div className="flex flex-wrap gap-1.5">
             {selectedTabs.map(tabName => <button key={tabName} type="button" aria-pressed={tab === tabName} className={`inline-flex max-w-48 items-center gap-1 rounded-full border px-2.5 py-1 text-xs ${tab === tabName ? "border-brand/40 bg-brand/10 text-brand" : "border-zinc-800 text-zinc-400 hover:bg-zinc-800"}`} onClick={() => switchBatchTab(tabName)}>{validTabDraft(draftForTab(tabName), tabName, url) && <Check className="h-3 w-3 shrink-0 text-emerald-500" />}<span className="min-w-0 truncate">{tabName}</span></button>)}
           </div>}
-          {selectedTabs.length > 1 && <p className="text-xs text-zinc-500">{t("sheets.batchConfigHint")}</p>}
+          <p className="text-xs text-zinc-500">{t("sheets.batchConfigHint")}</p>
           {selectedTabs.includes(tab) && <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_8rem_auto] sm:items-end">
             <label className="block min-w-0 text-xs">{t("sheets.tab")}<input className="ui-control mt-1 block w-full px-3 py-2 text-sm leading-5 font-normal" value={tab} readOnly /></label>
             <label className="block text-xs">{t("sheets.header")}<input type="number" min={1} max={1000} className="ui-control mt-1 block w-full px-3 py-2 text-sm leading-5 font-normal" value={row} onChange={e => { setRow(Number(e.target.value)); setHeaders([]); setFields([]); setPrimaryTagFieldId(""); setActions({}); }} /></label>

@@ -12,6 +12,7 @@ const mocks = {
   '@/components/settings/AiPromptLibrary':'export const AiPromptLibrary="prompt-library";',
   '@/components/settings/AiOutreachControls':'export const AiOutreachControls="outreach-controls";',
   '@/components/settings/AiOutreachPreview':'export const AiOutreachPreview="outreach-preview";',
+  '@/lib/aiOutreach':'export const tickAiOutreach=async()=>{};',
   '@/store/appStore': 'export const flushPersist=async()=>{};export const useAppStore=selector=>selector(globalThis.folderAiState);useAppStore.getState=()=>globalThis.folderAiState;',
 };
 const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/layout/FolderAiPromptDialog.tsx',import.meta.url))],
@@ -117,9 +118,9 @@ test('choosing a template from inherited mode appends it without enabling automa
  assert.equal(folder.aiPromptMode,'append');assert.equal(folder.aiPromptTemplateId,'t');assert.equal(folder.autoReplyMode,undefined);assert.equal(folder.aiOutreach.enabled,false);
 });
 
-test('folder can save and start a round from its own dialog without changing its recurring schedule',async()=>{
+test('folder can save a one-time immediate round without showing its daily schedule',async()=>{
  const h=harness('',state=>{
-  state.settings.chatFolders[1].aiOutreach={enabled:true,mode:'auto',trigger:'both',time:'22:55',timeZone:'UTC',dailyLimit:10,minIdleHours:12,goal:''};
+  state.settings.chatFolders[1].aiOutreach={enabled:true,mode:'auto',startMode:'immediate',runNowAt:Date.now(),trigger:'both',time:'22:55',timeZone:'UTC',dailyLimit:10,minIdleHours:12,goal:''};
   state.pushToast=()=>{};
  });
  const button=()=>h.nodes().find(n=>n.type==='button'&&n.props.children==='aiOutreach.saveRunNow');
@@ -127,7 +128,7 @@ test('folder can save and start a round from its own dialog without changing its
  h.click('aiOutreach.saveRunNow');
  await new Promise(resolve=>setImmediate(resolve));
  const rule=h.state.settings.chatFolders[1].aiOutreach;
- assert.ok(rule.runNowAt);assert.equal(rule.time,'22:55');assert.equal(rule.goal,'');assert.equal(h.closed,1);
+ assert.ok(rule.runNowAt);assert.equal(rule.startMode,'immediate');assert.equal(rule.scheduleStartAt,undefined);assert.equal(rule.time,'22:55');assert.equal(rule.goal,'');assert.equal(h.closed,1);
  h.state.settings.aiOutreachPaused=true;h.render();assert.equal(button().props.disabled,true);
 });
 test('saving a prompt preserves the selected folder account scope and other folders',()=>{const h=harness('CURRENT');const scopes=h.state.settings.chatFolders.map(f=>f.scope);h.type('UPDATED');h.click('dialog.save');assert.deepEqual(h.state.settings.chatFolders.map(f=>f.scope),scopes);assert.equal(h.state.settings.chatFolders.find(f=>f.id==='f').aiSystemPrompt,'UPDATED');});

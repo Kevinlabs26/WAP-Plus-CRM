@@ -83,7 +83,8 @@ export function getSuggestionContextKey(
   const prompt = profile.prompt;
   const usesMuse = settings.aiProvider === "muse" || !!(opts?.outreach && settings.aiOutreachMuseAccountId);
   return JSON.stringify([
-    contact?.id || "", chatId || "", profile.folderId || "", profile.primaryFolderIds, profile.error,resolveAiReplyConstraints(settings,accountId||contact?.accountId,chatId),
+    contact?.id || "", chatId || "", profile.folderId || "", profile.primaryFolderIds, profile.error,
+    profile.error ? profile.museMaterials : undefined, resolveAiReplyConstraints(settings,accountId||contact?.accountId,chatId),
     accountId || contact?.accountId || "",
     settings.aiProvider, settings.aiModel, settings.customAiModel,
     settings.customAiBaseUrl, settings.ollamaUrl,
@@ -103,7 +104,8 @@ export async function generateSuggestions(
   contact: Contact | undefined,
   recent: Message[],
   settings: AppSettings,
-  opts?: { auto?: boolean; count?: 1 | 3; accountId?: string; chatId?: string; replyTo?: Message; signal?: AbortSignal; outreach?: string; outreachDecision?: boolean; allowSidebarData?: boolean; onProgress?: (result: GenerateSuggestionsResult) => void; onMuseQueue?:(running:boolean)=>void }
+  opts?: { auto?: boolean; count?: 1 | 3; accountId?: string; chatId?: string; replyTo?: Message; signal?: AbortSignal; outreach?: string; outreachDecision?: boolean; allowSidebarData?: boolean; onProgress?: (result: GenerateSuggestionsResult) => void; onMuseQueue?:(running:boolean)=>void },
+  usePrimaryPlaybook = false
 ): Promise<GenerateSuggestionsResult> {
   const name = contact?.name ?? "there";
   const sorted = [...recent].sort((a, b) => a.sentAt.localeCompare(b.sentAt));
@@ -115,9 +117,21 @@ export async function generateSuggestions(
     opts?.accountId || contact?.accountId,
     opts?.chatId || opts?.replyTo?.chatId || recent[0]?.chatId,
     undefined,
-    contact?.aiChatInstructions
+    contact?.aiChatInstructions,
+    usePrimaryPlaybook
   );
-  if(provider==="muse"&&profile.readMuseFiles){
+  const primaryFallback = async (primaryId: string) => {
+    if (opts?.signal?.aborted || !primaryId || primaryId !== settings.aiPlaybookMuseAccountId) return;
+    const source = resolveAiReplyProfile(settings, opts?.accountId || contact?.accountId,
+      opts?.chatId || opts?.replyTo?.chatId || recent[0]?.chatId, undefined, contact?.aiChatInstructions, true);
+    if (!source.error && source.readMuseFiles) return generateSuggestions(contact, recent, settings, opts, true);
+  };
+  if (provider === "muse" && opts?.auto && !opts.outreach && !usePrimaryPlaybook &&
+      settings.aiPlaybookMuseMode !== "shared" && profile.readMuseFiles) {
+    const fallback = await primaryFallback(settings.aiPlaybookMuseAccountId || "");
+    if (fallback) return fallback;
+  }
+  if(provider==="muse"&&profile.readMuseFiles&&!usePrimaryPlaybook){
     try{
       const { shareMusePlaybooks } = await import("./musePlaybookSync.ts");
       const { useAppStore } = await import("@/store/appStore");
@@ -125,40 +139,85 @@ export async function generateSuggestions(
       settings=useAppStore.getState().settings;
       profile=resolveAiReplyProfile(settings,opts?.accountId||contact?.accountId,opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId,undefined,contact?.aiChatInstructions);
     }catch(error){
+      if (opts?.auto && !opts.outreach) {
+        const fallback = await primaryFallback(settings.aiPlaybookMuseAccountId || "");
+        if (fallback) return fallback;
+      }
       return {suggestions:[],source:"muse",fallback:true,error:error instanceof Error?error.message:String(error)};
     }
   }
   let museAccountId:string|undefined;
+  let primaryMuseId = "";
+  let useMuseWorkspacePlaybook=false;
   if(provider==="muse"){
     try{
       const workspaceMode=settings.aiPlaybookMuseMode!=="shared";
       const pool=await museWebAccounts();
-      if(opts?.outreach){
-        museAccountId=settings.aiOutreachMuseAccountId||pool.selectedId||pool.primaryId||pool.accounts[0]?.id;
+      primaryMuseId = pool.primaryId;
+      if (usePrimaryPlaybook) {
+        if (!primaryMuseId || primaryMuseId !== settings.aiPlaybookMuseAccountId || !profile.readMuseFiles)
+          throw Error("主 Muse 账号与 Playbook 来源不一致，请重新同步 Workspace");
+        museAccountId = primaryMuseId;
+      } else if(opts?.outreach){
+        museAccountId=settings.aiOutreachMuseAccountId||pool.primaryId||pool.selectedId||pool.accounts[0]?.id;
         if(!museAccountId||!pool.accounts.some(account=>account.id===museAccountId))throw Error("主动联系没有可用的 Muse 账号，请在 Muse 账号池中选择一个账号");
       }else if(opts?.auto){
         museAccountId=await nextMuseAutoReplyAccount(settings.museAutoReplyAccountIds??undefined);
         if(!museAccountId)throw Error("没有已勾选且可用的 Muse 自动回复账号：请确认账号已登录可用，并已确认关闭模型训练");
       }else museAccountId=pool.selectedId;
-      if(workspaceMode&&profile.museMaterials?.length){
+      if(!usePrimaryPlaybook&&workspaceMode&&profile.museMaterials?.length){
         const { trainMuseAccountPlaybooks } = await import("./musePlaybookSync.ts");
         const { useAppStore } = await import("@/store/appStore");
         const materials=profile.museMaterials;
-        for(const accountId of await readyMuseAutoReplyAccounts(settings.museAutoReplyAccountIds??undefined))if(accountId!==museAccountId)void trainMuseAccountPlaybooks(accountId,materials).catch(()=>undefined);
-        await trainMuseAccountPlaybooks(museAccountId,materials,opts?.signal);
-        settings=useAppStore.getState().settings;
+        if (opts?.auto && !opts.outreach) {
+          const copy = resolveAiReplyProfile(settings, opts.accountId || contact?.accountId,
+            opts.chatId || opts.replyTo?.chatId || recent[0]?.chatId, museAccountId, contact?.aiChatInstructions);
+          if (!copy.error && copy.readMuseFiles) useMuseWorkspacePlaybook = true;
+          else {
+            const fallback = await primaryFallback(primaryMuseId);
+            if (fallback) return fallback;
+          }
+        }
+        if (!useMuseWorkspacePlaybook) {
+          for(const accountId of await readyMuseAutoReplyAccounts(settings.museAutoReplyAccountIds??undefined))if(accountId!==museAccountId)void trainMuseAccountPlaybooks(accountId,materials).catch(()=>undefined);
+          try{await trainMuseAccountPlaybooks(museAccountId,materials,opts?.signal);useMuseWorkspacePlaybook=true;}
+          catch(error){
+            if(opts?.signal?.aborted)throw error;
+            settings=useAppStore.getState().settings;
+            const inline=resolveAiReplyProfile(settings,opts?.accountId||contact?.accountId,opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId,undefined,contact?.aiChatInstructions);
+            if(inline.error||inline.readMuseFiles)throw Error(inline.error||"主 Muse Playbook 原文尚未读取，无法交给副号使用");
+            console.warn("[muse-playbook] Workspace 副本未通过校验，本次改用 CRM 中的原文",error);
+          }
+          settings=useAppStore.getState().settings;
+        }
       }
-      profile=resolveAiReplyProfile(settings,opts?.accountId||contact?.accountId,opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId,workspaceMode?museAccountId:undefined,contact?.aiChatInstructions);
+      if (!usePrimaryPlaybook) profile=resolveAiReplyProfile(settings,opts?.accountId||contact?.accountId,opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId,workspaceMode&&useMuseWorkspacePlaybook?museAccountId:undefined,contact?.aiChatInstructions);
     }catch(error){
+      if (!usePrimaryPlaybook && opts?.auto && !opts.outreach) {
+        const fallback = await primaryFallback(primaryMuseId);
+        if (fallback) return fallback;
+      }
       return {suggestions:[],source:"muse",fallback:true,error:error instanceof Error?error.message:String(error)};
     }
   }
-  if (profile.error) return {suggestions:[],source:"mock",fallback:true,error:profile.error};
+  if (profile.error) {
+    if (!usePrimaryPlaybook && opts?.auto && !opts.outreach && profile.museMaterials?.length) {
+      const fallback = await primaryFallback(primaryMuseId);
+      if (fallback) return fallback;
+    }
+    return {suggestions:[],source:"mock",fallback:true,error:profile.error};
+  }
   const prompt = profile.prompt;
   const chatId=opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId,accountId=opts?.accountId||contact?.accountId;
   const constraints=resolveAiReplyConstraints(settings,accountId,chatId);
   const effectivePrompt=constraints.maxChars||constraints.forbiddenTerms.length ? `${prompt}\n\nProgram-enforced reply constraints: ${JSON.stringify(constraints)}. Respect these limits in every text.` : prompt;
-  if(effectivePrompt.length>MAX_EFFECTIVE_PROMPT_CHARS)return {suggestions:[],source:"mock",fallback:true,error:"提示词和硬性约束合计超过 24000 字符，请精简后重试"};
+  if (effectivePrompt.length > MAX_EFFECTIVE_PROMPT_CHARS) {
+    if (!usePrimaryPlaybook && opts?.auto && !opts.outreach && profile.museMaterials?.length) {
+      const fallback = await primaryFallback(primaryMuseId);
+      if (fallback) return fallback;
+    }
+    return {suggestions:[],source:"mock",fallback:true,error:"提示词和硬性约束合计超过 24000 字符，请精简后重试"};
+  }
   const effectiveSettings =
     effectivePrompt === settings.aiSystemPrompt ? settings : { ...settings, aiSystemPrompt: effectivePrompt };
   const finish=(suggestions:SuggestResult[],source:AiSource):GenerateSuggestionsResult=>{
@@ -229,14 +288,21 @@ export async function generateSuggestions(
         opts?.onMuseQueue?.(false);
         const raw=await generateMuseWeb(musePrompt,opts?.signal,conversationKey,context,opts?.outreach?0:opts?.auto?1:2,()=>opts?.onMuseQueue?.(true),museAccountId);
         if(raw.includes('PLAYBOOK_SOURCE_UNAVAILABLE')){
-          if(museAccountId) {
+          if(museAccountId && useMuseWorkspacePlaybook) {
             const { forgetMuseAccountPlaybookCopies } = await import("./musePlaybookSync.ts");
             await forgetMuseAccountPlaybookCopies(museAccountId,profile.museMaterials?.map(item=>item.id)||[]);
           }
-          throw Error('所选 Muse Workspace 文件无法读取（404），已清除该副本记录，下次会自动重新训练');
+          return 'PLAYBOOK_SOURCE_UNAVAILABLE';
         }
         return raw;
       });
+      if (raw === 'PLAYBOOK_SOURCE_UNAVAILABLE') {
+        if (!usePrimaryPlaybook && opts?.auto && !opts.outreach) {
+          const fallback = await primaryFallback(primaryMuseId);
+          if (fallback) return fallback;
+        }
+        throw Error('所选 Muse Workspace 文件无法读取（404），请检查 Playbook');
+      }
       if(opts?.outreachDecision){
         const decision=parseOutreachDecision(raw);
         if(decision.action==="skip")return {suggestions:[],source:"muse",fallback:false,outreachDecision:decision};

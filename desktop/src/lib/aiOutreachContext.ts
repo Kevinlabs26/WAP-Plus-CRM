@@ -42,6 +42,8 @@ export function inspectOutreachCandidate(state: OutreachState, folderId: string,
   if(settings.sendChannel!=="baileys")return {candidate:null,reason:"unsupported_channel"};
   if(!hasRealAiKey(settings)&&!settings.aiOutreachMuseAccountId)return {candidate:null,reason:"missing_ai"};
   const rule=lookup?.rule||normalizeOutreachRule(folder.aiOutreach);
+  if(rule.startMode==="immediate"&&!isImmediateOutreach(rule,now)&&!runId)return {candidate:null,reason:"disabled"};
+  if(rule.startMode==="scheduled"&&rule.scheduleStartAt!==undefined&&now<rule.scheduleStartAt)return {candidate:null,reason:"not_time"};
   const chat=lookup?.chat||state.chats.find(item=>item.id===chatId),contact=lookup?.contact||state.contacts.find(item=>item.id===chat?.contactId);
   if (!chat||!contact||chat.id!==chatId||contact.id!==chat.contactId||chat.isGroup||contact.isGroup||chat.localOnly) return {candidate:null,reason:"invalid_contact"};
   const recipient=resolveSendTarget({phone:contact.phone,channelAddress:contact.channelAddress,entityId:contact.id});
@@ -85,7 +87,8 @@ export function outreachCandidate(...args:Parameters<typeof inspectOutreachCandi
 export function outreachContextKey(state: OutreachState, folderId:string,chatId:string,runId:string,now=Date.now(),ownMessage?:Message) {
   const candidate=outreachCandidate(state,folderId,chatId,now,runId,ownMessage,undefined,!!ownMessage);
   if (!candidate) return null;
-  return JSON.stringify([folderId,chatId,candidate.accountId,candidate.recipient,candidate.day,candidate.basisAt,candidate.rule,
+  const rule={...candidate.rule,scheduleStartAt:undefined};
+  return JSON.stringify([folderId,chatId,candidate.accountId,candidate.recipient,candidate.day,candidate.basisAt,rule,
     state.settings.aiOutreachMuseAccountId,
     getSuggestionContextKey(candidate.contact,candidate.thread,state.settings,candidate.accountId,{auto:true,chatId,outreach:outreachGoal(candidate.rule),outreachDecision:state.settings.aiProvider==="muse"||!!state.settings.aiOutreachMuseAccountId,allowSidebarData:candidate.rule.allowSidebarData===true})]);
 }

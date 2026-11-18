@@ -405,8 +405,23 @@ test('the native adapter serializes customers and aborts queued requests without
 test('cancelling an active adapter request is scoped and a late reply is never returned',async()=>{
  const calls=[];let resolve;
  globalThis.museNative=async(cmd,args)=>{calls.push([cmd,args]);if(cmd==='muse_web_generate')return new Promise(r=>resolve=r);};
- const controller=new AbortController();const result=client.generateMuseWeb('customer',controller.signal);await new Promise(r=>setImmediate(r));controller.abort();await new Promise(r=>setImmediate(r));
- assert.equal(calls[1][0],'muse_web_cancel');assert.equal(calls[1][1].requestId,calls[0][1].requestId);resolve('late reply');await assert.rejects(result,/abort/i);
+ const controller=new AbortController();const result=client.generateMuseWeb('customer',controller.signal);
+ const rejected=assert.rejects(result,/abort/i);
+ await new Promise(r=>setImmediate(r));controller.abort();await new Promise(r=>setImmediate(r));
+ assert.equal(calls[1][0],'muse_web_cancel');assert.equal(calls[1][1].requestId,calls[0][1].requestId);resolve('late reply');await rejected;
+});
+test('manual cancellation discards a late native success',async()=>{
+ let finish;
+ globalThis.museNative=async(cmd)=>cmd==='muse_web_generate'?new Promise(resolve=>finish=resolve):undefined;
+ const result=client.generateMuseWeb('test request');
+ const rejected=assert.rejects(result,{name:'AbortError'});
+ await new Promise(resolve=>setImmediate(resolve));
+ const [request]=client.getActiveMuseRequests();
+ assert.ok(request);
+ await client.cancelActiveMuseRequest(request.id);
+ finish('late success');
+ await rejected;
+ assert.equal(client.getActiveMuseRequests().length,0);
 });
 test('handoff generations are counted separately with unknown tokens, including failed summaries',async()=>{
  globalThis.museNative=async()=>({text:'New reply',error:null,summaryRequests:1,summaryFailed:false});

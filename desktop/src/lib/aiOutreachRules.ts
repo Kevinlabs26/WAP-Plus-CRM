@@ -1,6 +1,6 @@
 export type AiOutreachRule = {
   enabled: boolean; paused?: boolean; mode: "draft" | "auto"; allowSidebarData?: boolean;
-  time: string; timeZone: string; goal: string; runNowAt?: number;
+  startMode: "scheduled" | "immediate"; time: string; timeZone: string; goal: string; runNowAt?: number; scheduleStartAt?: number;
 };
 export type AiOutreachRun = {
   id: string; folderId: string; chatId: string; accountId: string; day: string; at: string;
@@ -12,9 +12,10 @@ export type AiOutreachRun = {
 export const outreachGoal = (rule: AiOutreachRule) => rule.goal || "Initiate or resume contact naturally, following the configured conversation instructions. Respect the conversation history and any request to stop.";
 export function normalizeOutreachRule(raw: unknown): AiOutreachRule {
   const value = raw && typeof raw === "object" ? raw as Partial<AiOutreachRule> : {};
+  const runNowAt=typeof value.runNowAt === "number" && Number.isFinite(value.runNowAt) ? value.runNowAt : undefined;
   let zone = typeof value.timeZone === "string" ? value.timeZone : "UTC";
   try {new Intl.DateTimeFormat("en",{timeZone:zone});} catch {zone="UTC";}
-  return {...(typeof value.runNowAt === "number" && Number.isFinite(value.runNowAt) ? {runNowAt:value.runNowAt} : {}), ...(value.allowSidebarData===true?{allowSidebarData:true}:{}), enabled: value.enabled === true, ...(value.paused===true?{paused:true}:{}), mode: value.mode === "auto" ? "auto" : "draft",
+  return {...(runNowAt!==undefined?{runNowAt}:{}), ...(typeof value.scheduleStartAt==="number"&&Number.isFinite(value.scheduleStartAt)?{scheduleStartAt:value.scheduleStartAt}:{}), ...(value.allowSidebarData===true?{allowSidebarData:true}:{}), enabled: value.enabled === true, ...(value.paused===true?{paused:true}:{}), mode: value.mode === "auto" ? "auto" : "draft", startMode:value.startMode==="immediate"&&runNowAt!==undefined?"immediate":"scheduled",
     time: typeof value.time === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value.time) ? value.time : "09:00", timeZone: zone,
     goal: typeof value.goal === "string" ? value.goal.trim().slice(0,2000) : ""};
 }
@@ -50,14 +51,17 @@ export function isImmediateOutreach(rule: {runNowAt?:number}, now=Date.now()): b
   return typeof rule.runNowAt === "number" && now >= rule.runNowAt && now - rule.runNowAt < 2 * 3600_000;
 }
 
-export function outreachRunClock(rule:Pick<AiOutreachRule,"time"|"timeZone"|"runNowAt">,now=Date.now()) {
+export function outreachRunClock(rule:Pick<AiOutreachRule,"time"|"timeZone"|"runNowAt"|"startMode">,now=Date.now()) {
   const clock=outreachClock(rule.timeZone,now);
+  if(rule.startMode==="immediate"&&typeof rule.runNowAt==="number")return {...clock,day:outreachClock(rule.timeZone,rule.runNowAt).day};
   if(isImmediateOutreach(rule,now))return {...clock,day:outreachClock(rule.timeZone,rule.runNowAt!).day};
   return clock;
 }
 
 /** Search actual instants so missing and repeated daylight-saving hours follow the runner's schedule. */
-export function nextOutreachWindow(rule:Pick<AiOutreachRule,"time"|"timeZone"|"runNowAt">,now=Date.now(),skipToday=false):number|null {
+export function nextOutreachWindow(rule:Pick<AiOutreachRule,"time"|"timeZone"|"runNowAt"|"startMode"|"scheduleStartAt">,now=Date.now(),skipToday=false):number|null {
+  if(rule.startMode==="immediate")return !skipToday&&isImmediateOutreach(rule,now)?now:null;
+  if(!skipToday&&rule.scheduleStartAt!==undefined&&now<rule.scheduleStartAt)return rule.scheduleStartAt;
   if (!skipToday && isImmediateOutreach(rule,now)) return now;
   const today=outreachClock(rule.timeZone,now).day;
   const current=outreachClock(rule.timeZone,now);
@@ -67,4 +71,8 @@ export function nextOutreachWindow(rule:Pick<AiOutreachRule,"time"|"timeZone"|"r
     if(clock.time>=rule.time&&(!skipToday||clock.day>today))return at;
   }
   return null;
+}
+export function nextScheduledOutreachAt(rule:Pick<AiOutreachRule,"time"|"timeZone">,now=Date.now()) {
+  const current=outreachClock(rule.timeZone,now);
+  return nextOutreachWindow({...rule,startMode:"scheduled" as const},now,current.time>rule.time);
 }

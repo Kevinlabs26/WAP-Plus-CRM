@@ -189,14 +189,16 @@ export function SettingsAutoReplyPanel() {
             <SectionLabel>{t("settingsAutoReply.followUpTitle")}</SectionLabel>
             <p className="mt-1 text-2xs text-zinc-500">{t("settingsAutoReply.followUpHint")}</p>
           </div>
-          <Switch
-            checked={settings.aiAutoFollowUpEnabled}
-            aria-label={t("settingsAutoReply.followUpTitle")}
-            disabled={!settings.aiAutoFollowUpEnabled && !followUpConfigured}
-            onChange={event => updateSettings(event.target.checked
-              ? { aiAutoFollowUpEnabled: true, aiAutoFollowUpEnabledAt: Date.now() }
-              : { aiAutoFollowUpEnabled: false })}
-          />
+          <label className="inline-flex cursor-pointer">
+            <Switch
+              checked={settings.aiAutoFollowUpEnabled}
+              aria-label={t("settingsAutoReply.followUpTitle")}
+              disabled={!settings.aiAutoFollowUpEnabled && !followUpConfigured}
+              onChange={event => updateSettings(event.target.checked
+                ? { aiAutoFollowUpEnabled: true, aiAutoFollowUpEnabledAt: Date.now() }
+                : { aiAutoFollowUpEnabled: false })}
+            />
+          </label>
         </div>
         <div className="mt-3 divide-y divide-zinc-800/70">
           {followUpDelays.map((minutes, index) => (
