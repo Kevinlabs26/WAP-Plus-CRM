@@ -432,7 +432,7 @@ pub fn google_drive_jobs(app:AppHandle,jobs:Option<Vec<Value>>)->Result<Vec<Valu
     let file=match std::fs::File::open(path){Ok(file)=>file,Err(error) if error.kind()==std::io::ErrorKind::NotFound=>return Ok(vec![]),Err(error)=>return Err(format!("无法读取上传记录：{error}"))};
     let mut bytes=Vec::new();file.take(64*1024*1024+1).read_to_end(&mut bytes).map_err(|e|format!("无法读取上传记录：{e}"))?;
     if bytes.len()>64*1024*1024{return Err("上传记录文件超过安全限制".into());}
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     if !bytes.starts_with(crate::crm_backup::BACKUP_ENCRYPTION_MAGIC){return Err("上传记录不是有效的加密文件，已保留原文件".into());}
     let bytes=crate::crm_backup::unprotect_backup(&bytes,48*1024*1024)?;
     let jobs:Vec<Value>=serde_json::from_slice(&bytes).map_err(|_|"上传恢复记录无效")?;

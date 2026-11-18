@@ -4,7 +4,7 @@ use crate::bridge::{make_envelope, BridgeConnectionInfo, BridgeState};
 use crate::db::{self, AppSnapshot, DbState};
 use crate::protocol::{response_error, response_ok};
 use serde::{Deserialize, Serialize};
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub(crate) use crate::dpapi::{protect_secrets, unprotect_secrets};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -171,14 +171,14 @@ pub fn typing_diagnostic_write(app: AppHandle, line: String, reset: bool) -> Res
 
 #[tauri::command]
 pub fn secure_save_secrets(app: AppHandle, secrets: SecureSecrets) -> Result<(), String> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         let raw = serde_json::to_vec(&secrets).map_err(|e| e.to_string())?;
         let encrypted = protect_secrets(&raw)?;
         crate::atomic_file::write_atomic(&secure_secrets_path(&app)?, &encrypted)
             .map_err(|e| e.to_string())
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (app, secrets);
         Err("安全密钥存储仅支持 Windows 桌面版".into())
@@ -187,7 +187,7 @@ pub fn secure_save_secrets(app: AppHandle, secrets: SecureSecrets) -> Result<(),
 
 #[tauri::command]
 pub fn secure_load_secrets(app: AppHandle) -> Result<Option<SecureSecrets>, String> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         let path = secure_secrets_path(&app)?;
         let encrypted = match std::fs::read(path) {
@@ -200,7 +200,7 @@ pub fn secure_load_secrets(app: AppHandle) -> Result<Option<SecureSecrets>, Stri
             .map(Some)
             .map_err(|e| e.to_string())
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = app;
         Err("安全密钥存储仅支持 Windows 桌面版".into())

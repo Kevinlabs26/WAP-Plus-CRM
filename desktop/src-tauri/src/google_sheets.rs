@@ -69,17 +69,17 @@ fn auth_path(app: &AppHandle, drive: bool) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&dir).map_err(|_| "Cannot create application data")?;
     Ok(dir.join(if drive { "google-drive.dpapi" } else { "google-sheets.dpapi" }))
 }
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn save_auth(app: &AppHandle, tokens: &Tokens, drive: bool) -> Result<(), String> {
     let raw = serde_json::to_vec(tokens).map_err(|_| "Cannot encode Google authorization")?;
     crate::atomic_file::write_atomic(&auth_path(app, drive)?, &crate::commands::protect_secrets(&raw)?)
         .map_err(|_| "Cannot save Google authorization".into())
 }
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn save_auth(_: &AppHandle, _: &Tokens, _: bool) -> Result<(), String> {
     Err("Secure Google login requires Windows".into())
 }
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn load_auth(app: &AppHandle, drive: bool) -> Result<Option<Tokens>, String> {
     let bytes = match std::fs::read(auth_path(app, drive)?) {
         Ok(bytes) => bytes,
@@ -90,7 +90,7 @@ fn load_auth(app: &AppHandle, drive: bool) -> Result<Option<Tokens>, String> {
         .map(Some)
         .map_err(|_| "Invalid saved Google authorization".into())
 }
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn load_auth(_: &AppHandle, _: bool) -> Result<Option<Tokens>, String> { Ok(None) }
 fn http() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()

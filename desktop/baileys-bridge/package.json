@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "node index.mjs",
+    "build:macos": "node build-macos.mjs",
     "build": "node -e \"const fs=require('fs');fs.readdirSync('.').filter(f=>f.endsWith('.bun-build')).forEach(f=>fs.rmSync(f,{recursive:true,force:true}))\" && bun build --compile --outfile ../src-tauri/binaries/wap-plus-baileys-x86_64-pc-windows-msvc.exe index.mjs"
   },
   "dependencies": {

@@ -45,6 +45,9 @@ bzip2 = "0.4"
 # 本地语音识别：静态链接运行库，模型仍由用户进入应用后按需下载。
 sherpa-rs = { version = "0.5", default-features = false, features = ["download-binaries", "static"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7.0"
+
 [target.'cfg(windows)'.dependencies]
 tauri-winrt-notification = "0.7"
 windows-registry = "0.6"

@@ -1,26 +1,26 @@
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use ring::{
     pbkdf2,
     rand::{SecureRandom, SystemRandom},
 };
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use serde::Deserialize;
 use serde::Serialize;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use std::{num::NonZeroU32, path::PathBuf};
 use tauri::AppHandle;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use tauri::Manager;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 const FILE_NAME: &str = "app-lock.dpapi";
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 const ITERATIONS: u32 = 310_000;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 const SALT_LEN: usize = 16;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 const HASH_LEN: usize = 32;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 static ALGORITHM: pbkdf2::Algorithm = pbkdf2::PBKDF2_HMAC_SHA256;
 
 #[derive(Serialize)]
@@ -30,14 +30,14 @@ pub struct AppLockStatus {
     configured: bool,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[derive(Serialize, Deserialize)]
 struct LockRecord {
     salt: Vec<u8>,
     hash: Vec<u8>,
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn lock_path(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
@@ -45,7 +45,7 @@ fn lock_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| error.to_string())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn read_record(app: &AppHandle) -> Result<Option<LockRecord>, String> {
     let path = lock_path(app)?;
     let encrypted = match std::fs::read(path) {
@@ -61,7 +61,7 @@ fn read_record(app: &AppHandle) -> Result<Option<LockRecord>, String> {
     Ok(Some(record))
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn write_record(app: &AppHandle, record: &LockRecord) -> Result<(), String> {
     let path = lock_path(app)?;
     let dir = path
@@ -73,7 +73,7 @@ fn write_record(app: &AppHandle, record: &LockRecord) -> Result<(), String> {
     crate::atomic_file::write_atomic(&path, &encrypted).map_err(|e| e.to_string())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn validate_password(password: &str) -> Result<(), String> {
     let length = password.chars().count();
     if !(6..=128).contains(&length) || password.len() > 512 {
@@ -82,7 +82,7 @@ fn validate_password(password: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn new_record(password: &str) -> Result<LockRecord, String> {
     validate_password(password)?;
     let mut salt = vec![0; SALT_LEN];
@@ -100,7 +100,7 @@ fn new_record(password: &str) -> Result<LockRecord, String> {
     Ok(LockRecord { salt, hash })
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn matches(record: &LockRecord, password: &str) -> bool {
     pbkdf2::verify(
         ALGORITHM,
@@ -112,7 +112,7 @@ fn matches(record: &LockRecord, password: &str) -> bool {
     .is_ok()
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[tauri::command]
 pub fn app_lock_status(app: AppHandle) -> Result<AppLockStatus, String> {
     Ok(AppLockStatus {
@@ -121,7 +121,7 @@ pub fn app_lock_status(app: AppHandle) -> Result<AppLockStatus, String> {
     })
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 #[tauri::command]
 pub fn app_lock_status(_app: AppHandle) -> Result<AppLockStatus, String> {
     Ok(AppLockStatus {
@@ -130,7 +130,7 @@ pub fn app_lock_status(_app: AppHandle) -> Result<AppLockStatus, String> {
     })
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[tauri::command]
 pub fn app_lock_create(app: AppHandle, password: String) -> Result<(), String> {
     if read_record(&app)?.is_some() {
@@ -139,13 +139,13 @@ pub fn app_lock_create(app: AppHandle, password: String) -> Result<(), String> {
     write_record(&app, &new_record(&password)?)
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 #[tauri::command]
 pub fn app_lock_create(_app: AppHandle, _password: String) -> Result<(), String> {
     Err("锁屏仅支持 Windows 桌面版".into())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[tauri::command]
 pub fn app_lock_verify(app: AppHandle, password: String) -> Result<bool, String> {
     let Some(record) = read_record(&app)? else {
@@ -154,13 +154,13 @@ pub fn app_lock_verify(app: AppHandle, password: String) -> Result<bool, String>
     Ok(matches(&record, &password))
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 #[tauri::command]
 pub fn app_lock_verify(_app: AppHandle, _password: String) -> Result<bool, String> {
     Err("锁屏仅支持 Windows 桌面版".into())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[tauri::command]
 pub fn app_lock_change(
     app: AppHandle,
@@ -177,7 +177,7 @@ pub fn app_lock_change(
     Ok(true)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[tauri::command]
 pub fn app_lock_remove(app: AppHandle, current_password: String) -> Result<bool, String> {
     let Some(record) = read_record(&app)? else {
@@ -190,7 +190,7 @@ pub fn app_lock_remove(app: AppHandle, current_password: String) -> Result<bool,
     Ok(true)
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 #[tauri::command]
 pub fn app_lock_change(
     _app: AppHandle,
@@ -200,7 +200,7 @@ pub fn app_lock_change(
     Err("锁屏仅支持 Windows 桌面版".into())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 #[tauri::command]
 pub fn app_lock_remove(_app: AppHandle, _current_password: String) -> Result<bool, String> {
     Err("锁屏仅支持 Windows 桌面版".into())

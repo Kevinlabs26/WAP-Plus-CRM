@@ -12,7 +12,7 @@ pub(crate) const BACKUP_ENCRYPTION_MAGIC: &[u8] = b"WAPCRM-DPAPI-1\0";
 const BACKUP_ENCRYPTION_CHUNK: usize = 512 * 1024;
 
 pub(crate) fn protect_backup(bytes: &[u8]) -> Result<Vec<u8>, String> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         let chunks = bytes.chunks(BACKUP_ENCRYPTION_CHUNK).collect::<Vec<_>>();
         let mut output = BACKUP_ENCRYPTION_MAGIC.to_vec();
@@ -25,7 +25,7 @@ pub(crate) fn protect_backup(bytes: &[u8]) -> Result<Vec<u8>, String> {
         }
         return Ok(output);
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     Ok(bytes.to_vec())
 }
 
@@ -33,7 +33,7 @@ pub(crate) fn unprotect_backup(bytes: &[u8], limit: u64) -> Result<Vec<u8>, Stri
     if !bytes.starts_with(BACKUP_ENCRYPTION_MAGIC) {
         return Ok(bytes.to_vec());
     }
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         let mut cursor = BACKUP_ENCRYPTION_MAGIC.len();
         let count_end = cursor.checked_add(4).ok_or("备份加密格式无效")?;
@@ -71,7 +71,7 @@ pub(crate) fn unprotect_backup(bytes: &[u8], limit: u64) -> Result<Vec<u8>, Stri
         }
         return Ok(output);
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     Err("此备份由 Windows 账号加密，需在原 Windows 账号下恢复".into())
 }
 

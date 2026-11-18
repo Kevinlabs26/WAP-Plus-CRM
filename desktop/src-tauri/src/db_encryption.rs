@@ -1,4 +1,4 @@
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use ring::rand::SecureRandom;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::path::{Path, PathBuf};
@@ -8,7 +8,7 @@ const KEY_FILE: &str = "db-key.dpapi";
 const TEMP_FILE: &str = "wap-plus.db.encrypted.tmp";
 const BACKUP_PREFIX: &str = "wap-plus.db.plaintext-";
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub fn open(path: &Path) -> Result<Connection, String> {
     let key_path = path.with_file_name(KEY_FILE);
     let backups = migration_backups(path)?;
@@ -71,7 +71,7 @@ pub fn open(path: &Path) -> Result<Connection, String> {
     Ok(conn)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub fn open_readonly(path: &Path) -> Result<Connection, String> {
     let key_path = path.with_file_name(KEY_FILE);
     let protected = std::fs::read(&key_path).map_err(|e| format!("读取数据库加密密钥失败: {e}"))?;
@@ -84,17 +84,17 @@ pub fn open_readonly(path: &Path) -> Result<Connection, String> {
     Ok(conn)
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn open(_path: &Path) -> Result<Connection, String> {
     Err("数据库加密目前需要 Windows DPAPI。".into())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn open_readonly(_path: &Path) -> Result<Connection, String> {
     Err("数据库加密目前需要 Windows DPAPI。".into())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn connect(path: &Path, key: &str, flags: OpenFlags) -> Result<Connection, String> {
     let conn =
         Connection::open_with_flags(path, flags).map_err(|e| format!("打开数据库失败: {e}"))?;
@@ -110,7 +110,7 @@ fn connect(path: &Path, key: &str, flags: OpenFlags) -> Result<Connection, Strin
     Ok(conn)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn verify_key(conn: &Connection) -> Result<(), String> {
     conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| {
         row.get::<_, i64>(0)
@@ -119,7 +119,7 @@ fn verify_key(conn: &Connection) -> Result<(), String> {
     .map_err(|e| format!("数据库密钥不匹配或数据库已损坏: {e}"))
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn verify_integrity(conn: &Connection) -> Result<(), String> {
     let result: String = conn
         .query_row("PRAGMA quick_check", [], |row| row.get(0))
@@ -130,12 +130,12 @@ fn verify_integrity(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn hex_key(key: &[u8]) -> String {
     key.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn is_plaintext_database(path: &Path) -> Result<bool, String> {
     let metadata = std::fs::metadata(path).map_err(|e| e.to_string())?;
     if metadata.len() == 0 {
@@ -149,7 +149,7 @@ fn is_plaintext_database(path: &Path) -> Result<bool, String> {
     Ok(&header == SQLITE_HEADER)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn migrate_plaintext(path: &Path, key: &str) -> Result<(), String> {
     let temp = path.with_file_name(TEMP_FILE);
     let conn = Connection::open(path).map_err(|e| format!("打开旧数据库失败: {e}"))?;
@@ -232,7 +232,7 @@ fn migrate_plaintext(path: &Path, key: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn has_sidecars(path: &Path) -> Result<bool, String> {
     for suffix in ["-wal", "-shm", "-journal"] {
         let mut name = path.as_os_str().to_owned();
@@ -244,7 +244,7 @@ fn has_sidecars(path: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn migration_backups(path: &Path) -> Result<Vec<PathBuf>, String> {
     let dir = path.parent().ok_or("数据库路径无父目录")?;
     let mut result = Vec::new();
@@ -259,7 +259,7 @@ fn migration_backups(path: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(result)
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn newest(mut paths: Vec<PathBuf>) -> Option<PathBuf> {
     paths.sort_by_key(|path| {
         std::fs::metadata(path)
@@ -269,7 +269,7 @@ fn newest(mut paths: Vec<PathBuf>) -> Option<PathBuf> {
     paths.pop()
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn remove_plaintext_backups(path: &Path) -> Result<(), String> {
     for backup in migration_backups(path)? {
         std::fs::remove_file(&backup)

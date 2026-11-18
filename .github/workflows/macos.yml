@@ -1,0 +1,129 @@
+name: macOS build and DMG release
+
+on:
+  push:
+    branches: [codex/macos]
+    tags: ['macos-build-v*']
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Sign, notarize and publish both DMGs after CI passes
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  PUBLISH_MACOS: ${{ inputs.publish || startsWith(github.ref, 'refs/tags/macos-build-v') }}
+
+jobs:
+  build:
+    name: macOS (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - name: Install dependencies
+        run: |
+          test "$(uname -m)" = "${{ matrix.arch }}"
+          npm ci
+      - name: Build and test the native tools
+        env:
+          FFMPEG_SOURCE_BUNDLE: ${{ runner.temp }}/ffmpeg-source-${{ matrix.arch }}.tar.gz
+        run: |
+          bash tools/build-ffmpeg-macos.sh
+          npm run build:macos -w wap-plus-baileys
+          target=$(rustc -vV | awk '/^host:/ {print $2}')
+          tools="$PWD/desktop/src-tauri/binaries"
+          "$tools/ffmpeg-$target" -v error -f lavfi -i sine=duration=0.1 -c:a libopus "${RUNNER_TEMP}/voice.ogg"
+          test -s "${RUNNER_TEMP}/voice.ogg"
+          node tools/mock-bridge-smoke.test.mjs
+      - name: Test frontend and Rust
+        run: |
+          npm test
+          cargo test --locked --lib --tests --manifest-path desktop/src-tauri/Cargo.toml
+      - name: Prepare production Google OAuth configuration
+        if: ${{ env.PUBLISH_MACOS == 'true' }}
+        env:
+          GOOGLE_DESKTOP_CLIENT_JSON: ${{ secrets.GOOGLE_DESKTOP_CLIENT_JSON }}
+        run: node --experimental-strip-types .github/scripts/prepare-google-client.mjs
+      - name: Build test DMG
+        if: ${{ env.PUBLISH_MACOS != 'true' }}
+        run: npm run tauri -- build --debug --bundles dmg --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-","minimumSystemVersion":"13.0"}}}'
+      - name: Sign and notarize release DMG
+        if: ${{ env.PUBLISH_MACOS == 'true' }}
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          : "${APPLE_CERTIFICATE:?Missing APPLE_CERTIFICATE}"
+          : "${APPLE_CERTIFICATE_PASSWORD:?Missing APPLE_CERTIFICATE_PASSWORD}"
+          : "${APPLE_SIGNING_IDENTITY:?Missing APPLE_SIGNING_IDENTITY}"
+          : "${APPLE_ID:?Missing APPLE_ID}"
+          : "${APPLE_PASSWORD:?Missing APPLE_PASSWORD}"
+          : "${APPLE_TEAM_ID:?Missing APPLE_TEAM_ID}"
+          npm run tauri -- build --bundles dmg --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"minimumSystemVersion":"13.0"}}}'
+      - name: Verify the DMG and bundled executables
+        env:
+          ARCH: ${{ matrix.arch }}
+          PUBLISH: ${{ env.PUBLISH_MACOS }}
+        run: bash tools/verify-macos-dmg.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-${{ matrix.arch }}
+          path: ${{ runner.temp }}/macos-release/*
+          if-no-files-found: error
+
+  publish:
+    if: ${{ inputs.publish || startsWith(github.ref, 'refs/tags/macos-build-v') }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: macos-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish verified DMGs as a separate macOS release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(jq -er .version desktop/src-tauri/tauri.conf.json)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            [[ $GITHUB_REF_NAME == "macos-build-v$version" ]]
+          fi
+          for arch in arm64 x86_64; do
+            test -s "release-assets/WAP-Plus-CRM-${version}-macOS-${arch}.dmg"
+            test -s "release-assets/ffmpeg-source-${arch}.tar.gz"
+          done
+          tag="macos-v${version}"
+          gh release create "$tag" release-assets/* --target "$GITHUB_SHA" --draft --latest=false \
+            --title "WAP Plus CRM ${version} for macOS" \
+            --notes 'Signed and notarized DMGs for Apple Silicon and Intel. Choose the installer for your Mac architecture.'
+          gh release edit "$tag" --draft=false --latest=false

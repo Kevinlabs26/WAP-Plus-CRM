@@ -10,7 +10,7 @@ mod db_encryption;
 #[path = "../src/db.rs"]
 mod db;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn sqlcipher_419_database_and_uncheckpointed_wal_survive_upgrade_and_restore() {
     let root = std::env::temp_dir().join(format!("wap-sqlcipher-upgrade-{}", uuid::Uuid::new_v4()));
@@ -42,7 +42,7 @@ fn sqlcipher_419_database_and_uncheckpointed_wal_survive_upgrade_and_restore() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn encrypted_migration_survives_restart_and_missing_or_wrong_keys_preserve_the_database() {
     let root=std::env::temp_dir().join(format!("wap-db-encryption-{}",uuid::Uuid::new_v4()));
