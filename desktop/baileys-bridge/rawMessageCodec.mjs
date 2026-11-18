@@ -1,6 +1,9 @@
 import { deserialize } from "node:v8";
 import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { dirname, resolve } from "node:path";
+
+const require = createRequire(import.meta.url);
 
 const HEADER = "WAP-RAW-JSON-1\n";
 const arrays = { Uint8Array, Int8Array, Uint8ClampedArray, Uint16Array, Int16Array,
@@ -35,8 +38,11 @@ export function decodeRawMessage(data) {
 
 /** One-time migration of caches written by the other runtime; never overwrite an unreadable file. */
 export async function decodeLegacyRawMessage(data) {
-  const runtime = process.versions.bun ? "node" : fileURLToPath(new URL(
-    `../node_modules/bun/bin/${process.platform === "win32" ? "bun.exe" : "bun"}`, import.meta.url));
+  let runtime = "node";
+  if (!process.versions.bun) {
+    const bunManifest = require.resolve("bun/package.json");
+    runtime = resolve(dirname(bunManifest), require(bunManifest).bin.bun);
+  }
   const script = `const {deserialize}=require('node:v8');const {readFileSync}=require('node:fs');
     const HEADER=${JSON.stringify(HEADER)};const encodeRawMessage=${encodeRawMessage.toString()};
     process.stdout.write(encodeRawMessage(deserialize(readFileSync(0))));`;
