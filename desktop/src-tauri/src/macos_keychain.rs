@@ -2,14 +2,10 @@ use ring::{
     aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM},
     rand::{SecureRandom, SystemRandom},
 };
-use security_framework::{
-    os::macos::keychain::SecKeychain,
-    passwords::{generic_password, PasswordOptions},
-};
+use security_framework::os::macos::keychain::SecKeychain;
 use std::sync::Mutex;
 
 const SERVICE: &str = "com.wapplus.crm";
-const ACCOUNT: &str = "local-encryption-v1";
 const ITEM_NOT_FOUND: i32 = -25300;
 const DUPLICATE_ITEM: i32 = -25299;
 const HEADER: &[u8] = b"WAP-MAC-KEYCHAIN-V1";
@@ -19,7 +15,23 @@ fn wrapping_key(create: bool) -> Result<LessSafeKey, String> {
     let _guard = KEYCHAIN
         .lock()
         .map_err(|_| "Keychain storage unavailable")?;
-    let read = || generic_password(PasswordOptions::new_generic_password(SERVICE, ACCOUNT));
+    #[cfg(test)]
+    let _noninteractive = SecKeychain::disable_user_interaction()
+        .map_err(|error| format!("Cannot configure test Keychain ({})", error.code()))?;
+    #[cfg(test)]
+    let account = std::sync::OnceLock::get_or_init(&TEST_ACCOUNT, || {
+        format!("test-{}", uuid::Uuid::new_v4())
+    })
+    .as_str();
+    #[cfg(not(test))]
+    let account = "local-encryption-v1";
+    let keychain = SecKeychain::default()
+        .map_err(|error| format!("Cannot open default Keychain ({})", error.code()))?;
+    let read = || {
+        keychain
+            .find_generic_password(SERVICE, account)
+            .map(|(password, _)| password.as_ref().to_vec())
+    };
     let bytes = match read() {
         Ok(bytes) => bytes,
         Err(error) if create && error.code() == ITEM_NOT_FOUND => {
@@ -27,9 +39,7 @@ fn wrapping_key(create: bool) -> Result<LessSafeKey, String> {
             SystemRandom::new()
                 .fill(&mut bytes)
                 .map_err(|_| "Key generation failed")?;
-            let keychain = SecKeychain::default()
-                .map_err(|error| format!("Cannot open default Keychain ({})", error.code()))?;
-            match keychain.add_generic_password(SERVICE, ACCOUNT, &bytes) {
+            match keychain.add_generic_password(SERVICE, account, &bytes) {
                 Ok(()) => bytes,
                 Err(error) if error.code() == DUPLICATE_ITEM => read().map_err(|error| {
                     format!("Cannot read existing Keychain key ({})", error.code())
@@ -43,6 +53,9 @@ fn wrapping_key(create: bool) -> Result<LessSafeKey, String> {
         .map(LessSafeKey::new)
         .map_err(|_| "Invalid Keychain encryption key".into())
 }
+
+#[cfg(test)]
+static TEST_ACCOUNT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 pub(crate) fn protect_secrets(value: &[u8]) -> Result<Vec<u8>, String> {
     let key = wrapping_key(true)?;
