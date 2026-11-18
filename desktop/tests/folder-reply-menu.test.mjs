@@ -7,7 +7,7 @@ import { translate } from '../src/i18n/core.ts';
 const mocks={
  '@/store/appStore':'export const useAppStore=f=>f(globalThis.folderSheetState||{settings:{theme:"dark",chatFolders:[]}});useAppStore.getState=()=>globalThis.folderSheetState;',
  'zustand/react/shallow':'export const useShallow=f=>f;',
- '@/lib/googleSheets':'export const DEFAULT_SHEET_ID="default";export const refreshSheets=async()=>{};export const sheetConnections=()=>[{id:"sheet-a",name:"表格 A"},{id:"sheet-b",name:"表格 B"}];export const useGoogleSheets=f=>f({});',
+ '@/lib/googleSheets':'export const DEFAULT_SHEET_ID="default";export const refreshSheets=async()=>{};export const sheetConnections=()=>[{id:"sheet-a",name:"表格 A",config:{tab:"表格 A"}},{id:"sheet-b",name:"表格 B",config:{tab:"表格 B"}}];export const useGoogleSheets=f=>f({});',
  'emoji-picker-react':'export default "emoji-picker";export const EmojiStyle={NATIVE:"native"};export const Theme={DARK:"dark"};',
  react:'export const useState=v=>globalThis.folderMenuHooks.state(v);export const useRef=v=>globalThis.folderMenuHooks.ref(v);export const useEffect=(f,d)=>globalThis.folderMenuHooks.effect(f,d);export const useLayoutEffect=useEffect;',
  'react-dom':'export const createPortal=children=>children;',

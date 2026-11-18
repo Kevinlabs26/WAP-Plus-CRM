@@ -45,7 +45,10 @@ function OutreachTasks({active}:{active:boolean}) {
   useEffect(()=>{const timer=window.setInterval(()=>setNow(Date.now()),5_000);return()=>window.clearInterval(timer);},[]);
   const byId=new Map(folders.map(folder=>[folder.id,folder]));
   const accountNames=new Map(settings.waAccounts.map(account=>[account.id,account.label]));
-  const activePlans=folders.filter(folder=>(!folderId||folder.id===folderId)&&folder.aiOutreach?.enabled&&!folder.aiOutreach.paused&&!settings.aiAutoReplyPaused&&!settings.aiOutreachPaused&&(folder.aiOutreach.startMode!=="immediate"||isImmediateOutreach(folder.aiOutreach,now)));
+  const activePlans=folders.filter(folder=>folder.aiOutreach?.enabled&&(folderId
+    ? folder.id===folderId
+    : !folder.aiOutreach.paused&&!settings.aiAutoReplyPaused&&!settings.aiOutreachPaused&&
+      (folder.aiOutreach.startMode!=="immediate"||isImmediateOutreach(folder.aiOutreach,now))));
   const days=useMemo(()=>{
     const zones=new Map<string,string>();
     return new Map(folders.map(folder=>{const zone=folder.aiOutreach?.timeZone||"UTC";if(!zones.has(zone))zones.set(zone,outreachClock(zone,now).day);return [folder.id,zones.get(zone)!];}));
