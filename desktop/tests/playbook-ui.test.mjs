@@ -19,7 +19,7 @@ const settle=async()=>{for(let i=0;i<50;i++)await Promise.resolve();};
 function fixture(){
   let cells=[],cursor=0;
   globalThis.playbookHooks={state(value){const i=cursor++;if(!(i in cells))cells[i]=value;return[cells[i],next=>{cells[i]=next;}];},ref(value){const i=cursor++;if(!(i in cells))cells[i]={current:value};return cells[i];}};
-  globalThis.playbookState={settings:{aiPlaybooks:[],aiPlaybookBindings:{},chatFolders:[]},updateSettings(patch){this.settings={...this.settings,...patch};},pushToast(){},requestConfirm:async()=>true};
+  globalThis.playbookState={settings:{aiPlaybooks:[],aiPlaybookBindings:{},chatFolders:[],aiPlaybookAutoSync:false},updateSettings(patch){this.settings={...this.settings,...patch};},pushToast(){},requestConfirm:async()=>true};
   return {render(Component=PlaybookLibrary){cursor=0;return nodes(Component());}};
 }
 
@@ -45,7 +45,7 @@ test('local Markdown retains its full original content within the import capacit
   await settle();
   assert.equal(playbookState.settings.aiPlaybooks.length,1);assert.equal(playbookState.settings.aiPlaybooks[0].content.length,6001);assert.ok(!ui.render().some(node=>node.props.role==='alert'));
 });
-test('Muse sync imports only the user-entered relative folder',async()=>{const ui=fixture();const folder='解决观念/playbooks';let tree=ui.render();tree.find(n=>n.type==='input'&&n.props.placeholder==='playbook.scopePlaceholder').props.onChange({target:{value:folder}});tree=ui.render();tree.find(n=>n.type==='button'&&n.props.children==='playbook.findSources').props.onClick();await settle();assert.equal(playbookSyncRoot,folder);assert.equal(playbookState.settings.aiPlaybookAutoSync,true);delete globalThis.playbookSyncRoot;});
+test('Muse sync imports only the user-entered relative folder without enabling automatic checks',async()=>{const ui=fixture();const folder='解决观念/playbooks';let tree=ui.render();tree.find(n=>n.type==='input'&&n.props.placeholder==='playbook.scopePlaceholder').props.onChange({target:{value:folder}});tree=ui.render();tree.find(n=>n.type==='button'&&n.props.children==='playbook.findSources').props.onClick();await settle();assert.equal(playbookSyncRoot,folder);assert.equal(playbookState.settings.aiPlaybookAutoSync,false);delete globalThis.playbookSyncRoot;});
 
 
 test('customer picker saves only the current account conversation, and inherit clears the override',()=>{

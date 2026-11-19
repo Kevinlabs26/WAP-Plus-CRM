@@ -244,7 +244,9 @@ fn migrate(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_messages_sent_global ON messages(sent_at DESC, id DESC);
          CREATE INDEX IF NOT EXISTS idx_messages_wa_message_id ON messages(json_extract(json, '$.waMessageId'));
-         CREATE INDEX IF NOT EXISTS idx_messages_wa_key_id ON messages(json_extract(json, '$.waKey.id'));",
+         CREATE INDEX IF NOT EXISTS idx_messages_wa_key_id ON messages(json_extract(json, '$.waKey.id'));
+         CREATE INDEX IF NOT EXISTS idx_messages_auto_reply ON messages(chat_id, sent_at, id)
+           WHERE COALESCE(json_extract(json, '$.systemKind'), '') = 'ai_auto_reply';",
     )
     .map_err(|e| e.to_string())?;
 
@@ -1391,7 +1393,7 @@ fn load_chats_with_history(conn: &Connection) -> Result<Vec<Value>, String> {
     Ok(chats)
 }
 
-/// 最近历史 + 未完成出站/定时任务引用的消息；普通冷历史仍按需分页。
+/// 最近历史和待执行任务需要的消息；普通冷历史仍按需分页。
 const BOOT_MESSAGES_CAP: i64 = 2_000;
 const BOOT_ACTIVITIES_CAP: i64 = 2_000;
 
@@ -1405,6 +1407,35 @@ fn load_messages_boot(conn: &Connection) -> Result<Vec<Value>, String> {
     let mut stmt = conn
         .prepare(
             r#"
+            WITH follow_up_chats AS MATERIALIZED (
+                SELECT reply.chat_id,
+                       COALESCE(NULLIF(json_extract(reply.json, '$.aiAutoFollowUpRootId'), ''),
+                                NULLIF(json_extract(reply.json, '$.aiReplyInboundId'), '')) AS root_id
+                FROM settings AS config
+                CROSS JOIN messages AS reply INDEXED BY idx_messages_auto_reply
+                WHERE config.key = 'app'
+                  AND json_extract(config.value, '$.aiAutoFollowUpEnabled') = 1
+                  AND COALESCE(json_extract(reply.json, '$.systemKind'), '') = 'ai_auto_reply'
+                  AND json_extract(reply.json, '$.direction') = 'out'
+                  AND COALESCE(json_extract(reply.json, '$.aiAutoFollowUpCancelled'), 0) = 0
+                  AND (
+                      (json_extract(reply.json, '$.deliveryStatus') IN ('sent', 'server', 'delivered', 'read', 'played')
+                       AND json_extract(reply.json, '$.aiAutoFollowUpSentAt') >= json_extract(config.value, '$.aiAutoFollowUpEnabledAt')
+                       AND EXISTS (
+                           SELECT 1 FROM json_each(config.value, '$.aiAutoFollowUpDelaysMinutes') AS delay
+                           WHERE delay.key = COALESCE(json_extract(reply.json, '$.aiAutoFollowUpStep'), 0) AND delay.value > 0
+                       ))
+                      OR (json_extract(reply.json, '$.aiAutoFollowUpStep') > 0 AND (
+                          json_extract(reply.json, '$.deliveryStatus') IN ('queued', 'pending')
+                          OR (json_extract(reply.json, '$.deliveryStatus') = 'failed'
+                              AND COALESCE(json_extract(reply.json, '$.nextAttemptAt'), '') != '')
+                      ))
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM messages AS newer WHERE newer.chat_id = reply.chat_id
+                        AND (newer.sent_at, newer.id) > (reply.sent_at, reply.id)
+                  )
+            )
             SELECT json FROM messages
             WHERE id IN (
                 SELECT id FROM (
@@ -1418,11 +1449,35 @@ fn load_messages_boot(conn: &Connection) -> Result<Vec<Value>, String> {
                     COALESCE(json_extract(json, '$.deliveryStatus'), 'sent') IN ('queued', 'pending')
                     OR (COALESCE(json_extract(json, '$.deliveryStatus'), 'sent') = 'failed'
                         AND COALESCE(json_extract(json, '$.nextAttemptAt'), '') != '')
+                    OR (COALESCE(json_extract(json, '$.systemKind'), '') = 'ai_proactive'
+                        AND COALESCE(json_extract(json, '$.deliveryUncertain'), 0) = 1
+                        AND COALESCE(json_extract(json, '$.deliveryStatus'), '') NOT IN ('sent', 'server', 'delivered', 'read', 'played'))
                 )
                 UNION
                 SELECT json_extract(task.value, '$.messageId')
                 FROM settings, json_each(settings.value, '$.scheduledMessages') AS task
                 WHERE settings.key = 'app' AND json_extract(task.value, '$.status') = 'queued'
+                UNION
+                SELECT chain.id FROM follow_up_chats AS active
+                JOIN messages AS chain ON chain.chat_id = active.chat_id
+                WHERE chain.id = active.root_id OR (
+                    COALESCE(json_extract(chain.json, '$.systemKind'), '') = 'ai_auto_reply'
+                    AND COALESCE(NULLIF(json_extract(chain.json, '$.aiAutoFollowUpRootId'), ''),
+                                 NULLIF(json_extract(chain.json, '$.aiReplyInboundId'), '')) = active.root_id
+                )
+                UNION
+                SELECT recent.id FROM follow_up_chats AS active
+                CROSS JOIN messages AS recent ON recent.id IN (
+                    SELECT tail.id FROM messages AS tail WHERE tail.chat_id = active.chat_id
+                    ORDER BY tail.sent_at DESC, tail.id DESC LIMIT 361
+                )
+                WHERE active.root_id IS NOT NULL
+                UNION
+                SELECT (
+                    SELECT inbound.id FROM messages AS inbound INDEXED BY idx_messages_history_facts
+                    WHERE inbound.chat_id = active.chat_id AND json_extract(inbound.json, '$.direction') = 'in'
+                    ORDER BY inbound.sent_at DESC, inbound.id DESC LIMIT 1
+                ) FROM follow_up_chats AS active WHERE active.root_id IS NOT NULL
             )
             ORDER BY COALESCE(sent_at, '') DESC, id DESC
             "#,
@@ -2271,6 +2326,41 @@ mod tests {
                 !loaded.iter().any(|message| message["id"] == id),
                 "unexpected {id}"
             );
+        }
+    }
+
+    #[test]
+    fn boot_keeps_cold_follow_up_context_and_uncertain_outreach() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mut messages: Vec<_> = (0..2005)
+            .map(|i| message(&format!("recent-{i:04}"), "busy-account", "peer"))
+            .collect();
+        for (chat, status) in [("active", "read"), ("outbox", "queued"), ("closed", "read")] {
+            let root = format!("{chat}-root");
+            messages.extend([
+                json!({"id":root,"chatId":chat,"direction":"in","sentAt":"2026-01-01T09:00:00Z"}),
+                json!({"id":format!("{chat}-first"),"chatId":chat,"direction":"out","sentAt":"2026-01-01T10:00:00Z","systemKind":"ai_auto_reply","deliveryStatus":"delivered","aiReplyInboundId":root,"aiAutoFollowUpSentAt":11}),
+                json!({"id":format!("{chat}-next"),"chatId":chat,"direction":"out","sentAt":"2026-01-02T09:00:00Z","systemKind":"ai_auto_reply","deliveryStatus":status,"aiAutoFollowUpRootId":root,"aiAutoFollowUpStep":1,"aiAutoFollowUpSentAt":12}),
+            ]);
+        }
+        messages.extend([
+            json!({"id":"closed-replied","chatId":"closed","direction":"in","sentAt":"2026-01-03T09:00:00Z"}),
+            json!({"id":"old-unknown","chatId":"other-wa-account","direction":"out","sentAt":"2026-01-01T09:00:00Z","systemKind":"ai_proactive","deliveryStatus":"failed","deliveryUncertain":true}),
+            json!({"id":"old-resolved","chatId":"other-wa-account","direction":"out","sentAt":"2026-01-01T10:00:00Z","systemKind":"ai_proactive","deliveryStatus":"delivered","deliveryUncertain":true}),
+        ]);
+        save_snapshot(&conn, &AppSnapshot { messages, dirty: Some(message_dirty()), ..Default::default() }).unwrap();
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES ('app', ?1)",
+            params![json!({"aiAutoFollowUpEnabled":true,"aiAutoFollowUpEnabledAt":1,"aiAutoFollowUpDelaysMinutes":[60,120]}).to_string()],
+        ).unwrap();
+
+        let loaded = load_snapshot(&conn).unwrap().unwrap().messages;
+        for id in ["active-root", "active-first", "active-next", "outbox-root", "outbox-first", "outbox-next", "old-unknown"] {
+            assert!(loaded.iter().any(|message| message["id"] == id), "missing {id}");
+        }
+        for id in ["closed-root", "closed-next", "old-resolved", "recent-0000"] {
+            assert!(!loaded.iter().any(|message| message["id"] == id), "unexpected {id}");
         }
     }
 

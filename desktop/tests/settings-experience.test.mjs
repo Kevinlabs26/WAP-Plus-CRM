@@ -4,14 +4,14 @@ import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import zh from "../src/i18n/locales/zh-CN.ts";
 
-const panels = ["Connection", "Messaging", "Ai", "Translation", "AutoReply", "QuickReplies", "Data", "Blocklist", "Appearance", "Speech", "Notifications", "ScheduledMessages", "Update", "CloudImages"];
+const panels = ["Connection", "Messaging", "Ai", "AiPrivacy", "Translation", "AutoReply", "QuickReplies", "Data", "Blocklist", "Appearance", "Speech", "Notifications", "ScheduledMessages", "Update", "CloudImages"];
 const mocks = {
   "./SettingsGoogleSheets": "export const SettingsGoogleSheets=()=>null;",
   "./AiUsagePanel": "export const AiUsagePanel=()=>null;",
   "./PlaybookLibrary": "export const PlaybookLibrary=()=>null;",
   react: "export const memo=fn=>fn; export const useState=initial=>globalThis.settingsHookState?globalThis.settingsHookState(initial):[typeof initial==='function'?initial():initial,()=>{}]; export const useRef=value=>globalThis.settingsHookRef?globalThis.settingsHookRef(value):({current:null}); export const useEffect=fn=>globalThis.settingsEffects.push(fn);",
   "react/jsx-runtime": "export const jsx=(type,props,key)=>({type,props,key}); export const jsxs=jsx;",
-  "lucide-react": "export const Check=()=>null,ArrowLeft=Check,Save=Check,AudioLines=()=>null, CloudUpload=AudioLines, Bell=AudioLines, TableProperties=AudioLines, Bot=AudioLines, Clock3=AudioLines, Database=AudioLines, Info=AudioLines, MessageSquareText=AudioLines, Palette=AudioLines, Radio=AudioLines, ShieldBan=AudioLines, Workflow=AudioLines, X=AudioLines, Zap=AudioLines, Activity=AudioLines, BookOpen=AudioLines, AlertTriangle=AudioLines, CheckCircle2=AudioLines, Flame=AudioLines;",
+  "lucide-react": "export const Check=()=>null,ArrowLeft=Check,Save=Check,AudioLines=()=>null, CloudUpload=AudioLines, Bell=AudioLines, TableProperties=AudioLines, Bot=AudioLines, Clock3=AudioLines, Database=AudioLines, Info=AudioLines, MessageSquareText=AudioLines, Palette=AudioLines, Radio=AudioLines, ShieldBan=AudioLines, Shield=AudioLines, Workflow=AudioLines, X=AudioLines, Zap=AudioLines, Activity=AudioLines, BookOpen=AudioLines, AlertTriangle=AudioLines, CheckCircle2=AudioLines, Flame=AudioLines;",
   "@/store/appStore": "export const useAppStore=selector=>selector(globalThis.settingsState);",
   "@/i18n": "export const useI18n=()=>({t:globalThis.settingsTranslate});",
   ...Object.fromEntries(panels.map(name => [`./Settings${name}Panel`, `export const Settings${name}Panel=()=>null;`])),

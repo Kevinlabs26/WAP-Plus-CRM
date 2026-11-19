@@ -190,6 +190,7 @@ export interface SettingsShape {
    */
   aiReplyMode: "semi" | "auto";
   aiAutoReplyPaused: boolean;
+  aiAutoReplyDisabled: boolean;
   aiAutoFollowUpEnabled: boolean;
   aiAutoFollowUpEnabledAt: number;
   aiAutoFollowUpDelaysMinutes: number[];
@@ -223,6 +224,8 @@ export interface SettingsShape {
   museAccountChecks: Record<string, { ready: boolean; state: string; checkedAt: number; message?: string }>;
   /** User-confirmed Muse privacy state; this is not remotely verified by Muse. */
   musePrivacyByAccountId: Record<string, { trainingDisabledConfirmedAt?: number; memoryReviewedAt?: number }>;
+  /** 本机隐私规则，不写入备份。 */
+  museBlockedTerms: string;
   broadcastThemes: BroadcastTheme[];
   imagePromptTemplates: AiPromptTemplate[];
   aiContextMode: "compact" | "full";
@@ -417,6 +420,7 @@ export const defaultSettings: SettingsShape = {
   aiModel: "",
   aiReplyMode: "semi",
   aiAutoReplyPaused: false,
+  aiAutoReplyDisabled: false,
   aiAutoFollowUpEnabled: false,
   aiAutoFollowUpEnabledAt: 0,
   aiAutoFollowUpDelaysMinutes: [],
@@ -444,6 +448,7 @@ export const defaultSettings: SettingsShape = {
   aiPlaybookMuseError: "",
   museAccountChecks: {},
   musePrivacyByAccountId: {},
+  museBlockedTerms: "",
   broadcastThemes: [],
   imagePromptTemplates: [],
   aiContextMode: "full",
@@ -824,6 +829,7 @@ export function normalizeLoadedSettings(
     ? [...new Set(merged.aiAutoReplyManualChatIds.map((id) => String(id || "").trim()).filter(Boolean))]
     : [];
   merged.aiAutoReplyPaused = merged.aiAutoReplyPaused === true;
+  merged.aiAutoReplyDisabled = merged.aiAutoReplyDisabled === true;
   merged.aiAutoFollowUpDelaysMinutes = Array.isArray(merged.aiAutoFollowUpDelaysMinutes)
     ? merged.aiAutoFollowUpDelaysMinutes.slice(0, 10).map(value =>
         Number.isFinite(value) ? Math.max(0, Math.min(43_200, Math.round(value))) : 0)
@@ -877,6 +883,7 @@ export function normalizeLoadedSettings(
     }
     merged.musePrivacyByAccountId = privacy;
   }
+  merged.museBlockedTerms = typeof merged.museBlockedTerms === "string" ? merged.museBlockedTerms.slice(0, 4000) : "";
   merged.broadcastThemes = normalizeBroadcastThemes(merged.broadcastThemes);
   merged.imagePromptTemplates = normalizePromptTemplates(merged.imagePromptTemplates).map(item => ({ ...item, prompt: item.prompt.slice(0, 4000) }));
   merged.aiContextMode = merged.aiContextMode === "compact" ? "compact" : "full";

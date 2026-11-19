@@ -43,7 +43,7 @@ export interface BroadcastMedia {
   kind: BroadcastMediaKind;
   mime: string;
   fileName?: string;
-  /** Recorded audio is sent as a voice note; existing uploads keep file behavior. */
+  /** Send audio as a playable voice note. Older attachments may omit this flag. */
   voiceNote?: boolean;
 }
 

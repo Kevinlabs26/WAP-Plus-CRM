@@ -12,7 +12,7 @@ const mocks = {
   '@/components/settings/AiPromptLibrary':'export const AiPromptLibrary="prompt-library";',
   '@/components/settings/AiOutreachControls':'export const AiOutreachControls="outreach-controls";',
   '@/components/settings/AiOutreachPreview':'export const AiOutreachPreview="outreach-preview";',
-  '@/lib/aiOutreach':'export const tickAiOutreach=async()=>{};',
+  '@/lib/aiOutreach':'export const tickAiOutreach=async()=>{};export const outreachFolderDismissal=id=>`outreach-folder:${id}`;',
   '@/store/appStore': 'export const flushPersist=async()=>{};export const useAppStore=selector=>selector(globalThis.folderAiState);useAppStore.getState=()=>globalThis.folderAiState;',
 };
 const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/layout/FolderAiPromptDialog.tsx',import.meta.url))],
@@ -25,7 +25,7 @@ const {FolderAiPromptDialog}=await import('data:text/javascript;base64,'+Buffer.
 const nodes=tree=>Array.isArray(tree)?tree.flatMap(nodes):tree?.props?[tree,...nodes(tree.props.children)]:[];
 function harness(prompt,initialise=()=>{}) {
   let slots=[],cursor=0,tree,closed=0;
-  const settings={aiReplyMode:'semi',activeAccountId:'a',aiSystemPrompt:'GLOBAL',aiSystemPromptByAccountId:{a:'ACCOUNT'},chatFolders:[
+  const settings={aiReplyMode:'semi',activeAccountId:'a',aiSystemPrompt:'GLOBAL',aiSystemPromptByAccountId:{a:'ACCOUNT'},aiTaskDismissedIds:[],chatFolders:[
     {id:'parent',name:'Parent',chatIds:[],scope:{type:'account',accountId:'a'},aiSystemPrompt:'PARENT'},
     {id:'f',name:'Folder',chatIds:['chat'],parentId:'parent',scope:{type:'account',accountId:'a'},aiSystemPrompt:prompt},
   ]};

@@ -559,8 +559,9 @@ export function saveAppState(
   const chatIds = new Set(data.chats.map((chat) => (chat as { id?: string }).id));
   const remaps = data.replaceMessages || (data.dirty && !data.dirty.chats) ? [] : [...pendingChatMessageRemaps.values()]
     .filter((remap) => chatIds.has(remap.toChatId) && !chatIds.has(remap.fromChatId));
+  const mergedChatIds = new Set(remaps.map((remap) => remap.fromChatId));
   const accountRemaps = data.replaceMessages || (data.dirty && !data.dirty.chats) ? [] : [...pendingChatAccountRemaps.values()]
-    .filter((remap) => chatIds.has(remap.chatId));
+    .filter((remap) => chatIds.has(remap.chatId) || mergedChatIds.has(remap.chatId));
   const run = saveQueue.then(async () => {
     const writesMessages = !data.dirty || data.dirty.messages;
     const restoredIds = new Set(writesMessages && pendingDeletedMessageIds.size

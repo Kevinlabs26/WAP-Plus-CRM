@@ -4,7 +4,7 @@ export type MusePlaybookMaterial = {id:string;name:string;content:string;revisio
 export const MUSE_ACCOUNT_PLAYBOOK_FOLDER = 'WAP Plus CRM - Playbook';
 export function hasMuseAccountPlaybook(book: AiPlaybook, accountId: string): boolean {
   const copy = book.museAccountCopies?.[accountId];
-  return Boolean(copy && book.museShareRevision && copy.revision === book.museShareRevision && copy.path.endsWith(`/${MUSE_ACCOUNT_PLAYBOOK_FOLDER}/${book.id}${(copy.parts || 1) > 1 ? ".part1" : ""}.md`));
+  return Boolean(copy && book.museShareRevision && (!book.museRevision || book.museRevision === book.museShareRevision) && copy.revision === book.museShareRevision && copy.path.endsWith(`/${MUSE_ACCOUNT_PLAYBOOK_FOLDER}/${book.id}${(copy.parts || 1) > 1 ? ".part1" : ""}.md`));
 }
 export type PlaybookSettings = {
   aiProvider?: string;
@@ -116,13 +116,15 @@ export function resolvePlaybook(settings: PlaybookSettings, accountId?: string, 
   const books = [stage];
   if (books.some(item => item.museMissing)) return {id, source, prompt: '', name: stage.name, error: '绑定的 Muse 工作区文件已不在同步清单中，请检查来源或重新选择'};
   if (books.some(item => !item.musePath && !item.content.trim() && !item.summary.trim())) return {id, source, prompt: '', name: stage.name, error: 'Playbook 内容为空，请重新同步或导入资料'};
-  const museMaterials = books.filter(item => item.content.trim() || item.summary.trim()).map(item => ({id:item.id,name:item.name,content:item.content.trim() ? item.content : item.summary.trim(),revision:item.museShareRevision || ''}));
+  const hasCurrentContent = (item: AiPlaybook) => !!item.content.trim() &&
+    (!item.museRevision || item.museRevision === item.museShareRevision);
+  const museMaterials = books.filter(item => hasCurrentContent(item) || !item.musePath && item.summary.trim()).map(item => ({id:item.id,name:item.name,content:hasCurrentContent(item) ? item.content : item.summary.trim(),revision:item.museShareRevision || ''}));
   if (useSourceFile && !stage.musePath) return {id, source, prompt: '', name: stage.name, error: '此 Playbook 没有主 Muse Workspace 原文件'};
   if (museAccountId && museMaterials.length !== books.length) return {id, source, prompt: '', name: stage.name, error: 'Playbook 原文尚未由主 Muse 读取，请重试'};
   const copies = museAccountId ? books.map(item => item.museAccountCopies?.[museAccountId]) : [];
   if (museAccountId && books.some(book => !hasMuseAccountPlaybook(book,museAccountId))) return {id, source, prompt: '', name: stage.name, error: '该 Muse 账号尚未完成所选 Playbook 的训练，请重试'};
-  const local = books.filter(item => item.content.trim() || (!item.musePath && item.summary.trim())).map(item => JSON.stringify({name: item.name, content: item.content.trim() ? item.content : item.summary.trim()}));
-  const remote = books.filter(item => item.musePath && (useSourceFile || !item.content.trim())).map(item => item.musePath!);
+  const local = museMaterials.map(item => JSON.stringify({name:item.name,content:item.content}));
+  const remote = books.filter(item => item.musePath && (useSourceFile || !hasCurrentContent(item))).map(item => item.musePath!);
   const paths = museAccountId ? copies.flatMap(copy => Array.from({length: copy!.parts || 1}, (_, index) => copy!.path.replace(/\.part1\.md$/, ".part" + (index + 1) + ".md"))) : remote;
   const fileRefs = paths.map(path => {
     const book = books.find(item => museAccountId ? item.museAccountCopies?.[museAccountId]?.path === path : item.musePath === path);

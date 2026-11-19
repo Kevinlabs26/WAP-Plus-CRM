@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { addMuseWebAccount, advanceMuseWebSideChatCleanup, cancelMuseWebSideChatCleanup, deleteMuseWebSideChats, museWebAccounts, museWebCleanupSchedules, museWebSideChats, museWebStatus, museWebWorkspaceAccount, openMuseWeb, removeMuseWebAccount, scheduleMuseWebSideChatCleanup, setMuseWorkspaceContentVisible, setMuseWorkspaceSidebarCollapsed, updateMuseWebAccount, updateMuseWebSideChatCleanup, type MuseSideChat, type MuseSideChatCleanup, type MuseWebAccount, type MuseWebAccountPool, type MuseWebStatus } from "@/lib/museWeb";
 import { museQueueSnapshot, subscribeMuseQueue } from "@/lib/museQueue";
 import { useI18n } from "@/i18n";
+import { resumeMuseWebSideChatCleanup } from "@/lib/museWeb";
 
 type WorkspaceWindow = Window & { __museWorkspaceAccount?: string };
 type AccountStatus = Pick<MuseWebStatus, "ready" | "state" | "message"> & { checkedAt: number };
@@ -78,11 +79,13 @@ export function MuseWorkspace() {
 
   useEffect(() => {
     let mounted = true;
+    let activeAccountChanged = false;
     let stopActive: (() => void) | undefined;
     let stopPool: (() => void) | undefined;
     const initialize = async () => {
       const [activeListener, poolListener] = await Promise.all([
         listen<string>("muse-workspace-active-account", event => {
+          activeAccountChanged = true;
           if (mounted) setActiveId(event.payload);
         }),
         listen<MuseWebAccountPool>("muse-workspace-account-pool", event => {
@@ -100,7 +103,7 @@ export function MuseWorkspace() {
       if (!mounted) return;
       setPool(value);
       setCleanupSchedules(cleanupTasks);
-      setActiveId(value.accounts.some(account => account.id === workspaceAccountId) ? workspaceAccountId : value.selectedId);
+      if (!activeAccountChanged) setActiveId(value.accounts.some(account => account.id === workspaceAccountId) ? workspaceAccountId : "");
     };
     void initialize().catch(reason => {
       if (!mounted) return;
@@ -190,9 +193,13 @@ export function MuseWorkspace() {
           if (task.dueAtMs > Date.now()) continue;
           const now = Date.now();
           if (now - task.dueAtMs > CLEANUP_GRACE_MS) {
-            const updated = await updateMuseWebSideChatCleanup(task.id, task.chats, t("muse.cleanupScheduleExpired"));
-            setCleanupSchedules(updated);
-            if (!stopped) { setError(true); setMessage(t("muse.cleanupScheduleExpired")); }
+            try {
+              const reason = t("muse.cleanupScheduleExpired");
+              setCleanupSchedules(await updateMuseWebSideChatCleanup(task.id, task.chats, reason));
+              if (!stopped) { setError(true); setMessage(reason); }
+            } catch (reason) {
+              if (!stopped) { setError(true); setMessage(String(reason)); }
+            }
             continue;
           }
           if (task.accountId !== activeId || queueBusy || busy || checking || cleanupOpen || editingAccount || removingAccount) continue;
@@ -220,7 +227,9 @@ export function MuseWorkspace() {
               }
               continue;
             }
-            const result = await deleteMuseWebSideChats(task.accountId, task.chats);
+            const before = new Set((await museWebSideChats(task.accountId)).map(chat => chat.id));
+            const targets = task.chats.filter(chat => before.has(chat.id));
+            const result = targets.length ? await deleteMuseWebSideChats(task.accountId, targets) : { error: null };
             let current: MuseSideChat[];
             try { current = await museWebSideChats(task.accountId); }
             catch { current = task.chats; }
@@ -510,6 +519,23 @@ export function MuseWorkspace() {
     catch (reason) { setCleanupError(reason instanceof Error ? reason.message : String(reason)); }
   };
 
+  const resumeScheduledCleanup = async (task: MuseSideChatCleanup) => {
+    if (cleanupLoading || cleanupScheduleProcessing || queueBusy || task.accountId !== activeId) return;
+    setCleanupLoading(true);
+    setCleanupError("");
+    try {
+      const updated = await resumeMuseWebSideChatCleanup(task.id, task.accountId);
+      setCleanupSchedules(updated);
+      closeCleanup();
+      setError(false);
+      setMessage(t("muse.cleanupScheduleResumed"));
+    } catch (reason) {
+      setCleanupError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setCleanupLoading(false);
+    }
+  };
+
   const selectableChats = cleanupChats.filter(chat => !chat.ambiguous);
   const recurringExclusionCandidates = cleanupChats.filter(chat => !chat.ambiguous);
   const recurringIncludeCount = recurringExclusionCandidates.filter(chat => !excludedChatIds.has(chat.id)).length;
@@ -626,6 +652,7 @@ export function MuseWorkspace() {
                         <span className={`truncate ${stateTone(status)}`} title={status?.message || statusText(status)}>{statusText(status)}</span>
                         {status && status.state !== "checking" && <span className="shrink-0 text-slate-400">· {checkedAtText(status)}</span>}
                       </span>
+                      {status?.state === "error" && status.message && <span className="mt-1 block break-words text-[11px] leading-4 text-rose-600">{status.message}</span>}
                     </span>
                   </button>
                 </div>
@@ -716,6 +743,8 @@ export function MuseWorkspace() {
                       : t("muse.cleanupScheduleTask", { count: task.chats.length, time: new Date(task.dueAtMs).toLocaleString() })}</p>
                     {task.error && <p className="mt-1 break-words text-rose-700">{task.error}</p>}
                   </div>
+                  {task.error && (!task.repeatEveryDays || task.identityScheme === 2) &&
+                    <button type="button" disabled={cleanupLoading || !!cleanupScheduleProcessing || queueBusy} onClick={() => void resumeScheduledCleanup(task)} className="shrink-0 text-blue-700 hover:text-blue-800 disabled:opacity-40">{t("muse.cleanupScheduleResume")}</button>}
                   <button type="button" disabled={cleanupLoading || cleanupScheduleProcessing === task.id} onClick={() => void cancelScheduledCleanup(task.id)} className="shrink-0 text-rose-700 hover:text-rose-800 disabled:opacity-40">{t("muse.cleanupScheduleCancel")}</button>
                 </div>)}
               </div>

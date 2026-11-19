@@ -257,6 +257,42 @@ const bundled=await build({stdin:{contents:`export {generateSuggestions} from '.
 b.onResolve({filter:/museWeb\.ts$/},()=>({path:'muse',namespace:'mock'}));b.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:'export const museWebAccounts=async()=>({accounts:[{id:"primary",name:"Primary"}],selectedId:"primary",primaryId:"primary"});export const nextMuseAutoReplyAccount=async()=>"primary";export const readyMuseAutoReplyAccounts=async()=>["primary"];export const generateMuseWeb=(...args)=>globalThis.museTest(...args);'}));
 }}]});
 const ai=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text).toString('base64'));
+test('proactive contact uses its pinned Muse account and keeps ungrounded output as a draft',async()=>{
+ const settings={...ai.defaultSettings,aiProvider:'openai',aiOutreachMuseAccountId:'primary'};
+ const contact={id:'customer',name:'Client'};
+ const history=[
+  {id:'in',chatId:'chat',direction:'in',body:'Please contact me next week',sentAt:'2026-11-07T12:00:00Z'},
+  {id:'out',chatId:'chat',direction:'out',body:'Your payment is confirmed',sentAt:'2026-11-07T12:01:00Z'},
+ ];
+ const opts={auto:true,outreach:'Contact this customer if requested',outreachDecision:true};
+ for(const [evidence,action] of [['Please contact me next week','send'],['Your payment is confirmed','draft'],['Invented confirmation','draft']]){
+  globalThis.museTest=async(_prompt,_signal,_key,_context,_priority,_onStart,account)=>{
+   assert.equal(account,'primary');return JSON.stringify({action:'send',text:'Bonjour !',reason:'The customer requested contact',evidence});
+  };
+  const result=await ai.generateSuggestions(contact,history,settings,opts);
+  assert.equal(result.outreachDecision?.action,action);
+  assert.equal(result.decisionDetails?.museAccountId,'primary');
+  assert.equal(result.decisionDetails?.evidence,action==='send'?evidence:undefined);
+ }
+});
+test('Muse automatic replies do not retry a generation that may have been submitted',async()=>{
+ const settings={...ai.defaultSettings,aiProvider:'muse'};
+ const contact={id:'test',name:'Alice'};
+ const history=[{id:'m1',chatId:'test',direction:'in',body:'Salut',sentAt:'2026-11-07T12:00:00Z'}];
+ globalThis.museTest=async()=>{throw Object.assign(new Error('Muse 生成超时'),{museSubmissionUncertain:true});};
+ assert.equal((await ai.generateSuggestions(contact,history,settings,{auto:true})).retryable,false);
+ globalThis.museTest=async()=>{throw new Error('Muse 后台连接超时');};
+ assert.equal((await ai.generateSuggestions(contact,history,settings,{auto:true})).retryable,true);
+});
+test('Muse recovery never clicks Send for a request still being prepared',()=>{
+ const p=page();
+ assert.equal(p.api.start('job-1','Reply').state,'preparing');
+ assert.equal(p.api.recover('job-1',true).state,'error');
+ assert.equal(p.clicks,0);
+ assert.equal(p.api.poll('job-1').state,'generating');
+ assert.equal(p.api.recover('job-1',true).state,'generating');
+ assert.equal(p.clicks,1);
+});
 test('Muse reuses configured prompts, context, JSON parsing and output constraints without an API key',async()=>{
  let prompt,context;globalThis.museTest=async(value,signal,key,current)=>{prompt=value;context=current;return '[{"text":"Bonjour !","tone":"warm"}]';};
  const settings={...ai.defaultSettings,aiProvider:'muse',aiSystemPrompt:'Reply in French. Do not promise anything.'};
@@ -367,6 +403,7 @@ test('media requests pass the explicit wait flag and preserve the returned media
  const calls=[];globalThis.museNative=async(cmd,args)=>{calls.push([cmd,args]);return cmd==='muse_web_status'?{ready:true,mediaProtocol:8,parallelMedia:true}:{text:'Here it is',media:{mimeType:'image/png',dataUrl:'data:image/png;base64,aW1hZ2U='},error:null,summaryRequests:0};};
  const result=await client.generateMuseWebOutput('Draw',undefined,undefined,undefined,undefined,true);
  assert.equal(result.media.data,'aW1hZ2U=');assert.equal(calls[0][1].media,true);assert.equal(calls[1][0],'muse_web_generate');assert.equal(calls[1][1].expectMedia,true);
+ assert.equal(calls[0][1].accountId,'primary');assert.equal(calls[1][1].accountId,calls[0][1].accountId);
 });
 test('the native adapter passes both reference images without collapsing the subject and style',async()=>{
  let submitted;globalThis.museNative=async(cmd,args)=>{if(cmd==='muse_web_status')return{ready:true,mediaProtocol:8,parallelMedia:true};submitted=args;return{text:null,media:{mimeType:'image/png',dataUrl:'data:image/png;base64,aW1hZ2U='},error:null,summaryRequests:0};};

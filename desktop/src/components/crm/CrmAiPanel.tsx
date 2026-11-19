@@ -8,7 +8,6 @@ import {
   Loader2,
   PanelRightClose,
   RefreshCw,
-  Send,
   ShoppingCart,
   Sparkles,
   TableProperties,
@@ -24,7 +23,7 @@ import {
 } from "@/lib/baileys";
 import { generateSuggestions, getSuggestionContextKey, hasRealAiKey, type GenerateSuggestionsResult } from "@/lib/aiSuggest";
 import { generateContactConversationSummary, getAiConversationSummaryStatus, subscribeAiConversationSummary } from "@/lib/aiConversationSummary";
-import { createSuggestionCache, isManualSuggestionContext, SUGGESTION_MAX_AGE_MS } from "@/lib/aiSuggestionCache";
+import { createSuggestionCache, SUGGESTION_MAX_AGE_MS } from "@/lib/aiSuggestionCache";
 import { resolveAiReplyProfile } from "@/lib/aiPromptScope";
 import { PlaybookBinding } from "./PlaybookBinding";
 import type { Message, WhatsAppLabel } from "@/types/crm";
@@ -129,11 +128,8 @@ export function CrmAiPanel() {
   const [readingTarget, setReadingTarget] = useState<string | null>(null);
   const [suggestionExpansion,setSuggestionExpansion]=useState<{key:string;open:boolean}|null>(null);
   const generation = useRef(0);
-  const explicitSuggestionKey = useRef<string | null>(null);
   const [suggestionCache] = useState(createSuggestionCache);
   const visibleSuggestionExpiry = useRef<{ key: string; expiresAt: number } | null>(null);
-  const currentPanel = useRef({ collapsed, panelTab });
-  currentPanel.current = { collapsed, panelTab };
 
   const contact = contacts.find((item) => item.id === selectedContactId);
   const savedAiChatInstructions = contact?.aiChatInstructions ?? "";
@@ -223,31 +219,35 @@ export function CrmAiPanel() {
   const suggestionsOpen=suggestionExpansion?.key===expansionKey?suggestionExpansion.open:replyScope.mode!=="auto"||needsHuman;
   const [planClock,setPlanClock]=useState(0);
   useEffect(()=>{if(!settings.aiPlaybookPlans?.length)return;const timer=window.setInterval(()=>setPlanClock(Date.now()),30000);return()=>window.clearInterval(timer);},[settings.aiPlaybookPlans?.length]);
-  const baseSuggestionKey=useMemo(()=>getSuggestionContextKey(contact,thread,settings,aiAccountId,{chatId:selectedChatId||undefined}),[selectedChatId,selectedContactId,contact,thread,settings,aiAccountId,planClock]);
   const suggestionKey = useMemo(() => getSuggestionContextKey(contact, thread, settings, aiAccountId, { chatId: selectedChatId || undefined,count:1 }),
     [selectedChatId, selectedContactId, contact, thread, settings, aiAccountId,planClock]);
   const latestSuggestionKey = useRef(suggestionKey);
   latestSuggestionKey.current = suggestionKey;
-  const cancelSuggestionUnlessHidden = (key: string) => {
-    const entry = suggestionCache.get(key);
-    if (latestSuggestionKey.current === key && !currentPanel.current.collapsed && currentPanel.current.panelTab !== "customer" && entry && !entry.result) return false;
-    generation.current++;
-    suggestionCache.cancelPending(key);
-    return true;
-  };
-
   const previousSuggestionKey = useRef(suggestionKey);
   useEffect(() => {
     if (previousSuggestionKey.current === suggestionKey) return;
+    generation.current++;
     suggestionCache.cancelPending(previousSuggestionKey.current);
-    if (explicitSuggestionKey.current === previousSuggestionKey.current) explicitSuggestionKey.current = null;
     previousSuggestionKey.current = suggestionKey;
+    const cached = suggestionCache.get(suggestionKey);
+    visibleSuggestionExpiry.current = cached?.result?.suggestions.length ? { key: suggestionKey, expiresAt: cached.expiresAt } : null;
+    useAppStore.setState({ aiSuggestions: cached?.result?.suggestions || [] });
+    if (cached?.result) setAiSource(cached.result.source);
+    setLoading(false);
+    setAiError("");
   }, [suggestionKey, suggestionCache]);
 
   useEffect(() => () => {
     generation.current++;
     suggestionCache.cancelPending(latestSuggestionKey.current);
   }, [suggestionCache]);
+
+  useEffect(() => {
+    if (!collapsed) return;
+    generation.current++;
+    suggestionCache.cancelPending(suggestionKey);
+    setLoading(false);
+  }, [collapsed, suggestionKey, suggestionCache]);
 
   useEffect(() => {
     if (!aiSuggestions.length || collapsed || panelTab !== "customer") return;
@@ -271,15 +271,8 @@ export function CrmAiPanel() {
 
   const saveAiChatInstructions = () => {
     if (!contact || !aiChatInstructionsDirty) return;
-    const value = aiChatInstructionsDraft || undefined;
-    const key = getSuggestionContextKey({ ...contact, aiChatInstructions: value }, thread, settings, aiAccountId, { chatId: selectedChatId || undefined, count: 1 });
-    explicitSuggestionKey.current = aiReady ? key : null;
-    updateContact(contact.id, { aiChatInstructions: value });
-    setSuggestionExpansion({ key: expansionKey, open: true });
+    updateContact(contact.id, { aiChatInstructions: aiChatInstructionsDraft || undefined });
   };
-
-  const requestSuggestions = (key: string, force = false, onProgress?: (result: GenerateSuggestionsResult) => void) => suggestionCache.request(key,
-    (publish, signal) => generateSuggestions(contact, thread, settings, { accountId: aiAccountId, chatId: selectedChatId || undefined, count:1, onProgress: publish, signal }), force, onProgress);
 
   const showProgress = (key: string, request: number) => (result: GenerateSuggestionsResult) => {
     const entry = suggestionCache.get(key);
@@ -346,7 +339,6 @@ export function CrmAiPanel() {
     setFollowSchedulerOpen(false);
     setFollowNote("");
     setAiError("");
-    useAppStore.setState({ aiSuggestions: [] });
   }, [selectedChatId, selectedContactId]);
 
   const cancelAi = () => {
@@ -370,16 +362,18 @@ export function CrmAiPanel() {
     }
     const request = ++generation.current;
     const key = suggestionKey;
+    setSuggestionExpansion({key:expansionKey,open:true});
     setLoading(true);
     setAiError("");
     try {
-      const result = await requestSuggestions(key, true, showProgress(key, request));
+      const result = await suggestionCache.request(key,
+        (publish, signal) => generateSuggestions(contact, thread, settings, { accountId: aiAccountId, chatId: selectedChatId || undefined, count:1, onProgress: publish, signal }),
+        true, showProgress(key, request));
       if (request !== generation.current || latestSuggestionKey.current !== key) return;
       if (result.suggestions.length) visibleSuggestionExpiry.current = { key, expiresAt: suggestionCache.get(key)?.expiresAt || Date.now() + SUGGESTION_MAX_AGE_MS };
       useAppStore.setState({ aiSuggestions: result.suggestions });
       setAiSource(result.source);
       setAiError(result.error || "");
-      setSuggestionExpansion({key:expansionKey,open:true});
       pushToast(
         result.fallback ? result.error || "API \u4e0d\u53ef\u7528" : "\u5df2\u751f\u6210\u56de\u590d\u5efa\u8bae",
         result.fallback ? "error" : "success"
@@ -393,75 +387,6 @@ export function CrmAiPanel() {
     }
   };
 
-  useEffect(() => {
-    const key = suggestionKey;
-    const explicit = explicitSuggestionKey.current === key;
-    const pending = suggestionCache.get(key);
-    if (pending && !pending.result) {
-      if (explicit) explicitSuggestionKey.current = null;
-      return;
-    }
-    const request = ++generation.current;
-    if(visibleSuggestionExpiry.current?.key!==key){useAppStore.setState({ aiSuggestions: [] });setAiError("");}
-    if (collapsed || panelTab !== "customer" || !contact || !aiReady || !suggestionsOpen || replyScope.mode==="auto" && !explicit) {
-      if (explicit) explicitSuggestionKey.current = null;
-      setLoading(false);
-      return () => { cancelSuggestionUnlessHidden(key); };
-    }
-    const entry = suggestionCache.get(key);
-    const cached = entry?.result;
-    if (cached) {
-      if (explicit) explicitSuggestionKey.current = null;
-      useAppStore.setState({ aiSuggestions: cached.suggestions });
-      setAiSource(cached.source);
-      setAiError("");
-      setLoading(false);
-      return () => { cancelSuggestionUnlessHidden(key); };
-    }
-    if(visibleSuggestionExpiry.current?.key===key&&!entry&&useAppStore.getState().aiSuggestions.length){if(explicit)explicitSuggestionKey.current=null;setLoading(false);return()=>{cancelSuggestionUnlessHidden(key);};}
-    if (isManualSuggestionContext(baseSuggestionKey) && !explicit) {
-      setLoading(false);
-      return () => { cancelSuggestionUnlessHidden(key); };
-    }
-    let cancelled = false;
-    setLoading(true);
-    setAiError("");
-    const timer = window.setTimeout(() => {
-      if (request !== generation.current || latestSuggestionKey.current !== key) return;
-      if (isManualSuggestionContext(baseSuggestionKey) && !explicit) { setLoading(false); return; }
-      void requestSuggestions(key, false, showProgress(key, request))
-        .then((result) => {
-          if (explicitSuggestionKey.current === key) explicitSuggestionKey.current = null;
-          if (cancelled || request !== generation.current || latestSuggestionKey.current !== key) return;
-          if (result.suggestions.length) visibleSuggestionExpiry.current = { key, expiresAt: suggestionCache.get(key)?.expiresAt || Date.now() + SUGGESTION_MAX_AGE_MS };
-          useAppStore.setState({ aiSuggestions: result.suggestions });
-          setAiSource(result.source);
-          setAiError(result.error || "");
-          setLoading(false);
-        })
-        .catch((error) => {
-          if (explicitSuggestionKey.current === key) explicitSuggestionKey.current = null;
-          if (!cancelled && request === generation.current && latestSuggestionKey.current === key) {
-            setAiError(error instanceof Error ? error.message : t("crmPanel.suggestionError", { error: String(error) }));
-            setLoading(false);
-          }
-        });
-    }, suggestionCache.get(key) ? 0 : 500);
-    return () => {
-      window.clearTimeout(timer);
-      if (!cancelSuggestionUnlessHidden(key)) return;
-      cancelled = true;
-    };
-    // 已发出的消息也更新下一句建议；未发出的内容不改变上下文或重复请求。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    collapsed,
-    panelTab,
-    suggestionKey,
-    aiReady,
-    suggestionsOpen,
-    replyScope.mode,
-  ]);
 
   const refreshLabels = async () => {
     if (!labelAccountId) return;
@@ -662,8 +587,8 @@ export function CrmAiPanel() {
                 <label htmlFor="contact-ai-chat-instructions" className="text-[11px] font-medium text-zinc-400">
                   {t("contact.aiChatInstructions")}
                 </label>
-                {aiChatInstructionsDirty && <Button variant="ghost" size="xs" className="!p-1.5" aria-label={t("contact.aiChatInstructionsSend")} title={t("contact.aiChatInstructionsSend")} onClick={saveAiChatInstructions}>
-                  <Send className="h-3.5 w-3.5" />
+                {aiChatInstructionsDirty && <Button variant="ghost" size="xs" className="!p-1.5" aria-label={t("dialog.save")} title={t("dialog.save")} onClick={saveAiChatInstructions}>
+                  <Check className="h-3.5 w-3.5" />
                 </Button>}
               </div>
               <textarea

@@ -273,7 +273,7 @@ export function AccountSlotCard({
             className="!min-h-8 w-full text-2xs"
             onClick={onLogin}
           >
-            {needsLogin ? t("phones.scanLogin") : online ? t("phones.manageAccount") : t("phones.connectAccount")}
+            {needsLogin ? t("phones.loginWhatsApp") : online ? t("phones.manageAccount") : t("phones.connectAccount")}
           </Button>
         </div>
       )}

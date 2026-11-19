@@ -1,5 +1,6 @@
 import { AI_OUTPUT_TRUNCATED, readAiJson } from "./aiResponse.ts";
 import { trackAiRequest, type AiUsageFeature } from "./aiUsage.ts";
+import { assertAiContentAllowed } from "./aiPrivacy.ts";
 /**
  * Gemini API 调用（Google 官方 generateContent 接口，非 OpenAI 兼容）。
  * 供回复建议 / 客户卡洞察 / 草稿翻译 / 语音转写共用。
@@ -115,6 +116,7 @@ export async function geminiGenerate(opts: {
   onText?: (text: string) => void;
   feature?:AiUsageFeature;
 }): Promise<string> {
+  assertAiContentAllowed(opts.system, opts.user);
   const model = opts.model || GEMINI_DEFAULT_MODEL;
   const generationConfig: Record<string, unknown> = {
     temperature: opts.temperature ?? 0.7,
@@ -170,6 +172,7 @@ export async function geminiGenerateImage(opts: {
   const model = opts.model || GEMINI_IMAGE_MODEL;
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,159}$/.test(model)) throw Error("无效的 Gemini 图片模型 ID");
   const prompt = opts.prompt.trim();
+  assertAiContentAllowed(prompt);
   if (!prompt || prompt.length > 6000) throw Error("图片描述超出长度限制");
   const references = opts.referenceImages || (opts.referenceImage ? [opts.referenceImage] : []);
   if (references.length > 2 || references.some(image => !/^image\/(?:jpeg|png|webp)$/.test(image.mimeType) || !/^[A-Za-z0-9+/]+={0,2}$/.test(image.data) || image.data.length > 4_000_000)) throw Error("参考图片格式无效或过大");

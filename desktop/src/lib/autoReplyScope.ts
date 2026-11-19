@@ -3,6 +3,7 @@ export type AutoReplyMode = "auto" | "manual";
 export interface AutoReplyScopeSettings {
   aiReplyMode: string;
   aiAutoReplyPaused?: boolean;
+  aiAutoReplyDisabled?: boolean;
   aiAutoReplyManualChatIds?: string[];
   aiAutoReplyModeByChatId?: Record<string, AutoReplyMode>;
   chatFolders?: { id: string; name: string; parentId?: string; chatIds: string[]; autoReplyMode?: AutoReplyMode; systemType?: string }[];
@@ -11,7 +12,7 @@ export interface AutoReplyScopeSettings {
 }
 
 export function resolveAutoReplyScope(settings: AutoReplyScopeSettings, chatId: string) {
-  if (settings.aiAutoReplyPaused) return { mode: "manual" as const, source: "paused" as const };
+  if (settings.aiAutoReplyPaused || settings.aiAutoReplyDisabled) return { mode: "manual" as const, source: "paused" as const };
   const override = settings.aiAutoReplyManualChatIds?.includes(chatId)
     ? "manual" : settings.aiAutoReplyModeByChatId?.[chatId];
   if (override === "auto" || override === "manual") return { mode: override, source: "chat" as const };

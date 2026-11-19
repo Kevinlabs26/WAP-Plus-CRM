@@ -1,5 +1,6 @@
 import { readAiJson } from "./aiResponse.ts";
 import { trackAiRequest } from "./aiUsage.ts";
+import { assertAiContentAllowed } from "./aiPrivacy.ts";
 import { getTranslationSettings } from "./translationConfig.ts";
 import type { Contact } from "@/types/crm";
 import type { AppSettings } from "@/store/appStore";
@@ -468,6 +469,7 @@ async function chatComplete(opts: {
       feature:"translation",
     });
   }
+  assertAiContentAllowed(opts.system, opts.user);
   if (opts.provider === "ollama") {
     const base = opts.settings.ollamaUrl.replace(/\/$/, "");
     return trackAiRequest({provider:"ollama",model:opts.settings.aiModel.trim()||"llama3.2",endpoint:base,feature:"translation"},async observe=>{
@@ -548,6 +550,7 @@ async function googleTranslate(
   timeoutMs = 30_000,
   signal?: AbortSignal
 ): Promise<string> {
+  assertAiContentAllowed(text);
   const url = new URL("https://translate.googleapis.com/translate_a/single");
   url.searchParams.set("client", "gtx");
   url.searchParams.set("sl", "auto");

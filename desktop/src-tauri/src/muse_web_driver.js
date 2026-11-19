@@ -323,8 +323,10 @@
     else if (job.expectMedia && !job.mediaData && !job.mediaPending && Date.now() >= job.mediaDeadline) return fail(job.collecting ? '取回超时：已定位原对话，但未在本次回复范围内识别到可读取的图片；原图保留在 Muse，未重新生成' : text ? 'Muse 已回复文字，但等待图片或视频超时；请在 Muse 窗口查看原结果，未重复生成' : 'Muse 尚未返回图片或视频；请在 Muse 窗口查看原结果，未重复生成');
     return result();
   }
-  function recover(id) {
-    if (!job || job.id !== id || !job.seenUser || job.state !== 'error') return { state: 'error', error: '没有可恢复的 Muse 生成结果' };
+  function recover(id, allowActive = false) {
+    if (!job || job.id !== id || !job.sent || (!allowActive && (!job.seenUser || job.state !== 'error'))) return { state: 'error', error: '没有可恢复的 Muse 生成结果' };
+    if (job.state !== 'error') return poll(id);
+    if (!job.seenUser) return { state: 'error', error: '没有可恢复的 Muse 生成结果' };
     job.state = 'generating';
     delete job.error;
     job.mediaError = null;
@@ -340,9 +342,9 @@
     job = { id, path: location.pathname, owner: null, reference: false, expectMedia: true, collecting: true, sent: true, seenUser: true, state: 'generating', mediaDeadline: Date.now()+30_000, text: '', changed: Date.now() };
     return poll(id);
   }
-  function cancel(id) {
+  function cancel(id, stopRemote = true) {
     if (job?.id === id && !['done','error'].includes(job.state)) {
-      try { stop()?.click(); } catch {}
+      if (stopRemote) { try { stop()?.click(); } catch {} }
       fail('已取消 Muse 生成');
     }
   }

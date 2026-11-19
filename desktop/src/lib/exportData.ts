@@ -2,6 +2,7 @@ import { isValidAccountId } from "@/types/account";
 import { escapeCsvCell } from "./csv.ts";
 import { getTimezone } from "countries-and-timezones";
 import { validTimeZone } from "./timeZone.ts";
+import { normalizeAiDecisionDetails } from "./aiDecisionDetails.ts";
 import { VIDEO_DATA_URL_MAX_CHARS, BACKUP_MEDIA_MAX_CHARS } from "./mediaBlob";
 import type {
   Activity,
@@ -101,6 +102,7 @@ export type SettingsSafeExport = {
   /** AI 回复模式与人设（此前导出丢失，跨机恢复后全部回落默认） */
   aiReplyMode: AppSettings["aiReplyMode"];
   aiAutoReplyPaused: boolean;
+  aiAutoReplyDisabled: boolean;
   aiAutoFollowUpEnabled: boolean;
   aiAutoFollowUpEnabledAt: number;
   aiAutoFollowUpDelaysMinutes: number[];
@@ -221,6 +223,7 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     followUpRuleSettings: settings.followUpRuleSettings,
     aiReplyMode: settings.aiReplyMode,
     aiAutoReplyPaused: settings.aiAutoReplyPaused,
+    aiAutoReplyDisabled: settings.aiAutoReplyDisabled,
     aiAutoFollowUpEnabled: settings.aiAutoFollowUpEnabled,
     aiAutoFollowUpEnabledAt: settings.aiAutoFollowUpEnabledAt,
     aiAutoFollowUpDelaysMinutes: settings.aiAutoFollowUpDelaysMinutes,
@@ -491,6 +494,13 @@ function sanitizeMessage(raw: unknown): Message | null {
     senderAvatarUrl: sanitizeMediaUrl(m.senderAvatarUrl) || undefined,
     systemKind: str(m.systemKind, 80) || undefined,
     aiReplyInboundId: str(m.aiReplyInboundId, 200) || undefined,
+    aiAutoReplyReceivedAt: typeof m.aiAutoReplyReceivedAt === "number" && Number.isFinite(m.aiAutoReplyReceivedAt) && m.aiAutoReplyReceivedAt > 0 ? m.aiAutoReplyReceivedAt : undefined,
+    aiReplyStartedAt: typeof m.aiReplyStartedAt === "number" && Number.isFinite(m.aiReplyStartedAt) && m.aiReplyStartedAt > 0 ? m.aiReplyStartedAt : undefined,
+    aiReplyReceivedAt: typeof m.aiReplyReceivedAt === "number" && Number.isFinite(m.aiReplyReceivedAt) && m.aiReplyReceivedAt > 0 ? m.aiReplyReceivedAt : undefined,
+    aiReplyDurationMs: typeof m.aiReplyDurationMs === "number" && Number.isFinite(m.aiReplyDurationMs) && m.aiReplyDurationMs >= 0 ? m.aiReplyDurationMs : undefined,
+    aiReplyMuseAccountId: str(m.aiReplyMuseAccountId, 200) || undefined,
+    aiReplyMuseAccountName: str(m.aiReplyMuseAccountName, 200) || undefined,
+    aiDecisionDetails: normalizeAiDecisionDetails(m.aiDecisionDetails),
     aiReplyContextHash: typeof m.aiReplyContextHash === "string" && /^[a-f0-9]{64}$/.test(m.aiReplyContextHash)
       ? m.aiReplyContextHash : undefined,
     aiAutoFollowUpRootId: str(m.aiAutoFollowUpRootId, 200) || undefined,

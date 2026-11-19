@@ -7,7 +7,7 @@ import { lastContactedAccounts, recipientKey } from "@/lib/scheduledPlans";
 
 export type AiLocalAgentAction =
   | { type: "list_folder_contacts"; folder: string }
-  | { type: "prepare_invitation"; folder: string; phoneNumbers: string[] }
+  | { type: "prepare_invitation"; folder: string; phoneNumbers?: string[] }
   | { type: "create_folder"; name: string; parentFolder?: string }
   | { type: "rename_folder"; folder: string; name: string }
   | { type: "add_contact_to_folder" | "move_contact_to_folder" | "remove_contact_from_folder"; contact: string; folder: string };
@@ -40,9 +40,13 @@ export function parseAiLocalAgentActions(raw: string): AiLocalAgentAction[] {
     if (row.type === "list_folder_contacts" && exactKeys(row, ["type", "folder"]) && bounded("folder", 160)) {
       return { type: row.type, folder: (row.folder as string).trim() };
     }
-    if (row.type === "prepare_invitation" && exactKeys(row, ["type", "folder", "phoneNumbers"]) && bounded("folder", 160) &&
-        Array.isArray(row.phoneNumbers) && row.phoneNumbers.length > 0 && row.phoneNumbers.length <= 50 &&
-        row.phoneNumbers.every(phone => typeof phone === "string" && /^\+?[\d\s().-]{7,25}$/.test(phone))) {
+    if (row.type === "prepare_invitation" &&
+        (exactKeys(row, ["type", "folder"]) || exactKeys(row, ["type", "folder", "phoneNumbers"])) && bounded("folder", 160)) {
+      if (row.phoneNumbers === undefined) return { type: row.type, folder: (row.folder as string).trim() };
+      if (!Array.isArray(row.phoneNumbers) || row.phoneNumbers.length === 0 || row.phoneNumbers.length > 50 ||
+          !row.phoneNumbers.every(phone => typeof phone === "string" && /^\+?[\d\s().-]{7,25}$/.test(phone))) {
+        throw Error("邀请名单中有无效号码；未准备发送");
+      }
       const phoneNumbers = [...new Set((row.phoneNumbers as string[]).map(normalizeBroadcastPhone))];
       if (phoneNumbers.some(phone => !phone)) throw Error("邀请名单中有无效号码；未准备发送");
       return { type: row.type, folder: (row.folder as string).trim(), phoneNumbers: phoneNumbers as string[] };
@@ -197,7 +201,7 @@ export function resolveAiLocalAgentActions(actions: AiLocalAgentAction[], state:
       const { members } = folderContents(folders, state.settings.chatFolderClones || [], folder.id);
       const chatsById = new Map(state.chats.map(item => [item.id, item]));
       const contactsById = new Map(state.contacts.map(item => [item.id, item]));
-      const requested = new Set(action.phoneNumbers);
+      const requested = action.phoneNumbers && new Set(action.phoneNumbers);
       const matched = new Map<string, { contactId: string; chatId: string; accountId: string; name: string; phone: string }>();
       for (const chatId of members) {
         const chat = chatsById.get(chatId);
@@ -205,18 +209,20 @@ export function resolveAiLocalAgentActions(actions: AiLocalAgentAction[], state:
         const contact = contactsById.get(chat.contactId);
         if (!contact || contact.isGroup) continue;
         const phone = contactSendablePhone(contact);
-        if (!phone || !requested.has(phone) || matched.has(phone)) continue;
+        if (!phone || requested && !requested.has(phone) || matched.has(phone)) continue;
         matched.set(phone, { contactId: contact.id, chatId: chat.id, accountId: chat.accountId || chat.phoneId || contact.accountId || fallbackAccountId || defaultSendAccount(state.settings), name: contact.name?.trim() || chat.contactName.trim() || phone, phone });
+        if (!requested && matched.size > 50) throw Error("CRM_AGENT_INVITATION_TOO_MANY");
       }
       const fallback = fallbackAccountId || defaultSendAccount(state.settings);
       if (!fallback || !state.settings.waAccounts?.some(account => account.id === fallback)) throw Error("CRM_AGENT_NO_SEND_ACCOUNT");
       const lastAccounts = lastContactedAccounts(state.chats, state.contacts, state.messages);
-      const contacts = action.phoneNumbers.flatMap(phone => {
+      const phoneNumbers = action.phoneNumbers || [...matched.keys()];
+      const contacts = phoneNumbers.flatMap(phone => {
         const contact = matched.get(phone);
         return contact ? [{ ...contact, lastContactedAccountId: lastAccounts.get(recipientKey("", phone)) }] : [];
       });
-      resolved.push({ type: action.type, folderName: folder.name, phoneNumbers: action.phoneNumbers, contacts,
-        unmatchedPhones: action.phoneNumbers.filter(phone => !matched.has(phone)), fallbackAccountId: fallback });
+      resolved.push({ type: action.type, folderName: folder.name, phoneNumbers, contacts,
+        unmatchedPhones: action.phoneNumbers?.filter(phone => !matched.has(phone)) || [], fallbackAccountId: fallback });
       continue;
     }
     const { folder, created } = resolvedFolder(folders, action.folder, virtual);

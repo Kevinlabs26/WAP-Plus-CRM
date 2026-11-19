@@ -89,6 +89,18 @@ export function SettingsAutoReplyPanel() {
     updateSettings({ aiAutoReplyPolicyByAccountId: next });
   };
 
+  const enableDefaultAutoReply = async () => {
+    if (settings.aiReplyMode === "auto") return;
+    if (!await useAppStore.getState().requestConfirm({
+      title: t("settingsAutoReply.autoConfirmTitle"),
+      description: t("settingsAutoReply.autoConfirmDescription"),
+      confirmLabel: t("settingsAutoReply.autoConfirmButton"),
+      cancelLabel: t("common.cancel"),
+      tone: "danger",
+    })) return;
+    updateSettings({ aiReplyMode: "auto" });
+  };
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <header>
@@ -139,7 +151,7 @@ export function SettingsAutoReplyPanel() {
           </button>
           <button
             type="button"
-            onClick={() => updateSettings({ aiReplyMode: "auto" })}
+            onClick={() => void enableDefaultAutoReply()}
             className={cn(
               "flex flex-col items-start gap-1 rounded-lg border px-3 py-3 text-left transition-colors",
               settings.aiReplyMode === "auto"

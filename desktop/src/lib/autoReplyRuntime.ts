@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { AiDecisionDetails } from "./aiDecisionDetails";
 
 export type AutoReplyPhase = "waiting" | "transcribing" | "generating" | "retry" | "human";
 export interface AutoReplyRuntime {
@@ -6,6 +7,7 @@ export interface AutoReplyRuntime {
   inboundId: string;
   accountId?: string;
   reason?: string;
+  decisionDetails?: AiDecisionDetails;
   retryAt?: number;
 }
 // Runtime only: status must never restart automation or enter backups.
@@ -14,7 +16,7 @@ export function setAutoReplyRuntime(chatId: string, value: AutoReplyRuntime | nu
   useAutoReplyRuntime.setState(state => {
     if (expectedInboundId && state.byChat[chatId]?.inboundId !== expectedInboundId) return state;
     const old=state.byChat[chatId];
-    if (!value&&!old || value&&old&&value.phase===old.phase&&value.inboundId===old.inboundId&&value.accountId===old.accountId&&value.reason===old.reason&&value.retryAt===old.retryAt) return state;
+    if (!value&&!old || value&&old&&value.phase===old.phase&&value.inboundId===old.inboundId&&value.accountId===old.accountId&&value.reason===old.reason&&value.retryAt===old.retryAt&&value.decisionDetails===old.decisionDetails) return state;
     const byChat = { ...state.byChat };
     if (value) byChat[chatId] = value;
     else delete byChat[chatId];

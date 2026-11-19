@@ -1,7 +1,7 @@
 import { isTauri } from './bridge.ts';
 import { trackAiRequest } from './aiUsage.ts';
 import { enqueueMuseTask, museQueueSnapshot } from './museQueue.ts';
-import { createMuseChatRedactor, musePrivacyGateMessage, musePrivacyIdentities, museTrainingDisabledConfirmed } from './museChatPrivacy.ts';
+import { assertMuseContentAllowed, createMuseChatRedactor, musePrivacyGateMessage, musePrivacyIdentities, museTrainingDisabledConfirmed } from './museChatPrivacy.ts';
 
 export type MuseWebStatus = { opened:boolean; ready:boolean; state:string; message:string; mediaProtocol?:number;parallelMedia?:boolean };
 export type MuseWebAccount = {id:string;name:string;note:string;selected:boolean;primary:boolean};
@@ -11,7 +11,15 @@ export type MuseSideChat = {id:string;title:string;stable:boolean;ambiguous:bool
 export type MuseSideChatCleanup = {id:string;accountId:string;dueAtMs:number;chats:MuseSideChat[];error:string|null;repeatEveryDays?:number;identityScheme?:number;excludedChatIds?:string[]};
 export type MuseSideChatDeleteResult = {deleted:string[];error:string|null};
 export type MuseWebContext = {profile:string;prefix:string;history:{id:string;text:string}[];suffix:string};
-const checkedReadyAccounts=new Set<string>();
+const readyUntil = new Map<string, number>();
+const retryAfter = new Map<string, number>();
+const accountProbes = new Map<string, Promise<void>>();
+const isAccountReady = (id: string) => (readyUntil.get(id) ?? 0) > Date.now();
+const isRetryDeferred = (id: string) => (retryAfter.get(id) ?? 0) > Date.now();
+function markAccountUnavailable(id: string) {
+  readyUntil.delete(id);
+  retryAfter.set(id, Date.now() + 30_000);
+}
 let nextAutoReplyAccount=0;
 async function native<T>(command:string,args:Record<string,unknown>={}) {
   if(!isTauri())throw Error('Muse 网页接入仅支持桌面版');
@@ -53,6 +61,7 @@ export const museWebCleanupSchedules=()=>native<MuseSideChatCleanup[]>('muse_web
 export const scheduleMuseWebSideChatCleanup=(task:MuseSideChatCleanup)=>native<MuseSideChatCleanup[]>('muse_web_cleanup_schedule_add',{task});
 export const updateMuseWebSideChatCleanup=(taskId:string,remainingChats:MuseSideChat[],error?:string)=>native<MuseSideChatCleanup[]>('muse_web_cleanup_schedule_update',{taskId,remainingChats,error});
 export const advanceMuseWebSideChatCleanup=(taskId:string)=>native<MuseSideChatCleanup[]>('muse_web_cleanup_schedule_advance',{taskId});
+export const resumeMuseWebSideChatCleanup=(taskId:string,accountId:string)=>native<MuseSideChatCleanup[]>('muse_web_cleanup_schedule_resume',{taskId,accountId});
 export const cancelMuseWebSideChatCleanup=(taskId:string)=>native<MuseSideChatCleanup[]>('muse_web_cleanup_schedule_cancel',{taskId});
 export async function selectMuseWebAccount(accountId:string):Promise<MuseWebAccountPool>{
   requireMuseQueueIdle();
@@ -63,21 +72,45 @@ export async function setMuseWebPrimaryAccount(accountId:string):Promise<MuseWeb
   return native<MuseWebAccountPool>('muse_web_account_set_primary',{accountId});
 }
 export async function museWebStatus(media=false,accountId?:string):Promise<MuseWebStatus>{
-  const status=await native<MuseWebStatus>('muse_web_status',{media,accountId});
-  if(!media&&accountId){if(status.ready)checkedReadyAccounts.add(accountId);else checkedReadyAccounts.delete(accountId);}
-  return status;
+  try {
+    const status = await native<MuseWebStatus>('muse_web_status', {media, accountId});
+    if (!media && accountId) {
+      if (status.ready) {
+        readyUntil.set(accountId, Date.now() + 120_000);
+        retryAfter.delete(accountId);
+      } else if (status.state !== 'busy') {
+        markAccountUnavailable(accountId);
+      } else if (!isAccountReady(accountId)) {
+        retryAfter.set(accountId, Date.now() + 5_000);
+      }
+    }
+    return status;
+  } catch (error) {
+    if (!media && accountId) markAccountUnavailable(accountId);
+    throw error;
+  }
+}
+function probeAutoReplyAccount(id: string): Promise<void> {
+  const existing = accountProbes.get(id);
+  if (existing) return existing;
+  const probe = museWebStatus(false, id).then(() => {}, () => {}).finally(() => accountProbes.delete(id));
+  accountProbes.set(id, probe);
+  return probe;
 }
 export async function nextMuseAutoReplyAccount(accountIds?:readonly string[]):Promise<string>{
   const pool=await museWebAccounts();
   const allowed=accountIds?new Set(accountIds):undefined;
-  const eligible=()=>pool.accounts.filter(account=>museTrainingDisabledConfirmed(account.id)&&(!allowed||allowed.has(account.id)));
-  let ready=eligible().filter(account=>checkedReadyAccounts.has(account.id));
-  if(!ready.length){
-    // Readiness is cached per webview, so the separate Muse workspace may not have populated this renderer's cache.
-    await Promise.all(eligible().map(async account=>{
-      try{await museWebStatus(false,account.id);}catch{checkedReadyAccounts.delete(account.id);}
-    }));
-    ready=eligible().filter(account=>checkedReadyAccounts.has(account.id));
+  const eligible=pool.accounts.filter(account=>museTrainingDisabledConfirmed(account.id)&&(!allowed||allowed.has(account.id)));
+  let ready=eligible.filter(account=>isAccountReady(account.id) && !isRetryDeferred(account.id));
+  if (!ready.length) {
+    const due = eligible.filter(account => !isRetryDeferred(account.id));
+    for (let i = 0; i < due.length; i += 2) {
+      await Promise.all(due.slice(i, i + 2).map(account => probeAutoReplyAccount(account.id)));
+    }
+    ready=eligible.filter(account=>isAccountReady(account.id) && !isRetryDeferred(account.id));
+    if (!ready.length && eligible.some(account => isRetryDeferred(account.id))) {
+      throw Error('Muse 自动回复账号暂不可用，将稍后重新检查');
+    }
   }
   if(!ready.length)return '';
   const account=ready[nextAutoReplyAccount%ready.length]!;
@@ -87,7 +120,7 @@ export async function nextMuseAutoReplyAccount(accountIds?:readonly string[]):Pr
 export async function readyMuseAutoReplyAccounts(accountIds?:readonly string[]):Promise<string[]>{
   const pool=await museWebAccounts();
   const allowed=accountIds?new Set(accountIds):undefined;
-  return pool.accounts.filter(account=>checkedReadyAccounts.has(account.id)&&museTrainingDisabledConfirmed(account.id)&&(!allowed||allowed.has(account.id))).map(account=>account.id);
+  return pool.accounts.filter(account=>isAccountReady(account.id)&&museTrainingDisabledConfirmed(account.id)&&(!allowed||allowed.has(account.id))).map(account=>account.id);
 }
 export type MuseGeneratedMedia = { mimeType: "image/png"|"image/jpeg"|"image/webp"|"video/mp4"|"video/webm"; data: string };
 export type MuseWebOutput = { text?: string; media?: MuseGeneratedMedia };
@@ -119,13 +152,13 @@ function parseMedia(media:{mimeType:string;dataUrl:string}):MuseGeneratedMedia {
 export function collectMuseWebMedia(accountId?:string):Promise<MuseGeneratedMedia>{
   return enqueueMuseTask('media',async()=>parseMedia(await native<{mimeType:string;dataUrl:string}>('muse_web_collect_media',{accountId})));
 }
-export async function generateMuseWebOutput(prompt:string,signal?:AbortSignal,conversationKey?:string,context?:MuseWebContext,referenceImage?:MuseReferenceImage | MuseReferenceImage[],expectMedia=false,priority=0,onStart?:()=>void,accountId?:string):Promise<MuseWebOutput> {
+export async function generateMuseWebOutput(prompt:string,signal?:AbortSignal,conversationKey?:string,context?:MuseWebContext,referenceImage?:MuseReferenceImage | MuseReferenceImage[],expectMedia=false,priority=0,onStart?:()=>void|Promise<void>,accountId?:string):Promise<MuseWebOutput> {
   const targetAccount=accountId||(await museWebAccounts()).selectedId;
   if(!museTrainingDisabledConfirmed(targetAccount))throw Error(musePrivacyGateMessage());
+  assertMuseContentAllowed(prompt,context);
   return enqueueMuseTask(expectMedia?'media':'text',async(signal)=>{
     signal?.throwIfAborted();
     if(!museTrainingDisabledConfirmed(targetAccount))throw Error(musePrivacyGateMessage());
-    onStart?.();
     if(context || conversationKey?.startsWith('["sheet-extract",') || conversationKey?.startsWith('["customer-insight",')){
       const redact=createMuseChatRedactor(musePrivacyIdentities());
       if(context){
@@ -141,8 +174,12 @@ export async function generateMuseWebOutput(prompt:string,signal?:AbortSignal,co
       conversationKey=conversationKey?JSON.stringify(['private-chat-v1',conversationKey]):undefined;
       signal?.throwIfAborted();
     }
+    await onStart?.();
+    signal?.throwIfAborted();
+    if (!museTrainingDisabledConfirmed(targetAccount)) throw Error(musePrivacyGateMessage());
+    assertMuseContentAllowed(prompt,context);
     if(expectMedia){
-      const status=await museWebStatus(true);
+      const status=await museWebStatus(true, targetAccount);
       signal?.throwIfAborted();
       if(status.mediaProtocol!==8||!status.parallelMedia)throw Error('桌面后台仍是旧版 Muse 连接，请退出并重启桌面开发版；本次未提交媒体任务');
       if(!status.ready)throw Error(status.message||'Muse 页面尚未连接就绪');
@@ -156,13 +193,23 @@ export async function generateMuseWebOutput(prompt:string,signal?:AbortSignal,co
       const kind = expectMedia ? 'media' : priority < 0 ? 'playbook' :
         context ? (priority === 1 ? 'autoReply' : priority === 0 ? 'outreach' : 'suggestion') : 'other';
       setActiveMuseRequests([...activeMuseRequests, {id:requestId, accountId:targetAccount, startedAt:Date.now(), kind}]);
-      const result=await native<string|{text:string|null;media:{mimeType:string;dataUrl:string}|null;error:string|null;summaryRequests:number;summaryFailed:boolean}>('muse_web_generate',{accountId:targetAccount,requestId,prompt,conversationKey,context,referenceImage:null,referenceImages,expectMedia});
+      const result=await native<string|{text:string|null;media:{mimeType:string;dataUrl:string}|null;error:string|null;submissionUncertain?:boolean;summaryRequests:number;summaryFailed:boolean}>('muse_web_generate',{accountId:targetAccount,requestId,prompt,conversationKey,context,referenceImage:null,referenceImages,expectMedia}).catch(error => {
+        if (!signal?.aborted && /Muse 桌面通信中断/i.test(String(error))) {
+          throw Object.assign(new Error("Muse 请求可能已提交，请查看原对话。系统已停止自动重试。"), { museSubmissionUncertain: true });
+        }
+        throw error;
+      });
       if(typeof result==='object'&&result?.summaryRequests===1){
         await trackAiRequest({provider:'muse',model:'muse-web',feature:'context'},async()=>{if(result.summaryFailed)throw Error('Muse 续接摘要失败');}).catch(()=>undefined);
       }
       signal?.throwIfAborted();
       if (cancelledActiveMuseRequests.has(requestId)) throw new DOMException('Muse 请求已取消', 'AbortError');
-      if(typeof result==='object'&&result?.error)throw Error(result.error);
+      if (typeof result === 'object' && result?.error) {
+        if (result.submissionUncertain) {
+          throw Object.assign(new Error(`Muse 请求可能已提交，请查看原对话。系统已停止自动重试。原因：${result.error}`), { museSubmissionUncertain: true });
+        }
+        throw Error(result.error);
+      }
       const text=typeof result==='string'?result:result?.text;
       if(text!==null&&text!==undefined&&(typeof text!=='string'||text.length>512000))throw Error('Muse 返回内容无效');
       let media: MuseGeneratedMedia|undefined;
@@ -177,11 +224,14 @@ export async function generateMuseWebOutput(prompt:string,signal?:AbortSignal,co
       setActiveMuseRequests(activeMuseRequests.filter(request => request.id !== requestId));
     }
   },signal,priority,targetAccount).catch(error=>{
-    if(/login|登录/i.test(error instanceof Error?error.message:String(error)))checkedReadyAccounts.delete(targetAccount);
+    if (!expectMedia && !signal?.aborted &&
+      /Muse 后台连接超时|Muse 自动重连失败|无法读取 Muse 后台窗口状态|Muse 桌面通信中断|请先登录 Muse|Muse 当前需要登录|Muse 网页提示额度不足/i.test(error instanceof Error ? error.message : String(error))) {
+      markAccountUnavailable(targetAccount);
+    }
     throw error;
   });
 }
-export async function generateMuseWeb(prompt:string,signal?:AbortSignal,conversationKey?:string,context?:MuseWebContext,priority=0,onStart?:()=>void,accountId?:string):Promise<string> {
+export async function generateMuseWeb(prompt:string,signal?:AbortSignal,conversationKey?:string,context?:MuseWebContext,priority=0,onStart?:()=>void|Promise<void>,accountId?:string):Promise<string> {
   const result=await generateMuseWebOutput(prompt,signal,conversationKey,context,undefined,false,priority,onStart,accountId);
   if(!result.text)throw Error('Muse 只返回了媒体文件，当前操作需要文字回复');
   return result.text;

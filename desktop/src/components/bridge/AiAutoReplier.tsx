@@ -36,11 +36,12 @@ export function AiAutoReplier() {
       void tickAiAutoFollowUps().catch(error=>console.error("[ai-auto-follow-up] scheduler failed",error));
     },30_000);
     const unsubscribeSettings = useAppStore.subscribe((state, previous) => {
-      if(state.settings.aiAutoReplyPaused!==previous.settings.aiAutoReplyPaused)refreshAutoReplyPause();
+      if(state.settings.aiAutoReplyPaused!==previous.settings.aiAutoReplyPaused||state.settings.aiAutoReplyDisabled!==previous.settings.aiAutoReplyDisabled)refreshAutoReplyPause();
       if (state.settings.aiAutoReplyPolicy !== previous.settings.aiAutoReplyPolicy ||
           state.settings.aiAutoReplyPolicyByAccountId !== previous.settings.aiAutoReplyPolicyByAccountId) refreshManualTakeovers();
       if (state.settings.aiAutoFollowUpEnabled !== previous.settings.aiAutoFollowUpEnabled ||
           state.settings.aiAutoReplyPaused !== previous.settings.aiAutoReplyPaused ||
+          state.settings.aiAutoReplyDisabled !== previous.settings.aiAutoReplyDisabled ||
           state.settings.aiReplyMode !== previous.settings.aiReplyMode ||
           state.settings.aiAutoReplyModeByChatId !== previous.settings.aiAutoReplyModeByChatId ||
           state.settings.aiAutoReplyManualChatIds !== previous.settings.aiAutoReplyManualChatIds ||
@@ -49,6 +50,7 @@ export function AiAutoReplier() {
           state.settings.leadInbox !== previous.settings.leadInbox) cancelInactiveAiAutoFollowUps();
       if (state.hydrated && previous.hydrated && (
           state.settings.aiAutoReplyPaused !== previous.settings.aiAutoReplyPaused ||
+          state.settings.aiAutoReplyDisabled !== previous.settings.aiAutoReplyDisabled ||
           state.settings.aiReplyMode !== previous.settings.aiReplyMode ||
           state.settings.aiAutoReplyModeByChatId !== previous.settings.aiAutoReplyModeByChatId ||
           state.settings.aiAutoReplyManualChatIds !== previous.settings.aiAutoReplyManualChatIds ||

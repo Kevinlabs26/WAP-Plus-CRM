@@ -952,15 +952,28 @@ impl Ui<'_> {
         Err("聊天标题与选中的联系人不一致或尚未就绪，未拨号".into())
     }
     unsafe fn wait_chat_header(
-        &self,
+        &mut self,
+        family: &str,
+        host: HWND,
         recipient: &str,
         selected_label: &str,
     ) -> Result<IUIAutomationElement, String> {
         let until = self.deadline.min(Instant::now() + Duration::from_secs(5));
         loop {
             self.check()?;
-            // The previous chat's call button can remain visible while React switches the header.
-            match self.chat_call(recipient, selected_label) {
+            if window(family)? != host {
+                return Err("客户端主窗口已改变，未拨号".into());
+            }
+            let verified = chat_window(family).and_then(|hwnd| {
+                // Opening a chat can replace the WebView under the same client host.
+                self.hwnd = hwnd;
+                let call = self.chat_call(recipient, selected_label)?;
+                if window(family)? != host || chat_window(family)? != hwnd {
+                    return Err("客户端聊天窗口仍在切换，未拨号".into());
+                }
+                Ok(call)
+            });
+            match verified {
                 Ok(call) => return Ok(call),
                 Err(error) if Instant::now() >= until => return Err(error),
                 Err(_) => {}
@@ -1123,10 +1136,10 @@ pub fn call(id: &str, recipient: &str, cancelled: &AtomicBool) -> Result<(), Str
             ui.hwnd = chat_window(family)?;
             ui.chat = true;
             mark("检查当前聊天");
-            if let Ok(call) = ui.chat_call(recipient, "") {
+            if let Ok(mut call) = ui.chat_call(recipient, "") {
                 // Only a visible full phone number qualifies; a saved nickname still uses number search.
-                if window(family)? != hwnd || chat_window(family)? != ui.hwnd {
-                    return Err("客户端窗口已改变，未拨号".into());
+                if window(family)? != hwnd || chat_window(family).ok() != Some(ui.hwnd) {
+                    call = ui.wait_chat_header(family, hwnd, recipient, "")?;
                 }
                 mark("直接发起语音通话");
                 return ui.invoke(&call);
@@ -1199,11 +1212,8 @@ pub fn call(id: &str, recipient: &str, cancelled: &AtomicBool) -> Result<(), Str
                 std::thread::sleep(Duration::from_millis(100));
             }
             mark("确认聊天已切换");
-            let call = ui.wait_chat_header(recipient, &selected_label)?;
+            let call = ui.wait_chat_header(family, hwnd, recipient, &selected_label)?;
             // Final action is never retried: an invocation error can still mean a call was placed.
-            if window(family)? != hwnd || chat_window(family)? != ui.hwnd {
-                return Err("客户端窗口已改变，未拨号".into());
-            }
             mark("发起语音通话");
             ui.invoke(&call)
         }
@@ -1239,10 +1249,11 @@ mod tests {
             let walker = automation.RawViewWalker().unwrap();
             let mut checked = 0;
             for app in apps().unwrap() {
-                let Ok(hwnd) = chat_window(app.app_id.split_once('!').unwrap().0) else {
+                let family = app.app_id.split_once('!').unwrap().0;
+                let (Ok(host), Ok(hwnd)) = (window(family), chat_window(family)) else {
                     continue;
                 };
-                let ui = Ui {
+                let mut ui = Ui {
                     automation: automation.clone(),
                     hwnd,
                     deadline: Instant::now() + Duration::from_secs(15),
@@ -1290,7 +1301,7 @@ mod tests {
                         let label = normalized_label(&node.CachedName().ok()?.to_string());
                         displayed_phone(header_contact_label(&label))
                     }) {
-                        ui.wait_chat_header(&phone, "").expect(
+                        ui.wait_chat_header(family, host, &phone, "").expect(
                             "an observed complete header phone must verify without clicking",
                         );
                         assert!(ui

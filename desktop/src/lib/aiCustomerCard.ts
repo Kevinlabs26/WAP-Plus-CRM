@@ -1,5 +1,6 @@
 import { readAiJson } from "./aiResponse.ts";
 import { trackAiRequest } from "./aiUsage.ts";
+import { assertAiContentAllowed, checkAiMessages } from "./aiPrivacy.ts";
 import type { Contact, Message, SalesStage } from "@/types/crm";
 import type { AppSettings } from "@/store/appStore";
 import type { AiSource } from "@/lib/aiSuggest";
@@ -59,6 +60,7 @@ export async function extractChatSheetFields(
     fields,
     conversation: history,
   });
+  assertAiContentAllowed(system, user);
   let raw = "";
   if (provider === "muse") {
     raw = await trackAiRequest({ provider: "muse", model: "muse-web", feature: "insight" }, () =>
@@ -266,13 +268,13 @@ async function openAiCompatibleInsight(opts: {
     body: JSON.stringify({
       model: opts.model,
       ...chatCompletionOptions(opts.provider,opts.model,0.4),
-      messages: [
+      messages: checkAiMessages([
         { role: "system", content: buildInsightSystem(opts.outputLanguage) },
         {
           role: "user",
           content: buildInsightUser(opts.contact, opts.messages),
         },
-      ],
+      ]),
     }),
   });
   if (!res.ok) {
@@ -333,10 +335,10 @@ async function ollamaInsight(
       model: settings.aiModel.trim() || "llama3.2",
       stream: false,
       format: "json",
-      messages: [
+      messages: checkAiMessages([
         { role: "system", content: buildInsightSystem(outputLanguage) },
         { role: "user", content: buildInsightUser(contact, messages) },
-      ],
+      ]),
     }),
   });
   if (!res.ok) throw new Error(`Ollama ${res.status}`);

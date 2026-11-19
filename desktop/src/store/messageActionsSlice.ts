@@ -86,6 +86,11 @@ export function createMessageActionsSlice({
         systemKind: input.systemKind,
         aiReplyContextHash: input.aiReplyContextHash,
         aiReplyInboundId: input.aiReplyInboundId,
+        aiReplyReceivedAt: input.aiReplyReceivedAt,
+        aiReplyDurationMs: input.aiReplyDurationMs,
+        aiReplyMuseAccountId: input.aiReplyMuseAccountId,
+        aiReplyMuseAccountName: input.aiReplyMuseAccountName,
+        aiDecisionDetails: input.aiDecisionDetails,
         aiAutoFollowUpRootId: input.aiAutoFollowUpRootId,
         aiAutoFollowUpStep: input.aiAutoFollowUpStep,
         aiAutoFollowUpSentAt: input.aiAutoFollowUpSentAt,
@@ -163,7 +168,12 @@ export function createMessageActionsSlice({
 
     updateMessageDelivery: (id, patch) => {
       const prev = get().messages.find((m) => m.id === id);
-      const applied = get().patchMessage(id, patch);
+      const completed = ["sent", "server", "delivered", "read", "played"].includes(patch.deliveryStatus || "");
+      const duration = prev?.systemKind === "ai_auto_reply" && !prev.aiAutoFollowUpStep &&
+        prev.aiReplyReceivedAt !== undefined && prev.aiReplyDurationMs === undefined && completed
+        ? { aiReplyDurationMs: Math.max(0, Date.now() - prev.aiReplyReceivedAt) }
+        : {};
+      const applied = get().patchMessage(id, { ...patch, ...duration });
       if (!applied) return;
       const next = get().messages.find((m) => m.id === id);
       if (next && isConversationOutgoing(next)) {

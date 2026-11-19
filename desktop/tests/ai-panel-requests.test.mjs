@@ -113,7 +113,7 @@ test('automatic mode starts compact, does no duplicate generation and expands wh
 });
 
 test('a stuck suggestion can be cancelled without refreshing the chat', async () => {
- const h=harness(); await h.mount(); h.fireTimers();
+ const h=harness(); await h.mount(); h.refresh();
  const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
  const cancel=nodes(h.render()).find(node=>node.props['aria-label']==='common.cancel');
  assert.ok(cancel,'cancel button exists while generating'); cancel.props.onClick();
@@ -122,14 +122,14 @@ test('a stuck suggestion can be cancelled without refreshing the chat', async ()
 });
 
 test('edited original is inserted into the current composer only and stale editor callbacks cannot change another conversation',async()=>{
- const h=harness(),inserted=[];h.state.applyAiSuggestion=(...args)=>inserted.push(args);await h.mount();h.fireTimers();h.requests[0].resolve(reply('Original'));await settle();
+ const h=harness(),inserted=[];h.state.applyAiSuggestion=(...args)=>inserted.push(args);await h.mount(); h.refresh();h.requests[0].resolve(reply('Original'));await settle();
  const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
  const card=nodes(h.render()).find(node=>node.type==='suggestion-card');card.props.onInsert('replace','Edited original');assert.deepEqual(inserted,[['Edited original','replace']]);
  h.state.selectedChatId='b';card.props.onInsert('replace','Do not insert');assert.equal(inserted.length,1);h.unmount();
 });
 
 test('streaming additional suggestions keeps the first card mounted even when the provider regenerates candidate IDs',async()=>{
-  const h=harness();await h.mount();h.fireTimers();
+  const h=harness();await h.mount(); h.refresh();
   const nodes=tree=>Array.isArray(tree)?tree.flatMap(nodes):tree?.props?[tree,...nodes(tree.props.children)]:[];
   const progress=h.requests[0].args[3].onProgress;
   progress({source:'custom',suggestions:[{id:'chunk-1',text:'Bonjour !'}]});
@@ -142,7 +142,7 @@ test('streaming additional suggestions keeps the first card mounted even when th
 
 test('expired visible suggestions cannot be inserted, expire without automatic API loops and allow explicit regeneration',async t=>{
   let now=Date.now();t.mock.method(Date,'now',()=>now);
-  const h=harness(),inserted=[];h.state.applyAiSuggestion=(...args)=>inserted.push(args);await h.mount();h.fireTimers();
+  const h=harness(),inserted=[];h.state.applyAiSuggestion=(...args)=>inserted.push(args);await h.mount(); h.refresh();
   h.requests[0].resolve(reply('Good evening.'));await settle();
   const nodes=tree=>Array.isArray(tree)?tree.flatMap(nodes):tree?.props?[tree,...nodes(tree.props.children)]:[];
   const card=nodes(h.render()).find(n=>n.type==='suggestion-card');assert.ok(card);
@@ -154,7 +154,7 @@ test('expired visible suggestions cannot be inserted, expire without automatic A
 });
 
 test("a single reading control updates all suggestions, remembers the target and also controls newly generated cards", async () => {
-  const h=harness();h.state.settings.myLang='zh';await h.mount();h.fireTimers();
+  const h=harness();h.state.settings.myLang='zh';await h.mount(); h.refresh();
   h.requests[0].resolve({source:'custom',suggestions:[{id:'1',text:'Bonjour !'},{id:'2',text:'Bonsoir !'},{id:'3',text:'Salut !'}]});await settle();
   const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
   const control=()=>nodes(h.render()).filter(n=>n.type==='reading-control');
@@ -169,7 +169,7 @@ test("a single reading control updates all suggestions, remembers the target and
 
 test("suggestion reading inserts only the generated original and rejects stale chat, account or refreshed cards", async () => {
   const h=harness(),inserted=[];h.state.applyAiSuggestion=(...args)=>inserted.push(args);
-  await h.mount();h.fireTimers();h.requests[0].resolve(reply('Bonjour !'));await settle();
+  await h.mount(); h.refresh();h.requests[0].resolve(reply('Bonjour !'));await settle();
   const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
   const card=nodes(h.render()).find(n=>n.type==='suggestion-card').props;
   assert.equal(card.text,'Bonjour !');assert.strictEqual(card.settings,h.state.settings);
@@ -204,19 +204,19 @@ test("folder identity edits and moves reject old streaming replies while clone c
     { id: 'parent', name: 'Parent', chatIds: [], aiSystemPrompt: 'PARENT', scope: { type: 'account', accountId: 'a' } },
     { id: 'child', name: 'Child', chatIds: ['a'], parentId: 'parent', scope: { type: 'account', accountId: 'a' } },
   ];
-  await h.mount(); h.fireTimers();
+  await h.mount(); h.refresh();
   const original = h.requests[0];
   h.state.settings = { ...h.state.settings, chatFolderClones: [{ sourceChatId: 'a', folderId: 'other' }] };
   h.render(); h.fireTimers(); assert.equal(h.requests.length, 1);
   h.state.settings = { ...h.state.settings, chatFolders: h.state.settings.chatFolders.map(f => f.id === 'parent' ? { ...f, aiSystemPrompt: 'NEW ROLE' } : f) };
-  h.render(); h.fireTimers(); assert.equal(h.requests.length, 2);
+  h.render(); h.fireTimers(); assert.equal(h.requests.length, 1); h.refresh();
   original.args[3].onProgress(reply('OLD ROLE'));
   original.resolve(reply('OLD FINAL')); await settle();
   assert.deepEqual(h.state.aiSuggestions, []);
   h.requests[1].args[3].onProgress(reply('NEW ROLE candidate'));
   assert.equal(h.state.aiSuggestions[0].text, 'NEW ROLE candidate');
   h.state.settings = { ...h.state.settings, chatFolders: [] };
-  h.render(); h.fireTimers(); assert.equal(h.requests.length, 3);
+  h.render(); h.fireTimers(); assert.equal(h.requests.length, 2); h.refresh();
   h.requests[1].resolve(reply('STALE AFTER MOVE')); await settle();
   assert.deepEqual(h.state.aiSuggestions, []);
   h.requests[2].resolve(reply('DEFAULT ROLE')); await settle();
@@ -224,15 +224,15 @@ test("folder identity edits and moves reject old streaming replies while clone c
 });
 
 test("streamed candidates appear while loading and cannot leak across conversations or unmount", async () => {
-  const h = harness(); await h.mount(); h.fireTimers();
+  const h = harness(); await h.mount(); h.refresh();
   const progressA = h.requests[0].args[3].onProgress;
   progressA(reply("First completed A candidate"));
   assert.equal(h.state.aiSuggestions[0].text, "First completed A candidate");
   assert.ok(JSON.stringify(h.render()).includes("First completed A candidate"), "candidate is visible before completion");
-  Object.assign(h.state, { selectedContactId: "b", selectedChatId: "b" }); h.render(); h.fireTimers();
+  Object.assign(h.state, { selectedContactId: "b", selectedChatId: "b" }); h.render(); h.refresh();
   progressA(reply("STALE A progress"));
   assert.deepEqual(h.state.aiSuggestions, []);
-  Object.assign(h.state, { selectedContactId: "a", selectedChatId: "a" }); h.render(); h.fireTimers();
+  Object.assign(h.state, { selectedContactId: "a", selectedChatId: "a" }); h.render(); h.refresh();
   assert.equal(h.requests.length, 3, "returning starts a new request after cancelling obsolete work");
   assert.equal(h.requests[0].args[3].signal.aborted, true);
   assert.equal(h.requests[1].args[3].signal.aborted, true);
@@ -243,12 +243,12 @@ test("streamed candidates appear while loading and cannot leak across conversati
   h.requests.forEach(request => request.resolve(reply("done"))); await settle();
 });
 
-test("manual and automatic requests cannot put an old contact's suggestion into a new conversation", async () => {
-  for (const manual of [false, true]) {
+test("manual requests cannot put an old contact's suggestion into a new conversation", async () => {
+  {
     const h = harness(); await h.mount();
-    if (manual) h.refresh(); else h.fireTimers();
+    h.refresh();
     assert.equal(h.requests.length, 1);
-    Object.assign(h.state, { selectedContactId: "b", selectedChatId: "b" }); h.render(); h.fireTimers();
+    Object.assign(h.state, { selectedContactId: "b", selectedChatId: "b" }); h.render(); h.refresh();
     assert.equal(h.requests.length, 2);
     h.requests[1].resolve(reply("B reply")); await settle();
     h.requests[0].resolve(reply("STALE A reply")); await settle();
@@ -257,21 +257,21 @@ test("manual and automatic requests cannot put an old contact's suggestion into 
   }
 });
 
-test("sent replies automatically generate a continuation while receipts reuse it and refresh shares pending work", async () => {
-  const h = harness(); await h.mount(); h.fireTimers();
+test("sent replies invalidate old suggestions while receipt changes keep the current context", async () => {
+  const h = harness(); await h.mount(); h.refresh();
   h.requests[0].resolve(reply("first")); await settle(); h.render();
   h.state.messagesByChatId = { ...h.state.messagesByChatId, a: h.state.messagesByChatId.a.map(m => ({ ...m, deliveryStatus: "read" })) };
   h.render(); h.fireTimers(); assert.equal(h.requests.length, 1);
   h.state.messagesByChatId = { ...h.state.messagesByChatId, a: [...h.state.messagesByChatId.a, { id: "a-out", chatId: "a", direction: "out", body: "Already answered.", deliveryStatus: "sent", sentAt: "2026-01-01T00:01:00Z" }] };
-  h.render(); h.fireTimers(); assert.equal(h.requests.length, 2);
+  h.render(); h.fireTimers(); assert.equal(h.requests.length, 1); h.refresh();
   assert.equal(h.requests[1].args[1].at(-1).body, "Already answered.");
   h.requests[1].resolve(reply("continuation")); await settle(); h.render();
   assert.equal(h.state.aiSuggestions[0].text, "continuation");
   h.state.messagesByChatId = { ...h.state.messagesByChatId, a: h.state.messagesByChatId.a.map(m => ({ ...m, deliveryStatus: "read" })) };
   h.render(); h.fireTimers(); assert.equal(h.requests.length, 2);
   h.state.settings = { ...h.state.settings, customAiModel: "two" }; h.render(); h.fireTimers();
-  assert.equal(h.requests.length, 3);
-  h.refresh(); assert.equal(h.requests.length, 3);
+  assert.equal(h.requests.length, 2);
+  h.refresh(); h.refresh(); assert.equal(h.requests.length, 3);
   assert.equal(h.requests[2].args[2].customAiModel, "two");
   assert.equal(h.requests[2].args[1].at(-1).body, "Already answered.");
   h.requests[2].resolve(reply("new model")); await settle(); h.render();
@@ -283,12 +283,13 @@ test("sent replies automatically generate a continuation while receipts reuse it
 
 test("switching away cancels pending work but keeps completed results for instant return", async () => {
   for (const finishBeforeLeaving of [false, true]) {
-    const h = harness(); await h.mount(); h.fireTimers();
+    const h = harness(); await h.mount(); h.refresh();
     if (finishBeforeLeaving) { h.requests[0].resolve(reply("A cached")); await settle(); h.render(); }
-    Object.assign(h.state, { selectedContactId: "b", selectedChatId: "b" }); h.render(); h.fireTimers();
+    Object.assign(h.state, { selectedContactId: "b", selectedChatId: "b" }); h.render(); h.refresh();
     assert.equal(h.requests[0].args[3].signal.aborted, !finishBeforeLeaving);
     Object.assign(h.state, { selectedContactId: "a", selectedChatId: "a" }); h.render(); h.fireTimers();
     assert.equal(h.requests[1].args[3].signal.aborted, true);
+    if (!finishBeforeLeaving) h.refresh();
     assert.equal(h.requests.length, finishBeforeLeaving ? 2 : 3);
     if (!finishBeforeLeaving) {
       h.requests[0].resolve(reply("cancelled A")); await settle(); assert.deepEqual(h.state.aiSuggestions, []);
@@ -297,14 +298,14 @@ test("switching away cancels pending work but keeps completed results for instan
     assert.equal(h.state.aiSuggestions[0].text, "A cached");
     h.requests[1].resolve(reply("cancelled B")); await settle();
     assert.equal(h.state.aiSuggestions[0].text, "A cached", "B cannot overwrite A");
-    Object.assign(h.state, { selectedContactId: "b", selectedChatId: "b" }); h.render(); h.fireTimers();
+    Object.assign(h.state, { selectedContactId: "b", selectedChatId: "b" }); h.render(); h.refresh();
     h.requests.at(-1).resolve(reply("B cached")); await settle();
     assert.equal(h.state.aiSuggestions[0].text, "B cached");
     h.unmount();
   }
 });
 
-test("message bursts settle once, manual clicks share pending work, and hidden panels do no automatic work", async () => {
+test("message bursts await explicit generation, repeated clicks share pending work, and hidden panels stay idle", async () => {
   const h = harness(); await h.mount();
   const addIncoming = id => {
     h.state.messagesByChatId = { ...h.state.messagesByChatId, a: [...h.state.messagesByChatId.a, {
@@ -312,19 +313,19 @@ test("message bursts settle once, manual clicks share pending work, and hidden p
     }] }; h.render();
   };
   addIncoming("1"); addIncoming("2"); h.fireTimers();
-  assert.equal(h.delays.at(-1), 500, 'automatic requests wait for a half-second pause in the message burst');
+  assert.equal(h.requests.length, 0); h.refresh();
   assert.equal(h.requests.length, 1);
   assert.equal(h.requests[0].args[1].length, 3);
   h.refresh(); h.refresh(); assert.equal(h.requests.length, 1);
   h.requests[0].resolve(reply("combined")); await settle(); h.render();
   h.state.crmPanelTab = "quick-replies"; h.render(); addIncoming("3"); h.fireTimers();
   assert.equal(h.requests.length, 1);
-  h.state.crmPanelTab = "customer"; h.render(); h.fireTimers(); assert.equal(h.requests.length, 2);
+  h.state.crmPanelTab = "customer"; h.render(); h.fireTimers(); assert.equal(h.requests.length, 1); h.refresh();
   h.state.crmPanelCollapsed = true; h.render();
   assert.equal(h.requests[1].args[3].signal.aborted, true);
   h.requests[1].resolve(reply("while collapsed")); await settle();
   h.state.crmPanelCollapsed = false; h.render(); h.fireTimers();
-  assert.equal(h.requests.length, 3);
+  assert.equal(h.requests.length, 2); h.refresh();
   assert.deepEqual(h.state.aiSuggestions, []);
   h.requests[2].resolve(reply("reopened")); await settle();
   assert.equal(h.state.aiSuggestions[0].text, "reopened");
@@ -332,10 +333,10 @@ test("message bursts settle once, manual clicks share pending work, and hidden p
 });
 
 test("failed requests are retryable and changed incoming text, identity, model and account cannot reuse old suggestions", async () => {
-  const h = harness(); await h.mount(); h.fireTimers();
+  const h = harness(); await h.mount(); h.refresh();
   h.requests[0].resolve({ ...reply("fallback"), fallback: true }); await settle(); h.render();
   Object.assign(h.state, { selectedContactId: "b", selectedChatId: "b" }); h.render();
-  Object.assign(h.state, { selectedContactId: "a", selectedChatId: "a" }); h.render(); h.fireTimers();
+  Object.assign(h.state, { selectedContactId: "a", selectedChatId: "a" }); h.render(); h.refresh();
   assert.equal(h.requests.length, 2);
   h.requests[1].resolve(reply("real")); await settle(); h.render();
   for (const change of [
@@ -344,7 +345,7 @@ test("failed requests are retryable and changed incoming text, identity, model a
     () => { h.state.settings = { ...h.state.settings, customAiModel: "two" }; },
     () => { h.state.selectedThreadAccount = { chatId: "a", accountId: "b" }; },
   ]) {
-    const before = h.requests.length; change(); h.render(); h.fireTimers();
+    const before = h.requests.length; change(); h.render(); h.refresh();
     assert.equal(h.requests.length, before + 1);
     h.requests.at(-1).resolve(reply(`revision ${before}`)); await settle(); h.render();
   }
@@ -352,7 +353,7 @@ test("failed requests are retryable and changed incoming text, identity, model a
 });
 
 test("unsent replies reuse suggestions; confirmed sending updates context and rejects older results", async () => {
-  const h = harness(); await h.mount(); h.fireTimers();
+  const h = harness(); await h.mount(); h.refresh();
   h.state.messagesByChatId = { ...h.state.messagesByChatId, a: [...h.state.messagesByChatId.a, {
     id: "queued", chatId: "a", direction: "out", body: "My answer", deliveryStatus: "queued", sentAt: "2026-01-01T00:01:00Z",
   }] }; h.render(); h.fireTimers();
@@ -365,7 +366,7 @@ test("unsent replies reuse suggestions; confirmed sending updates context and re
   assert.equal(h.state.aiSuggestions[0].text, "old unanswered context");
   h.state.messagesByChatId = { ...h.state.messagesByChatId, a: h.state.messagesByChatId.a.map(m => m.id === "queued" ? { ...m, deliveryStatus: "sent" } : m) };
   h.render(); h.fireTimers();
-  assert.equal(h.requests.length, 2);
+  assert.equal(h.requests.length, 1); h.refresh();
   assert.deepEqual(h.state.aiSuggestions, []);
   h.requests[0].args[3].onProgress(reply("STALE PROGRESS"));
   assert.deepEqual(h.state.aiSuggestions, []);
@@ -377,7 +378,7 @@ test("unsent replies reuse suggestions; confirmed sending updates context and re
 test("empty conversations and conversations with only my sent messages can offer suggestions", async () => {
   for (const messages of [[], [{ id: "own", chatId: "a", direction: "out", body: "Bonjour", deliveryStatus: "sent", sentAt: "2026-01-01T00:00:00Z" }]]) {
     const h = harness(); h.state.messagesByChatId.a = messages;
-    await h.mount(); h.fireTimers();
+    await h.mount(); h.refresh();
     assert.equal(h.requests.length, 1);
     assert.deepEqual(h.requests[0].args[1], messages);
     h.requests[0].resolve(reply("start or continue")); await settle();
@@ -387,7 +388,7 @@ test("empty conversations and conversations with only my sent messages can offer
 });
 
 test("another conversation receiving messages does not rebuild the selected conversation's AI context", async () => {
-  const h = harness(); await h.mount(); h.fireTimers();
+  const h = harness(); await h.mount(); h.refresh();
   h.requests[0].resolve(reply("keep")); await settle(); h.render();
   const before = h.contextReads;
   h.state.messagesByChatId = { ...h.state.messagesByChatId, b: [...h.state.messagesByChatId.b, {
@@ -399,7 +400,7 @@ test("another conversation receiving messages does not rebuild the selected conv
   h.unmount();
 });
 
-test("manual drafting prevents an unstarted automatic request, while explicit refresh and genuinely new context still work", async () => {
+test("manual drafting and new messages stay idle until an explicit refresh", async () => {
   const h = harness(); await h.mount();
   markManualSuggestionContext(getSuggestionContextKey(h.state.contacts[0], h.state.messagesByChatId.a, h.state.settings, "a"));
   h.fireTimers(); assert.equal(h.requests.length, 0);
@@ -407,6 +408,7 @@ test("manual drafting prevents an unstarted automatic request, while explicit re
   h.requests[0].resolve(reply("explicit refresh")); await settle(); h.render();
   h.state.messagesByChatId = { ...h.state.messagesByChatId, a: [...h.state.messagesByChatId.a, {
     id: "new-turn", chatId: "a", accountId: "a", direction: "in", body: "New question", sentAt: "2026-01-01T01:00:00Z",
-  }] }; h.render(); h.fireTimers(); assert.equal(h.requests.length, 2);
+  }] }; h.render(); h.fireTimers(); assert.equal(h.requests.length, 1); h.refresh();
+  assert.equal(h.requests.length, 2);
   h.requests[1].resolve(reply("new turn")); await settle(); h.unmount();
 });

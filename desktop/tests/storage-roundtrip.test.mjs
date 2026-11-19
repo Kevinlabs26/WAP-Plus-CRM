@@ -53,7 +53,7 @@ async function setup({ sqlite = false, readError = false, writeError = false, cl
     return null;
   };
   const result = await build({
-    stdin: { contents: 'export * from "./src/store/persist.ts"; export * from "./src/lib/storage.ts";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
+    stdin: { contents: 'export * from "./src/store/persist.ts"; export * from "./src/lib/storage.ts"; export { createBootSlice } from "./src/store/bootSlice.ts";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
     bundle: true, format: "esm", platform: "browser", write: false,
     alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) },
     plugins: [{ name: "storage-boundaries", setup(b) {
@@ -101,6 +101,28 @@ test("chat remaps accompany the merged snapshot, survive a failed save and retir
   await api.saveAppState(merged);
   assert.deepEqual(calls.filter(call => call.cmd === "db_save").at(-1).args.snapshot.chatMessageRemaps, []);
   assert.equal((await api.loadMessagesPage({ chatId: "kept" })).ok, true);
+});
+
+test("startup sends ownership repairs for merged-out legacy chats with the history move", async () => {
+  const contact = { id: "customer", name: "Customer", phone: "+33612345678", accountId: "wa-live" };
+  const kept = { id: "chat-customer", contactId: contact.id, accountId: "wa-removed" };
+  const old = { id: "bridge-chat-customer", contactId: contact.id, phoneId: "wa-removed" };
+  const original = {
+    phones: [], contacts: [contact], chats: [kept, old], messages: [], followUps: [],
+    settings: { waAccounts: [{ id: "wa-live", label: "Live", status: "connected" }], liveBaileysAccountId: "wa-live" },
+  };
+  const { api, calls } = await setup({ sqlite: true, snapshot: original });
+  let state = { pushToast: message => assert.fail(message) };
+  await api.createBootSlice({ get: () => state, set: patch => { state = { ...state, ...patch }; } }).hydrate();
+
+  const saved = calls.find(call => call.cmd === "db_save").args.snapshot;
+  assert.deepEqual(saved.chats.map(chat => [chat.id, chat.accountId]), [[kept.id, "wa-live"]]);
+  assert.deepEqual(saved.chatAccountRemaps, [kept, old].map(chat => ({
+    chatId: chat.id, fromAccountId: "wa-removed", toAccountId: "wa-live",
+  })));
+  assert.deepEqual(saved.chatMessageRemaps, [{
+    fromChatId: old.id, toChatId: kept.id, contactId: contact.id, accountId: "wa-live",
+  }]);
 });
 
 test("orphan chat ownership corrections are transactional and retryable", async () => {

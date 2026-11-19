@@ -15,6 +15,7 @@ import {
   Radio,
   Save,
   ShieldBan,
+  Shield,
   TableProperties,
   Workflow,
   Zap,
@@ -25,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { SettingsConnectionPanel } from "./SettingsConnectionPanel";
 import { SettingsMessagingPanel } from "./SettingsMessagingPanel";
 import { SettingsAiPanel } from "./SettingsAiPanel";
+import { SettingsAiPrivacyPanel } from "./SettingsAiPrivacyPanel";
 import { AiUsagePanel } from "./AiUsagePanel";
 import { PlaybookLibrary } from "./PlaybookLibrary";
 import { SettingsTranslationPanel } from "./SettingsTranslationPanel";
@@ -47,6 +49,7 @@ const CATEGORIES = [
   { id: "notifications", labelKey: "settings.notifications", icon: Bell },
   { id: "blocklist", labelKey: "settings.blocklist", icon: ShieldBan },
   { id: "ai", labelKey: "settings.ai", icon: Bot },
+  { id: "ai-privacy", labelKey: "aiPrivacy.title", icon: Shield, parentId: "ai" },
   { id: "auto-reply", labelKey: "settings.autoReply", icon: Workflow, parentId: "ai" },
   { id: "ai-usage", labelKey: "aiUsage.title", icon: Activity, parentId: "ai" },
   { id: "playbook", labelKey: "playbook.library", icon: BookOpen, parentId: "ai" },
@@ -69,7 +72,7 @@ const GROUP_LABELS: Partial<Record<CategoryId, TranslationKey>> = {
   "google-sheets": "settings.group.data",
   appearance: "settings.group.application",
 };
-const AUTO_SAVE_CATEGORIES: CategoryId[] = ["connection", "messaging", "notifications", "ai", "translation", "local-speech", "auto-reply", "quick-replies", "appearance"];
+const AUTO_SAVE_CATEGORIES: CategoryId[] = ["connection", "messaging", "notifications", "ai", "ai-privacy", "translation", "local-speech", "auto-reply", "quick-replies", "appearance"];
 const MANUAL_SAVE_CATEGORIES: CategoryId[] = ["google-sheets", "cloud-images"];
 
 const PANEL_COMPONENTS: Record<CategoryId, ComponentType> = {
@@ -77,6 +80,7 @@ const PANEL_COMPONENTS: Record<CategoryId, ComponentType> = {
   messaging: SettingsMessagingPanel,
   blocklist: SettingsBlocklistPanel,
   ai: SettingsAiPanel,
+  "ai-privacy": SettingsAiPrivacyPanel,
   "ai-usage": AiUsagePanel,
   playbook: PlaybookLibrary,
   translation: SettingsTranslationPanel,
@@ -101,6 +105,7 @@ const KeepAlivePanel = memo(function KeepAlivePanel({
   Panel: ComponentType;
   onCloseGuardChange: (guard: SheetCloseGuard | null) => void;
 }) {
+  if (Panel === SettingsAiPrivacyPanel && !active) return null;
   return (
     <div hidden={!active} aria-hidden={!active}>
       {Panel === SettingsGoogleSheets ? <SettingsGoogleSheets onCloseGuardChange={onCloseGuardChange} /> : <Panel />}
@@ -115,7 +120,7 @@ export function SettingsModal() {
   const secretSaveStatus = useAppStore(state => state.secretSaveStatus);
   const retrySecretSave = useAppStore(state => state.retrySecretSave);
   const category = useAppStore((state) => state.settingsCategory) as CategoryId;
-  const museProvider = useAppStore((state) => state.settings?.aiProvider === "muse");
+  const museProvider = useAppStore((state) => state.settings?.aiProvider === "muse" || !!state.settings?.aiOutreachMuseAccountId);
   const setCategory = useAppStore((state) => state.setSettingsCategory);
   const [visited, setVisited] = useState(() => new Set<CategoryId>([category]));
   const closeRef = useRef<HTMLButtonElement>(null);

@@ -13,7 +13,7 @@ export function normalizePromptTemplates(value: unknown): AiPromptTemplate[] {
   });
 }
 type PromptSettings = Pick<SettingsShape, "aiSystemPrompt" | "aiSystemPromptByAccountId" | "chatFolders" | "liveBaileysAccountId" | "activeAccountId" | "leadInbox"> & Omit<PlaybookSettings, 'chatFolders'> & {aiPromptTemplates?: AiPromptTemplate[]};
-export type AiReplyProfile = { prompt: string; source: "folder" | "account" | "global" | "default"; folderId?: string; folderName?: string; primaryFolderIds?: string[]; error?: string; templateIds?: string[]; readMuseFiles?: boolean; musePlaybookPaths?: string[]; museMaterials?: MusePlaybookMaterial[] };
+export type AiReplyProfile = { prompt: string; source: "folder" | "account" | "global" | "default"; folderId?: string; folderName?: string; primaryFolderIds?: string[]; error?: string; templateIds?: string[]; readMuseFiles?: boolean; musePlaybookPaths?: string[]; museMaterials?: MusePlaybookMaterial[]; playbookName?: string; playbookVersion?: string; workspacePlaybook?: boolean };
 
 function scopeKey(settings: PromptSettings, folder: SettingsChatFolder): string {
   return folder.scope?.type === "all" ? "all"
@@ -99,7 +99,8 @@ export function resolveAiReplyProfile(
   ]
     .filter(Boolean)
     .join("\n\n");
-  const resolved = {...profile, prompt, readMuseFiles: playbook.readMuseFiles, musePlaybookPaths:playbook.musePaths, museMaterials:playbook.museMaterials};
+  const book = settings.aiPlaybooks?.find(item => item.id === playbook.id);
+  const resolved = {...profile, prompt, readMuseFiles: playbook.readMuseFiles, musePlaybookPaths:playbook.musePaths, museMaterials:playbook.museMaterials, playbookName: book?.name, playbookVersion: book?.museRevision, workspacePlaybook:!!book?.musePath};
   return prompt.length > MAX_EFFECTIVE_PROMPT_CHARS
     ? {...resolved, prompt: '', error: '合并提示词和联系人补充说明后超过 24000 字符，请精简后重试'} : resolved;
 }

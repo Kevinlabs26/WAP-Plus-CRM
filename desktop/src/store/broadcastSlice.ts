@@ -202,6 +202,8 @@ export function createBroadcastSlice({
     },
 
     cancelBroadcastCampaign: (id) => {
+      const campaign = get().broadcastCampaigns.find((entry) => entry.id === id);
+      if (!campaign || campaign.status === "done" || campaign.status === "cancelled") return;
       set((s) => ({
         broadcastCampaigns: s.broadcastCampaigns.map((x) =>
           x.id === id

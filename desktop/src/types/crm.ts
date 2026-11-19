@@ -1,4 +1,5 @@
 import type { SalesStage } from "@shared/protocol";
+import type { AiDecisionDetails } from "@/lib/aiDecisionDetails";
 
 export type { SalesStage };
 
@@ -248,6 +249,15 @@ export interface Message {
   /** 自动回复生成上下文的 SHA-256；排队/重启后复核，不含聊天正文或密钥。 */
   aiReplyContextHash?: string;
   aiReplyInboundId?: string;
+  /** 本机收到自动回复任务的 Unix 毫秒时间戳。 */
+  aiAutoReplyReceivedAt?: number;
+  aiReplyStartedAt?: number;
+  /** 本机接收入站消息的 Unix 毫秒时间戳。 */
+  aiReplyReceivedAt?: number;
+  aiReplyDurationMs?: number;
+  aiReplyMuseAccountId?: string;
+  aiReplyMuseAccountName?: string;
+  aiDecisionDetails?: AiDecisionDetails;
   aiAutoFollowUpRootId?: string;
   aiAutoFollowUpStep?: number;
   aiAutoFollowUpSentAt?: number;

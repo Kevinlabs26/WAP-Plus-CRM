@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 const mocks={
  react:'export const useState=i=>globalThis.batchHooks.state(i),useRef=i=>globalThis.batchHooks.ref(i),useEffect=(f,d)=>globalThis.batchHooks.effect(f,d);',
  'react/jsx-runtime':'export const jsx=(type,props)=>({type,props}),jsxs=jsx;',
- 'lucide-react':'export const LoaderCircle="loading",Pause="pause",Play="play";',
+ 'lucide-react':'export const LoaderCircle="loading",Pause="pause",Play="play",Square="stop";',
  '@/components/ui/primitives':'export const Button="button";',
  '@/i18n':'export const useI18n=()=>({t:(k,p)=>k+(p?JSON.stringify(p):"")});',
  '@/store/appStore':'export const useAppStore=Object.assign(f=>f(globalThis.batchState),{getState:()=>globalThis.batchState});',

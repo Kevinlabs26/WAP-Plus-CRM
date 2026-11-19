@@ -5,11 +5,26 @@ import {fileURLToPath} from 'node:url';
 import {readFile} from 'node:fs/promises';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
-const bundle=await build({stdin:{contents:`export * from './src/lib/imageGenerationRequest.ts';export * from './src/lib/imageGenerationReferences.ts';export {openAiGenerateImage} from './src/lib/openAiImage.ts';export {geminiGenerateImage} from './src/lib/gemini.ts';export {normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {buildSettingsSafe,parseBackupJson} from './src/lib/exportData.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',alias:{'@':root+'src'},plugins:[{name:'store',setup(b){
+const bundle=await build({stdin:{contents:`export * from './src/lib/imageGenerationRequest.ts';export * from './src/lib/imageGenerationReferences.ts';export {openAiGenerateImage} from './src/lib/openAiImage.ts';export {setAiPrivacyPolicyProvider} from './src/lib/aiPrivacy.ts';export {geminiGenerateImage} from './src/lib/gemini.ts';export {normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {buildSettingsSafe,parseBackupJson} from './src/lib/exportData.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',alias:{'@':root+'src'},plugins:[{name:'store',setup(b){
  b.onResolve({filter:/store\/appStore$/},()=>({path:'store',namespace:'mock'}));
  b.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:'export const useAppStore=f=>f(globalThis.imageWorkflowStore);useAppStore.getState=()=>globalThis.imageWorkflowStore;'}));
 }}]});
 const api=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
+test('OpenAI image creation and editing block private prompt text before any request', async () => {
+ const original = globalThis.fetch;
+ let requests = 0;
+ globalThis.fetch = async () => { requests++; throw Error('Unexpected request'); };
+ api.setAiPrivacyPolicyProvider(() => ({ terms: 'internal project', blockedMessage: 'Blocked locally' }));
+ try {
+  for (const reference of [undefined, 'data:image/png;base64,aW1hZ2U=']) {
+   await assert.rejects(api.openAiGenerateImage('test-key', 'Draw INTERNAL PROJECT', '1:1', reference), /Blocked locally/);
+  }
+  assert.equal(requests, 0);
+ } finally {
+  api.setAiPrivacyPolicyProvider(undefined);
+  globalThis.fetch = original;
+ }
+});
 test('subject identity and layout style stay separate with explicit numbered image roles',()=>{
  const subject={title:'Avatar',mimeType:'image/jpeg',data:'c3ViamVjdA=='},style={title:'Card layout',mimeType:'image/jpeg',data:'c3R5bGU='};
  const result=api.imageGenerationReferences(subject,style);assert.deepEqual(result.images,[subject,style]);

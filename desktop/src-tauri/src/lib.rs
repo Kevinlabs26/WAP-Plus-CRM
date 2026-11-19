@@ -175,6 +175,7 @@ pub fn run() {
             muse_web::muse_web_cleanup_schedule_add,
             muse_web::muse_web_cleanup_schedule_update,
             muse_web::muse_web_cleanup_schedule_advance,
+            muse_web::muse_web_cleanup_schedule_resume,
             muse_web::muse_web_cleanup_schedule_cancel,
             muse_web::muse_web_switch_account,
             muse_web::muse_web_accounts,

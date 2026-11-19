@@ -298,6 +298,7 @@ pub struct MuseGenerateResult {
     text: Option<String>,
     media: Option<MuseGeneratedMedia>,
     error: Option<String>,
+    submission_uncertain: bool,
     summary_requests: u8,
     summary_failed: bool,
 }
@@ -643,6 +644,36 @@ fn account_profile_dir(root: &Path, account: &MuseAccountRecord) -> PathBuf {
         root.join("muse-web-accounts").join(&account.id).join("profile")
     }
 }
+
+#[cfg(target_os = "macos")]
+fn muse_has_isolated_profiles() -> bool {
+    static SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SUPPORTED.get_or_init(|| {
+        std::process::Command::new("/usr/bin/sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .and_then(|version| version.trim().split('.').next()?.parse::<u32>().ok())
+            .is_some_and(|major| major >= 14)
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn muse_profile_identifier(account: &MuseAccountRecord) -> Result<[u8; 16], String> {
+    uuid::Uuid::parse_str(&account.id)
+        .map(|id| *id.as_bytes())
+        .map_err(|_| "Muse 账号编号无效".into())
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_muse_pool_supported(account_count: usize) -> Result<(), String> {
+    if account_count > 1 && !muse_has_isolated_profiles() {
+        return Err("Muse 多账号需要 macOS 14 或更新版本，以隔离各账号登录状态".into());
+    }
+    Ok(())
+}
 fn account_window_label(account: &MuseAccountRecord, media: bool) -> String {
     if account.legacy_profile {
         if media { MEDIA_LABEL.into() } else { LABEL.into() }
@@ -865,6 +896,8 @@ fn muse_window_for(
 ) -> Result<WebviewWindow, String> {
     let root = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
     let pool = load_muse_account_pool(&root)?;
+    #[cfg(target_os = "macos")]
+    ensure_muse_pool_supported(pool.accounts.len())?;
     let account = account_from_pool(&pool, account_id)?;
     let label = account_window_label(&account, media);
     if let Some(window) = app.get_webview_window(&label) {
@@ -878,7 +911,7 @@ fn muse_window_for(
     let dir = account_profile_dir(&root, &account);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     // This remote window receives no application IPC capabilities (the default capability only covers main).
-    let window = WebviewWindowBuilder::new(
+    let builder = WebviewWindowBuilder::new(
         app,
         &label,
         WebviewUrl::External("https://muse.ai/thread/new".parse().unwrap()),
@@ -889,7 +922,16 @@ fn muse_window_for(
     .focused(visible)
     .data_directory(dir)
     .on_navigation(|url| matches!(url.scheme(), "https" | "http"))
-    .on_new_window(|_, _| tauri::webview::NewWindowResponse::Allow)
+    .on_new_window(|_, _| tauri::webview::NewWindowResponse::Allow);
+    #[cfg(target_os = "macos")]
+    let builder = if muse_has_isolated_profiles() {
+        builder
+            .data_store_identifier(muse_profile_identifier(&account)?)
+            .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
+    } else {
+        builder
+    };
+    let window = builder
     .build()
     .or_else(|error| app.get_webview_window(&label).ok_or(error))
     .map_err(|e| format!("无法打开 Muse 窗口：{e}"))?;
@@ -996,6 +1038,10 @@ async fn open_or_update_muse_workspace(
     account: &MuseAccountRecord,
     show: bool,
 ) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    if !muse_has_isolated_profiles() {
+        ensure_muse_pool_supported(load_muse_account_pool(root)?.accounts.len())?;
+    }
     let state = app.state::<MuseWebState>();
     let _workspace = state.workspace_operation.lock().await;
     let window = match app.get_webview(WORKSPACE_LABEL) {
@@ -1008,6 +1054,8 @@ async fn open_or_update_muse_workspace(
     if active.as_deref() != Some(&account.id)
         || app.get_webview(WORKSPACE_CONTENT_LABEL).is_none()
     {
+        *active = None;
+        let _ = app.emit_to(WORKSPACE_LABEL, "muse-workspace-active-account", "");
         if let Some(previous) = app.get_webview(WORKSPACE_CONTENT_LABEL) {
             previous.close().map_err(|error| error.to_string())?;
         }
@@ -1022,22 +1070,31 @@ async fn open_or_update_muse_workspace(
         .focused(false)
         .on_navigation(|url| matches!(url.scheme(), "https" | "http"))
         .on_new_window(|_, _| tauri::webview::NewWindowResponse::Allow);
-        parent.add_child(
+        #[cfg(target_os = "macos")]
+        let content = if muse_has_isolated_profiles() {
+            content.data_store_identifier(muse_profile_identifier(account)?)
+        } else {
+            content
+        };
+        let content = parent.add_child(
             content,
             LogicalPosition::new(WORKSPACE_SIDEBAR_WIDTH, WORKSPACE_HEADER_HEIGHT),
             LogicalSize::new(1060.0, 796.0),
         )
         .map_err(|error| format!("无法载入 Muse 页面：{error}"))?;
-        resize_muse_workspace_content(app)?;
+        if let Err(error) = resize_muse_workspace_content(app) {
+            let _ = content.close();
+            return Err(error);
+        }
         *active = Some(account.id.clone());
     }
     drop(active);
+    let _ = app.emit_to(WORKSPACE_LABEL, "muse-workspace-active-account", account.id.clone());
     if show {
         window.show().map_err(|error| error.to_string())?;
         window.unminimize().map_err(|error| error.to_string())?;
         window.set_focus().map_err(|error| error.to_string())?;
     }
-    let _ = app.emit_to(WORKSPACE_LABEL, "muse-workspace-active-account", account.id.clone());
     Ok(())
 }
 
@@ -1104,6 +1161,9 @@ pub async fn muse_web_workspace_account(app: tauri::AppHandle) -> Result<String,
         .clone()
     {
         return Ok(account_id);
+    }
+    if app.get_webview(WORKSPACE_LABEL).is_some() {
+        return Ok(String::new());
     }
     let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
     Ok(load_muse_account_pool(&root)?.selected_id)
@@ -1448,6 +1508,30 @@ pub async fn muse_web_cleanup_schedule_advance(
 }
 
 #[tauri::command]
+pub async fn muse_web_cleanup_schedule_resume(
+    app: tauri::AppHandle,
+    task_id: String,
+    account_id: String,
+) -> Result<Vec<MuseSideChatCleanup>, String> {
+    let state = app.state::<MuseWebState>();
+    let _lock = state.side_chat_cleanup_operation.lock().await;
+    let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
+    account_from_pool(&load_muse_account_pool(&root)?, Some(&account_id))?;
+    let mut tasks = load_muse_side_chat_cleanups(&root)?;
+    let task = tasks.iter_mut().find(|task| task.id == task_id && task.account_id == account_id)
+        .ok_or("这个 Muse 账号没有该清理计划")?;
+    if task.error.is_none() || task.repeat_every_days.is_some() && task.identity_scheme != Some(2) {
+        return Err("该计划无法恢复，请检查状态或重新设置".into());
+    }
+    let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+    task.due_at_ms = now_ms + 15_000;
+    task.error = None;
+    validate_muse_side_chat_cleanup(task)?;
+    save_muse_side_chat_cleanups(&root, &tasks)?;
+    Ok(tasks)
+}
+
+#[tauri::command]
 pub async fn muse_web_cleanup_schedule_cancel(
     app: tauri::AppHandle,
     task_id: String,
@@ -1474,6 +1558,8 @@ pub async fn muse_web_accounts(app: tauri::AppHandle) -> Result<MuseAccountPoolV
 
 #[tauri::command]
 pub async fn muse_web_account_add(app: tauri::AppHandle) -> Result<MuseAccountPoolView, String> {
+    #[cfg(target_os = "macos")]
+    ensure_muse_pool_supported(2)?;
     let state=app.state::<MuseWebState>();
     let _pool=state.account_pool_operation.try_lock().map_err(|_|"Muse 账号池正在更新，请稍后重试")?;
     let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
@@ -1578,6 +1664,19 @@ pub async fn muse_web_account_remove(
     let mut warnings = Vec::new();
     if let Some(warning) = schedule_warning { warnings.push(format!("定时清理计划未能同步移除：{warning}")); }
     if let Err(warning) = remove_muse_account_data(&root, &removed).await { warnings.push(warning); }
+    #[cfg(target_os = "macos")]
+    if muse_has_isolated_profiles() {
+        let identifier = muse_profile_identifier(&removed)?;
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
+            if app.fetch_data_store_identifiers().await?.contains(&identifier) {
+                app.remove_data_store(identifier).await?;
+            }
+            Ok::<(), tauri::Error>(())
+        }).await;
+        if !matches!(result, Ok(Ok(()))) {
+            warnings.push("未能清理 macOS 中该 Muse 账号的登录数据".into());
+        }
+    }
     let cleanup_warning = (!warnings.is_empty()).then(|| warnings.join("；"));
     Ok(MuseAccountRemoveResult { pool: view, cleanup_warning })
 }
@@ -1588,10 +1687,12 @@ pub async fn muse_web_account_select(app: tauri::AppHandle, account_id: String) 
     let _pool=state.account_pool_operation.try_lock().map_err(|_|"Muse 账号池正在更新，请稍后重试")?;
     let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
     let mut pool = load_muse_account_pool(&root)?;
+    #[cfg(target_os = "macos")]
+    ensure_muse_pool_supported(pool.accounts.len())?;
     let account = account_from_pool(&pool, Some(&account_id))?;
+    open_or_update_muse_workspace(&app, &root, &account, false).await?;
     pool.selected_id = account_id;
     save_muse_account_pool(&root, &pool)?;
-    open_or_update_muse_workspace(&app, &root, &account, false).await?;
     let view = account_pool_view(pool);
     let _ = app.emit_to(WORKSPACE_LABEL, "muse-workspace-account-pool", &view);
     Ok(view)
@@ -1657,20 +1758,20 @@ async fn wait_for_connection(
             check_cancelled(state, id)?;
         }
         let url = window.url().map_err(|_| "无法读取 Muse 后台窗口状态")?;
-        let status = if muse_origin(&url) {
+        let probe = if muse_origin(&url) {
             evaluate(window, "window.__wapMuse.inspect()".into())
                 .await
-                .ok()
+                .map(Some)
         } else if url.scheme() == "about" {
-            None
+            Ok(None)
         } else {
-            Some(
+            Ok(Some(
                 serde_json::json!({"state":"login","error":"Muse 当前需要登录，请在 AI 设置中打开 Muse 完成登录"}),
-            )
+            ))
         };
+        let status = probe.as_ref().ok().and_then(|data| data.as_ref());
         // A restored session can briefly render sign-in before hydration finishes.
         let state_name = status
-            .as_ref()
             .and_then(|data| data.get("state"))
             .and_then(|v| v.as_str())
             .unwrap_or("loading")
@@ -1686,7 +1787,7 @@ async fn wait_for_connection(
         );
         if let Some(data) = status {
             if settled {
-                return Ok(data);
+                return Ok(data.clone());
             }
         }
         if tokio::time::Instant::now() >= deadline {
@@ -1698,7 +1799,12 @@ async fn wait_for_connection(
                 login_since = None;
                 continue;
             }
-            return Err("Muse 后台连接超时，请稍后重试，或打开 Muse 查看连接状态".into());
+            let detail = match probe {
+                Err(error) => error,
+                Ok(Some(data)) => page_error(&data),
+                Ok(None) => "后台窗口尚未载入 Muse 页面".into(),
+            };
+            return Err(format!("Muse 后台连接超时：{detail}"));
         }
         tokio::time::sleep(Duration::from_millis(350)).await;
     }
@@ -1838,7 +1944,9 @@ impl MuseRun<'_> {
         context: Option<&MuseWebContext>,
         reference_images: &[MuseReferenceImage],
         expect_media: bool,
+        may_have_submitted: &mut bool,
     ) -> Result<MuseOutput, String> {
+        *may_have_submitted = false;
         let window = &self.window;
         let result = async {
         check_cancelled(self.state, self.operation_id)?;
@@ -1862,11 +1970,33 @@ impl MuseRun<'_> {
         let mut submitted_profile_hash = None;
         loop {
             check_cancelled(self.state, self.operation_id)?;
-            if tokio::time::Instant::now()>=deadline { return Err("Muse 生成超时；未重复提交，请在连接窗口查看结果".into()); }
+            let expired = tokio::time::Instant::now() >= deadline;
+            let timeout = "Muse 生成超时";
+            if expired && !*may_have_submitted { return Err(timeout.into()); }
             let expression = if submitted { format!("window.__wapMuse.poll({id})") } else {
                 format!("window.__wapMuse.inspect({id},{},{owner})",serde_json::to_string(&target).map_err(|e| e.to_string())?)
             };
-            let data = match evaluate(&window, expression).await { Ok(data)=>data, Err(_) if !submitted=>{tokio::time::sleep(Duration::from_millis(400)).await;continue;}, Err(error)=>return Err(error) };
+            let previously_submitted = *may_have_submitted;
+            // poll can click Send even if its result never reaches the desktop.
+            if submitted { *may_have_submitted = true; }
+            let data = if expired {
+                let recovered = evaluate(window, format!("window.__wapMuse.recover({id}, true)")).await?;
+                if recovered.get("state").and_then(|v| v.as_str()) != Some("done") { return Err(timeout.into()); }
+                recovered
+            } else {
+                match evaluate(window, expression).await {
+                    Ok(data) => data,
+                    Err(_) if !submitted => { tokio::time::sleep(Duration::from_millis(400)).await; continue; }
+                    Err(error) => {
+                        let recovered = evaluate(window, format!("window.__wapMuse.recover({id}, true)")).await?;
+                        if !matches!(recovered.get("state").and_then(|v| v.as_str()), Some("done" | "generating")) { return Err(error); }
+                        recovered
+                    }
+                }
+            };
+            if submitted && data.get("requestId").and_then(|v| v.as_str()) == Some(request_id) {
+                *may_have_submitted = previously_submitted || data.get("sent").and_then(|v| v.as_bool()) == Some(true);
+            }
             // Remember an acknowledged submission even if its later reply is cancelled or times out.
             if submitted && !counted {
                 if let Some(path) = data.get("path").and_then(|v| v.as_str()).filter(|p| thread_path(p)) {
@@ -1940,7 +2070,8 @@ impl MuseRun<'_> {
       }.await;
         if result.is_err() {
             let id = serde_json::to_string(request_id).unwrap();
-            let _ = window.eval(format!("window.__wapMuse?.cancel({id})"));
+            let stop_remote = !*may_have_submitted || check_cancelled(self.state, self.operation_id).is_err();
+            let _ = window.eval(format!("window.__wapMuse?.cancel({id}, {stop_remote})"));
         }
         result
     }
@@ -1980,6 +2111,7 @@ pub async fn muse_web_generate(
     let _guard = try_muse_operation(&state, &account.id, expect_media)?;
     let mut summary_requests = 0;
     let mut summary_failed = false;
+    let mut may_have_submitted = false;
     let result = async {
         check_cancelled(&state, &request_id)?;
         let owner = conversation_key
@@ -2013,6 +2145,7 @@ pub async fn muse_web_generate(
                     None,
                     &[],
                     false,
+                    &mut may_have_submitted,
                 )
                 .await?;
             check_cancelled(&state, &request_id)?;
@@ -2027,6 +2160,7 @@ pub async fn muse_web_generate(
             context.as_ref(),
             &references,
             expect_media,
+            &mut may_have_submitted,
         )
         .await
     }
@@ -2039,6 +2173,7 @@ pub async fn muse_web_generate(
             text: output.text,
             media: output.media,
             error: None,
+            submission_uncertain: false,
             summary_requests,
             summary_failed,
         },
@@ -2046,6 +2181,7 @@ pub async fn muse_web_generate(
             text: None,
             media: None,
             error: Some(error),
+            submission_uncertain: may_have_submitted,
             summary_requests,
             summary_failed,
         },

@@ -1,5 +1,5 @@
 import type { OutreachState, OutreachReason } from "./aiOutreachContext";
-import { inspectOutreachCandidate, outreachFolderChatIds } from "./aiOutreachContext";
+import { inspectOutreachCandidate, outreachFolderChatIds, unresolvedOutreachRecipients } from "./aiOutreachContext";
 import { normalizeOutreachRule, nextOutreachWindow, outreachClock, type AiOutreachRun } from "./aiOutreachRules";
 import { lastContactedAccounts, recipientKey } from "./scheduledPlans";
 import { resolveSendTarget } from "./utils";
@@ -15,6 +15,7 @@ export async function buildOutreachPreview(state:OutreachState,folderIds:readonl
   const snapshot={...state,settings},wanted=new Set(folderIds);
   const chats=new Map(state.chats.map(chat=>[chat.id,chat])),contacts=new Map(state.contacts.map(contact=>[contact.id,contact]));
   const latest=lastContactedAccounts(state.chats,state.contacts,state.messages);
+  const unresolvedRecipients=unresolvedOutreachRecipients(snapshot);
   const byRecipient=new Map<string,AiOutreachRun[]>(),byChat=new Map<string,AiOutreachRun[]>(),lastRun=new Map<string,number>();
   for(const run of settings.aiOutreachRuns){
     const key=run.recipient?recipientKey("",run.recipient):"";
@@ -35,7 +36,7 @@ export async function buildOutreachPreview(state:OutreachState,folderIds:readonl
       const recipient=contact?resolveSendTarget({phone:contact.phone,channelAddress:contact.channelAddress,entityId:contact.id}):"";
       const accountId=chat?.accountId||contact?.accountId||settings.liveBaileysAccountId||settings.activeAccountId;
       const person=recipient?recipientKey("",recipient):"",recipientRuns=[...new Set([...(byRecipient.get(person)||[]),...(byChat.get(chatId)||[])])];
-      const check=(at:number)=>inspectOutreachCandidate(snapshot,folder.id,chatId,at,undefined,undefined,chat&&contact?{chat,contact,members,rule,clock:outreachClock(rule.timeZone,at),lastAccounts:latest,recipientRuns}:undefined);
+      const check=(at:number)=>inspectOutreachCandidate(snapshot,folder.id,chatId,at,undefined,undefined,chat&&contact?{chat,contact,members,rule,clock:outreachClock(rule.timeZone,at),lastAccounts:latest,recipientRuns,unresolvedRecipients}:undefined);
       const current=check(now);
       let scheduledAt=next(rule,now),projected=current;
       if(scheduledAt!==null&&["ready","not_time","outside_hours","already_contacted","takeover"].includes(current.reason)){

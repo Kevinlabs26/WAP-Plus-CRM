@@ -23,7 +23,6 @@ export function PlaybookLibrary() {
   const sync = async (folder: string) => {
     const count = await syncMusePlaybooks(true, folder);
     const current = useAppStore.getState();
-    current.updateSettings({aiPlaybookAutoSync: true});
     setFolderPath(folder);
     current.pushToast(t('playbook.museSynced', {count}), 'success');
   };

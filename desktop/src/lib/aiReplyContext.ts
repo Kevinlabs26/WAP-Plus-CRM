@@ -5,6 +5,8 @@ import { getSuggestionContextKey, hasRealAiKey } from "@/lib/aiSuggest";
 import { isManualSuggestionContext, SUGGESTION_MAX_AGE_MS } from "@/lib/aiSuggestionCache";
 import { getAiOutputConstraintError } from "./aiReplyConstraints";
 
+export const autoFollowUpPrompt = "The other person has not replied to the last message. Write one brief, natural, low-pressure follow-up in the conversation's language. Do not repeat the previous message, mention automation, or invent facts. Respect any refusal or request to stop in the conversation.";
+
 export async function hashAiReplyContext(key: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
@@ -13,7 +15,7 @@ export async function hashAiReplyContext(key: string): Promise<string> {
 /** 队列和首次发送使用同一份上下文；仅把摘要落库，不复制聊天内容或密钥。 */
 export function inspectAutoReplyContext(
   state: Pick<AppState, "settings" | "contacts" | "chats" | "messages" | "messagesByChatId">,
-  reply: Pick<Message, "id" | "chatId" | "contactId" | "accountId" | "channelId"> & Partial<Pick<Message, "sentAt"|"body"|"aiAutoFollowUpStep">>
+  reply: Pick<Message, "id" | "chatId" | "contactId" | "accountId" | "channelId"> & Partial<Pick<Message, "sentAt"|"body"|"aiAutoFollowUpStep"|"aiReplyMuseAccountId">>
 ): {key:string|null;error:string} {
   if (reply.id) {
     const constraint=reply.body&&getAiOutputConstraintError(state.settings,reply.accountId,reply.chatId,reply.body);
@@ -23,6 +25,11 @@ export function inspectAutoReplyContext(
     if (!reply.aiAutoFollowUpStep && Date.now() - queuedAt >= SUGGESTION_MAX_AGE_MS) return {key:null,error:"自动回复已排队超过 5 分钟，请根据最新聊天重新生成"};
   }
   if (resolveAutoReplyScope(state.settings, reply.chatId).mode !== "auto") return {key:null,error:"此会话已暂停自动回复或切换为人工模式"};
+  const museAccountId = reply.aiReplyMuseAccountId;
+  if (museAccountId && (!state.settings.musePrivacyByAccountId?.[museAccountId]?.trainingDisabledConfirmedAt ||
+      state.settings.museAutoReplyAccountIds && !state.settings.museAutoReplyAccountIds.includes(museAccountId))) {
+    return {key:null,error:"生成回复的 Muse 账号已不再获准自动回复，请重新生成"};
+  }
   const contact = state.contacts.find(item => item.id === reply.contactId);
   const chat = state.chats.find(item => item.id === reply.chatId);
   if (!contact || !chat || contact.isGroup || chat.isGroup || chat.localOnly || !reply.accountId ||
@@ -31,7 +38,10 @@ export function inspectAutoReplyContext(
   const context = (state.messagesByChatId?.[reply.chatId] || state.messages)
     .filter(item => item.chatId === reply.chatId && item.id !== reply.id);
   if (isManualSuggestionContext(getSuggestionContextKey(contact, context, state.settings, reply.accountId))) return {key:null,error:"当前聊天内容需要人工处理"};
-  return {key:getSuggestionContextKey(contact, context, state.settings, reply.accountId, { auto: true }),error:""};
+  const options = reply.aiAutoFollowUpStep
+    ? { auto: true, count: 1 as const, chatId: reply.chatId, outreach: autoFollowUpPrompt, allowSidebarData: false }
+    : { auto: true };
+  return {key:getSuggestionContextKey(contact, context, state.settings, reply.accountId, options),error:""};
 }
 
 export function currentAutoReplyContext(...args:Parameters<typeof inspectAutoReplyContext>):string|null {

@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/primitives";
 import { resolveFolderAiProfile } from "@/lib/aiPromptScope";
 import { AiOutreachControls } from "@/components/settings/AiOutreachControls";
 import { nextScheduledOutreachAt, normalizeOutreachRule } from "@/lib/aiOutreachRules";
-import { tickAiOutreach } from "@/lib/aiOutreach";
+import { outreachFolderDismissal, tickAiOutreach } from "@/lib/aiOutreach";
 import { resolveAiReplyConstraints } from "@/lib/aiReplyConstraints";
 import { lastContactedAccounts, recipientKey } from "@/lib/scheduledPlans";
 import { resolveSendTarget } from "@/lib/utils";
@@ -64,7 +64,8 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
     current.updateSettings({ chatFolders: current.settings.chatFolders.map(item => item.id === folderId
       ? { ...item, aiSystemPrompt: custom ? draft.trim().slice(0, 6000) : undefined,
         aiPromptMode:mode==="custom"?"replace":mode as "append"|"inherit",aiPromptTemplateId:custom?templateId||undefined:undefined,aiPlaybookId:playbookId||undefined,aiPlaybookSchedule:schedule,aiOutreach:savedOutreach,...(hideReplyMode?{}:{autoReplyMode:replyMode==="inherit"?undefined:replyMode}),
-        aiReplyMaxChars:maxChars?Number(maxChars):undefined,aiReplyForbiddenTerms:forbiddenTerms } : item) });
+        aiReplyMaxChars:maxChars?Number(maxChars):undefined,aiReplyForbiddenTerms:forbiddenTerms } : item),
+      ...(savedOutreach.enabled?{aiTaskDismissedIds:current.settings.aiTaskDismissedIds.filter(id=>id!==outreachFolderDismissal(folderId))}:{}) });
     if (immediate) {
       void flushPersist(useAppStore.getState).then(()=>{
         useAppStore.getState().pushToast(t("aiOutreach.runNowStarted"),"info");

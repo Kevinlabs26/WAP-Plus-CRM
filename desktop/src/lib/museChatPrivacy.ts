@@ -1,4 +1,5 @@
 import type { Message } from "../types/crm";
+import { assertAiContentAllowed } from "./aiPrivacy.ts";
 
 type Identity = { name?: string; label?: string; userName?: string; phone?: string; phoneE164?: string; historyPhoneE164?: string };
 type MusePrivacyByAccount = Record<string, { trainingDisabledConfirmedAt?: number; memoryReviewedAt?: number }>;
@@ -9,6 +10,9 @@ export function setMusePrivacyIdentityProvider(provider: () => Identity[]) { ide
 export function setMusePrivacySettingsProvider(provider: () => MusePrivacyByAccount) { privacyProvider = provider; }
 export function setMusePrivacyGateMessageProvider(provider: () => string) { privacyGateMessageProvider = provider; }
 export function musePrivacyGateMessage(): string { return privacyGateMessageProvider?.() || "此 Muse 账号未确认关闭模型训练，CRM 已阻止本次请求。"; }
+export function assertMuseContentAllowed(prompt: string, context?: unknown): void {
+  assertAiContentAllowed(prompt, context ? JSON.stringify(context) : undefined);
+}
 export function museTrainingDisabledConfirmed(accountId: string): boolean {
   return !!accountId && !!privacyProvider?.()?.[accountId]?.trainingDisabledConfirmedAt;
 }
@@ -44,9 +48,19 @@ export function createMuseChatRedactor(identities: Identity[], messages: Message
     messages.flatMap(item => [item.senderPhoneE164, item.accountPhoneE164, item.phoneE164]))
     .map(phone => phone?.replace(/\D/g, "") || "").filter(phone => phone.length >= 6));
   const redact = (text: string): string => {
+    assertMuseContentAllowed(text);
+    const youtubeLinks: string[] = [];
     let result = text
       .replace(/BEGIN:VCARD[\s\S]*?(?:END:VCARD|$)/gi, "[shared contact omitted]")
       .replace(/^[^\r\n]*https?:\/\/(?:wa\.me|api\.whatsapp\.com\/send)[^\r\n]*$/gim, "[shared contact omitted]")
+      .replace(/(?:https?:\/\/|www\.)[^\s<>"'`]+/giu, link => {
+        const hostname = link.match(/^(?:https?:\/\/|www\.)([^/:?#]+)/i)?.[1]?.toLowerCase() || "";
+        if (hostname === "youtu.be" || hostname.endsWith(".youtu.be") || hostname === "youtube.com" || hostname.endsWith(".youtube.com") || hostname === "youtube-nocookie.com" || hostname.endsWith(".youtube-nocookie.com")) {
+          const index = youtubeLinks.push(link) - 1;
+          return `\uE000${index}\uE001`;
+        }
+        return "[shared link omitted]";
+      })
       .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email omitted]")
       .replace(/(?<![\p{L}\p{N}])\+?\d(?:[\d ().-]*\d)?(?![\p{L}\p{N}])/gu, value => {
         const digits = value.replace(/\D/g, "");
@@ -55,7 +69,7 @@ export function createMuseChatRedactor(identities: Identity[], messages: Message
         return digits.length >= 7 ? "[phone omitted]" : value;
       });
     for(const pattern of namePatterns)result=result.replace(pattern,"[person omitted]");
-    return result;
+    return result.replace(/\uE000(\d+)\uE001/g, (_, index: string) => youtubeLinks[Number(index)] || "");
   };
   if(!messages.length)identityRedactors.set(identities,{signature,redact});
   return redact;

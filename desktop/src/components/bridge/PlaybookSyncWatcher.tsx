@@ -1,11 +1,11 @@
 import { useEffect } from 'react';
 import { useAppStore } from '@/store/appStore';
 import { museQueueSnapshot } from '@/lib/museQueue';
-import { musePlaybookSyncActive, shouldAutoSyncPlaybooks, syncMusePlaybooks, syncSelectedMusePlaybookCopies } from '@/lib/musePlaybookSync';
+import { musePlaybookSyncActive, shouldAutoSyncPlaybooks, syncMusePlaybooks } from '@/lib/musePlaybookSync';
 import { isDataRestoreActive } from '@/store/restoreGuard';
 
 let controller: AbortController | undefined;
-let status: 'idle' | 'scan' | 'copy' | 'paused' = 'idle';
+let status: 'idle' | 'scan' | 'paused' = 'idle';
 const listeners = new Set<() => void>();
 export const backgroundPlaybookSyncStatus = () => status;
 export function subscribeBackgroundPlaybookSync(listener: () => void) {
@@ -30,12 +30,12 @@ export function PlaybookSyncWatcher() {
     const check = () => {
       const state = useAppStore.getState(), queue = museQueueSnapshot();
       if (controller || status === 'paused' || musePlaybookSyncActive() || isDataRestoreActive() ||
-          !state.hydrated || !state.uiReady || document.hidden || queue.textRunning || queue.textWaiting ||
-          state.settings.aiProvider !== 'muse') return;
+          !state.hydrated || !state.uiReady || document.hidden || queue.textRunning || queue.textWaiting) return;
       const scan = shouldAutoSyncPlaybooks(state.settings, Date.now(), true, true, true);
+      if (!scan) return;
       const { signal } = controller = new AbortController();
-      setStatus(scan ? 'scan' : 'copy');
-      const work = scan ? syncMusePlaybooks(false, undefined, signal) : syncSelectedMusePlaybookCopies(signal);
+      setStatus('scan');
+      const work = syncMusePlaybooks(false, undefined, signal);
       void work.catch(() => {}).finally(() => {
         controller = undefined;
         if (status !== 'paused') setStatus('idle');

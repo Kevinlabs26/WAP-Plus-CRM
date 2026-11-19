@@ -14,7 +14,7 @@ import {
 import { getAutoReplySendError, canSendAutoReply } from "@/lib/aiSafety";
 import { canSendAiAutoFollowUp } from "@/lib/aiAutoReply";
 import { currentAutoReplyContext, inspectAutoReplyContext, hashAiReplyContext } from "@/lib/aiReplyContext";
-import { currentOutreachContext, isOutreachPaused } from "@/lib/aiOutreachContext";
+import { currentOutreachContext, isOutreachMessageExpired, isOutreachPaused } from "@/lib/aiOutreachContext";
 import { hydrateOutreachHistory } from "@/lib/aiOutreachHistory";
 import { translateCurrent } from "@/i18n";
 import { scheduledMessageExpired } from "@/lib/scheduledMessageExpiry";
@@ -87,7 +87,7 @@ export function SendQueueWatcher() {
       if (msg.mediaType) return;
 
       let settings = state.settings;
-      if(msg.systemKind==="ai_auto_reply"&&settings.aiAutoReplyPaused)return;
+      if(msg.systemKind==="ai_auto_reply"&&(settings.aiAutoReplyPaused||settings.aiAutoReplyDisabled))return;
       const scheduled = settings.scheduledMessages?.find(task => task.messageId === msg!.id);
       if (scheduled && scheduledMessageExpired(scheduled)) {
         const error = translateCurrent("scheduled.expired");
@@ -96,7 +96,13 @@ export function SendQueueWatcher() {
         return;
       }
       const proactive=msg.systemKind==="ai_proactive";
+      const expireOutreachMessage=(currentState:typeof state,message:Message)=>{
+        if(!proactive||!isOutreachMessageExpired(currentState.settings,message.id))return false;
+        currentState.updateMessageDelivery(message.id,{deliveryStatus:"failed",retryCount:MAX_AUTO_RETRIES,nextAttemptAt:undefined,lastError:translateCurrent("outreachReason.expired")});
+        return true;
+      };
       if(proactive){
+        if(expireOutreachMessage(state,msg))return;
         if(isOutreachPaused(settings,msg.id))return;
         try{await hydrateOutreachHistory(msg.chatId);}catch{
           state.updateMessageDelivery(msg.id,{deliveryStatus:"queued",lastError:"聊天历史尚未读取，稍后重新检查",nextAttemptAt:new Date(Date.now()+30_000).toISOString()});return;
@@ -105,6 +111,7 @@ export function SendQueueWatcher() {
         state=useAppStore.getState();const current=state.messages.find(item=>item.id===queued.id);
         if(!current||!isRetryableOutgoing(current))return;
         msg=current;settings=state.settings;
+        if(expireOutreachMessage(state,msg))return;
         if(isOutreachPaused(settings,msg.id))return;
       }
       const aiContextKey = proactive ? currentOutreachContext(state,msg) : msg.systemKind === "ai_auto_reply" ? currentAutoReplyContext(state, msg) : null;
@@ -121,12 +128,12 @@ export function SendQueueWatcher() {
         if (cancelled) return;
         const latest = useAppStore.getState();
         const current = latest.messages.find((item) => item.id === queued.id);
-        if(proactive&&isOutreachPaused(latest.settings,queued.id))return;
         // 摘要校验会让出执行权；不能复活期间取消、删除或推迟的消息。
         if (!current || !isRetryableOutgoing(current) || current.body !== msg.body ||
             current.phoneE164 !== msg.phoneE164 || current.accountId !== msg.accountId || current.channelId !== msg.channelId ||
             current.aiReplyContextHash !== msg.aiReplyContextHash ||
             latest.settings.scheduledMessages?.some(task => task.messageId === current.id && task.status === "cancelled")) return;
+        if(expireOutreachMessage(latest,current)||proactive&&isOutreachPaused(latest.settings,queued.id))return;
         if (!verified || (proactive?currentOutreachContext(latest,current):currentAutoReplyContext(latest, current)) !== aiContextKey) {
           latest.updateMessageDelivery(current.id, {
             deliveryStatus: "failed", retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined,
@@ -248,11 +255,12 @@ export function SendQueueWatcher() {
           return;
         }
 
-        if(proactive&&result.error==="automation_cancelled") {
+        if(proactive&&(result.error==="automation_cancelled"||result.error==="rate_limited")) {
           const latest=useAppStore.getState(),current=latest.messages.find(item=>item.id===msg.id);
+          if(current?.deliveryStatus==="pending"&&expireOutreachMessage(latest,current))return;
           const run=latest.settings.aiOutreachRuns.find(item=>item.messageId===msg.id);
           // The final gate rejected before transport; a pause can safely retain this exact message.
-          if(current?.deliveryStatus==="pending"&&run?.status==="queued"&&isOutreachPaused(latest.settings,msg.id)) {
+          if(result.error==="automation_cancelled"&&current?.deliveryStatus==="pending"&&run?.status==="queued"&&isOutreachPaused(latest.settings,msg.id)) {
             latest.updateMessageDelivery(msg.id,{deliveryStatus:"queued",retryCount:Math.max(0,attempt-1),lastError:undefined,nextAttemptAt:new Date(Date.now()+5000).toISOString()});
             return;
           }

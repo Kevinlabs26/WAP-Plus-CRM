@@ -180,6 +180,11 @@ export interface AppState extends PersistSlice {
     systemKind?: string;
     aiReplyContextHash?: string;
     aiReplyInboundId?: string;
+    aiReplyReceivedAt?: number;
+    aiReplyDurationMs?: number;
+    aiReplyMuseAccountId?: string;
+    aiReplyMuseAccountName?: string;
+    aiDecisionDetails?: import("@/lib/aiDecisionDetails").AiDecisionDetails;
     aiAutoFollowUpRootId?: string;
     aiAutoFollowUpStep?: number;
     aiAutoFollowUpSentAt?: number;

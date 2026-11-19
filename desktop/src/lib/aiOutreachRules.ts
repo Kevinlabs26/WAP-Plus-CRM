@@ -1,12 +1,18 @@
+import { normalizeAiDecisionDetails, type AiDecisionDetails } from "./aiDecisionDetails.ts";
+
 export type AiOutreachRule = {
   enabled: boolean; paused?: boolean; mode: "draft" | "auto"; allowSidebarData?: boolean;
   startMode: "scheduled" | "immediate"; time: string; timeZone: string; goal: string; runNowAt?: number; scheduleStartAt?: number;
 };
 export type AiOutreachRun = {
   id: string; folderId: string; chatId: string; accountId: string; day: string; at: string;
-  status: "waiting" | "generating" | "draft" | "queued" | "sent" | "skipped" | "failed" | "cancelled";
+  status: "waiting" | "generating" | "draft" | "queued" | "sent" | "skipped" | "failed" | "cancelled" | "expired";
   text?: string; error?: string; messageId?: string; basisAt: string; contextHash?: string; skipReason?: string;
-  approved?: boolean;
+  approved?: boolean; roundAt?: number;
+  expiresAt?: number;
+  archived?: boolean;
+  autoEvidence?: boolean;
+  decisionDetails?: AiDecisionDetails;
   recipient?: string;
 };
 export const outreachGoal = (rule: AiOutreachRule) => rule.goal || "Initiate or resume contact naturally, following the configured conversation instructions. Respect the conversation history and any request to stop.";
@@ -19,18 +25,28 @@ export function normalizeOutreachRule(raw: unknown): AiOutreachRule {
     time: typeof value.time === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value.time) ? value.time : "09:00", timeZone: zone,
     goal: typeof value.goal === "string" ? value.goal.trim().slice(0,2000) : ""};
 }
+export const OUTREACH_IMMEDIATE_WINDOW_MS = 2 * 3600_000;
+export const isPendingOutreachRun = (run: AiOutreachRun) => ["waiting", "generating", "draft", "queued"].includes(run.status);
+
 export function normalizeOutreachRuns(raw: unknown): AiOutreachRun[] {
   const seen = new Set<string>();
-  return (Array.isArray(raw) ? raw : []).slice(-10_000).flatMap(value => {
+  return (Array.isArray(raw) ? raw : []).flatMap(value => {
     if (!value || !["id","folderId","chatId","accountId","day","at","basisAt"].every(key => typeof value[key] === "string" && value[key].length <= 200) ||
-        !value.id || seen.has(value.id) || !["waiting","generating","draft","queued","sent","skipped","failed","cancelled"].includes(value.status)) return [];
+        !value.id || seen.has(value.id) || !["waiting","generating","draft","queued","sent","skipped","failed","cancelled","expired"].includes(value.status)) return [];
     seen.add(value.id);
+    const decisionDetails=normalizeAiDecisionDetails(value.decisionDetails);
+    const roundAt = typeof value.roundAt === "number" && Number.isFinite(value.roundAt) ? value.roundAt : undefined;
     return [{id:value.id, folderId:value.folderId, chatId:value.chatId, accountId:value.accountId, day:value.day, at:value.at, basisAt:value.basisAt,
       status:value.status, text:typeof value.text === "string" ? value.text.slice(0,4000) : undefined,
       error:typeof value.error === "string" ? value.error.slice(0,500) : undefined, messageId:typeof value.messageId === "string" ? value.messageId.slice(0,200) : undefined,
       skipReason:typeof value.skipReason === "string" ? value.skipReason.slice(0,500) : undefined,
+      autoEvidence:value.autoEvidence===true && !!decisionDetails?.evidence && !!decisionDetails.reason,
+      decisionDetails,
       contextHash:typeof value.contextHash === "string" && /^[a-f0-9]{64}$/.test(value.contextHash) ? value.contextHash : undefined,approved:value.approved===true,
-      recipient:typeof value.recipient==="string"?value.recipient.slice(0,200):undefined}];
+      recipient:typeof value.recipient==="string"?value.recipient.slice(0,200):undefined,
+      roundAt,
+      expiresAt:typeof value.expiresAt==="number"&&Number.isFinite(value.expiresAt)?value.expiresAt:roundAt===undefined?undefined:roundAt+OUTREACH_IMMEDIATE_WINDOW_MS,
+      archived:value.archived===true&&!isPendingOutreachRun(value)||undefined}];
   });
 }
 const clockFormats=new Map<string,Intl.DateTimeFormat>();
@@ -48,7 +64,16 @@ export function outreachClock(timeZone: string, now = Date.now()) {
 }
 
 export function isImmediateOutreach(rule: {runNowAt?:number}, now=Date.now()): boolean {
-  return typeof rule.runNowAt === "number" && now >= rule.runNowAt && now - rule.runNowAt < 2 * 3600_000;
+  return typeof rule.runNowAt === "number" && now >= rule.runNowAt && now - rule.runNowAt < OUTREACH_IMMEDIATE_WINDOW_MS;
+}
+
+export function outreachRunExpired(run: AiOutreachRun, rule: AiOutreachRule | undefined, now = Date.now()): boolean {
+  if (run.status === "expired") return true;
+  if (run.roundAt !== undefined || run.expiresAt !== undefined) {
+    const deadline = Math.min(run.expiresAt ?? Infinity, (run.roundAt ?? Infinity) + OUTREACH_IMMEDIATE_WINDOW_MS);
+    return now >= deadline;
+  }
+  return !!rule && outreachClock(rule.timeZone, now).day > run.day;
 }
 
 export function outreachRunClock(rule:Pick<AiOutreachRule,"time"|"timeZone"|"runNowAt"|"startMode">,now=Date.now()) {

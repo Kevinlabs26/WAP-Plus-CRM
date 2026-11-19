@@ -8,7 +8,7 @@ const mocks = {
   '@/lib/utils': 'export const resolveSendTarget=()=>"12025550100";',
   '@/lib/aiSuggest': 'export const hasRealAiKey=()=>true; export const getSuggestionContextKey=()=>"context"; export async function generateSuggestions(){globalThis.__takeoverTest.generated++;if(globalThis.__takeoverTest.gate)await globalThis.__takeoverTest.gate;return {fallback:true,error:"test stops before sending"};}',
   '@/lib/aiSuggestionCache': 'export const isManualSuggestionContext=()=>false;export const SUGGESTION_MAX_AGE_MS=300000;',
-  '@/lib/aiReplyContext': 'export const currentAutoReplyContext=()=>"context";export const hashAiReplyContext=async()=>"hash";',
+  '@/lib/aiReplyContext': 'export const currentAutoReplyContext=()=>"context";export const hashAiReplyContext=async()=>"hash";export const autoFollowUpPrompt="follow up";',
   '@/components/chat/sendTextMessage': 'export const sendTextMessage=async()=>{throw Error("must not send in test");};',
   '@/lib/accountConnection': 'export const isWaAccountConnected=()=>true;',
   '@/components/chat/reloadMediaAction': 'export const reloadMedia=async()=>{};',
@@ -28,7 +28,7 @@ function setup(t,minutes=1){
   const inbound={...manual,id:'inbound',direction:'in',body:'bonjour',sentAt:new Date().toISOString()};
   const state={settings:{leadInbox:{enabled:false,collectedChatIds:[],dismissedChatIds:[]},aiReplyMode:'auto',sendChannel:'baileys',aiProvider:'muse',aiAutoReplyPolicy:{takeoverMinutes:minutes}},
     baileysUi:{connection:'connected'},messages:[manual,inbound],contacts:[{id:'contact',phone:'+12025550100'}],chats:[{id:'chat',contactId:'contact',accountId:'account'}],logActivity(){},
-    updateSettings(patch){this.settings={...this.settings,...patch};},updateMessageDelivery(id,patch){this.messages=this.messages.map(message=>message.id===id?{...message,...patch}:message);}};
+    updateSettings(patch){this.settings={...this.settings,...patch};},patchMessage(id,patch){this.updateMessageDelivery(id,patch);},updateMessageDelivery(id,patch){this.messages=this.messages.map(message=>message.id===id?{...message,...patch}:message);}};
   globalThis.__takeoverTest={state,generated:0};
   t.after(()=>{stopAutoReplies();delete globalThis.__takeoverTest;});
   return {state,inbound};

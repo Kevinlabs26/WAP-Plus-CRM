@@ -281,8 +281,8 @@ export function createBootSlice({
             : "";
         const accountId =
           ch.accountId ||
-          accountByContact.get(ch.contactId) ||
           fromPhone ||
+          accountByContact.get(ch.contactId) ||
           fallbackAccountId;
         return {
           ...ch,
@@ -294,6 +294,7 @@ export function createBootSlice({
       const chatsBeforeLocalRestore = chats;
       chats = restoreLocalContactChats(chats, contacts);
       const restoredLocalChats = chats !== chatsBeforeLocalRestore;
+      const chatsBeforeMerge = chats;
       const mergedLocalChats = mergeImportedContactChatDuplicates(
         chats,
         messages,
@@ -336,7 +337,8 @@ export function createBootSlice({
 
       const healed = healSingleSessionOwnership({
         contacts,
-        chats,
+        // A merged-out chat still owns its SQLite history until the save commits.
+        chats: mergedLocalChats.changed ? chatsBeforeMerge : chats,
         folders: settingsNorm.chatFolders || [],
         accounts: settingsNorm.waAccounts || [],
         liveAccountId:
@@ -350,7 +352,15 @@ export function createBootSlice({
         messages = applyChatAccountReplacements(messages, healed.chatAccountReplacements);
       }
       contacts = healed.contacts;
-      chats = healed.chats;
+      if (mergedLocalChats.changed) {
+        const ownerByChat = new Map(healed.chatAccountReplacements.map(remap => [remap.chatId, remap.toAccountId]));
+        chats = chats.map(chat => {
+          const accountId = ownerByChat.get(chat.id);
+          return accountId ? { ...chat, accountId } : chat;
+        });
+      } else {
+        chats = healed.chats;
+      }
       settingsNorm.chatFolders = healed.folders as AppSettings["chatFolders"];
       settingsNorm.waAccounts = healed.accounts;
       settingsNorm.liveBaileysAccountId = healed.liveAccountId;

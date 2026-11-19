@@ -15,7 +15,7 @@ type PendingMedia = BroadcastMedia & {
   size: number;
 };
 
-function fileToDataUrl(file: File): Promise<string> {
+function fileToDataUrl(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ""));
@@ -24,11 +24,23 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
-function kindOf(file: File): BroadcastMediaKind {
-  const t = file.type || "";
-  if (t.startsWith("image/")) return "image";
-  if (t.startsWith("video/")) return "video";
-  if (t.startsWith("audio/")) return "audio";
+const AUDIO_MIME_BY_EXTENSION: Record<string, string> = {
+  mp3: "audio/mpeg", m4a: "audio/mp4", aac: "audio/aac", wav: "audio/wav",
+  flac: "audio/flac", ogg: "audio/ogg", oga: "audio/ogg", opus: "audio/opus",
+};
+
+function mediaMime(file: File): string {
+  const mime = file.type.toLowerCase();
+  if (mime && mime !== "application/octet-stream" && mime !== "application/ogg") return mime;
+  const extension = /\.([a-z0-9]+)$/i.exec(file.name)?.[1].toLowerCase();
+  if (extension && Object.hasOwn(AUDIO_MIME_BY_EXTENSION, extension)) return AUDIO_MIME_BY_EXTENSION[extension];
+  return mime || "application/octet-stream";
+}
+
+function kindOf(mime: string): BroadcastMediaKind {
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("video/")) return "video";
+  if (mime.startsWith("audio/")) return "audio";
   return "document";
 }
 
@@ -108,15 +120,18 @@ export function BroadcastMediaPicker(props: {
       const next: PendingMedia[] = [];
       for (const file of Array.from(files).slice(0, 10 - pendingRef.current.length)) {
         if (file.size > 14 * 1024 * 1024) throw new Error(t("runtime.fileTooLarge"));
-        const dataUrl = await fileToDataUrl(file);
+        const mime = mediaMime(file);
+        const kind = kindOf(mime);
+        const dataUrl = await fileToDataUrl(kind === "audio" && mime !== file.type ? file.slice(0, file.size, mime) : file);
         if (requestId !== generation.current) return;
         const id = `broadcast-media-${Date.now().toString(36)}-${Math.random()
           .toString(36)
           .slice(2, 8)}`;
         next.push({
           id,
-          kind: kindOf(file),
-          mime: file.type || "application/octet-stream",
+          kind,
+          mime,
+          ...(kind === "audio" ? { voiceNote: true } : {}),
           fileName: file.name || undefined,
           dataUrl,
           size: file.size,
@@ -181,7 +196,7 @@ export function BroadcastMediaPicker(props: {
         ref={inputRef}
         type="file"
         multiple
-        accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"
+        accept={["image/*", "video/*", "audio/*", ...Object.keys(AUDIO_MIME_BY_EXTENSION).map(ext => `.${ext}`), ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"].join(",")}
         className="hidden"
         onChange={(event) => void addFiles(event.target.files)}
       />
