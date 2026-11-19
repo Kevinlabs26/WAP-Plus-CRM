@@ -13,8 +13,8 @@ test('portable protocol caches round-trip through Node and Bun, preserving binar
  const message={key:{id:'sample'},message:{audioMessage:{mediaKey:Buffer.alloc(32,7),waveform:new Uint8Array([1,2])}},count:123456789123456789n};
  const data=encodeRawMessage(message);
  assert.deepEqual(decodeRawMessage(data),message);
- const script="const c=require('./baileys-bridge/rawMessageCodec.mjs');const fs=require('node:fs');process.stdout.write(c.encodeRawMessage(c.decodeRawMessage(fs.readFileSync(0))));";
- const result=execFileSync(bun,['-e',script],{input:data,windowsHide:true,timeout:10000});
+ const script="const c=require('./baileys-bridge/rawMessageCodec.mjs');const data=Buffer.from(process.argv.at(-1),'base64');process.stdout.write(c.encodeRawMessage(c.decodeRawMessage(data)));";
+ const result=execFileSync(bun,['-e',script,data.toString('base64')],{windowsHide:true,timeout:10000});
  assert.deepEqual(decodeRawMessage(result),message);
  assert.deepEqual(decodeRawMessage(serialize(message)),message,'same-runtime legacy caches remain readable');
 });
