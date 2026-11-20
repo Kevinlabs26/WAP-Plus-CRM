@@ -68,14 +68,16 @@ export async function installDownloadedAppUpdate(update: NonNullable<AppUpdate>)
 
   // Windows starts the installer while the current process is still alive.
   // Stop every sidecar first so the installer can replace wap-plus-baileys.exe.
-  await bridgeInvoke("baileys_stop_all");
   try {
+    await bridgeInvoke("baileys_stop_all");
     await update.install({ restartAfterInstall: true });
   } catch (error) {
     window.localStorage.removeItem(PENDING_UPDATE_STORAGE_KEY);
     await bridgeInvoke("baileys_cancel_update").catch(() => undefined);
     throw error;
   }
+  // The macOS updater installs the bundle in place and leaves relaunch to the app.
+  await bridgeInvoke("restart_after_macos_update");
 }
 
 export async function installAppUpdate(

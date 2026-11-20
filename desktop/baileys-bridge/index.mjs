@@ -734,6 +734,10 @@ async function connect(opts = {}) {
   return wrapped;
 }
 
+function hasPendingPhonePairing(creds) {
+  return Boolean(creds?.pairingCode && !creds.account && !creds.registered);
+}
+
 async function connectInternal(opts = {}) {
   const myGen = ++connectGeneration;
   if (connecting) {
@@ -758,6 +762,13 @@ async function connectInternal(opts = {}) {
 
     const { state, saveCreds } = await useMultiFileAuthState(authDir);
     if (myGen !== connectGeneration) return;
+    // Baileys uses creds.me to choose login over registration.
+    if (hasPendingPhonePairing(state.creds)) {
+      delete state.creds.me;
+      delete state.creds.pairingCode;
+      await saveCreds();
+      if (myGen !== connectGeneration) return;
+    }
     authMe = state.creds.me || undefined;
 
     const sock = makeWASocket({
@@ -1352,7 +1363,7 @@ async function connectInternal(opts = {}) {
       if (myGen !== connectGeneration) return;
       // 已登录时偶发 qr 刷新：不要把状态打成 qr（否则前端变「点此扫码」）
       if (update.qr) {
-        const hadSession = Boolean(sock.authState?.creds?.me || sock.user);
+        const hadSession = Boolean(sock.user) && !hasPendingPhonePairing(sock.authState?.creds);
         if (!hadSession) {
           connection = "qr";
           lastError = "";
@@ -1487,13 +1498,27 @@ async function requestPairingCode(phoneNumber) {
   if (!/^\d{7,15}$/.test(digits) || /[^\d+\s().-]/.test(raw)) {
     throw new Error("手机号必须包含国家码，且只允许数字、空格、+、括号或短横线");
   }
-  if (!socket || !["starting", "qr", "reconnecting"].includes(connection)) {
-    throw new Error("请先启动未登录的 WhatsApp 会话");
-  }
-  if (socket.authState?.creds?.registered || socket.user) {
+  if (connectPromise) await connectPromise;
+  const currentSocket = socket;
+  const creds = currentSocket?.authState?.creds;
+  if (connection === "connected" || creds?.account || creds?.registered ||
+      (currentSocket?.user && !hasPendingPhonePairing(creds))) {
     throw new Error("当前会话已经登录");
   }
-  return { phoneNumber: digits, code: await socket.requestPairingCode(digits) };
+  if (!currentSocket || !["starting", "qr", "reconnecting"].includes(connection)) {
+    throw new Error("WhatsApp 登录会话尚未就绪，请重试");
+  }
+  if (connection !== "qr") {
+    try {
+      await currentSocket.waitForConnectionUpdate(update => Boolean(update.qr || update.isNewLogin || update.connection === "open"), 20_000);
+    } catch {
+      throw new Error("WhatsApp 登录连接尚未就绪，请重试");
+    }
+  }
+  if (currentSocket !== socket || connection !== "qr" || !currentSocket.ws.isOpen) {
+    throw new Error("WhatsApp 登录会话已变化，请重试");
+  }
+  return { phoneNumber: digits, code: await currentSocket.requestPairingCode(digits) };
 }
 
 async function checkWhatsAppNumbers(numbers) {
@@ -1545,8 +1570,9 @@ async function updatePrivacySettings(patch = {}) {
 
 function statusPayload() {
   const syncStorage = eventSpool.health;
-  const socketUser = socket?.user || null;
-  const credentialUser = authMe || null;
+  const pendingPairing = hasPendingPhonePairing(socket?.authState?.creds);
+  const socketUser = pendingPairing ? null : socket?.user || null;
+  const credentialUser = pendingPairing ? null : authMe || null;
   const user = socketUser || credentialUser
     ? {
         ...(credentialUser || {}),
@@ -1570,7 +1596,7 @@ function statusPayload() {
     hasQr: connection === "qr" && Boolean(qrDataUrl),
     reconnectAttempts,
     lastDisconnectAt,
-    signedIn: connection !== "logged_out" && (Boolean(me) || connection === "connected" || connection === "reconnecting"),
+    signedIn: connection !== "logged_out" && (Boolean(me) || connection === "connected"),
     presenceEventCount,
     lastPresenceDebug,
     eventCursor: sequence,

@@ -113,6 +113,8 @@ export interface GroupDetails {
 }
 
 export interface ChatPreview {
+  /** SQLite found conflicting history owners. Leave this chat out of automatic merges. */
+  historyRemapBlocked?: boolean;
   id: string;
   contactId: string;
   contactName: string;

@@ -27,6 +27,7 @@ export type ContactIngestBag = {
   _contactLookup?: ContactLookup;
   /** 同步合并会话后，文件夹和分身也必须改指向保留的会话。 */
   _chatReplacements?: Map<string, string>;
+  _contactsWithBlockedRemaps?: Set<string>;
 };
 
 /**
@@ -83,9 +84,13 @@ export function ensureIngestContact(
   }
 
   if (index >= 0 && phone) {
+    const protectedContacts = (bag._contactsWithBlockedRemaps ??= new Set(
+      chats.filter(chat => chat.historyRemapBlocked).map(chat => chat.contactId)
+    ));
     const dupIdx = contacts.findIndex(
       (c, i) =>
         i !== index &&
+        !protectedContacts.has(c.id) && !protectedContacts.has(contacts[index].id) &&
         contactOwner(c) === deviceId &&
         ((channelAddress && c.channelAddress === channelAddress) ||
           (c.phone && c.phone === phone) ||

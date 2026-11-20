@@ -161,7 +161,7 @@ test("draft-only saves leave pending history remaps for the chat snapshot", asyn
   assert.equal(calls.filter(call => call.cmd === "db_save").at(-1).args.snapshot.chatMessageRemaps.length, 1);
 });
 
-test("chunked saves migrate cold history only with the final chat snapshot", async () => {
+test("chunked saves validate cold history with the chat snapshot before writing later chunks", async () => {
   const { api, calls } = await setup({ sqlite: true });
   const target = { id: "kept", contactId: "customer", accountId: "wa-a" };
   api.registerChatMessageReplacements(new Map([["old", "kept"]]), [target]);
@@ -169,9 +169,10 @@ test("chunked saves migrate cold history only with the final chat snapshot", asy
     messages: Array.from({ length: 1501 }, (_, i) => ({ id: `m-${i}`, chatId: "kept" })) });
   const snapshots = calls.filter(call => call.cmd === "db_save").map(call => call.args.snapshot);
   assert.equal(snapshots.length, 2);
-  assert.deepEqual(snapshots[0].chatMessageRemaps, []);
-  assert.equal(snapshots[1].chatMessageRemaps.length, 1);
-  assert.deepEqual(snapshots[1].chats, [target]);
+  assert.equal(snapshots[0].chatMessageRemaps.length, 1);
+  assert.deepEqual(snapshots[0].chats, [target]);
+  assert.deepEqual(snapshots[1].chatMessageRemaps, []);
+  assert.deepEqual(Object.keys(snapshots[1].dirty).filter(key => snapshots[1].dirty[key]), ["messages"]);
 });
 
 test("IDB roundtrip preserves unchanged messages, edits and deletions", async () => {

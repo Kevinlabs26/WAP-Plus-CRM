@@ -181,6 +181,10 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             json TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS blocked_chat_remaps (
+            chat_id TEXT PRIMARY KEY NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS messages (
             id TEXT PRIMARY KEY NOT NULL,
             chat_id TEXT,
@@ -458,6 +462,26 @@ fn upsert_json_table(
     Ok((written, skipped, deleted))
 }
 
+fn blocked_chat_remap_ids(conn: &Connection) -> Result<HashSet<String>, String> {
+    let mut stmt = conn.prepare("SELECT chat_id FROM blocked_chat_remaps").map_err(|e| e.to_string())?;
+    let ids = stmt.query_map([], |row| row.get(0)).map_err(|e| e.to_string())?;
+    ids.collect::<Result<_, _>>().map_err(|e| e.to_string())
+}
+
+fn chat_has_foreign_owner(
+    conn: &Connection,
+    chat_id: &str,
+    source: &str,
+    target: &str,
+) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM messages WHERE chat_id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.deviceId'), ''), '') NOT IN ('', ?2, ?3))
+             OR EXISTS(SELECT 1 FROM chats WHERE id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.phoneId'), ''), '') NOT IN ('', ?2, ?3))",
+        params![chat_id, source, target],
+        |row| row.get(0),
+    ).map_err(|e| e.to_string())
+}
+
 fn fts_available(conn: &Connection) -> bool {
     conn.query_row(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts' LIMIT 1",
@@ -613,27 +637,66 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
     let mut total_skipped = 0usize;
     let mut total_deleted = 0usize;
 
-    if !snap.replace_messages {
+    let mut blocked = blocked_chat_remap_ids(&tx)?;
+    let original_blocked_count = blocked.len();
+    let mut rejected_targets = HashSet::new();
+    if snap.replace_messages {
+        tx.execute("DELETE FROM blocked_chat_remaps", []).map_err(|e| e.to_string())?;
+        blocked.clear();
+    } else {
+        let repairs: HashMap<_, _> = snap.chat_account_remaps.iter()
+            .map(|remap| (remap.chat_id.as_str(), remap)).collect();
         for remap in &snap.chat_account_remaps {
-            if remap.chat_id.is_empty()
-                || remap.to_account_id.is_empty()
+            if remap.chat_id.is_empty() || remap.to_account_id.is_empty()
                 || remap.from_account_id == remap.to_account_id
             {
                 return Err("聊天归属纠偏参数无效".into());
             }
-            let foreign_messages: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.deviceId'), ''), '') NOT IN ('', ?2, ?3)",
-                params![remap.chat_id, remap.from_account_id, remap.to_account_id],
-                |row| row.get(0),
-            ).map_err(|e| e.to_string())?;
-            let foreign_chat: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM chats WHERE id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.phoneId'), ''), '') NOT IN ('', ?2, ?3)",
-                params![remap.chat_id, remap.from_account_id, remap.to_account_id],
-                |row| row.get(0),
-            ).map_err(|e| e.to_string())?;
-            if foreign_messages > 0 || foreign_chat > 0 {
-                return Err("已阻止跨账号迁移聊天历史".into());
+            if !blocked.contains(&remap.chat_id)
+                && chat_has_foreign_owner(&tx, &remap.chat_id, &remap.from_account_id, &remap.to_account_id)?
+            {
+                blocked.insert(remap.chat_id.clone());
             }
+        }
+        for remap in &snap.chat_message_remaps {
+            // A compatible account repair and subsequent merge are one decision.
+            let source_repair = repairs.get(remap.from_chat_id.as_str());
+            let target_repair = repairs.get(remap.to_chat_id.as_str());
+            let account = remap.account_id.as_str();
+            let from = source_repair.map_or(account, |repair| repair.from_account_id.as_str());
+            let target_from = target_repair.map_or(account, |repair| repair.from_account_id.as_str());
+            if !blocked.contains(&remap.from_chat_id)
+                && (source_repair.is_some_and(|repair| repair.to_account_id != account)
+                    || target_repair.is_some_and(|repair| repair.to_account_id != account)
+                    || chat_has_foreign_owner(&tx, &remap.from_chat_id, from, account)?
+                    || chat_has_foreign_owner(&tx, &remap.to_chat_id, target_from, account)?)
+            {
+                blocked.insert(remap.from_chat_id.clone());
+            }
+        }
+        loop {
+            let count = blocked.len();
+            rejected_targets.extend(snap.chat_message_remaps.iter()
+                .filter(|remap| blocked.contains(&remap.from_chat_id))
+                .map(|remap| remap.to_chat_id.as_str()));
+            for remap in &snap.chat_message_remaps {
+                if blocked.contains(&remap.to_chat_id) || rejected_targets.contains(remap.to_chat_id.as_str()) {
+                    blocked.insert(remap.from_chat_id.clone());
+                }
+            }
+            if blocked.len() == count { break; }
+        }
+        if blocked.len() > original_blocked_count {
+            for id in &blocked {
+                tx.execute("INSERT OR IGNORE INTO blocked_chat_remaps(chat_id) VALUES (?1)", params![id])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    if !snap.replace_messages {
+        for remap in &snap.chat_account_remaps {
+            if blocked.contains(&remap.chat_id) { continue; }
             tx.execute(
                 "UPDATE messages SET json = json_set(json, '$.accountId', ?3), content_hash = NULL WHERE chat_id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.deviceId'), ''), '') IN ('', ?2)",
                 params![remap.chat_id, remap.from_account_id, remap.to_account_id],
@@ -664,21 +727,38 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
         {
             return Err("历史迁移会话归属不匹配".into());
         }
-        let wrong_owner: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.deviceId'), ''), '') NOT IN ('', ?2)",
-            params![remap.from_chat_id, remap.account_id], |row| row.get(0),
-        ).map_err(|e| e.to_string())?;
-        let wrong_chat_owner: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM chats WHERE id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.phoneId'), ''), '') NOT IN ('', ?2)",
-            params![remap.from_chat_id, remap.account_id], |row| row.get(0),
-        ).map_err(|e| e.to_string())?;
-        if wrong_owner > 0 || wrong_chat_owner > 0 {
-            return Err("已阻止跨账号迁移聊天历史".into());
+        if blocked.contains(&remap.from_chat_id) { continue; }
+        // Check again because another repair or merge can have changed the source.
+        if chat_has_foreign_owner(&tx, &remap.from_chat_id, &remap.account_id, &remap.account_id)? {
+            return Err("聊天归属在同一批迁移中变化".into());
         }
         tx.execute(
             "UPDATE messages SET chat_id = ?2, json = json_set(json, '$.chatId', ?2, '$.contactId', ?3), content_hash = NULL WHERE chat_id = ?1",
             params![remap.from_chat_id, remap.to_chat_id, remap.contact_id],
         ).map_err(|e| e.to_string())?;
+    }
+
+    // Keep original rows even when a stale full snapshot has already removed them in memory.
+    let mut original_chats = HashMap::<String, String>::new();
+    let mut original_contacts = HashMap::<String, String>::new();
+    let mut original_owners = HashMap::<String, String>::new();
+    for id in blocked.iter().map(String::as_str).chain(rejected_targets.iter().copied()) {
+        let original: Option<(String, Option<String>, String)> = tx.query_row(
+            "SELECT json, json_extract(json, '$.contactId'), COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.phoneId'), ''), '') FROM chats WHERE id = ?1",
+            params![id],
+            |row| Ok((read_json_text(row, 0)?, row.get(1)?, row.get(2)?)),
+        ).optional().map_err(|e| e.to_string())?;
+        if let Some((json, contact_id, owner)) = original {
+            original_chats.insert(id.to_string(), json);
+            if blocked.contains(id) {
+                original_owners.insert(id.to_string(), owner);
+                if let Some(contact_id) = contact_id {
+                    let json = tx.query_row("SELECT json FROM contacts WHERE id = ?1", params![contact_id],
+                        |row| read_json_text(row, 0)).optional().map_err(|e| e.to_string())?;
+                    if let Some(json) = json { original_contacts.insert(contact_id, json); }
+                }
+            }
+        }
     }
 
     // phones / contacts / chats / follow_ups：仅写变更 + 删缺失
@@ -697,16 +777,22 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
 
     if dirty.contacts {
         let mut contact_rows = Vec::with_capacity(snap.contacts.len());
+        let mut contact_deletes = row_deltas.and_then(|delta| delta.contacts.clone());
+        if let Some(ids) = &mut contact_deletes {
+            ids.retain(|id| !original_contacts.contains_key(id));
+        }
         for c in &snap.contacts {
             let id = id_of(c).ok_or("contact missing id")?;
+            original_contacts.remove(&id);
             let j = serde_json::to_string(c).map_err(|e| e.to_string())?;
             contact_rows.push((id, j));
         }
+        contact_rows.extend(original_contacts);
         let (w, s, d) = upsert_json_table(
             &tx,
             "contacts",
             &contact_rows,
-            row_deltas.and_then(|delta| delta.contacts.as_deref()),
+            contact_deletes.as_deref(),
         )?;
         total_written += w;
         total_skipped += s;
@@ -717,14 +803,18 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
         let mut chat_rows = Vec::with_capacity(snap.chats.len());
         for c in &snap.chats {
             let id = id_of(c).ok_or("chat missing id")?;
+            if blocked.contains(&id) || rejected_targets.contains(id.as_str()) { continue; }
             let j = serde_json::to_string(c).map_err(|e| e.to_string())?;
             chat_rows.push((id, j));
         }
+        chat_rows.extend(original_chats);
+        let chat_deletes = row_deltas.and_then(|delta| delta.chats.as_ref())
+            .map(|ids| ids.iter().filter(|id| !blocked.contains(*id) && !rejected_targets.contains(id.as_str())).cloned().collect::<Vec<_>>());
         let (w, s, d) = upsert_json_table(
             &tx,
             "chats",
             &chat_rows,
-            row_deltas.and_then(|delta| delta.chats.as_deref()),
+            chat_deletes.as_deref(),
         )?;
         total_written += w;
         total_skipped += s;
@@ -735,9 +825,23 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
     // 用 content_hash 在 SQL 侧判断未变，禁止全表 SELECT json。
     if dirty.messages {
         let mut has_fts = fts_available(&tx);
+        let mut protected_message = if blocked.is_empty() { None } else {
+            Some(tx.prepare_cached(
+                "SELECT EXISTS(SELECT 1 FROM messages m JOIN blocked_chat_remaps b ON b.chat_id = m.chat_id WHERE m.id = ?1)"
+            ).map_err(|e| e.to_string())?)
+        };
         for m in &snap.messages {
             let id = id_of(m).ok_or("message missing id")?;
             let chat_id = m.get("chatId").and_then(|x| x.as_str()).unwrap_or("");
+            if let Some(stmt) = &mut protected_message {
+                let owner = m["accountId"].as_str().filter(|id| !id.is_empty())
+                    .or_else(|| m["deviceId"].as_str()).unwrap_or("");
+                if (blocked.contains(chat_id) && (owner.is_empty() || original_owners.get(chat_id).map(String::as_str) != Some(owner)))
+                    || stmt.query_row(params![id], |row| row.get::<_, bool>(0)).map_err(|e| e.to_string())?
+                {
+                    continue;
+                }
+            }
             let sent_at = m.get("sentAt").and_then(|x| x.as_str()).unwrap_or("");
             let mut message = m.clone();
             if !snap.replace_messages && m.get("direction").and_then(Value::as_str) == Some("out") {
@@ -813,6 +917,9 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
             }
         }
         for id in &snap.deleted_message_ids {
+            if let Some(stmt) = &mut protected_message {
+                if stmt.query_row(params![id], |row| row.get::<_, bool>(0)).map_err(|e| e.to_string())? { continue; }
+            }
             total_deleted += tx
                 .execute("DELETE FROM messages WHERE id = ?1", params![id])
                 .map_err(|e| e.to_string())?;
@@ -852,7 +959,7 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
         if dirty.chats && row_deltas.and_then(|delta| delta.chats.as_ref()).is_none() {
             total_deleted += tx
             .execute(
-                "DELETE FROM messages WHERE chat_id IS NOT NULL AND chat_id != '' AND chat_id NOT IN (SELECT id FROM chats)",
+                "DELETE FROM messages WHERE chat_id IS NOT NULL AND chat_id != '' AND chat_id NOT IN (SELECT id FROM chats) AND chat_id NOT IN (SELECT chat_id FROM blocked_chat_remaps)",
                 [],
             )
             .map_err(|e| e.to_string())?;
@@ -868,6 +975,7 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
     if dirty.chats {
         if let Some(ids) = row_deltas.and_then(|delta| delta.chats.as_ref()) {
             for id in ids {
+                if blocked.contains(id) || rejected_targets.contains(id.as_str()) { continue; }
                 if fts_available(&tx) {
                     tx.execute("DELETE FROM messages_fts WHERE id IN (SELECT id FROM messages WHERE chat_id = ?1)", params![id]).map_err(|e| e.to_string())?;
                 }
@@ -1284,6 +1392,17 @@ fn load_table(conn: &Connection, table: &str) -> Result<Vec<Value>, String> {
 
 fn load_chats_with_history(conn: &Connection) -> Result<Vec<Value>, String> {
     let mut chats = load_table(conn, "chats")?;
+    // Detect old conflicts before the app proposes an automatic merge at startup.
+    let mut owners = conn.prepare(
+        "SELECT id FROM chats c WHERE EXISTS (
+            SELECT 1 FROM messages m WHERE m.chat_id = c.id
+            AND COALESCE(NULLIF(json_extract(m.json, '$.accountId'), ''), NULLIF(json_extract(m.json, '$.deviceId'), ''), '')
+                NOT IN ('', COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''), NULLIF(json_extract(c.json, '$.phoneId'), ''), ''))
+            AND COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''), NULLIF(json_extract(c.json, '$.phoneId'), ''), '') != ''
+        ) UNION SELECT chat_id FROM blocked_chat_remaps"
+    ).map_err(|e| e.to_string())?;
+    let blocked = owners.query_map([], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?
+        .collect::<Result<HashSet<_>, _>>().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
             r#"
@@ -1356,6 +1475,11 @@ fn load_chats_with_history(conn: &Connection) -> Result<Vec<Value>, String> {
         let Some(object) = chat.as_object_mut() else {
             continue;
         };
+        if object.get("id").and_then(Value::as_str).is_some_and(|id| blocked.contains(id)) {
+            object.insert("historyRemapBlocked".into(), Value::Bool(true));
+        } else {
+            object.remove("historyRemapBlocked");
+        }
         let has_outgoing = object
             .get("id")
             .and_then(Value::as_str)
@@ -1757,7 +1881,7 @@ pub fn clear_all(conn: &Connection) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     tx.execute_batch(
-        "DELETE FROM phones; DELETE FROM contacts; DELETE FROM chats; DELETE FROM messages; DELETE FROM follow_ups; DELETE FROM activities; DELETE FROM settings; DELETE FROM meta WHERE key = 'last_saved_at';",
+        "DELETE FROM phones; DELETE FROM contacts; DELETE FROM chats; DELETE FROM messages; DELETE FROM blocked_chat_remaps; DELETE FROM follow_ups; DELETE FROM activities; DELETE FROM settings; DELETE FROM meta WHERE key = 'last_saved_at';",
     ).map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
 }
@@ -3088,7 +3212,7 @@ mod tests {
     }
 
     #[test]
-    fn orphan_chat_owner_repair_still_rejects_another_valid_account() {
+    fn orphan_chat_owner_conflict_preserves_history_and_saves_unrelated_rows() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let target = json!({"id":"kept", "contactId":"customer", "accountId":"wa-live"});
@@ -3104,10 +3228,16 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(save_snapshot(
+        save_snapshot(
             &conn,
             &AppSnapshot {
                 chats: vec![target],
+                messages: vec![
+                    json!({"id":"foreign", "chatId":"kept", "accountId":"wa-live"}),
+                    json!({"id":"independent", "chatId":"kept", "accountId":"wa-live", "body":"new"}),
+                ],
+                deleted_message_ids: vec!["foreign".into()],
+                settings: json!({"savedDespiteConflict":true}),
                 chat_account_remaps: vec![ChatAccountRemap {
                     chat_id: "old".into(),
                     from_account_id: "wa-removed".into(),
@@ -3122,14 +3252,27 @@ mod tests {
                 ..Default::default()
             }
         )
-        .is_err());
+        .unwrap();
+        save_snapshot(&conn, &AppSnapshot {
+            chats: vec![json!({"id":"kept", "contactId":"customer", "accountId":"wa-live"})],
+            messages: vec![json!({"id":"foreign", "chatId":"kept", "accountId":"wa-live"})],
+            settings: json!({"savedDespiteConflict":true, "savedAgain":true}),
+            ..Default::default()
+        }).unwrap();
         assert_eq!(count_messages_for_chat(&conn, "old").unwrap(), 1);
         let message = get_message_by_id(&conn, "foreign").unwrap().unwrap();
+        assert_eq!(message["chatId"], "old");
         assert_eq!(message["accountId"], "wa-other");
+        assert_eq!(get_message_by_id(&conn, "independent").unwrap().unwrap()["body"], "new");
+        let saved = load_snapshot(&conn).unwrap().unwrap();
+        assert_eq!(saved.settings["savedAgain"], true);
+        let old = saved.chats.iter().find(|chat| chat["id"] == "old").unwrap();
+        assert_eq!(old["accountId"], "wa-removed");
+        assert_eq!(old["historyRemapBlocked"], true);
     }
 
     #[test]
-    fn chat_merge_refuses_cross_account_history_and_rolls_back() {
+    fn chat_merge_skips_cross_account_history() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let target = json!({"id":"kept", "contactId":"customer", "accountId":"wa-b"});
@@ -3142,7 +3285,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(save_snapshot(
+        save_snapshot(
             &conn,
             &AppSnapshot {
                 chats: vec![target],
@@ -3155,7 +3298,7 @@ mod tests {
                 ..Default::default()
             }
         )
-        .is_err());
+        .unwrap();
         assert_eq!(count_messages_for_chat(&conn, "old").unwrap(), 1);
     }
 
@@ -3173,7 +3316,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(save_snapshot(
+        save_snapshot(
             &conn,
             &AppSnapshot {
                 chats: vec![target],
@@ -3186,7 +3329,7 @@ mod tests {
                 ..Default::default()
             }
         )
-        .is_err());
+        .unwrap();
         assert_eq!(count_messages_for_chat(&conn, "old").unwrap(), 1);
     }
 }

@@ -15,8 +15,11 @@ GitHub Actions 的 `macOS build and DMG release` 工作流在 `codex/macos` 分�
 | `APPLE_PASSWORD` | Apple 账号的应用专用密码 |
 | `APPLE_TEAM_ID` | Apple Developer Team ID |
 | `GOOGLE_DESKTOP_CLIENT_JSON` | 现有 Windows 发布已使用的 Google 桌面 OAuth 配置。如仓库已设置，可直接复用 |
+| `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 复用 Windows 更新包的 Tauri 签名密钥和密码。两种 Mac 发布均需验证更新包签名 |
 
-两个架构的测试构建通过后，可用同一提交创建 `macos-build-v0.1.79` 标签来签名、公证并发布；也可创建 `macos-unsigned-build-v0.1.79` 标签来发布正式模式的未签名/未公证 DMG。后者无需 Apple Secrets，会生成单独的 `macos-unsigned-v0.1.79` Release，DMG 文件名带 `-unsigned`，发布说明会提示 Gatekeeper 首次打开需手动允许。两种 macOS Release 都不标为 Latest，避免替换 Windows 更新器使用的发布入口。
+两个架构的测试构建通过后，可用同一提交创建 `macos-build-v<版本>` 标签来签名、公证并发布，也可创建 `macos-unsigned-build-v<版本>` 标签发布未经 Apple 公证的 DMG。后者使用 `macos-unsigned-v<版本>` Release，DMG 文件名带 `-unsigned`，发布说明会提示 Gatekeeper 首次打开可能需手动允许。Windows 发布继续使用 GitHub 的 Latest Release 入口。
+
+两种 Mac 发布都会为 Apple Silicon 和 Intel 生成签名的 `.app.tar.gz` 更新包。两个架构通过验收且 Release 公开后，发布任务才会把对应清单写入 `macos-updates` 分支。Apple 公证版使用 `latest-signed.json`，未经 Apple 公证的版本使用 `latest-unsigned.json`。用户需先手动安装包含新更新入口的 DMG，后续版本可在应用内检查并安装。
 
 ## 本地构建
 
@@ -39,6 +42,6 @@ GitHub Actions 的 `macOS build and DMG release` 工作流在 `codex/macos` 分�
    ```
 
 6. 每种架构都从 DMG 安装一次，再验证启动、WhatsApp 登入、退出应用后重新打开、自动恢复会话、语音和媒体收发、备份恢复，以及新的数据库和密钥文件均为加密格式。确认 Keychain 拒绝访问时不会以明文数据库或替换密钥的方式继续运行。使用专用测试用户及合成数据。
-7. 公开分发前，用 Apple Developer ID 对应用及其内置工具签名并公证，通过 Gatekeeper 验证与签名检查后再上传。macOS 更新器需要独立测通后才与 Windows 共用发布清单。
+7. Apple 公证版需使用 Developer ID 签名，并通过 Gatekeeper 和签名检查。Apple Silicon 和 Intel 各从旧版 DMG 安装一次，然后用应用内更新安装下一版，确认应用能重启且可继续读取原有的钥匙串和数据库。
 
-当前步骤只准备 macOS 构建。Windows 的依赖准备脚本、磁盘格式和发布工作流不需要调整。macOS 安装包不得附加到指向不同源代码的现有发布标签。
+每个 macOS 发布标签应指向构建该安装包的提交。

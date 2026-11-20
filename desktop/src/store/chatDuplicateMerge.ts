@@ -28,7 +28,7 @@ export function mergeImportedContactChatDuplicates(
     if (local.id !== `chat-${local.contactId}`) continue;
     const bridgeId = `bridge-chat-${local.contactId}`;
     const bridge = byId.get(bridgeId);
-    if (!bridge) continue;
+    if (!bridge || local.historyRemapBlocked || bridge.historyRemapBlocked) continue;
     const localOwner = local.accountId || local.phoneId || "";
     const bridgeOwner = bridge.accountId || bridge.phoneId || "";
     if (localOwner && bridgeOwner && localOwner !== bridgeOwner) continue;
@@ -41,14 +41,14 @@ export function mergeImportedContactChatDuplicates(
     const chatsWithMessages = new Set(messages.map(message => message.chatId));
     for (const legacy of chats) {
       const owner = legacy.accountId || legacy.phoneId;
-      if (!owner || legacy.id !== `bridge-chat-${legacy.contactId}-${owner}` ||
+      if (!owner || legacy.historyRemapBlocked || legacy.id !== `bridge-chat-${legacy.contactId}-${owner}` ||
         chatHasMessageHistory(legacy) || chatsWithMessages.has(legacy.id) || groups.protectedIds.has(legacy.id)) continue;
       const jid = contactsById.get(legacy.contactId)?.channelAddress;
       if (!jid?.endsWith("@g.us")) continue;
       const targetContactId = groupContacts.get(`${owner}|${jid}`);
       if (!targetContactId) continue;
       const target = byId.get(`bridge-chat-${targetContactId}`) || byId.get(`chat-${targetContactId}`);
-      if (!target || target.contactId !== targetContactId || (target.accountId || target.phoneId) !== owner) continue;
+      if (!target || target.historyRemapBlocked || target.contactId !== targetContactId || (target.accountId || target.phoneId) !== owner) continue;
       // shortcut: Only empty, unreferenced invite shells are automatic; populated duplicates need review.
       replacements.set(legacy.id, replacements.get(target.id) || target.id);
     }

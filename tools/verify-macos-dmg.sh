@@ -30,3 +30,15 @@ fi
 mkdir -p "$RUNNER_TEMP/macos-release"
 cp "$dmg" "$RUNNER_TEMP/macos-release/WAP-Plus-CRM-$version-macOS-$ARCH.dmg"
 cp "$RUNNER_TEMP/ffmpeg-source-$ARCH.tar.gz" "$RUNNER_TEMP/macos-release/"
+if [[ ${RELEASE_BUILD:-false} == true ]]; then
+  archives=(desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz)
+  [[ ${#archives[@]} == 1 ]]
+  archive=${archives[0]}
+  test -s "$archive.sig"
+  for name in wap-plus-crm wap-plus-baileys ffmpeg; do
+    tar -xOf "$archive" "WAP Plus CRM.app/Contents/MacOS/$name" | cmp - "$executables/$name"
+  done
+  update="$RUNNER_TEMP/macos-release/WAP-Plus-CRM-$version-macOS-$ARCH.app.tar.gz"
+  cp "$archive" "$update"
+  cp "$archive.sig" "$update.sig"
+fi

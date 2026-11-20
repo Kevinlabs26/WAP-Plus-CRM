@@ -6,7 +6,7 @@
  * - baileysChatActions：回执 / 已读 / 删除 / 反应 / 媒体补下 / 重启 / 头像
  * - baileysLabels：标签与快捷话术
  */
-import { request } from "./baileysCore";
+import { baileysResetAccount, baileysStatus, request, resolveBaileysAccountId } from "./baileysCore";
 
 export * from "./baileysCore";
 export * from "./baileysSend";
@@ -17,15 +17,27 @@ export * from "./baileysProfile";
 
 export type BaileysPrivacySettings = Record<string, unknown>;
 
-export const baileysPairingCode = (
+export const baileysPairingCode = async (
   phoneNumber: string,
   accountId?: string | null
-) =>
-  request<{ ok: boolean; phoneNumber: string; code: string }>(
+) => {
+  const raw = phoneNumber.trim();
+  const digits = raw.replace(/\D/g, "");
+  if (!/^\d{7,15}$/.test(digits) || /[^\d+\s().-]/.test(raw)) {
+    throw new Error("手机号必须包含国家码，且只允许数字、空格、+、括号或短横线");
+  }
+  const id = resolveBaileysAccountId(accountId);
+  const status = await baileysStatus(id);
+  // Reuse the QR reset path so a new login cannot reuse the old process's caches.
+  if (status.connection === "logged_out" && !status.signedIn) {
+    await baileysResetAccount(id);
+  }
+  return request<{ ok: boolean; phoneNumber: string; code: string }>(
     "/pairing-code",
-    { method: "POST", body: JSON.stringify({ phoneNumber }) },
-    accountId
+    { method: "POST", body: JSON.stringify({ phoneNumber: digits }) },
+    id
   );
+};
 
 export const baileysCheckNumbers = (
   numbers: string[],

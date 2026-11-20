@@ -467,17 +467,18 @@ async function saveAppStateNow(
       !data.replaceMessages &&
       (!data.dirty || data.dirty.messages)
     ) {
-      // 其他表和删除只随末块保存，最后按会话表清掉孤立消息。
+      const hasRemaps = Boolean(data.chatMessageRemaps?.length || data.chatAccountRemaps?.length);
+      // Validate ownership before writing any message with a proposed new chat/owner.
       for (let i = 0; i < messages.length; i += MESSAGE_CHUNK) {
-        const last = i + MESSAGE_CHUNK >= messages.length;
+        const checkpoint = hasRemaps ? i === 0 : i + MESSAGE_CHUNK >= messages.length;
         const part: PersistedAppState = {
           ...data,
           messages: messages.slice(i, i + MESSAGE_CHUNK),
-          dirty: last ? data.dirty : { messages: true },
-          deletedMessageIds: last ? data.deletedMessageIds : [],
-          chatMessageRemaps: last ? data.chatMessageRemaps : [],
-          chatAccountRemaps: last ? data.chatAccountRemaps : [],
-          rowDeltas: last ? data.rowDeltas : undefined,
+          dirty: checkpoint ? data.dirty : { messages: true },
+          deletedMessageIds: checkpoint ? data.deletedMessageIds : [],
+          chatMessageRemaps: checkpoint ? data.chatMessageRemaps : [],
+          chatAccountRemaps: checkpoint ? data.chatAccountRemaps : [],
+          rowDeltas: checkpoint ? data.rowDeltas : undefined,
           replaceMessages: false,
         };
         await saveSqliteSnapshot(toRust(part));

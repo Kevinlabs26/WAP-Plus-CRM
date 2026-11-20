@@ -39,6 +39,14 @@ pub(crate) fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
+#[tauri::command(async)]
+fn restart_after_macos_update(app: tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
+    app.restart();
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+}
+
 #[cfg(target_os = "windows")]
 fn configure_webview2_speech_compatibility() {
     const FEATURE: &str = "msSpeechRecognitionServiceUseCetoService";
@@ -153,6 +161,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            restart_after_macos_update,
             app_lock::app_lock_status,
             app_lock::app_lock_create,
             app_lock::app_lock_verify,

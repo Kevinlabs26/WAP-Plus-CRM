@@ -97,10 +97,15 @@ jobs:
         run: npm run tauri -- build --debug --bundles dmg --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-","minimumSystemVersion":"13.0"}}}'
       - name: Build unsigned release DMG
         if: ${{ env.PUBLISH_MACOS_UNSIGNED == 'true' }}
-        run: npm run tauri -- build --bundles dmg --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-","minimumSystemVersion":"13.0"}}}'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri -- build --bundles app,dmg --config '{"bundle":{"macOS":{"signingIdentity":"-","minimumSystemVersion":"13.0"}}}'
       - name: Sign and notarize release DMG
         if: ${{ env.PUBLISH_MACOS == 'true' }}
         env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -114,7 +119,7 @@ jobs:
           : "${APPLE_ID:?Missing APPLE_ID}"
           : "${APPLE_PASSWORD:?Missing APPLE_PASSWORD}"
           : "${APPLE_TEAM_ID:?Missing APPLE_TEAM_ID}"
-          npm run tauri -- build --bundles dmg --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"minimumSystemVersion":"13.0"}}}'
+          npm run tauri -- build --bundles app,dmg --config '{"bundle":{"macOS":{"minimumSystemVersion":"13.0"}},"plugins":{"updater":{"endpoints":["https://raw.githubusercontent.com/Kevinlabs26/WAP-Plus-CRM/macos-updates/latest-signed.json"]}}}'
       - name: Verify the DMG and bundled executables
         env:
           ARCH: ${{ matrix.arch }}
@@ -133,6 +138,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: macos-update-publish
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -142,10 +150,11 @@ jobs:
           pattern: macos-*
           path: release-assets
           merge-multiple: true
-      - name: Publish verified DMGs as a separate macOS release
+      - name: Publish verified DMGs and update archives
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           version=$(jq -er .version desktop/src-tauri/tauri.conf.json)
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           if [[ $GITHUB_REF == refs/tags/* ]]; then
@@ -165,14 +174,49 @@ jobs:
           done
           if [[ $PUBLISH_MACOS_UNSIGNED == true ]]; then
             tag="macos-unsigned-v${version}"
+            feed=latest-unsigned.json
             title="WAP Plus CRM ${version} for macOS (unsigned)"
             notes='Unsigned and unnotarized DMGs for Apple Silicon and Intel. Gatekeeper may block first launch; only open if you trust this download. See System Settings > Privacy & Security > Open Anyway.'
           else
             tag="macos-v${version}"
+            feed=latest-signed.json
             title="WAP Plus CRM ${version} for macOS"
             notes='Signed and notarized DMGs for Apple Silicon and Intel. Choose the installer for your Mac architecture.'
           fi
-          gh release create "$tag" release-assets/* --target "$GITHUB_SHA" --draft --latest=false \
-            --title "$title" \
-            --notes "$notes"
-          gh release edit "$tag" --draft=false --latest=false
+          manifest=macos-latest.json
+          if release=$(gh release view "$tag" --json isDraft,targetCommitish 2>/dev/null); then
+            if [[ $(jq -r .isDraft <<< "$release") == true ]]; then
+              [[ $(jq -r .targetCommitish <<< "$release") == "$GITHUB_SHA" ]]
+              node .github/scripts/macos-update-manifest.mjs "$version" "$tag" release-assets > "release-assets/$manifest"
+              gh release upload "$tag" release-assets/* --clobber
+              gh release edit "$tag" --draft=false --latest=false
+            fi
+          else
+            node .github/scripts/macos-update-manifest.mjs "$version" "$tag" release-assets > "release-assets/$manifest"
+            gh release create "$tag" release-assets/* --target "$GITHUB_SHA" --draft --latest=false --title "$title" --notes "$notes"
+            gh release edit "$tag" --draft=false --latest=false
+          fi
+          [[ $(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha) == "$GITHUB_SHA" ]]
+
+          # Publish the feed only after both signed archives are publicly available.
+          feed_dir=$(mktemp -d)
+          gh auth setup-git
+          git -C "$feed_dir" init -b macos-updates
+          git -C "$feed_dir" remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          if git -C "$feed_dir" ls-remote --exit-code --heads origin refs/heads/macos-updates; then
+            git -C "$feed_dir" fetch --depth=1 origin refs/heads/macos-updates
+            git -C "$feed_dir" switch --detach FETCH_HEAD
+          else
+            [[ $? == 2 ]]
+          fi
+          gh release download "$tag" --pattern "$manifest" --dir "$feed_dir"
+          if [[ -s "$feed_dir/$feed" ]]; then
+            previous=$(jq -er .version "$feed_dir/$feed")
+            newest=$(printf '%s\n' "$previous" "$version" | sort -V | tail -1)
+            [[ $version == "$newest" ]] || exit 0
+          fi
+          mv "$feed_dir/$manifest" "$feed_dir/$feed"
+          git -C "$feed_dir" add -- "$feed"
+          if git -C "$feed_dir" diff --cached --quiet; then exit 0; fi
+          git -C "$feed_dir" -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "Update $feed to $version"
+          git -C "$feed_dir" push origin HEAD:refs/heads/macos-updates
