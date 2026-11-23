@@ -29,7 +29,7 @@ import { buildPresencePush } from "./presenceHandler.mjs";
 import { startBaileysHttpServer } from "./httpServer.mjs";
 import { createGroupService } from "./groupService.mjs";
 import { createGroupWriteService } from "./groupWriteService.mjs";
-import { attachGroupParticipantEvents } from "./groupEvents.mjs";
+import { attachGroupParticipantEvents, liveGroupJoin } from "./groupEvents.mjs";
 import { attachGroupJoinRequestEvents } from "./groupJoinRequestEvents.mjs";
 import { attachMessageLifecycleEvents } from "./messageLifecycleEvents.mjs";
 import { attachChatLifecycleEvents } from "./chatLifecycleEvents.mjs";
@@ -914,6 +914,8 @@ async function connectInternal(opts = {}) {
     });
     attachGroupParticipantEvents(sock, {
       getSocket: () => sock,
+      resolvePnJid,
+      getCachedParticipants: (jid) => groupMetadataCache.get(jid)?.value?.participants,
       contacts,
       messages,
       upsertContact,
@@ -1240,6 +1242,10 @@ async function connectInternal(opts = {}) {
         .catch((error) => console.error("[sync] history processing failed", error));
     });
     sock.ev.on("messages.upsert", ({ messages: incoming, type }) => {
+      for (const message of incoming || []) {
+        const join = liveGroupJoin(message, type, proto.WebMessageInfo.StubType, isSelfJid);
+        if (join) push("messages.sync", { ...join, items: [], live: true, source: "group-welcome-live" });
+      }
       const items = (incoming || []).map(ingestMessage).filter(Boolean);
       if (!items.length) return;
       const live = type === "notify" || type === "append" || !type;

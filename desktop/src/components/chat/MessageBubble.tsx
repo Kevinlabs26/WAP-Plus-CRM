@@ -37,7 +37,7 @@ type Props = {
   onRetry: (id: string) => void;
   onReloadMedia: (m: Message) => void;
   onPreview: (src: string, alt: string) => void;
-  onSenderClick?: (m: Message) => void;
+  onSenderClick?: (m: Message, member?: SenderPresentation) => void;
   onQuoteClick?: (messageId: string) => void;
   onTranscribe?: (messageId: string) => void;
   onTranslate?: (messageId: string) => void;
@@ -404,13 +404,60 @@ export const MessageBubble = memo(function MessageBubble({
     Boolean(onTranslate) &&
     Boolean(hasUsableTranslation || m.body?.trim());
   if (m.mediaType === "system" || mediaKind === "system") {
+    const groupEvent = senderPresentation?.groupEvent;
+    const memberLabel = t("groupEvent.member");
+    const renderMember = (member: SenderPresentation, key: string) => {
+      const label = member.label === "\u7fa4\u6210\u5458" ? memberLabel : member.label;
+      return member.dmTarget && onSenderClick ? (
+        <button
+          key={key}
+          type="button"
+          className="rounded-sm font-medium hover:underline focus-visible:underline"
+          title={t("tooltip.dmMember")}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSenderClick(m, member);
+          }}
+        >
+          {label}
+        </button>
+      ) : <span key={key}>{label}</span>;
+    };
+    let systemBody: React.ReactNode = m.body;
+    if (m.systemKind === "group_participants") {
+      systemBody = (m.body || "").replace(/(^|[\s\u3001])\d{7,32}(?=$|[\s\u3001\uff09])/g, (_match, prefix) => prefix + memberLabel);
+    }
+    if (m.systemKind === "group_participants" && groupEvent) {
+      const action = m.systemAction;
+      const key = action === "add" && groupEvent?.author ? "groupEvent.addBy"
+        : action === "add" ? "groupEvent.add"
+        : action === "remove" ? "groupEvent.remove"
+        : action === "promote" ? "groupEvent.promote"
+        : action === "demote" ? "groupEvent.demote"
+        : "groupEvent.modify";
+      const placeholders = { members: "{members}", actor: "{actor}" };
+      const sentence = t(key, placeholders) + (groupEvent?.author && action !== "add"
+        ? t("groupEvent.by", placeholders) : "");
+      const members = groupEvent?.participants.length
+        ? groupEvent.participants.map((member, index) => (
+            <span key={m.systemParticipants?.[index] || index}>
+              {index > 0 && ", "}{renderMember(member, "member")}
+            </span>
+          ))
+        : memberLabel;
+      systemBody = sentence.split(/(\{members\}|\{actor\})/).map((part) => (
+        part === "{members}" ? members
+          : part === "{actor}" && groupEvent?.author ? renderMember(groupEvent.author, "actor")
+          : part
+      ));
+    }
     return (
       <div
         className="flex justify-center px-3 py-1"
         data-message-id={m.id}
       >
         <div className="max-w-[90%] rounded-full border border-zinc-800/80 bg-zinc-900/70 px-3 py-1 text-center text-[11px] leading-4 text-zinc-400">
-          {m.body}
+          {systemBody}
         </div>
       </div>
     );

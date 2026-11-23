@@ -50,7 +50,8 @@ export function createMessageActionsSlice({
         input.accountId ||
         state.chats.find((chat) => chat.id === chatId)?.accountId ||
         state.contacts.find((contact) => contact.id === contactId)?.accountId;
-      const id = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const id = input.dedupeId || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      if (input.dedupeId && state.messages.some(message => message.id === id)) return id;
       let latestAt = -Infinity;
       for (const message of state.messages) {
         const owner = message.accountId || message.deviceId;

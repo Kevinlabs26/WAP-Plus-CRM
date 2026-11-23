@@ -6,7 +6,7 @@ import {
 } from "@/channels";
 import { useAppStore } from "@/store/appStore";
 import type { Message } from "@/types/crm";
-import { isRetryableOutgoing } from "@/store/outgoingRetry";
+import { isQueuedWelcomeImage, isRetryableOutgoing } from "@/store/outgoingRetry";
 import {
   isWaAccountConnected,
   resolveWaSendAccountId,
@@ -19,6 +19,7 @@ import { hydrateOutreachHistory } from "@/lib/aiOutreachHistory";
 import { translateCurrent } from "@/i18n";
 import { scheduledMessageExpired } from "@/lib/scheduledMessageExpiry";
 import { isAppLockActive } from "@/lib/appLockRuntime";
+import { groupWelcomeBlockedStatus, normalizeWelcomeImage } from "@/lib/groupWelcome";
 import { refreshAiConversationSummary } from "@/lib/aiConversationSummary";
 
 const MAX_AUTO_RETRIES = 5;
@@ -83,16 +84,17 @@ export function SendQueueWatcher() {
         (task) => task.messageId === queued.id && task.status === "cancelled"
       )) return;
       if (inflight.current.has(msg.id)) return;
-      if (!msg.phoneE164 || !msg.body) return;
+      if (!msg.phoneE164) return;
       // 媒体由聊天面板按原 data URL 重试，不能退化成占位文本发送。
-      if (msg.mediaType) return;
+      if (msg.mediaType && !isQueuedWelcomeImage(msg)) return;
 
       let settings = state.settings;
       if(msg.systemKind==="ai_auto_reply"&&(settings.aiAutoReplyPaused||settings.aiAutoReplyDisabled))return;
       const scheduled = settings.scheduledMessages?.find(task => task.messageId === msg!.id);
-      if (scheduled && scheduledMessageExpired(scheduled)) {
-        const error = translateCurrent("scheduled.expired");
-        state.updateScheduledMessage(scheduled.id, { status: "expired", error });
+      const welcomeStatus = scheduled && groupWelcomeBlockedStatus(settings, scheduled);
+      if (scheduled && (welcomeStatus || scheduledMessageExpired(scheduled))) {
+        const error = translateCurrent(welcomeStatus ? "groupWelcome.stopped" : "scheduled.expired");
+        state.updateScheduledMessage(scheduled.id, { status: welcomeStatus || "expired", error });
         state.updateMessageDelivery(msg.id, { deliveryStatus: "failed", lastError: error, retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined });
         return;
       }
@@ -183,7 +185,12 @@ export function SendQueueWatcher() {
         return;
       }
 
-      if (!msg.phoneE164 || !msg.body) return;
+      if (!msg.phoneE164) return;
+      const imageDataUrl = isQueuedWelcomeImage(msg) ? normalizeWelcomeImage(scheduled?.imageDataUrl) : undefined;
+      if (isQueuedWelcomeImage(msg) && (!imageDataUrl || channelId !== "baileys")) {
+        state.updateMessageDelivery(msg.id, { deliveryStatus: "failed", retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined });
+        return;
+      }
       inflight.current.add(msg.id);
       const attempt = (msg.retryCount ?? 0) + 1;
       state.updateMessageDelivery(msg.id, {
@@ -196,6 +203,7 @@ export function SendQueueWatcher() {
         const result = await dispatchSendText(
           {
             text: msg.body,
+            imageDataUrl,
             phoneE164: msg.phoneE164,
             contactId: msg.contactId,
             deviceId: msg.deviceId ?? state.selectedPhoneId,
@@ -209,8 +217,9 @@ export function SendQueueWatcher() {
               const latest = useAppStore.getState();
               const message = latest.messages.find((item) => item.id === msg.id);
               const task = latest.settings.scheduledMessages?.find(item => item.messageId === msg.id);
-              if (task?.status === "queued" && scheduledMessageExpired(task)) {
-                latest.updateScheduledMessage(task.id, { status: "expired", error: translateCurrent("scheduled.expired") });
+              const welcomeStatus = task && groupWelcomeBlockedStatus(latest.settings, task);
+              if (task?.status === "queued" && (welcomeStatus || scheduledMessageExpired(task))) {
+                latest.updateScheduledMessage(task.id, { status: welcomeStatus || "expired", error: translateCurrent(welcomeStatus ? "groupWelcome.stopped" : "scheduled.expired") });
                 return false;
               }
               return !!message && message.deliveryStatus === "pending" &&
@@ -306,7 +315,7 @@ export function SendQueueWatcher() {
       if (cancelled || isAppLockActive()) return;
       const state = useAppStore.getState();
       const due = state.listRetryableOutgoing().filter(msg =>
-        !msg.mediaType && isRetryableOutgoing(msg) &&
+        (!msg.mediaType || isQueuedWelcomeImage(msg)) && isRetryableOutgoing(msg) &&
         !state.settings.scheduledMessages?.some(task => task.messageId === msg.id && task.status === "cancelled")
       ).sort((a, b) => a.sentAt.localeCompare(b.sentAt));
       for (const msg of due) {

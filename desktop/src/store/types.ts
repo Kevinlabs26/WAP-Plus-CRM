@@ -172,6 +172,7 @@ export interface AppState extends PersistSlice {
    */
   enqueueOutgoingMessage: (input: {
     body: string;
+    dedupeId?: string;
     chatId?: string | null;
     contactId?: string | null;
     phoneE164?: string;

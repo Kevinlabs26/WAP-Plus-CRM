@@ -77,6 +77,8 @@ function shallowMessageSame(a: Message, b: Message): boolean {
     a.quoted?.mediaSeconds === b.quoted?.mediaSeconds &&
     a.systemKind === b.systemKind &&
     a.systemAction === b.systemAction &&
+    a.systemAuthor === b.systemAuthor &&
+    a.systemParticipants?.join(",") === b.systemParticipants?.join(",") &&
     a.waKey?.id === b.waKey?.id &&
     a.waKey?.remoteJid === b.waKey?.remoteJid &&
     a.waKey?.fromMe === b.waKey?.fromMe &&
@@ -272,6 +274,8 @@ export function applyMessagesSync(opts: {
         waKey,
         systemKind,
         systemAction,
+        systemParticipants,
+        systemAuthor,
         mentionedJids,
         mentionedMe,
       } = parsed;
@@ -304,6 +308,8 @@ export function applyMessagesSync(opts: {
         systemKind:
           (typeof systemKind === "string" && systemKind) ||
           prev.systemKind,
+        systemParticipants: systemParticipants ?? prev.systemParticipants,
+        systemAuthor: systemAuthor ?? prev.systemAuthor,
         systemAction:
           (typeof systemAction === "string" && systemAction) ||
           prev.systemAction,
@@ -547,6 +553,8 @@ export function applyMessagesSync(opts: {
         quoted,
         systemKind:
           typeof systemKind === "string" ? systemKind : undefined,
+        systemParticipants,
+        systemAuthor,
         systemAction:
           typeof systemAction === "string" ? systemAction : undefined,
         mentionedJids,

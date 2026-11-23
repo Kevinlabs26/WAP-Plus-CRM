@@ -1,3 +1,4 @@
+import { groupEventJid, groupEventParticipants } from "./groupEventIdentity.ts";
 import { isValidAccountId } from "@/types/account";
 import { escapeCsvCell } from "./csv.ts";
 import { getTimezone } from "countries-and-timezones";
@@ -514,6 +515,8 @@ function sanitizeMessage(raw: unknown): Message | null {
     aiAutoFollowUpSentAt: typeof m.aiAutoFollowUpSentAt === "number" && Number.isFinite(m.aiAutoFollowUpSentAt) && m.aiAutoFollowUpSentAt > 0 ? m.aiAutoFollowUpSentAt : undefined,
     aiAutoFollowUpAttemptAt: typeof m.aiAutoFollowUpAttemptAt === "number" && Number.isFinite(m.aiAutoFollowUpAttemptAt) && m.aiAutoFollowUpAttemptAt > 0 ? m.aiAutoFollowUpAttemptAt : undefined,
     aiAutoFollowUpCancelled: m.aiAutoFollowUpCancelled === true || undefined,
+    systemParticipants: groupEventParticipants(m.systemParticipants),
+    systemAuthor: groupEventJid(m.systemAuthor),
     systemAction: str(m.systemAction, 80) || undefined,
     mentionedJids: Array.isArray(m.mentionedJids)
       ? m.mentionedJids

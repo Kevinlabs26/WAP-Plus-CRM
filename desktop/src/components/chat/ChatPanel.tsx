@@ -14,6 +14,7 @@ import {
   buildSenderMemberLookup,
   openOrBuildDmContact,
   presentGroupSender,
+  type SenderPresentation,
 } from "@/lib/groupSenderDisplay";
 import {
   SAVED_MESSAGES_CHAT_ID,
@@ -143,7 +144,8 @@ function shallowSenderSame(
     a.avatarUrl === b.avatarUrl &&
     a.avatarFullUrl === b.avatarFullUrl &&
     a.subtitle === b.subtitle &&
-    a.dmTarget === b.dmTarget
+    a.dmTarget === b.dmTarget &&
+    a.groupEvent === b.groupEvent
   );
 }
 
@@ -538,7 +540,18 @@ export function ChatPanel() {
   );
   const isBaileys = channelId === "baileys";
 
+  const latestMembershipEventId = useMemo(() => {
+    for (let index = chatMessages.length - 1; index >= 0; index--) {
+      const message = chatMessages[index];
+      if (message.systemKind === "group_participants" &&
+        (message.systemAction === "add" || message.systemAction === "remove")) {
+        return message.id;
+      }
+    }
+    return undefined;
+  }, [chatMessages]);
   const { groupMembers, groupMemberDetails } = useGroupMembers({
+    latestMembershipEventId,
     selectedChatId,
     selectedContactId,
     isBaileys,
@@ -857,19 +870,28 @@ export function ChatPanel() {
     const contactLookup = buildSenderContactLookup(contacts, aid);
     const memberLookup = buildSenderMemberLookup(groupMemberDetails);
     let anyChanged = false;
-    const senderMessages =
-      chatMessages.length > MESSAGE_INITIAL_RENDER_COUNT
-        ? chatMessages.slice(-MESSAGE_INITIAL_RENDER_COUNT)
-        : chatMessages;
-    for (const m of senderMessages) {
+    const recentStart = Math.max(0, chatMessages.length - MESSAGE_INITIAL_RENDER_COUNT);
+    const senderOptions = { accountId: aid, contacts, members: groupMemberDetails, contactLookup, memberLookup };
+    const presentMember = (jid: string) =>
+      presentGroupSender({
+        direction: "in",
+        senderJid: jid,
+        senderPhoneE164: /@(?:s\.whatsapp\.net|c\.us)$/.test(jid) ? jid.split(/[:@]/)[0] : undefined,
+      }, senderOptions);
+    for (const [index, m] of chatMessages.entries()) {
       if (m.direction !== "in" || !m.isGroup) continue;
-      const next = presentGroupSender(m, {
-        accountId: aid,
-        contacts,
-        members: groupMemberDetails,
-        contactLookup,
-        memberLookup,
-      });
+      const isGroupEvent = m.systemKind === "group_participants";
+      if (!isGroupEvent && index < recentStart) continue;
+      if (isGroupEvent && (m.accountId || m.deviceId || aid) !== aid) continue;
+      const next = presentGroupSender(m, senderOptions);
+      if (isGroupEvent && (m.systemParticipants?.length || m.systemAuthor)) {
+        next.groupEvent = {
+          participants: (m.systemParticipants || []).map(presentMember),
+          author: m.systemAuthor && !m.systemParticipants?.includes(m.systemAuthor)
+            ? presentMember(m.systemAuthor)
+            : undefined,
+        };
+      }
       const prev = prevMap?.[m.id];
       if (prev && shallowSenderSame(prev, next)) {
         map[m.id] = prev;
@@ -879,7 +901,7 @@ export function ChatPanel() {
       }
     }
     // 全部条目内容未变 → 复用整个旧 map 引用（MessageList memo 命中）
-    if (!anyChanged && prevMap) {
+    if (!anyChanged && prevMap && Object.keys(prevMap).length === Object.keys(map).length) {
       senderCacheRef.current = { map: prevMap };
       return prevMap;
     }
@@ -896,7 +918,7 @@ export function ChatPanel() {
     groupMemberDetails,
   ]);
 
-  const openGroupSenderDm = useEventCallback((m: Message) => {
+  const openGroupSenderDm = useEventCallback((m: Message, member?: SenderPresentation) => {
       const aid =
         chatAccountId ||
         activeContact?.accountId ||
@@ -905,7 +927,7 @@ export function ChatPanel() {
         settings.activeAccountId ||
         "wa-default";
       const presented =
-        senderByMessageId[m.id] ||
+        member || senderByMessageId[m.id] ||
         presentGroupSender(m, {
           accountId: aid,
           contacts: useAppStore.getState().contacts,

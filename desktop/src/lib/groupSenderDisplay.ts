@@ -34,6 +34,10 @@ export function isOpaqueSenderLabel(name?: string | null): boolean {
 }
 
 export type SenderPresentation = {
+  groupEvent?: {
+    participants: SenderPresentation[];
+    author?: SenderPresentation;
+  };
   label: string;
   avatarUrl?: string;
   /** 已缓存的高清头像（悬停放大用，避免把小图硬放大） */

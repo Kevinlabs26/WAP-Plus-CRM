@@ -170,7 +170,7 @@ function LegacyScheduledMessagesPanel({ filter, onFilterChange: setFilter }: { f
                 {task.status === "pending" ? t("settingsScheduled.scheduled") : t("settingsScheduled.originallyScheduled")}: {formatDueAt(task.dueAt, locale, t("settingsScheduled.invalidTime"))}
               </div>
               <p className="mt-1 line-clamp-2 whitespace-pre-wrap text-[12px] leading-5 text-zinc-300">
-                {task.text}
+                {task.text || (task.imageDataUrl ? t("media.image") : "")}
               </p>
               {task.error && (
                 <p className="mt-1 line-clamp-2 text-2xs text-rose-300" title={task.error}>{task.error}</p>

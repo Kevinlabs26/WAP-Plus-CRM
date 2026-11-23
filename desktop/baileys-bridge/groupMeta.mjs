@@ -130,6 +130,7 @@ export function participantRefToJid(p) {
 function displayPhoneTail(jidOrPhone) {
   const s = str(jidOrPhone);
   if (!s) return "";
+  if (s.endsWith("@lid")) return "群成员";
   const user = s.includes("@") ? s.replace(/@.+$/, "") : s;
   const digits = user.replace(/\D/g, "");
   if (digits.length >= 7 && digits.length <= 15) return `+${digits}`;

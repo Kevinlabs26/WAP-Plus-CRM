@@ -267,6 +267,8 @@ export interface Message {
   aiAutoFollowUpAttemptAt?: number;
   aiAutoFollowUpCancelled?: boolean;
   systemAction?: string;
+  systemParticipants?: string[];
+  systemAuthor?: string;
   /** 被 @ 的成员 jid */
   mentionedJids?: string[];
   /** 群消息是否明确 @ 了当前登录账号 */
@@ -357,6 +359,7 @@ export interface ScheduledMessage {
   contactName: string;
   recipient: string;
   text: string;
+  imageDataUrl?: string;
   dueAt: string;
   channelId: string;
   deviceId?: string | null;

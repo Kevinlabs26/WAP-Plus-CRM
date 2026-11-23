@@ -131,13 +131,7 @@ test("Muse Playbook has a conditional submenu, and an unavailable saved category
       settingsState.settings.aiProvider = aiProvider;
       all = nodes(SettingsModal());
       assert.equal(all.some(node => node.type === "button" && text(node) === zh["playbook.library"]), false, aiProvider);
-      assert.ok(all.some(node => node.type === "button" && text(node) === zh["playbook.outreachLibrary"]), aiProvider);
-      assert.ok(all.some(node => node.props.active && node.props.Panel?.name === "PlaybookLibrary"), aiProvider);
-    }
-    delete settingsState.settings.aiOutreachMuseAccountId;
-    for (const aiProvider of ["gemini", "vertex", "openai"]) {
-      settingsState.settings.aiProvider = aiProvider;
-      all = nodes(SettingsModal());
+      assert.equal(all.some(node => node.type === "button" && text(node) === zh["playbook.outreachLibrary"]), false, aiProvider);
       assert.equal(all.some(node => node.props.Panel?.name === "PlaybookLibrary"), false, aiProvider);
       assert.ok(all.some(node => node.props.active && node.props.Panel?.name === "SettingsAiPanel"), aiProvider);
       settingsEffects.at(-1)();

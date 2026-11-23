@@ -1,6 +1,7 @@
 import { deferDuringRestore } from "./restoreGuard";
 import { remapPlaybookBindings } from "@/lib/aiPlaybooks";
 import { remapPromptPlanBindings } from "@/lib/promptPlans";
+import { buildGroupWelcomeQueue, groupWelcomePendingWrites } from "@/lib/groupWelcome";
 import type { AppState, SliceContext } from "./types";
 import {
   applyMessagesAck,
@@ -787,6 +788,28 @@ export function createIngestSlice({
         }
         try { if (writes.length) await Promise.all(writes); }
         catch (error) { get().pushToast(error instanceof Error ? error.message : "同步落盘失败", "error"); throw error; }
+        const welcome = buildGroupWelcomeQueue(get(), events);
+        if (welcome) {
+          const ids = new Set(welcome.added.map(task => task.id));
+          ids.forEach(id => groupWelcomePendingWrites.add(id));
+          set(state => ({
+            scheduledMessages: welcome.tasks,
+            settings: { ...state.settings, scheduledMessages: welcome.tasks, groupWelcomeSeen: welcome.seen },
+          }));
+          try {
+            await persist(get, true);
+          } catch (error) {
+            set(state => {
+              const scheduledMessages = state.settings.scheduledMessages.filter(task => !ids.has(task.id));
+              const groupWelcomeSeen = { ...state.settings.groupWelcomeSeen };
+              ids.forEach(id => delete groupWelcomeSeen[id]);
+              return { scheduledMessages, settings: { ...state.settings, scheduledMessages, groupWelcomeSeen } };
+            });
+            throw error;
+          } finally {
+            ids.forEach(id => groupWelcomePendingWrites.delete(id));
+          }
+        }
         if (!ingestChanged) { resolve(); return; }
         // 桌面通知（入站新消息）：复用已入库的 chats 构建静音表
         const notifyItems: InboundNotifyItem[] = inboundNotifies

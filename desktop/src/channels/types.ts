@@ -42,6 +42,7 @@ export const CHANNEL_META: Record<
 
 export interface SendTextInput {
   confirmPhoneSend?: boolean;
+  imageDataUrl?: string;
   text: string;
   phoneE164: string;
   displayName?: string;

@@ -139,7 +139,7 @@ const sendQueue = readFileSync(
   new URL("../src/components/bridge/SendQueueWatcher.tsx", import.meta.url),
   "utf8"
 );
-assert.match(sendQueue, /if \(msg\.mediaType\) return/);
+assert.match(sendQueue, /if \(msg\.mediaType && !isQueuedWelcomeImage\(msg\)\) return/);
 
 const baileysCore = readFileSync(
   new URL("../src/lib/baileysCore.ts", import.meta.url),

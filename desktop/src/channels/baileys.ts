@@ -1,4 +1,4 @@
-import { baileysSend, baileysStatus } from "@/lib/baileys";
+import { baileysSend, baileysSendImage, baileysStatus } from "@/lib/baileys";
 import { resolveSendTarget } from "@/lib/utils";
 import { translateCurrent } from "@/i18n";
 import type { MessageChannel } from "./types";
@@ -54,7 +54,7 @@ export const baileysChannel: MessageChannel = {
         channelAddress: rawTo,
         jid: rawTo,
       }) || rawTo;
-    if (!target || !input.text?.trim()) {
+    if (!target || (!input.text?.trim() && !input.imageDataUrl)) {
       return {
         ok: false,
         delivered: false,
@@ -72,7 +72,9 @@ export const baileysChannel: MessageChannel = {
         return notConnectedResult();
       }
       sendStarted = true;
-      const raw = await baileysSend(target, input.text, {
+      const raw = input.imageDataUrl
+        ? await baileysSendImage(target, input.imageDataUrl, input.text, { accountId, quoted: input.quoted })
+        : await baileysSend(target, input.text, {
         quoted: input.quoted,
         accountId,
         mentionedJid: input.mentionedJid,

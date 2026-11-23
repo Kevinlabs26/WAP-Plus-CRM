@@ -1,3 +1,4 @@
+import { groupEventJid, groupEventParticipants } from "../lib/groupEventIdentity.ts";
 import type { MessageContactCard, WaMessageKey } from "@/types/crm";
 import { isHiddenProtocolMessageBody } from "./messageOrdering.ts";
 
@@ -74,6 +75,8 @@ export type ParsedEnvelope = {
   waKey?: WaMessageKey;
   systemKind?: string;
   systemAction?: string;
+  systemParticipants?: string[];
+  systemAuthor?: string;
   mentionedJids?: string[];
   mentionedMe?: boolean;
 };
@@ -355,6 +358,8 @@ body,
     waKey,
     systemKind:
       typeof item.systemKind === "string" ? item.systemKind : undefined,
+    systemParticipants: groupEventParticipants(item.systemParticipants),
+    systemAuthor: groupEventJid(item.systemAuthor),
     systemAction:
       typeof item.systemAction === "string" ? item.systemAction : undefined,
     mentionedJids: Array.isArray(item.mentionedJids)

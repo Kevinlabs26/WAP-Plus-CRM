@@ -128,9 +128,8 @@ export function SettingsModal() {
   const retrySecretSave = useAppStore(state => state.retrySecretSave);
   const requestedCategory = useAppStore((state) => state.settingsCategory) as CategoryId;
   const provider = useAppStore((state) => state.settings?.aiProvider);
-  const outreachUsesMuse = useAppStore((state) => !!state.settings?.aiOutreachMuseAccountId);
   const visibleCategories = CATEGORIES.filter(item => {
-    if (item.id === "playbook") return provider === "muse" || outreachUsesMuse;
+    if (item.id === "playbook") return provider === "muse";
     if (item.id === "prompt-library" || item.id === "prompt-plans") return usesPromptPlans(provider);
     return true;
   });
@@ -190,7 +189,7 @@ export function SettingsModal() {
       >
         <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", category === item.id && "text-brand")} />
         <span className="min-w-0">
-          <span className="block break-words text-[13px] font-medium">{t(item.id === "playbook" && provider !== "muse" ? "playbook.outreachLibrary" : item.labelKey as TranslationKey)}</span>
+          <span className="block break-words text-[13px] font-medium">{t(item.labelKey as TranslationKey)}</span>
         </span>
       </button>
     );

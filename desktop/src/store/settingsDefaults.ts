@@ -5,6 +5,7 @@ import { normalizeAiReplyTaskRecords, type AiReplyTaskRecord } from "@/lib/aiTas
 import type { AutoReplyMode } from "@/lib/autoReplyScope";
 import { normalizePlaybooks, normalizePlaybookBindings, type AiPlaybook } from "@/lib/aiPlaybooks";
 import { validTimeZone } from "@/lib/timeZone";
+import { isGroupWelcomeTask, normalizeGroupWelcomeRules, normalizeWelcomeImage, recentWelcomeEvents, type GroupWelcomeRule } from "@/lib/groupWelcome";
 import { normalizeScheduledPlans, type ScheduledPlan } from "@/lib/scheduledPlans";
 import {
   normalizeQuickReplyCategory,
@@ -332,6 +333,8 @@ export interface SettingsShape {
   followUpRuleSettings: FollowUpRuleSetting[];
   /** 一次性定时文字消息；由出站队列实际发送 */
   scheduledMessages: ScheduledMessage[];
+  groupWelcomeRules: Record<string, GroupWelcomeRule>;
+  groupWelcomeSeen: Record<string, number>;
   scheduledPlans: ScheduledPlan[];
   /** 健康度「过热」时是否拦截发送 */
   blockSendWhenOverheated: boolean;
@@ -522,6 +525,8 @@ export const defaultSettings: SettingsShape = {
   autoFollowUpEnabled: true,
   followUpRuleSettings: DEFAULT_FOLLOW_UP_RULE_SETTINGS,
   scheduledMessages: [],
+  groupWelcomeRules: {},
+  groupWelcomeSeen: {},
   scheduledPlans: [],
   blockSendWhenOverheated: true,
   sendPausedAccountIds: [],
@@ -798,6 +803,7 @@ export function normalizeLoadedSettings(
           contactName: String(value.contactName || "").slice(0, 120),
           recipient: String(value.recipient || "").slice(0, 160),
           text: String(value.text || "").trim().slice(0, 4000),
+          imageDataUrl: isGroupWelcomeTask(String(value.id || "")) ? normalizeWelcomeImage(value.imageDataUrl) : undefined,
           dueAt: String(value.dueAt || ""),
           channelId: value.channelId === "android_bridge" ? "android_bridge" : "baileys",
           deviceId: value.deviceId ? String(value.deviceId) : null,
@@ -818,9 +824,11 @@ export function normalizeLoadedSettings(
           createdAt: String(value.createdAt || new Date().toISOString()),
         } satisfies ScheduledMessage;
       })
-      .filter((item) => item.id && item.chatId && item.contactId && item.recipient && item.text && item.dueAt);
+      .filter((item) => item.id && item.chatId && item.contactId && item.recipient && (item.text || item.imageDataUrl) && item.dueAt);
   }
   merged.customAiBaseUrl = String(merged.customAiBaseUrl || "").trim().replace(/\/+$/, "");
+  merged.groupWelcomeRules = normalizeGroupWelcomeRules(merged.groupWelcomeRules);
+  merged.groupWelcomeSeen = recentWelcomeEvents(merged.groupWelcomeSeen);
   merged.customAiModel = String(merged.customAiModel || "").trim();
   merged.customWhisperModel = String(merged.customWhisperModel || "").trim();
   const transcription = resolveTranscriptionConfig(src);
