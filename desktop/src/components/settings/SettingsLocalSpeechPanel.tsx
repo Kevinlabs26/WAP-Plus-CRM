@@ -1,17 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Check, Download, HardDriveDownload, Loader2, Trash2 } from "lucide-react";
 
-function useSystemVoices(): SpeechSynthesisVoice[] {
-  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
-  useEffect(() => {
-    const load = () => setVoices(window.speechSynthesis?.getVoices() ?? []);
-    load();
-    window.speechSynthesis?.addEventListener?.("voiceschanged", load);
-    return () =>
-      window.speechSynthesis?.removeEventListener?.("voiceschanged", load);
-  }, []);
-  return voices;
-}
 import { Button, SectionLabel } from "@/components/ui/primitives";
 import { useAppStore } from "@/store/appStore";
 import {
@@ -22,6 +11,8 @@ import {
   type SpeechModelInfo,
 } from "@/lib/localSpeech";
 import { cn } from "@/lib/utils";
+import { useSystemVoices } from "@/lib/useSystemVoices";
+import { isMac } from "@/lib/desktopPlatform";
 import { useI18n } from "@/i18n";
 
 /**
@@ -206,7 +197,7 @@ export function SettingsLocalSpeechPanel({ embedded = false }: { embedded?: bool
           </div>
         )}
         <p className="mt-1.5 text-2xs leading-snug text-zinc-600">
-          {t("settingsSpeech.voiceHint")}
+          {t(isMac ? "settingsSpeech.macVoiceHint" : "settingsSpeech.voiceHint")}
         </p>
       </details>
     </div>

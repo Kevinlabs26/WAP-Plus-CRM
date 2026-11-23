@@ -1,6 +1,7 @@
 import { AI_OUTPUT_TRUNCATED, readAiJson } from "./aiResponse.ts";
 import { trackAiRequest, type AiUsageFeature } from "./aiUsage.ts";
 import { assertAiContentAllowed } from "./aiPrivacy.ts";
+import { VERTEX_DEFAULT_MODEL, vertexRequest } from "./vertexAi.ts";
 /**
  * Gemini API 调用（Google 官方 generateContent 接口，非 OpenAI 兼容）。
  * 供回复建议 / 客户卡洞察 / 草稿翻译 / 语音转写共用。
@@ -12,8 +13,10 @@ const GEMINI_IMAGE_BASE = "https://generativelanguage.googleapis.com/v1/models";
 export const GEMINI_DEFAULT_MODEL = "gemini-2.0-flash";
 export const GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image";
 
+type GeminiCredentials = { apiKey: string; vertexCredential?: never } | { apiKey?: never; vertexCredential: string };
+
 async function geminiPost(
-  apiKey: string,
+  credentials: GeminiCredentials,
   model: string,
   body: Record<string, unknown>,
   signal?: AbortSignal,
@@ -22,26 +25,32 @@ async function geminiPost(
 ): Promise<string> {
   if(!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,159}$/.test(model))throw Error("无效的 Gemini 模型 ID");
   signal?.throwIfAborted();
-  return trackAiRequest({provider:"gemini",model,feature},async observe=>{
-  const url = `${GEMINI_BASE}/models/${model}:${onText ? "streamGenerateContent?alt=sse" : "generateContent"}`;
+  const vertex = credentials.vertexCredential !== undefined;
+  const label = vertex ? "Vertex AI" : "Gemini";
+  return trackAiRequest({provider:vertex ? "vertex" : "gemini",model,feature},async observe=>{
+  const requestSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000);
+  const { base, headers } = credentials.vertexCredential !== undefined
+    ? await vertexRequest(credentials.vertexCredential, requestSignal)
+    : { base: `${GEMINI_BASE}/models`, headers: new Headers({ "x-goog-api-key": credentials.apiKey }) };
+  requestSignal.throwIfAborted();
+  headers.set("Content-Type", "application/json");
+  const url = `${base}/${model}:${onText ? "streamGenerateContent?alt=sse" : "generateContent"}`;
   const res = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-goog-api-key": apiKey,
-    },
+    headers,
     body: JSON.stringify(body),
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
+    signal: requestSignal,
+    redirect: vertex ? "error" : "follow",
   });
   if (!res.ok) {
     let detail = res.statusText;
     try {
       const err = (await readAiJson(res,observe)) as { error?: { message?: string } };
-      detail = err.error?.message || detail;
+      if (!vertex) detail = err.error?.message || detail;
     } catch {
       /* ignore */
     }
-    throw new Error(`Gemini ${res.status}: ${detail}`);
+    throw new Error(`${label} ${res.status}${detail ? `: ${detail}` : ""}`);
   }
   if (onText) {
     if (!res.body) throw new Error("Gemini 空响应");
@@ -104,8 +113,7 @@ async function geminiPost(
 }
 
 /** 文本生成（可要求 JSON 输出） */
-export async function geminiGenerate(opts: {
-  apiKey: string;
+export async function geminiGenerate(opts: GeminiCredentials & {
   model?: string;
   system?: string;
   user: string;
@@ -117,7 +125,7 @@ export async function geminiGenerate(opts: {
   feature?:AiUsageFeature;
 }): Promise<string> {
   assertAiContentAllowed(opts.system, opts.user);
-  const model = opts.model || GEMINI_DEFAULT_MODEL;
+  const model = opts.model || (opts.vertexCredential !== undefined ? VERTEX_DEFAULT_MODEL : GEMINI_DEFAULT_MODEL);
   const generationConfig: Record<string, unknown> = {
     temperature: opts.temperature ?? 0.7,
   };
@@ -132,7 +140,7 @@ export async function geminiGenerate(opts: {
   if (opts.system?.trim()) {
     body.systemInstruction = { parts: [{ text: opts.system }] };
   }
-  return geminiPost(opts.apiKey, model, body, opts.signal, opts.onText,opts.feature);
+  return geminiPost(opts, model, body, opts.signal, opts.onText,opts.feature);
 }
 
 /** 语音转写：把音频 base64 内联给 Gemini，输出纯文本转写 */
@@ -157,11 +165,10 @@ export async function geminiTranscribeAudio(opts: {
       },
     ],
   };
-  return geminiPost(opts.apiKey, model, body, opts.signal,undefined,"transcription");
+  return geminiPost(opts, model, body, opts.signal,undefined,"transcription");
 }
 
-export async function geminiGenerateImage(opts: {
-  apiKey: string;
+export async function geminiGenerateImage(opts: GeminiCredentials & {
   prompt: string;
   model?: string;
   aspectRatio?: "1:1" | "2:3" | "3:2";
@@ -176,17 +183,25 @@ export async function geminiGenerateImage(opts: {
   if (!prompt || prompt.length > 6000) throw Error("图片描述超出长度限制");
   const references = opts.referenceImages || (opts.referenceImage ? [opts.referenceImage] : []);
   if (references.length > 2 || references.some(image => !/^image\/(?:jpeg|png|webp)$/.test(image.mimeType) || !/^[A-Za-z0-9+/]+={0,2}$/.test(image.data) || image.data.length > 4_000_000)) throw Error("参考图片格式无效或过大");
-  return trackAiRequest({ provider: "gemini", model, feature: "image" }, async observe => {
-    const res = await fetch(`${GEMINI_IMAGE_BASE}/${model}:generateContent`, {
+  const vertex = opts.vertexCredential !== undefined;
+  return trackAiRequest({ provider: vertex ? "vertex" : "gemini", model, feature: "image" }, async observe => {
+    const signal = opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000);
+    const { base, headers } = opts.vertexCredential !== undefined
+      ? await vertexRequest(opts.vertexCredential, signal)
+      : { base: GEMINI_IMAGE_BASE, headers: new Headers({ "x-goog-api-key": opts.apiKey }) };
+    signal.throwIfAborted();
+    headers.set("Content-Type", "application/json");
+    const res = await fetch(`${base}/${model}:generateContent`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": opts.apiKey },
+      headers,
       body: JSON.stringify({ contents: [{ role: "user", parts: [...references.map(image => ({ inlineData: { mimeType: image.mimeType, data: image.data } })), { text: prompt }] }], generationConfig: { responseModalities: ["IMAGE"], imageConfig: { aspectRatio: opts.aspectRatio || "1:1" } } }),
-      signal: opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000),
+      signal,
+      redirect: vertex ? "error" : "follow",
     });
     if (!res.ok) {
       let detail = res.statusText;
-      try { const err = await readAiJson(res, observe) as { error?: { message?: string } }; detail = err.error?.message || detail; } catch { /* Keep the HTTP status if the error body is invalid. */ }
-      throw Error(`Gemini ${res.status}: ${detail}`);
+      try { const err = await readAiJson(res, observe) as { error?: { message?: string } }; if (!vertex) detail = err.error?.message || detail; } catch { /* Keep the HTTP status if the error body is invalid. */ }
+      throw Error(`${vertex ? "Vertex AI" : "Gemini"} ${res.status}${detail ? `: ${detail}` : ""}`);
     }
     const result = await readAiJson(res, observe, 16_000_000) as {
       candidates?: { finishReason?: string; content?: { parts?: { inlineData?: { mimeType?: string; data?: string } }[] } }[];

@@ -31,7 +31,7 @@ export function mergeImportedContactChatDuplicates(
     if (!bridge || local.historyRemapBlocked || bridge.historyRemapBlocked) continue;
     const localOwner = local.accountId || local.phoneId || "";
     const bridgeOwner = bridge.accountId || bridge.phoneId || "";
-    if (localOwner && bridgeOwner && localOwner !== bridgeOwner) continue;
+    if (!localOwner || (bridgeOwner && localOwner !== bridgeOwner)) continue;
     replacements.set(bridgeId, local.id);
   }
   if (groups) {

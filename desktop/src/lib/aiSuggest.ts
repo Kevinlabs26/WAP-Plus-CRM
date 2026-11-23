@@ -6,7 +6,7 @@ import { generateMuseWeb, museWebAccounts, nextMuseAutoReplyAccount } from "./mu
 import type { Contact, Message } from "@/types/crm";
 import type { AppSettings } from "@/store/appStore";
 import { geminiGenerate } from "./gemini.ts";
-import { getOpenAiCompatibleConfig, hasAiCredentials, chatCompletionOptions } from "./aiProviders.ts";
+import { geminiCredentials, getOpenAiCompatibleConfig, hasAiCredentials, chatCompletionOptions } from "./aiProviders.ts";
 import { ingestString } from "../store/bridgeIngestHelpers.ts";
 import { resolveAiReplyProfile, MAX_EFFECTIVE_PROMPT_CHARS } from "./aiPromptScope.ts";
 import { buildAiTimeContext, resolveAiTimeZones } from "./aiTimeContext.ts";
@@ -27,6 +27,7 @@ export type AiSource =
   | "groq"
   | "openrouter"
   | "gemini"
+  | "vertex"
   | "muse"
   | "ollama"
   | "custom";
@@ -300,9 +301,11 @@ export async function generateSuggestions(
             ? "未配置 Groq API Key"
             : provider === "gemini"
               ? "未配置 Gemini API Key"
-              : provider === "openrouter"
-                ? "未配置 OpenRouter API Key"
-                : "未配置 AI",
+              : provider === "vertex"
+                ? "未配置 Vertex AI 凭据"
+                : provider === "openrouter"
+                  ? "未配置 OpenRouter API Key"
+                  : "未配置 AI",
     };
   }
 
@@ -406,7 +409,7 @@ export async function generateSuggestions(
       );
       return finish(suggestions,"ollama");
     }
-    if (provider === "gemini") {
+    if (provider === "gemini" || provider === "vertex") {
       const suggestions = await geminiSuggest(
         contact,
         sorted,
@@ -818,7 +821,7 @@ async function geminiSuggest(
 ): Promise<SuggestResult[]> {
   let published = 0;
   const content = await geminiGenerate({
-    apiKey: settings.geminiKey,
+    ...geminiCredentials(settings),
     model: settings.aiModel.trim() || undefined,
     system: buildSystemPrompt(contact, settings, auto, replyTo, count),
     user: buildUserPrompt(contact, messages, auto, replyTo, buildAiTimeContext(contact, settings), {count,outreach,compact:settings.aiContextMode === "compact"}),
@@ -830,7 +833,7 @@ async function geminiSuggest(
       const suggestions = completedSuggestions(raw, "Gemini", auto || replyTo ? 1 : count || 3);
       if (suggestions.length > published) {
         published = suggestions.length;
-        onProgress({ suggestions, source: "gemini", fallback: false });
+        onProgress({ suggestions, source: settings.aiProvider === "vertex" ? "vertex" : "gemini", fallback: false });
       }
     } : undefined,
     feature:outreach?"outreach":auto?"autoReply":"suggestion",

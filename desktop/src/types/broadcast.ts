@@ -27,6 +27,7 @@ export interface BroadcastItem {
   variantId?: string;
   mediaId?: string;
   status: BroadcastItemStatus;
+  deliveryUncertain?: boolean;
   error?: string;
   sentAt?: string;
   /** 本地出站消息 id */
@@ -65,6 +66,7 @@ export interface BroadcastTheme {
 
 export interface BroadcastCampaign {
   id: string;
+  channelId?: "android_bridge";
   accountId: string;
   title?: string;
   /** 原始模板，含 {name} {company}；渲染后作为纯文本正文或媒体 caption */

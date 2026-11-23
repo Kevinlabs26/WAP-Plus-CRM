@@ -28,6 +28,7 @@ import { useI18n } from "@/i18n";
 import { baileysGroupInviteCode } from "@/lib/baileysGroups";
 import { useAppStore } from "@/store/appStore";
 import { jidFromBridgeEntityId } from "@/lib/utils";
+import { copyLink } from "@/lib/copyLink";
 
 type Props = {
   chat: ChatPreview;
@@ -103,7 +104,7 @@ export function ChatHeaderMoreMenu(props: Props) {
       const url = new URL(result.inviteUrl || "");
       if (url.origin !== "https://chat.whatsapp.com" || url.username || url.password || !/^\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)) throw new Error(t("groupActions.noInviteLink"));
       try {
-        await navigator.clipboard.writeText(url.href);
+        await copyLink(url.href);
         if (!current()) return;
         useAppStore.getState().pushToast(t("group.linkCopied"), "success");
         props.onClose();

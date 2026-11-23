@@ -46,6 +46,7 @@ export function CampaignRunPanel({
   const [selected,setSelected] = useState<string[]>([]);
   const messages = useAppStore(s=>s.messages);
   const accounts = useAppStore(s=>s.settings.waAccounts || []);
+  const phones = useAppStore(s=>s.phones);
   const c = useAppStore((s) =>
     (s.broadcastCampaigns || []).find((x) => x.id === campaignId)
   );
@@ -124,18 +125,20 @@ export function CampaignRunPanel({
           >
             <div className="flex justify-between gap-2">
               {it.status === "failed" && c.status !== "running" && !broadcastItemUncertain(it,messages) && <input type="checkbox" aria-label={t("planQueue.selectRetry",{name:it.contactName})} checked={selected.includes(it.id)} onChange={e=>setSelected(ids=>e.target.checked?[...ids,it.id]:ids.filter(id=>id!==it.id))} />}
-              <span className="min-w-0 truncate font-medium text-zinc-200">{it.contactName}<span className="ml-2 text-2xs font-normal text-zinc-500">{accounts.find(account => account.id === (it.accountId || c.accountId))?.label || it.accountId || c.accountId}</span></span>
+              <span className="min-w-0 truncate font-medium text-zinc-200">{it.contactName}<span className="ml-2 text-2xs font-normal text-zinc-500">{c.channelId === "android_bridge" ? phones.find(phone => phone.id === c.accountId)?.name || c.accountId : accounts.find(account => account.id === (it.accountId || c.accountId))?.label || it.accountId || c.accountId}</span></span>
               <span
                 className={cn(
                   "shrink-0 tabular-nums",
                   it.status === "sent" && "text-emerald-400",
-                  it.status === "failed" && "text-rose-400",
+                  it.status === "failed" && (broadcastItemUncertain(it,messages) ? "text-amber-300" : "text-rose-400"),
                   it.status === "pending" && "text-zinc-500",
                   it.status === "sending" && "text-brand",
                   it.status === "skipped" && "text-zinc-600"
                 )}
               >
-                {it.status==="sent"?t(`planQueue.receipt.${planItemReceipt({status:"sent",messageId:it.messageId},messagesById)}`):t(ITEM_STATUS_LABELS[it.status] || "broadcast.run.item.pending")}
+                {it.status==="sent"?t(`planQueue.receipt.${planItemReceipt({status:"sent",messageId:it.messageId},messagesById)}`)
+                  : it.status === "failed" && broadcastItemUncertain(it,messages) ? t("messageBubble.deliveryUncertain")
+                  : t(ITEM_STATUS_LABELS[it.status] || "broadcast.run.item.pending")}
               </span>
             </div>
             {it.variantId && <p className="mt-1 text-2xs text-zinc-500">

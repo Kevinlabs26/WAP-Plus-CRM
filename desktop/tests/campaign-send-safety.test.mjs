@@ -6,11 +6,11 @@ const storageRows=new Map();globalThis.localStorage={getItem:k=>storageRows.get(
 
 const mocks = {
   react: "export const useRef=current=>({current});export const useEffect=fn=>{globalThis.campaignCleanup=fn();};",
-  "@/store/appStore": "export const useAppStore={getState:()=>globalThis.campaignState};export const flushPersist=async()=>globalThis.campaignPersist?.();",
+  "@/store/appStore": "export const useAppStore={getState:()=>globalThis.campaignState,subscribe:fn=>{globalThis.campaignSubscribe=fn;return()=>delete globalThis.campaignSubscribe;}};export const flushPersist=async()=>globalThis.campaignPersist?.();",
   "@/lib/baileys": `export const baileysStatus=async()=>({connection:'connected'});
     export const baileysSend=(...args)=>globalThis.campaignSend(...args);
     export const baileysSendImage=baileysSend,baileysSendSticker=baileysSend,baileysSendDocument=baileysSend,baileysSendVoice=baileysSend,baileysSendVideo=baileysSend;`,
-  "@/lib/bridge": "export const isTauri=()=>true;export const bridgeInvoke=async()=>({});export const getBridgeStatus=async()=>({connected:true});",
+  "@/lib/bridge": "export const isTauri=()=>true;export const bridgeInvoke=(...args)=>globalThis.campaignBridge?.(...args);export const getBridgeStatus=async()=>({connected:true});",
   "@/lib/mediaCache": "export const readMediaCache=async()=>globalThis.campaignMedia;export const cacheMediaBlob=async()=>{};",
   "@/i18n": "export const translateCurrent=key=>key;",
 };
@@ -75,7 +75,12 @@ function setup(kind = "text") {
       media: kind === "text" ? undefined : [{ id: "media", kind: kind === "voice" ? "audio" : kind, mime: kind === "image" ? "image/png" : kind === "voice" ? "audio/ogg" : "application/pdf", ...(kind === "voice" ? { voiceNote: true } : {}) }],
       items: [{ id: "item", status: "pending", contactId: "customer", phoneE164: "+12025550100", bodyRendered: kind === "voice" ? "" : "hello" }] }],
   };
-  const set = patch => { state = { ...state, ...patch }; globalThis.campaignState = state; };
+  const set = patch => {
+    const previous = state;
+    state = { ...state, ...patch };
+    globalThis.campaignState = state;
+    globalThis.campaignSubscribe?.(state, previous);
+  };
   Object.assign(state, {
     ensureChatForContact: () => "chat", setBaileysLoginOpen() {}, pushToast() {},
     enqueueOutgoingMessage(input) { const id = `out-${state.messages.length}`; set({ messages: [...state.messages, { ...input, id, direction: "out", sentAt: new Date().toISOString() }] }); return id; },
@@ -87,12 +92,106 @@ function setup(kind = "text") {
     completeBroadcastCampaignIfIdle() {},
   });
   globalThis.campaignState = state;
-  return { sends, get: () => state, tick: () => tick(), cleanup() {
+  return { sends, set, get: () => state, tick: () => tick(), cleanup() {
     globalThis.campaignCleanup?.();
     Object.assign(globalThis, originals);
-    for (const key of ["campaignState", "campaignCleanup", "campaignMedia", "campaignSend", "campaignPersist"]) delete globalThis[key];
+    for (const key of ["campaignState", "campaignCleanup", "campaignMedia", "campaignSend", "campaignPersist", "campaignBridge", "campaignSubscribe"]) delete globalThis[key];
   } };
 }
+
+function androidSetup() {
+  const env = setup();
+  const state = env.get();
+  const campaign = state.broadcastCampaigns[0];
+  Object.assign(campaign, { channelId: "android_bridge", accountId: "phone-a" });
+  campaign.items.push({ id: "second", status: "pending", contactId: "customer-2", phoneE164: "+12025550101", bodyRendered: "next" });
+  env.set({ bridge: { connected: true, deviceId: "phone-a" }, selectedPhoneId: "phone-b", settings: { ...state.settings, sendChannel: "android_bridge" } });
+  return env;
+}
+
+test("Android campaign sends sequentially on the bound phone after a confirmed send and the configured gap", async () => {
+  const env = androidSetup();
+  const previousTimer = globalThis.setTimeout;
+  const previousNow = Date.now;
+  let now = Date.now();
+  let gap;
+  Date.now = () => now;
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    if (ms >= 20_000) { gap = { finish: fn, ms }; return 0; }
+    return previousTimer(fn, ms, ...args);
+  };
+  globalThis.campaignBridge = async (command, input) => {
+    assert.equal(command, "type_and_send");
+    assert.equal(input.deviceId, "phone-a");
+    assert.equal(input.confirmSent, true);
+    env.sends.push(input.phoneE164);
+    return { status: "phone_sent", delivered: false };
+  };
+  try {
+    CampaignRunner(); await settle();
+    assert.deepEqual(env.sends, ["+12025550100"]);
+    assert.ok(gap.ms >= 20_000);
+    await env.tick(); await settle();
+    assert.equal(env.sends.length, 1);
+    now += gap.ms + 1000;
+    gap.finish(); await settle();
+    await env.tick(); await settle();
+    assert.deepEqual(env.sends, ["+12025550100", "+12025550101"]);
+  } finally { Date.now = previousNow; env.cleanup(); }
+});
+
+test("a click-only result pauses Android and is never requeued by reconnect", async () => {
+  const env = androidSetup();
+  globalThis.campaignBridge = async () => { env.sends.push(true); return { status: "clicked" }; };
+  try {
+    CampaignRunner(); await settle();
+    assert.equal(env.get().broadcastCampaigns[0].status, "paused");
+    assert.equal(env.get().broadcastCampaigns[0].items[0].deliveryUncertain, true);
+    assert.equal(env.get().broadcastCampaigns[0].items[0].status, "failed");
+    env.set({ bridge: { connected: false } });
+    env.set({ bridge: { connected: true, deviceId: "phone-a" } });
+    await env.tick(); await settle();
+    assert.equal(env.sends.length, 1);
+    assert.equal(env.get().broadcastCampaigns[0].items[1].status, "pending");
+  } finally { env.cleanup(); }
+});
+
+test("Android disconnect while persisting pauses before transport, even if it reconnects immediately", async () => {
+  const env = androidSetup();
+  globalThis.campaignBridge = async () => { env.sends.push(true); return { status: "phone_sent" }; };
+  globalThis.campaignPersist = () => {
+    env.set({ bridge: { connected: false } });
+    env.set({ bridge: { connected: true, deviceId: "phone-a" } });
+  };
+  try {
+    CampaignRunner(); await settle();
+    assert.equal(env.get().broadcastCampaigns[0].status, "paused");
+    assert.equal(env.get().broadcastCampaigns[0].items[0].status, "pending");
+    assert.equal(env.sends.length, 0);
+  } finally { env.cleanup(); }
+});
+
+test("Android disconnect after dispatch leaves the current recipient for review and preserves the rest", async () => {
+  const env = androidSetup();
+  let dropReceipt;
+  globalThis.campaignBridge = async () => {
+    env.sends.push(true);
+    return new Promise((_resolve, reject) => { dropReceipt = reject; });
+  };
+  try {
+    CampaignRunner(); await settle();
+    env.set({ bridge: { connected: false } });
+    assert.equal(env.get().broadcastCampaigns[0].status, "paused");
+    dropReceipt(new Error("disconnected")); await settle();
+    env.set({ bridge: { connected: true, deviceId: "phone-a" } });
+    await env.tick(); await settle();
+    const items = env.get().broadcastCampaigns[0].items;
+    assert.equal(items[0].deliveryUncertain, true);
+    assert.equal(items[0].status, "failed");
+    assert.equal(items[1].status, "pending");
+    assert.equal(env.sends.length, 1);
+  } finally { env.cleanup(); }
+});
 
 for (const kind of ["text", "image", "document", "voice"]) {
   test(`${kind}: a definite send failure pauses before the next recipient`, async () => {

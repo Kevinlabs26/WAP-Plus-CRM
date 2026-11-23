@@ -18,7 +18,7 @@ import { CloneCallBinding, type useCloneCallBindings } from "./CloneCallBinding"
 
 export type AccountSlotCardProps = {
   account: WaAccount;
-  cloneClients: ReturnType<typeof useCloneCallBindings>;
+  cloneClients?: ReturnType<typeof useCloneCallBindings>;
   idx: number;
   isDefaultSend: boolean;
   isConnectionFocus: boolean;
@@ -177,7 +177,7 @@ export function AccountSlotCard({
             </>
           )}
         </div>
-        <CloneCallBinding account={a} clients={cloneClients} />
+        {cloneClients && <CloneCallBinding account={a} clients={cloneClients} />}
         <div
           className="relative shrink-0 self-start"
           data-account-slot-menu

@@ -46,6 +46,7 @@ import {
 import { noteMainThreadWork, syncLog } from "@/lib/syncDebug";
 import { isComposerTypingBusy } from "@/lib/composerActivity";
 import type { BridgeEvent } from "@/lib/bridge";
+import { androidVoiceAttachment } from "./androidVoiceAttachment";
 import { persist, scheduleStatsRecompute } from "./persist";
 import { notifyInboundMessages, type InboundNotifyItem } from "@/lib/inboundMessageNotify";
 import { emitLiveInboundMessages } from "@/lib/aiAutoReply";
@@ -145,8 +146,10 @@ export function createIngestSlice({
       if (deferDuringRestore(() => { get().ingestBridgeEvents(events).then(resolve, reject); })) return;
       const ingestStarted = performance.now();
       const mediaCacheEntries: { messageId: string; url: string }[] = [];
+      const voiceCacheEntries: { messageId: string; url: string }[] = [];
       for (const event of events) {
         const payload = ingestObject(event.payload) ?? {};
+        if (payload.source === "android-media-share") continue;
         const ownerAccountId =
           ingestString(
             (event as { accountId?: string }).accountId ??
@@ -460,6 +463,19 @@ export function createIngestSlice({
             continue;
           }
 
+          if (event.type === "messages.sync" && payload.source === "android-media-share") {
+            for (const raw of items) {
+              const item = object(raw);
+              if (!item || !event.deviceId || !item.targetMessageId) continue;
+              const index = messages.findIndex((message) => message.id === item.targetMessageId);
+              if (index < 0) continue;
+              const patch = androidVoiceAttachment(messages[index], item, event.deviceId);
+              if (!patch) continue;
+              messages[index] = { ...messages[index], ...patch };
+              voiceCacheEntries.push({ messageId: messages[index].id, url: patch.mediaUrl });
+            }
+            continue;
+          }
           if (event.type === "messages.sync") {
             contactBag.contacts = contacts;
             contactBag.chats = chats;
@@ -756,6 +772,7 @@ export function createIngestSlice({
       // 全部块跑完后统一收尾（通知 / 统计 / 落盘），只跑一次
       const finish = async () => {
         const writes: Promise<void>[] = [];
+        if (voiceCacheEntries.length) writes.push(cacheMediaUrls(voiceCacheEntries));
         for (const target of clearedRemoteTargets.values()) {
           writes.push(clearStoredRemoteMessages(target.remoteJid, target.accountId, target.before));
         }

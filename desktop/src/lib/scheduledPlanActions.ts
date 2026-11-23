@@ -22,6 +22,14 @@ export async function updateScheduledPlan(id: string, change: (plan: ScheduledPl
   await flushPersist(() => useAppStore.getState());
 }
 
+export function cancelScheduledPlan(id: string) {
+  return updateScheduledPlan(id, plan => ["done", "cancelled"].includes(plan.status) ? plan : {
+    ...plan,
+    status: "cancelled",
+    items: plan.items.map(item => item.status === "pending" ? { ...item, status: "cancelled" } : item),
+  });
+}
+
 export async function prioritizeBatchTask(id: string) {
   if (isDataRestoreActive()) throw new Error(translateCurrent("planQueue.restoring"));
   const state=useAppStore.getState();const plans=state.settings.scheduledPlans||[],campaigns=state.broadcastCampaigns||[];

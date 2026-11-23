@@ -28,6 +28,11 @@ assert.deepEqual(updated[0], {
   overlayEnabled: true,
 });
 
+const locked = applyDeviceStatus(updated, "phone-1", { phoneLocked: true });
+assert.equal(locked[0].phoneLocked, true);
+assert.equal(applyDeviceStatus(locked, "phone-1", { level: 42 })[0].phoneLocked, true);
+assert.equal(applyDeviceStatus(locked, "phone-1", { phoneLocked: false })[0].phoneLocked, false);
+
 // 多账号 deviceId 不应堆出多张 Baileys 卡
 let multi = applyDeviceHello([], "wa-default", {
   name: "E",

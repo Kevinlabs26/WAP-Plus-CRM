@@ -15,6 +15,7 @@ import {
   GripVertical,
   LayoutGrid,
   MoreHorizontal,
+  Phone,
   Pencil,
   Trash2,
   Upload,
@@ -52,6 +53,7 @@ type FolderHeaderRowProps = {
   onAiPrompt?: () => void;
   onSchedule?: () => void;
   onBroadcast?: () => void;
+  onCallByDelivery?: () => void;
   onToggle: () => void;
   onStartDrag: (event: React.PointerEvent) => void;
   onCreateChild: () => void;
@@ -90,6 +92,7 @@ export function FolderHeaderRow({
   onAiPrompt,
   onSchedule,
   onBroadcast,
+  onCallByDelivery,
   onToggle,
   onStartDrag,
   onCreateChild,
@@ -388,6 +391,9 @@ export function FolderHeaderRow({
           </button>}
           {onSchedule && <button type="button" role="menuitem" className={itemClass} onClick={() => run(onSchedule)}>
             <Clock3 className="h-3.5 w-3.5 text-brand" />{t("planQueue.create")}
+          </button>}
+          {onCallByDelivery && <button type="button" role="menuitem" className={itemClass} onClick={() => run(onCallByDelivery)}>
+            <Phone className="h-3.5 w-3.5 text-brand" />{t("folderCall.title")}
           </button>}
           <button
             type="button"

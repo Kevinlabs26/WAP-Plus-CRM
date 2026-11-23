@@ -2,8 +2,8 @@ import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const [version, tag, directory] = process.argv.slice(2);
-if (!/^\d+\.\d+\.\d+$/.test(version ?? "") || ![`macos-v${version}`, `macos-unsigned-v${version}`].includes(tag) || !directory) {
-  throw new Error("Expected a release version, matching macOS tag and asset directory");
+if (!/^\d+\.\d+\.\d+$/.test(version ?? "") || tag !== `v${version}` || !directory) {
+  throw new Error("Expected a release version, matching desktop release tag and asset directory");
 }
 
 const platforms = {};

@@ -1,30 +1,15 @@
-name: macOS build and DMG release
+name: macOS build and DMG verification
 
 on:
-  push:
-    branches: [codex/macos]
-    tags: ['macos-build-v*', 'macos-unsigned-build-v*']
-  workflow_dispatch:
+  workflow_call:
     inputs:
-      publish:
-        description: Sign, notarize and publish both DMGs after CI passes
+      notarize:
         type: boolean
         default: false
-      publish_unsigned:
-        description: Publish unsigned, unnotarized release DMGs after CI passes
-        type: boolean
-        default: false
+  workflow_dispatch:
 
 permissions:
   contents: read
-
-concurrency:
-  group: macos-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  PUBLISH_MACOS: ${{ inputs.publish || startsWith(github.ref, 'refs/tags/macos-build-v') }}
-  PUBLISH_MACOS_UNSIGNED: ${{ (inputs.publish_unsigned && !inputs.publish) || startsWith(github.ref, 'refs/tags/macos-unsigned-build-v') }}
 
 jobs:
   build:
@@ -48,10 +33,18 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - name: Set up Java for the Android Bridge
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
       - name: Install dependencies
         run: |
           test "$(uname -m)" = "${{ matrix.arch }}"
           npm ci
+      - name: Prepare Android Bridge APK
+        run: npm run android:bridge:prepare
       - name: Build and test the native tools
         env:
           FFMPEG_SOURCE_BUNDLE: ${{ runner.temp }}/ffmpeg-source-${{ matrix.arch }}.tar.gz
@@ -88,21 +81,21 @@ jobs:
           fi
           exit "$status"
       - name: Prepare production Google OAuth configuration
-        if: ${{ env.PUBLISH_MACOS == 'true' || env.PUBLISH_MACOS_UNSIGNED == 'true' }}
+        if: ${{ github.ref_type == 'tag' }}
         env:
           GOOGLE_DESKTOP_CLIENT_JSON: ${{ secrets.GOOGLE_DESKTOP_CLIENT_JSON }}
         run: node --experimental-strip-types .github/scripts/prepare-google-client.mjs
       - name: Build test DMG
-        if: ${{ env.PUBLISH_MACOS != 'true' && env.PUBLISH_MACOS_UNSIGNED != 'true' }}
+        if: ${{ github.ref_type != 'tag' }}
         run: npm run tauri -- build --debug --bundles dmg --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-","minimumSystemVersion":"13.0"}}}'
       - name: Build unsigned release DMG
-        if: ${{ env.PUBLISH_MACOS_UNSIGNED == 'true' }}
+        if: ${{ github.ref_type == 'tag' && inputs.notarize != true }}
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri -- build --bundles app,dmg --config '{"bundle":{"macOS":{"signingIdentity":"-","minimumSystemVersion":"13.0"}}}'
       - name: Sign and notarize release DMG
-        if: ${{ env.PUBLISH_MACOS == 'true' }}
+        if: ${{ github.ref_type == 'tag' && inputs.notarize == true }}
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -123,100 +116,11 @@ jobs:
       - name: Verify the DMG and bundled executables
         env:
           ARCH: ${{ matrix.arch }}
-          PUBLISH: ${{ env.PUBLISH_MACOS }}
-          RELEASE_BUILD: ${{ env.PUBLISH_MACOS == 'true' || env.PUBLISH_MACOS_UNSIGNED == 'true' }}
+          PUBLISH: ${{ inputs.notarize == true }}
+          RELEASE_BUILD: ${{ github.ref_type == 'tag' }}
         run: bash tools/verify-macos-dmg.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: macos-${{ matrix.arch }}
           path: ${{ runner.temp }}/macos-release/*
           if-no-files-found: error
-
-  publish:
-    if: ${{ inputs.publish || inputs.publish_unsigned || startsWith(github.ref, 'refs/tags/macos-build-v') || startsWith(github.ref, 'refs/tags/macos-unsigned-build-v') }}
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    concurrency:
-      group: macos-update-publish
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          pattern: macos-*
-          path: release-assets
-          merge-multiple: true
-      - name: Publish verified DMGs and update archives
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          version=$(jq -er .version desktop/src-tauri/tauri.conf.json)
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          if [[ $GITHUB_REF == refs/tags/* ]]; then
-            if [[ $PUBLISH_MACOS_UNSIGNED == true ]]; then
-              [[ $GITHUB_REF_NAME == "macos-unsigned-build-v$version" ]]
-            else
-              [[ $GITHUB_REF_NAME == "macos-build-v$version" ]]
-            fi
-          fi
-          for arch in arm64 x86_64; do
-            dmg="release-assets/WAP-Plus-CRM-${version}-macOS-${arch}.dmg"
-            test -s "$dmg"
-            test -s "release-assets/ffmpeg-source-${arch}.tar.gz"
-            if [[ $PUBLISH_MACOS_UNSIGNED == true ]]; then
-              mv "$dmg" "${dmg%.dmg}-unsigned.dmg"
-            fi
-          done
-          if [[ $PUBLISH_MACOS_UNSIGNED == true ]]; then
-            tag="macos-unsigned-v${version}"
-            feed=latest-unsigned.json
-            title="WAP Plus CRM ${version} for macOS (unsigned)"
-            notes='Unsigned and unnotarized DMGs for Apple Silicon and Intel. Gatekeeper may block first launch; only open if you trust this download. See System Settings > Privacy & Security > Open Anyway.'
-          else
-            tag="macos-v${version}"
-            feed=latest-signed.json
-            title="WAP Plus CRM ${version} for macOS"
-            notes='Signed and notarized DMGs for Apple Silicon and Intel. Choose the installer for your Mac architecture.'
-          fi
-          manifest=macos-latest.json
-          if release=$(gh release view "$tag" --json isDraft,targetCommitish 2>/dev/null); then
-            if [[ $(jq -r .isDraft <<< "$release") == true ]]; then
-              [[ $(jq -r .targetCommitish <<< "$release") == "$GITHUB_SHA" ]]
-              node .github/scripts/macos-update-manifest.mjs "$version" "$tag" release-assets > "release-assets/$manifest"
-              gh release upload "$tag" release-assets/* --clobber
-              gh release edit "$tag" --draft=false --latest=false
-            fi
-          else
-            node .github/scripts/macos-update-manifest.mjs "$version" "$tag" release-assets > "release-assets/$manifest"
-            gh release create "$tag" release-assets/* --target "$GITHUB_SHA" --draft --latest=false --title "$title" --notes "$notes"
-            gh release edit "$tag" --draft=false --latest=false
-          fi
-          [[ $(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq .sha) == "$GITHUB_SHA" ]]
-
-          # Publish the feed only after both signed archives are publicly available.
-          feed_dir=$(mktemp -d)
-          gh auth setup-git
-          git -C "$feed_dir" init -b macos-updates
-          git -C "$feed_dir" remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
-          if git -C "$feed_dir" ls-remote --exit-code --heads origin refs/heads/macos-updates; then
-            git -C "$feed_dir" fetch --depth=1 origin refs/heads/macos-updates
-            git -C "$feed_dir" switch --detach FETCH_HEAD
-          else
-            [[ $? == 2 ]]
-          fi
-          gh release download "$tag" --pattern "$manifest" --dir "$feed_dir"
-          if [[ -s "$feed_dir/$feed" ]]; then
-            previous=$(jq -er .version "$feed_dir/$feed")
-            newest=$(printf '%s\n' "$previous" "$version" | sort -V | tail -1)
-            [[ $version == "$newest" ]] || exit 0
-          fi
-          mv "$feed_dir/$manifest" "$feed_dir/$feed"
-          git -C "$feed_dir" add -- "$feed"
-          if git -C "$feed_dir" diff --cached --quiet; then exit 0; fi
-          git -C "$feed_dir" -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "Update $feed to $version"
-          git -C "$feed_dir" push origin HEAD:refs/heads/macos-updates

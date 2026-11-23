@@ -539,7 +539,7 @@ pub async fn google_sheets_read_grid(
             query.append_pair("ranges", &range);
         }
         query.append_pair("includeGridData", "true");
-        query.append_pair("fields", "sheets(data(startRow,rowData(values(formattedValue,hyperlink,userEnteredValue(formulaValue),textFormatRuns(format(link(uri)))))))");
+        query.append_pair("fields", "sheets(data(startRow,startColumn,rowData(values(hyperlink,userEnteredValue(formulaValue),textFormatRuns(format(link(uri)))))))");
     }
     json(
         http()?

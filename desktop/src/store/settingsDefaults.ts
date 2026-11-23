@@ -151,6 +151,7 @@ export interface SettingsShape {
   openaiKey: string;
   groqKey: string;
   geminiKey: string;
+  vertexCredential: string;
   openrouterKey: string;
   ollamaUrl: string;
   bridgeHost: string;
@@ -162,6 +163,7 @@ export interface SettingsShape {
     | "groq"
     | "openrouter"
     | "gemini"
+    | "vertex"
     | "muse"
     | "ollama"
     | "custom";
@@ -398,6 +400,7 @@ export const defaultSettings: SettingsShape = {
   openaiKey: "",
   groqKey: "",
   geminiKey: "",
+  vertexCredential: "",
   openrouterKey: "",
   ollamaUrl: "http://127.0.0.1:11434",
   bridgeHost: "127.0.0.1",

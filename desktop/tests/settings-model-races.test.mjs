@@ -12,12 +12,13 @@ const mocks={
  '@/components/ui/primitives':'export const Input="input",SectionLabel="h4";',
  '@/i18n':'export const useI18n=()=>({t:globalThis.modelTranslate});',
  '@/lib/listModels':'export const listProviderModels=(provider,settings)=>new Promise((resolve,reject)=>globalThis.modelRequests.push({provider,key:settings.openaiKey||settings.groqKey,resolve,reject}));',
+ '@/lib/vertexAi':'export const VERTEX_CREDENTIAL_LIMIT=16384,VERTEX_DEFAULT_MODEL="gemini-default",parseVertexServiceAccount=JSON.parse;export const listVertexModels=(key,model,signal)=>new Promise(resolve=>globalThis.modelRequests.push({key,model,signal,resolve}));',
 };
 const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/settings/SettingsAiPanel.tsx',import.meta.url))],bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},plugins:[{name:'mocks',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
-const {ModelPicker}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
+const {AiServiceFields,ModelPicker}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
 const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-test('only the latest model request can update the list, including credential changes and unmount',async()=>{
+function setupHooks(){
  const cells=[],effects=[];let index=0,writes=0;
  const equal=(a,b)=>a&&b&&a.length===b.length&&a.every((v,i)=>Object.is(v,b[i]));
  globalThis.modelRequests=[];globalThis.modelTranslate=k=>k;
@@ -28,7 +29,16 @@ test('only the latest model request can update the list, including credential ch
   callback(fn,deps){const n=index++;if(!equal(cells[n]?.deps,deps))cells[n]={deps,fn};return cells[n].fn;},
   effect(fn,deps){const n=index++;if(!equal(cells[n]?.deps,deps)){const old=cells[n];cells[n]={deps};effects.push(()=>{old?.cleanup?.();cells[n].cleanup=fn();});}},
  };
- const render=()=>{index=0;const tree=ModelPicker({settings:modelStore.settings,onModelChange:()=>{}});effects.splice(0).forEach(fn=>fn());return nodes(tree);};
+ return {
+  render(view){index=0;const tree=view();effects.splice(0).forEach(fn=>fn());return nodes(tree);},
+  unmount(){cells.forEach(cell=>cell?.cleanup?.());},
+  writes:()=>writes,
+  close(){for(const key of ['modelHooks','modelRequests','modelTranslate','modelStore'])delete globalThis[key];},
+ };
+}
+test('only the latest model request can update the list, including credential changes and unmount',async()=>{
+ const hooks=setupHooks();
+ const render=()=>hooks.render(()=>ModelPicker({settings:modelStore.settings,onModelChange:()=>{}}));
  const options=()=>render().filter(node=>node.type==='option').map(node=>node.props.value);
  try {
   render();assert.equal(modelRequests.length,1);
@@ -42,7 +52,45 @@ test('only the latest model request can update the list, including credential ch
   modelRequests[3].resolve([{id:'stale-refresh',label:'Stale'}]);await tick();
   assert.ok(options().includes('latest-refresh'));assert.ok(!options().includes('stale-refresh'));
   render().find(node=>node.type==='button').props.onClick();assert.equal(modelRequests.length,6);
-  cells.forEach(cell=>cell?.cleanup?.());const before=writes;
-  modelRequests[5].resolve([{id:'after-unmount',label:'Late'}]);await tick();assert.equal(writes,before);
- }finally{for(const key of ['modelHooks','modelRequests','modelTranslate','modelStore'])delete globalThis[key];}
+  hooks.unmount();const before=hooks.writes();
+  modelRequests[5].resolve([{id:'after-unmount',label:'Late'}]);await tick();assert.equal(hooks.writes(),before);
+ }finally{hooks.close();}
+});
+
+test('Vertex pulls models on demand and requires a new choice if the saved model is unavailable',async()=>{
+ const hooks=setupHooks();
+ let settings={aiProvider:'vertex',vertexCredential:'first-key',aiModel:'gemini-unavailable'};
+ const updateSettings=patch=>{settings={...settings,...patch};};
+ const render=()=>hooks.render(()=>{
+  const fields=AiServiceFields({settings,updateSettings});
+  const vertex=nodes(fields).find(node=>typeof node.type==='function'&&node.type.name==='VertexFields');
+  return vertex.type(vertex.props);
+ });
+ const button=(tree,label)=>tree.find(node=>node.type==='button'&&node.props.children===label);
+ try {
+  const initial=render();
+  const file=initial.find(node=>node.type==='input'&&node.props.type==='file');
+  assert.equal(file.props.className,'hidden');
+  let opened=false;file.props.ref.current={click(){opened=true;}};
+  button(initial,'contactImport.chooseFile').props.onClick();
+  assert.ok(opened);
+  assert.equal(modelRequests.length,0);
+
+  button(initial,'settingsAi.vertexLoadModels').props.onClick();
+  assert.equal(modelRequests[0].key,'first-key');
+  modelRequests[0].resolve(['gemini-available']);await tick();
+  const loaded=render();
+  assert.deepEqual(loaded.filter(node=>node.type==='option').map(node=>node.props.value),['','gemini-available']);
+  assert.ok(button(loaded,'settingsAi.vertexVerify').props.disabled);
+  assert.equal(settings.aiModel,'gemini-unavailable');
+  loaded.find(node=>node.type==='select').props.onChange({target:{value:'gemini-available'}});
+  assert.equal(settings.aiModel,'gemini-available');
+
+  button(render(),'settingsAi.vertexLoadModels').props.onClick();
+  settings={...settings,vertexCredential:'second-key'};render();
+  assert.ok(modelRequests[1].signal.aborted);
+  modelRequests[1].resolve(['gemini-stale']);await tick();
+  assert.ok(render().find(node=>node.type==='select').props.disabled);
+  assert.ok(!render().find(node=>node.type==='option'&&node.props.value==='gemini-stale'));
+ }finally{hooks.unmount();hooks.close();}
 });

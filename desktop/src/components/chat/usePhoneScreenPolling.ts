@@ -1,17 +1,26 @@
 import { useEffect, useState } from "react";
-import { bridgeInvoke } from "@/lib/bridge";
+import { bridgeInvoke, isTauri } from "@/lib/bridge";
+import { useAppStore } from "@/store/appStore";
+import { translateCurrent } from "@/i18n";
 
 /**
  * 手机屏幕实时预览：showScreen 开启后定时拉取截屏，
  * 页面隐藏时暂停、恢复时延迟再取。清理时释放旧 URL。
  */
-export function usePhoneScreenPolling() {
+export function usePhoneScreenPolling(deviceId: string | null) {
   const [showScreen, setShowScreen] = useState(false);
-  const [screenUrl, setScreenUrl] = useState<string | null>(null);
+  const [screen, setScreen] = useState<{ deviceId: string; url: string } | null>(null);
   const [screenError, setScreenError] = useState<string | null>(null);
+  const connectedDeviceId = useAppStore((state) => state.bridge.connected ? state.bridge.deviceId : null);
 
   useEffect(() => {
+    setScreen(null);
+    setScreenError(null);
     if (!showScreen) return;
+    if (!isTauri() || !connectedDeviceId) {
+      setScreenError(translateCurrent("runtime.phoneBridgeUnavailable"));
+      return;
+    }
     let cancelled = false;
     let inFlight = false;
     let currentUrl: string | null = null;
@@ -25,17 +34,22 @@ export function usePhoneScreenPolling() {
       if (Date.now() < resumeBlockedUntil) return;
       inFlight = true;
       try {
-        const bytes = await bridgeInvoke<number[]>("phone_screenshot");
+        const bytes = await bridgeInvoke<number[]>("phone_screenshot", { deviceId: deviceId ?? connectedDeviceId });
         if (cancelled) return;
         const nextUrl = URL.createObjectURL(
           new Blob([new Uint8Array(bytes)], { type: "image/png" })
         );
         if (currentUrl) URL.revokeObjectURL(currentUrl);
         currentUrl = nextUrl;
-        setScreenUrl(nextUrl);
+        setScreen({ deviceId: connectedDeviceId, url: nextUrl });
         setScreenError(null);
       } catch (error) {
-        if (!cancelled) setScreenError(String(error));
+        if (!cancelled) {
+          if (currentUrl) URL.revokeObjectURL(currentUrl);
+          currentUrl = null;
+          setScreen(null);
+          setScreenError(String(error));
+        }
       } finally {
         inFlight = false;
       }
@@ -58,7 +72,10 @@ export function usePhoneScreenPolling() {
       document.removeEventListener("visibilitychange", onResume);
       if (currentUrl) URL.revokeObjectURL(currentUrl);
     };
-  }, [showScreen]);
+  }, [showScreen, deviceId, connectedDeviceId]);
 
+  const screenUrl = showScreen && screen && screen.deviceId === connectedDeviceId && (!deviceId || deviceId === connectedDeviceId)
+    ? screen.url
+    : null;
   return { showScreen, setShowScreen, screenUrl, screenError };
 }

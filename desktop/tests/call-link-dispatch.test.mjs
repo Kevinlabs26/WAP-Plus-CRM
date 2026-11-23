@@ -8,6 +8,7 @@ const mocks={
  'react/jsx-runtime':'export const jsx=(type,props)=>({type,props}),jsxs=jsx,Fragment="fragment";',
  '@/store/appStore':'export const useAppStore={getState:()=>globalThis.callLinkTest.state};',
  '@/lib/bridge':'export const isTauri=()=>globalThis.callLinkTest.native;',
+ '@/lib/desktopPlatform':'export const isWindows=true;',
  '@tauri-apps/api/core':'export const invoke=(...a)=>globalThis.callLinkTest.invoke(...a);',
  '@tauri-apps/plugin-shell':'export const open=(...a)=>globalThis.callLinkTest.browser(...a);',
 };

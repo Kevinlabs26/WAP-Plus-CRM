@@ -1,6 +1,6 @@
 [package]
 name = "wap-plus-crm"
-version = "0.1.81"
+version = "0.1.83"
 description = "WAP Plus CRM — WhatsApp sales CRM desktop"
 authors = ["WAP Plus CRM"]
 edition = "2021"
@@ -33,7 +33,7 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2.14.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "io-util", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "io-util", "time", "fs"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2"
@@ -46,6 +46,8 @@ bzip2 = "0.4"
 sherpa-rs = { version = "0.5", default-features = false, features = ["download-binaries", "static"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSString"] }
 security-framework = "3.7.0"
 
 [target.'cfg(windows)'.dependencies]

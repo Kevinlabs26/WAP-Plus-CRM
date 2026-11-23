@@ -390,7 +390,7 @@ export function ChatPanel() {
     setShowScreen,
     screenUrl,
     screenError,
-  } = usePhoneScreenPolling();
+  } = usePhoneScreenPolling(selectedPhoneId);
   const [imagePreview, setImagePreview] = useState<{
     src: string;
     alt: string;

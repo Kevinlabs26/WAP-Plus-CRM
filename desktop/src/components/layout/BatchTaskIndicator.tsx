@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { LoaderCircle, Pause, Play, Square } from "lucide-react";
+import { LoaderCircle, Pause, Play } from "lucide-react";
 import { Button } from "@/components/ui/primitives";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { nextBatchTask } from "@/lib/scheduledPlans";
-import { updateScheduledPlan } from "@/lib/scheduledPlanActions";
+import { cancelScheduledPlan, updateScheduledPlan } from "@/lib/scheduledPlanActions";
 import { useAppStore } from "@/store/appStore";
 
 export function BatchTaskIndicator() {
@@ -55,6 +55,8 @@ export function BatchTaskIndicator() {
         const sent = task.items.filter(item => item.status === "sent").length;
         const failed = task.items.filter(item => item.status === "failed" || item.status === "unknown").length;
         const current = task.items.find(item => item.status === "sending") || task.items.find(item => item.status === "pending");
+        const canCancel = ["draft", "pending", "running", "paused"].includes(task.status);
+        const cancelLabel = t(current ? "planQueue.cancel" : "planQueue.clearProgress");
         const accountId = current?.accountId || ("accountId" in task ? task.accountId : undefined);
         const accountLabel = accounts.find(account => account.id === accountId)?.label || accountId;
         const total = task.items.length;
@@ -70,7 +72,26 @@ export function BatchTaskIndicator() {
             {task.status === "paused" && current?.status === "sending" && <p className="mt-1 text-xs text-amber-500">{t("planQueue.pausingInFlight")}</p>}
             {task.status === "running" && !error && current?.status !== "sending" && nextId && nextId !== task.id && <p className="mt-1 text-xs text-zinc-500">{t("planQueue.waitingTurn")}</p>}
             {task.status === "running" && waitSec > 0 && current?.status !== "sending" && <p className="mt-1 text-xs text-zinc-500">{t("planQueue.wait", { seconds: waitSec })}</p>}
-            <button type="button" className="mt-1 text-xs text-brand hover:underline" onClick={() => { setOpen(false); if (task.kind === "plan") useAppStore.getState().setSettingsOpen(true, "scheduled"); else useAppStore.getState().setActiveNav("broadcast"); }}>{t("planQueue.details")}</button>
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+              <button type="button" className="text-brand hover:underline" onClick={() => { setOpen(false); if (task.kind === "plan") useAppStore.getState().setSettingsOpen(true, "scheduled"); else useAppStore.getState().setActiveNav("broadcast"); }}>{t("planQueue.details")}</button>
+              {canCancel && <button type="button" className="text-rose-600 hover:underline dark:text-rose-400" onClick={async () => {
+                const state = useAppStore.getState();
+                const confirmed = await state.requestConfirm({
+                  title: cancelLabel,
+                  description: t(current ? "planQueue.cancelHint" : "planQueue.clearProgressHint"),
+                  confirmLabel: cancelLabel,
+                  tone: "danger",
+                });
+                if (!confirmed) return;
+                try {
+                  if (task.kind === "plan") await cancelScheduledPlan(task.id);
+                  else state.cancelBroadcastCampaign(task.id);
+                  setFocusedPlanId(id => id === task.id ? null : id);
+                } catch (error) {
+                  state.pushToast(error instanceof Error ? error.message : String(error), "error");
+                }
+              }}>{cancelLabel}</button>}
+            </div>
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {task.status === "running" || task.kind === "plan" && task.status === "pending" ? <Button size="sm" className="w-8 justify-center !px-0" aria-label={t("planQueue.pause")} title={t("planQueue.pause")} onClick={() => task.kind === "plan" ? void updateScheduledPlan(task.id, plan => ["pending", "running"].includes(plan.status) ? { ...plan, status: "paused", error: "planQueue.userPaused" } : plan).catch(error => useAppStore.getState().pushToast(error instanceof Error ? error.message : String(error), "error")) : useAppStore.getState().pauseBroadcastCampaign(task.id)}><Pause className="h-3.5 w-3.5" aria-hidden="true" /></Button> : task.status === "paused" ? <Button size="sm" className="w-8 justify-center !px-0" disabled={task.items.some(item => item.status === "sending") || task.kind === "plan" && task.mediaUnavailable} aria-label={t("planQueue.resume")} title={t("planQueue.resume")} onClick={() => {
@@ -80,16 +101,6 @@ export function BatchTaskIndicator() {
                 if (!result.ok) useAppStore.getState().pushToast(result.reason, "error");
               }
             }}><Play className="h-3.5 w-3.5" aria-hidden="true" /></Button> : null}
-            {task.kind === "campaign" && <Button size="sm" className="w-8 justify-center !px-0" aria-label={t("broadcast.run.cancel")} title={t("broadcast.run.cancel")} onClick={async () => {
-              const state = useAppStore.getState();
-              const confirmed = await state.requestConfirm({
-                title: t("broadcast.cancelTitle"),
-                description: t("planQueue.cancelHint"),
-                confirmLabel: t("broadcast.cancelConfirm"),
-                tone: "danger",
-              });
-              if (confirmed) state.cancelBroadcastCampaign(task.id);
-            }}><Square className="h-3.5 w-3.5" aria-hidden="true" /></Button>}
           </div>
         </div>;
       })}

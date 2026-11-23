@@ -43,12 +43,16 @@ test("contact lookup scopes by account owner", () => {
   assert.equal(lookup.matchIndex({ deviceId: "wa-b", phone: "+331111" }), -1);
 });
 
-test("contact lookup follows appended contacts (length-versioned rebuild)", () => {
-  const contacts = [contact({ id: "c1", phone: "+331111" })];
+test("contact lookup indexes only appended rows", () => {
+  let originalPhoneReads = 0;
+  const contacts = [contact({ id: "c1" })];
+  Object.defineProperty(contacts[0], "phone", { get: () => { originalPhoneReads++; return "+331111"; } });
   const lookup = createContactLookup(contacts);
   assert.equal(lookup.matchIndex({ deviceId: "wa-a", phone: "+331111" }), 0);
+  const readsAfterBuild = originalPhoneReads;
   contacts.push(contact({ id: "c2", phone: "+339999" }));
   assert.equal(lookup.matchIndex({ deviceId: "wa-a", phone: "+339999" }), 1);
+  assert.equal(originalPhoneReads, readsAfterBuild);
 });
 
 test("contact lookup pnJid normalizes to phone and channel", () => {
@@ -73,6 +77,10 @@ test("stale key after replace falls back without false positive", () => {
   assert.equal(lookup.matchIndex({ deviceId: "wa-a", phone: "+331111" }), -1);
   // 新 phone 未建索引 → -1（与原始 findIndex 语义一致）
   assert.equal(lookup.matchIndex({ deviceId: "wa-a", phone: "+337777" }), -1);
+  lookup.invalidate();
+  contacts.push(contact({ id: "c2", phone: "+339999" }));
+  assert.equal(lookup.matchIndex({ deviceId: "wa-a", phone: "+337777" }), 0);
+  assert.equal(lookup.matchIndex({ deviceId: "wa-a", phone: "+339999" }), 1);
 });
 
 test("chat id lookup versions on reference and length", () => {

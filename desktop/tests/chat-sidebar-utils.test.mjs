@@ -132,6 +132,26 @@ test("sidebar preview uses the newest indexed message instead of stale chat prev
   assert.equal(result.lastBodyByChat.get("chat-1"), "new message");
 });
 
+test("sidebar reuses untouched message buckets and refreshes on owner changes", () => {
+  const chat = (id, accountId) => ({ id, accountId });
+  const message = (id, chatId, accountId, sentAt) => ({ id, chatId, accountId, sentAt, body: id, direction: "in" });
+  let scans = 0;
+  const a = new Proxy([
+    message("a-one", "a", "wa-a", "2026-11-01T00:00:00Z"),
+    message("a-two", "a", "wa-b", "2026-11-02T00:00:00Z"),
+    message("misfiled", "b", "wa-a", "2026-11-03T00:00:00Z"),
+  ], { get(target, key, receiver) {
+    if (key === Symbol.iterator) scans++;
+    return Reflect.get(target, key, receiver);
+  } });
+  const read = (owner, b) => mod.buildChatActivityMapsFromPreviews([chat("a", owner), chat("b", "wa-b")], undefined, { a, b });
+  assert.equal(read("wa-a", []).lastBodyByChat.get("a"), "a-one");
+  assert.equal(read("wa-a", [message("new", "b", "wa-b", "2026-11-03T00:00:00Z")]).lastBodyByChat.get("b"), "new");
+  assert.equal(scans, 1);
+  assert.equal(read("wa-b", []).lastBodyByChat.get("a"), "a-two");
+  assert.equal(scans, 2);
+});
+
 test("sidebar preview ignores a newer message from another account", () => {
   const result = mod.filterAndSortSidebarChats({
     chats: [{

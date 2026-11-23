@@ -62,6 +62,7 @@ export function ContactImportModal({ open, onClose, accountId }: Props) {
   const phones = useAppStore((state) => state.phones);
   const selectedPhoneId = useAppStore((state) => state.selectedPhoneId);
   const bridgeConnected = useAppStore((state) => state.bridge.connected);
+  const bridgeDeviceId = useAppStore((state) => state.bridge.deviceId);
   const [tab, setTab] = useState<TabId>("paste");
   const [text, setText] = useState("");
   const [headerMode, setHeaderMode] = useState<"auto" | "yes" | "no">("auto");
@@ -75,8 +76,8 @@ export function ContactImportModal({ open, onClose, accountId }: Props) {
   const [importing, setImporting] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const availablePhones = useMemo(
-    () => phones.filter((phone) => phone.online),
-    [phones]
+    () => phones.filter((phone) => bridgeConnected && phone.id === bridgeDeviceId),
+    [phones, bridgeConnected, bridgeDeviceId]
   );
 
   const result = useMemo(

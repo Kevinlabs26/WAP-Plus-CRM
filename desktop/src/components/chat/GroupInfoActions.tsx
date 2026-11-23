@@ -12,6 +12,7 @@ import { useAppStore } from "@/store/appStore";
 import { parsePhoneEntries } from "@/lib/phoneEntries";
 import type { GroupDetails, GroupMember } from "@/types/crm";
 import { useI18n } from "@/i18n";
+import { copyLink } from "@/lib/copyLink";
 
 type Props = {
   groupJid: string;
@@ -155,7 +156,7 @@ export function GroupInfoActions({
                       throw new Error(t("groupActions.noInviteLink"));
                     }
                     try {
-                      await navigator.clipboard.writeText(res.inviteUrl);
+                      await copyLink(res.inviteUrl);
                       useAppStore
                         .getState()
                         .pushToast(t("group.linkCopied"), "success");

@@ -84,7 +84,7 @@ function chatHasContent(chat: ChatPreview): boolean {
 }
 
 /** 文件夹内只把有实际聊天内容的会话提到前面，分别保持两组原有手动顺序。 */
-function prioritizeFolderChats(chats: ChatPreview[]): ChatPreview[] {
+export function prioritizeFolderChats(chats: ChatPreview[]): ChatPreview[] {
   const withContent = chats.filter(chatHasContent);
   if (withContent.length === chats.length) return chats;
   return [...withContent, ...chats.filter((chat) => !chatHasContent(chat))];

@@ -251,7 +251,7 @@ export function useTextSend(opts: UseTextSendOptions) {
       quoted,
       mentionedJid,
       updateMessageDelivery: (id, patch) => {
-        if (patch.deliveryStatus === "failed") failed = true;
+        if (patch.deliveryStatus === "failed" && !(opts.channelId === "android_bridge" && patch.deliveryUncertain)) failed = true;
         opts.updateMessageDelivery(id, patch);
       },
       setBaileysLoginOpen: opts.setBaileysLoginOpen,

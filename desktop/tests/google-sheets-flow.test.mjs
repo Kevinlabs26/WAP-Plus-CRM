@@ -82,6 +82,68 @@ test('oversized display-column selection is rejected before changing a working c
  }finally{useGoogleSheets.setState(previous);delete globalThis.sheetInvoke;}
 });
 
+test('wide sparse sheets keep values, links and formulas at their actual coordinates after splitting large reads', async()=>{
+ const previous=useGoogleSheets.getState();
+ const headers=Array.from({length:44},()=>[]);
+ headers[0]=['Phone'];headers[35]=['Visit link'];headers[36]=['Session'];headers[43]=['Follow-up'];
+ const columns=new Map([
+  ["'Visits'!2:2",headers],
+  ["'Visits'!A:A",[['','Phone','','+12025550100','','+12025550101']]],
+  ["'Visits'!AJ:AJ",[['','Visit link','','Visit A','','Visit B']]],
+  ["'Visits'!AK:AK",[['','Session','','Fourth','','Eighth']]],
+  ["'Visits'!AR:AR",[['','Follow-up','','Manual','','Formula']]],
+ ]);
+ let splits=0;
+ globalThis.sheetInvoke=async(command,{ranges})=>{
+  if(command==='google_sheets_read_grid'){
+   assert.deepEqual(ranges,["'Visits'!AJ3:AJ6","'Visits'!AR3:AR6"]);
+   return {sheets:[{data:[
+    {startColumn:43,startRow:5,rowData:[{values:[{userEnteredValue:{formulaValue:'=A6'}}]}]},
+    {startColumn:35,startRow:3,rowData:[{values:[{hyperlink:'https://example.test/a'}]}, {}, {values:[{textFormatRuns:[{format:{link:{uri:'https://example.test/b'}}}]}]}]},
+   ]}]};
+  }
+  if(ranges.length>2){splits++;throw Error('Google response exceeds 32 MiB; reduce selected data');}
+  return {valueRanges:ranges.map(range=>({values:columns.get(range)}))};
+ };
+ const fields=[['visit','Visit link','link'],['session','Session'],['follow','Follow-up','edit']].map(([id,heading,action])=>({id,label:heading,column:{heading},schedule:{kind:'manual'},action}));
+ try{
+  await saveSheetConfig({spreadsheet:'visits',tab:'Visits',headerRow:2,phone:{heading:'Phone'},fields});
+  const {data,error}=useGoogleSheets.getState();assert.equal(error,'');assert.ok(splits>0);
+  assert.deepEqual(data.visit.values['+12025550100'],[{value:'Visit A',row:4,links:['https://example.test/a'],formula:false}]);
+  assert.deepEqual(data.visit.values['+12025550101'],[{value:'Visit B',row:6,links:['https://example.test/b'],formula:false}]);
+  assert.deepEqual(data.session.values['+12025550101'],['Eighth']);
+  assert.deepEqual(data.follow.values['+12025550100'],[{value:'Manual',row:4,links:[],formula:false}]);
+  assert.deepEqual(data.follow.values['+12025550101'],[{value:'Formula',row:6,links:[],formula:true}]);
+ }finally{useGoogleSheets.setState(previous);delete globalThis.sheetInvoke;}
+});
+
+test('refreshing all fields during an automatic refresh queues a complete read',async()=>{
+ const previous=useGoogleSheets.getState(),calls=[];
+ const header=[['Phone'],['Automatic'],['Manual']];
+ const columns=new Map([
+  ["'People'!1:1",header],
+  ["'People'!A:A",[['Phone','+12025550100']]],
+  ["'People'!B:B",[['Automatic','yes']]],
+  ["'People'!C:C",[['Manual','also loaded']]],
+ ]);
+ let started,release;
+ const entered=new Promise(resolve=>{started=resolve;});
+ const hold=new Promise(resolve=>{release=resolve;});
+ globalThis.sheetInvoke=async(_command,{ranges})=>{
+  if(ranges.length>1){calls.push(ranges);if(calls.length===1){started();await hold;}}
+  return {valueRanges:ranges.map(range=>({values:columns.get(range)}))};
+ };
+ const fields=[{id:'automatic',label:'Automatic',column:{heading:'Automatic'},schedule:{kind:'interval',minutes:15}},{id:'manual',label:'Manual',column:{heading:'Manual'},schedule:{kind:'manual'}}];
+ try{
+  await saveSheetConfig({spreadsheet:'people-manual',tab:'People',headerRow:1,phone:{heading:'Phone'},fields},'default',undefined,false);
+  const automatic=refreshSheets();await entered;
+  const manual=refreshSheets(true);assert.equal(refreshSheets(true),manual);
+  release();await Promise.all([automatic,manual]);
+  assert.deepEqual(calls.map(ranges=>ranges.includes("'People'!C:C")),[false,true]);
+  assert.deepEqual(useGoogleSheets.getState().data.manual.values['+12025550100'],['also loaded']);
+ }finally{release();useGoogleSheets.setState(previous);delete globalThis.sheetInvoke;}
+});
+
 test('automatic retries wait longer after failures, pause on authorization errors and resume after success', async()=>{
  const originalNow=Date.now;let clock=1_800_000_000_000, calls=0;
  Date.now=()=>clock;

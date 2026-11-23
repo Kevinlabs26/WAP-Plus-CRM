@@ -68,6 +68,7 @@ export interface ConfirmRequest {
 /** 运行时 Bridge 连接快照（不持久化） */
 export interface BridgeRuntime {
   connected: boolean;
+  deviceId?: string | null;
   host: string;
   port: number;
   deviceName: string | null;
@@ -267,6 +268,7 @@ export interface AppState extends PersistSlice {
   /** 克制版群发战役 */
   createBroadcastCampaign: (input: {
     accountId: string;
+    channelId?: "android_bridge";
     template: string;
     contactIds: string[];
     phoneNumbers?: string[];

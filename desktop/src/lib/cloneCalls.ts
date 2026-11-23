@@ -1,4 +1,5 @@
 import { isTauri } from "@/lib/bridge";
+import { isWindows } from "@/lib/desktopPlatform";
 import { resolveSendTarget } from "@/lib/utils";
 import type { WaAccount } from "@/types/account";
 import type { ChatPreview, Contact } from "@/types/crm";
@@ -6,6 +7,10 @@ import type { ChatPreview, Contact } from "@/types/crm";
 export type CloneApp = { appId: string; name: string };
 export type CloneCallSetup = { apps: CloneApp[]; bindings: Record<string, string>; verified: Record<string, string> };
 export type CloneCallTarget = { ownerPhone: string; recipientPhone: string; accountId: string; accountLabel: string };
+
+export function canUseCloneCalls(): boolean {
+  return isWindows && isTauri();
+}
 
 export function isWhatsAppCallLink(raw: string): boolean {
   try {
@@ -24,7 +29,7 @@ export async function tryOpenBoundCallLink(
   accountId: string | undefined,
   accounts: WaAccount[]
 ): Promise<boolean> {
-  if (!isTauri() || !accountId || !isWhatsAppCallLink(raw)) return false;
+  if (!canUseCloneCalls() || !accountId || !isWhatsAppCallLink(raw)) return false;
   const ownerPhone = cloneCallOwnerPhone(accounts.find((account) => account.id === accountId));
   if (!ownerPhone) return false;
   try {
@@ -56,7 +61,7 @@ export function cloneCallTarget(chat: ChatPreview | null, contact: Contact | und
 }
 
 export async function cloneCallInvoke<T>(command: string, args: Record<string, unknown>): Promise<T> {
-  if (!isTauri()) throw new Error("请在 Windows 桌面版中使用通话客户端");
+  if (!canUseCloneCalls()) throw new Error("请在 Windows 桌面版中使用通话客户端");
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(command, args);
 }

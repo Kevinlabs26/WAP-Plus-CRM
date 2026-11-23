@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
+import android.provider.Settings
 import java.util.UUID
 
 class BridgeApp : Application() {
@@ -34,6 +35,10 @@ class BridgeApp : Application() {
 
         private const val SECURITY_PREFS = "bridge_security"
         private const val AUTH_TOKEN_KEY = "auth_token"
+
+        fun deviceId(context: Context): String =
+            Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+                ?: "android-bridge"
 
         fun authToken(context: Context): String {
             val prefs = context.getSharedPreferences(SECURITY_PREFS, Context.MODE_PRIVATE)

@@ -78,12 +78,14 @@ export const androidBridgeChannel: MessageChannel = {
       const res = await bridgeInvoke<{
         mock?: boolean;
         delivered?: boolean;
+        status?: "failed" | "unknown" | "clicked" | "phone_sent" | "delivered";
+        deviceId?: string;
         note?: string;
-        error?: string;
       }>("type_and_send", {
         deviceId: input.deviceId ?? null,
         text: input.text,
         phoneE164: input.phoneE164,
+        confirmSent: input.confirmPhoneSend === true,
       });
 
       if (res?.mock) {
@@ -96,33 +98,25 @@ export const androidBridgeChannel: MessageChannel = {
           raw: res,
         };
       }
-      if (res?.delivered) {
+      if (res?.status === "phone_sent" || (res?.status === "delivered" && res.delivered)) {
         return {
           ok: true,
-          delivered: true,
+          delivered: res.status === "delivered",
           channel: "android_bridge",
           status: "sent",
           message: res.note || "已提交至手机 WhatsApp Business",
-          raw: res,
-        };
-      }
-      if (res?.error) {
-        return {
-          ok: false,
-          delivered: false,
-          channel: "android_bridge",
-          status: "failed",
-          message: res.note || "Android 未确认发送",
-          error: res.error,
+          deviceId: res.deviceId,
           raw: res,
         };
       }
       return {
-        ok: true,
+        ok: false,
         delivered: false,
         channel: "android_bridge",
-        status: "local",
-        message: res?.note || "已存本地 · 手机未连接",
+        status: "failed",
+        message: res?.note || "未收到手机发送结果，请在 WhatsApp 核对",
+        deliveryUncertain: res?.status !== "failed",
+        deviceId: res?.deviceId,
         raw: res,
       };
     } catch (e) {
@@ -132,8 +126,8 @@ export const androidBridgeChannel: MessageChannel = {
         delivered: false,
         channel: "android_bridge",
         status: "failed",
-        message: "发送失败",
-        error: msg,
+        message: msg,
+        deliveryUncertain: true,
       };
     }
   },

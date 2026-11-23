@@ -33,12 +33,13 @@ function isTransientError(result: {
   error?: string;
   message?: string;
   status?: string;
+  deliveryUncertain?: boolean;
 }): boolean {
   const err = `${result.error || ""} ${result.message || ""}`.toLowerCase();
   if (result.error === "rate_limited") return true;
   if (result.error === "overheated" || result.error === "send_paused")
     return false;
-  if (result.error === "baileys_delivery_unknown") return false;
+  if (result.deliveryUncertain || result.error === "baileys_delivery_unknown") return false;
   if (result.error === "baileys_not_connected") return true;
   if (result.status === "queued") return true;
   return (
@@ -246,6 +247,7 @@ export function SendQueueWatcher() {
               result.status === "local" ? "local" : "sent",
             lastError: undefined,
             nextAttemptAt: undefined,
+            ...(result.deviceId ? { deviceId: result.deviceId } : {}),
             ...(waId ? { waMessageId: waId } : {}),
           });
           if (msg.systemKind === "ai_auto_reply" && msg.aiAutoFollowUpRootId && result.status !== "local") {
@@ -266,13 +268,14 @@ export function SendQueueWatcher() {
           }
         }
         const rateLimited = result.error === "rate_limited";
-        const transient = isTransientError(result);
+        const transient = channelId !== "android_bridge" && isTransientError(result);
         // 冷却/限速本身就是可恢复状态，不消耗普通瞬时错误的重试额度。
         const canRetry = rateLimited || (transient && attempt < MAX_AUTO_RETRIES);
         const wait = backoffMs(attempt, result.retryAfterMs);
         useAppStore.getState().updateMessageDelivery(msg.id, {
           deliveryStatus: canRetry ? "queued" : "failed",
-          deliveryUncertain: result.error === "baileys_delivery_unknown",
+          deliveryUncertain: result.deliveryUncertain || result.error === "baileys_delivery_unknown",
+          ...(result.deviceId ? { deviceId: result.deviceId } : {}),
           lastError:
             result.message || result.error || translateCurrent("runtime.sendFailed"),
           ...(rateLimited ? { retryCount: Math.max(0, attempt - 1) } : {}),

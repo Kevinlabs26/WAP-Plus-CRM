@@ -135,7 +135,7 @@ export async function sendTextMessage({
     if (!result.ok) {
       const rateLimited = result.error === "rate_limited";
       const notConnected = result.error === "baileys_not_connected";
-      const deliveryUnknown = result.error === "baileys_delivery_unknown";
+      const deliveryUnknown = result.deliveryUncertain || result.error === "baileys_delivery_unknown";
       if (notConnected) setBaileysLoginOpen(true);
       const wait =
         result.retryAfterMs && result.retryAfterMs > 0
@@ -148,13 +148,17 @@ export async function sendTextMessage({
         (rateLimited ||
           notConnected ||
           result.status === "queued" ||
-          /fetch|timeout|network|429/i.test(
+          (channelId !== "android_bridge" && /fetch|timeout|network|429/i.test(
             `${result.error || ""} ${result.message || ""}`
-          ));
+          )));
+      const message = deliveryUnknown && channelId === "android_bridge"
+        ? translateCurrent("runtime.sendUnknown", { reason: result.message })
+        : result.message || result.error || translateCurrent("runtime.sendFailed");
       updateMessageDelivery(msgId, {
         deliveryStatus: queue ? "queued" : "failed",
         deliveryUncertain: deliveryUnknown,
-        lastError: result.message || result.error || translateCurrent("runtime.sendFailed"),
+        lastError: message,
+        ...(result.deviceId ? { deviceId: result.deviceId } : {}),
         nextAttemptAt: queue
           ? new Date(Date.now() + wait).toISOString()
           : undefined,
@@ -163,7 +167,7 @@ export async function sendTextMessage({
       pushToast(
         queue
           ? result.message || translateCurrent("runtime.queueRetry")
-          : result.message || result.error || translateCurrent("runtime.sendFailed"),
+          : message,
         queue ? "info" : "error"
       );
       return;
@@ -180,6 +184,7 @@ export async function sendTextMessage({
           : "");
     updateMessageDelivery(msgId, {
       deliveryStatus: result.status === "local" ? "local" : "sent",
+      ...(result.deviceId ? { deviceId: result.deviceId } : {}),
       lastError: undefined,
       nextAttemptAt: undefined,
       ...(waId ? { waMessageId: waId } : {}),

@@ -25,6 +25,7 @@ import { isDeliveryUncertain } from "@/store/outgoingRetry";
 import type { Message } from "@/types/crm";
 
 export function broadcastItemUncertain(item: BroadcastItem, messages: Message[]) {
+  if (item.deliveryUncertain) return true;
   const message = messages.find(m=>m.id===item.messageId);
   return message ? isDeliveryUncertain(message) : isDeliveryUncertain({direction:"out",deliveryStatus:"failed",lastError:item.error});
 }
@@ -48,7 +49,7 @@ export function normalizeCampaigns(raw: unknown): BroadcastCampaign[] {
         const item = it as Partial<BroadcastItem>;
         const iid = String(item.id || "").trim();
         if (!iid) continue;
-        const unknown = /发送结果未知|baileys_delivery_unknown/.test(String(item.error || ""));
+        const unknown = item.deliveryUncertain === true || /发送结果未知|baileys_delivery_unknown/.test(String(item.error || ""));
         items.push({
           id: iid,
           contactId: String(item.contactId || ""),
@@ -56,6 +57,7 @@ export function normalizeCampaigns(raw: unknown): BroadcastCampaign[] {
           accountId: item.accountId ? String(item.accountId).trim().slice(0, 120) || undefined : undefined,
           phoneE164: String(item.phoneE164 || ""),
           bodyRendered: String(item.bodyRendered || ""),
+          ...(unknown || item.status === "sending" ? { deliveryUncertain: true } : {}),
           variantId: item.variantId ? String(item.variantId).slice(0, 120) : undefined,
           mediaId: item.mediaId ? String(item.mediaId).slice(0, 120) : undefined,
           // 应用退出时仍为 sending 的结果无法确认，不能静默重发。
@@ -92,6 +94,7 @@ export function normalizeCampaigns(raw: unknown): BroadcastCampaign[] {
     }
     out.push({
       id,
+      ...(c.channelId === "android_bridge" ? { channelId: c.channelId } : {}),
       accountId: String(c.accountId || "").trim() || "wa-default",
       priority: Number.isFinite(c.priority) ? c.priority : 0,
       title: c.title ? String(c.title).slice(0, 80) : undefined,

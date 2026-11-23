@@ -9,7 +9,7 @@ import { resumeMuseWebSideChatCleanup } from "@/lib/museWeb";
 
 type WorkspaceWindow = Window & { __museWorkspaceAccount?: string };
 type AccountStatus = Pick<MuseWebStatus, "ready" | "state" | "message"> & { checkedAt: number };
-type AccountStatusFilter = "all" | "ready" | "login" | "quota" | "busy" | "error" | "checking" | "unchecked";
+type AccountStatusFilter = "all" | "ready" | "login" | "quota" | "busy" | "error" | "checking" | "unconfirmed" | "unchecked";
 const CLEANUP_GRACE_MS = 15 * 60_000;
 
 function localDateTimeInput(minutes = 10) {
@@ -121,6 +121,7 @@ export function MuseWorkspace() {
     if (!status) return t("muse.statusUnknown");
     if (status.ready) return t("muse.statusReady");
     if (status.state === "checking" || status.state === "loading") return t("muse.statusChecking");
+    if (status.state === "unconfirmed") return t("muse.statusUnconfirmed");
     if (status.state === "login") return t("muse.statusLogin");
     if (status.state === "quota") return t("muse.statusQuota");
     if (status.state === "busy") return t("muse.statusBusy");
@@ -311,6 +312,10 @@ export function MuseWorkspace() {
     try {
       await openMuseWeb(false, accountId);
       setActiveId(accountId);
+      const previousState = statuses[accountId]?.state;
+      if (!checking && (previousState === "unconfirmed" || previousState === "error")) {
+        void checkOne(accountId);
+      }
     } catch (reason) {
       setError(true);
       setMessage(reason instanceof Error ? reason.message : String(reason));
@@ -561,6 +566,7 @@ export function MuseWorkspace() {
       case "quota": return status?.state === "quota";
       case "busy": return status?.state === "busy";
       case "error": return status?.state === "error";
+      case "unconfirmed": return status?.state === "unconfirmed";
       case "checking": return status?.state === "checking" || status?.state === "loading";
       case "unchecked": return !status;
       default: return true;
@@ -570,7 +576,7 @@ export function MuseWorkspace() {
   const stateTone = (status?: AccountStatus) => {
     if (status?.ready) return "text-emerald-700";
     if (status?.state === "busy") return "text-sky-700";
-    if (status?.state === "quota" || status?.state === "login") return "text-amber-700";
+    if (status?.state === "quota" || status?.state === "login" || status?.state === "unconfirmed") return "text-amber-700";
     if (status?.state === "error") return "text-rose-700";
     return "text-slate-500";
   };
@@ -628,6 +634,7 @@ export function MuseWorkspace() {
               <option value="quota">{t("muse.statusQuota")}</option>
               <option value="busy">{t("muse.statusBusy")}</option>
               <option value="error">{t("muse.statusError")}</option>
+              <option value="unconfirmed">{t("muse.statusUnconfirmed")}</option>
               <option value="checking">{t("muse.statusChecking")}</option>
               <option value="unchecked">{t("muse.statusUnknown")}</option>
             </select>
@@ -653,6 +660,7 @@ export function MuseWorkspace() {
                         {status && status.state !== "checking" && <span className="shrink-0 text-slate-400">· {checkedAtText(status)}</span>}
                       </span>
                       {status?.state === "error" && status.message && <span className="mt-1 block break-words text-[11px] leading-4 text-rose-600">{status.message}</span>}
+                      {status?.state === "unconfirmed" && <span className="mt-1 block break-words text-[11px] leading-4 text-amber-700">{t("muse.statusUnconfirmedHint")}</span>}
                     </span>
                   </button>
                 </div>

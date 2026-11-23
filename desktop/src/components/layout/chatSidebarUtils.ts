@@ -29,6 +29,30 @@ const SIDEBAR_VISIBLE_SYSTEM_KINDS = new Set([
   "scheduled_plan",
 ]);
 
+const sidebarMessageByBucket = new WeakMap<Message[], { chatId: string; owner: string; latest?: Message }>();
+
+function isSidebarMessage(message: Message): boolean {
+  return message.mediaType !== "system" && (!message.systemKind || SIDEBAR_VISIBLE_SYSTEM_KINDS.has(message.systemKind));
+}
+
+function latestSidebarMessage(messages: Message[], chatId: string, owner: string): Message | undefined {
+  const cached = sidebarMessageByBucket.get(messages);
+  if (cached?.chatId === chatId && cached.owner === owner) return cached.latest;
+  let latest: Message | undefined;
+  let latestAt = "";
+  for (const message of messages) {
+    const messageOwner = message.accountId || message.deviceId;
+    if (message.chatId !== chatId || !isSidebarMessage(message) || (owner && messageOwner && owner !== messageOwner)) continue;
+    const at = messageOrderTime(message);
+    if (!latestAt || at >= latestAt) {
+      latest = message;
+      latestAt = at;
+    }
+  }
+  sidebarMessageByBucket.set(messages, { chatId, owner, latest });
+  return latest;
+}
+
 function phoneDigits(value: unknown) {
   return String(value || "").replace(/\D/g, "");
 }
@@ -72,7 +96,7 @@ export function buildChatActivityMaps(messages: Message[]) {
   >();
   for (const m of messages) {
     // 自动回复、群发和定时消息都是实际聊天内容；其他系统事件不参与侧栏最新消息。
-    if (m.mediaType === "system" || m.systemKind && !SIDEBAR_VISIBLE_SYSTEM_KINDS.has(m.systemKind)) continue;
+    if (!isSidebarMessage(m)) continue;
     const at = messageOrderTime(m);
     const prev = lastOrderAtByChat.get(m.chatId);
     if (!prev || at >= prev) {
@@ -93,9 +117,7 @@ export function buildChatActivityMaps(messages: Message[]) {
 }
 
 /**
- * 侧栏轻量路径：优先用 ChatPreview 上的 lastMessage/updatedAt，
- * 避免每次渲染扫全量 messages（上千条时主因卡顿）。
- * 仅当 preview 缺字段时才回落到 messages 扫描。
+ * 用会话预览补没有加载历史的会话，已加载的会话复用最新消息摘要。
  */
 export function buildChatActivityMapsFromPreviews(
   chats: ChatPreview[],
@@ -116,17 +138,22 @@ export function buildChatActivityMapsFromPreviews(
       lastMsgAtByChat.set(c.id, c.updatedAt || "");
       if (c.lastMessageDirection) lastDirByChat.set(c.id, c.lastMessageDirection);
     }
+    const bucket = messagesByChatId && Object.hasOwn(messagesByChatId, c.id) ? messagesByChatId[c.id] : undefined;
+    const latest = bucket?.length ? latestSidebarMessage(bucket, c.id, c.accountId || c.phoneId || "") : undefined;
+    if (latest) {
+      lastMsgAtByChat.set(c.id, latest.sentAt);
+      lastBodyByChat.set(c.id, latest.body);
+      lastDirByChat.set(c.id, latest.direction);
+      lastDeliveryStatusByChat.set(c.id, latest.deliveryStatus);
+    }
   }
   // 2) 有消息库时：用「真实最后一条」覆盖时间/正文（对齐官方按最后消息排序）
   //    不能只在 preview 缺失时才扫——否则错误/过期的 updatedAt 会一直主导顺序
-  if ((messages && messages.length) || messagesByChatId) {
+  if (!messagesByChatId && messages?.length) {
     const ownerByChat = new Map(
       chats.map((chat) => [chat.id, chat.accountId || chat.phoneId || ""])
     );
-    const sourceMessages = messagesByChatId
-      ? chats.flatMap((chat) => messagesByChatId[chat.id] || [])
-      : messages || [];
-    const scopedMessages = sourceMessages.filter((message) => {
+    const scopedMessages = messages.filter((message) => {
       const chatOwner = ownerByChat.get(message.chatId);
       const messageOwner = message.accountId || message.deviceId || "";
       return !chatOwner || !messageOwner || chatOwner === messageOwner;
@@ -217,7 +244,7 @@ export function filterAndSortSidebarChats(opts: {
   // O(1) 联系人查找，避免 filter/sort 里反复 find
   const contactById =
     opts.contactById ?? new Map(opts.contacts.map((c) => [c.id, c]));
-  // 有 preview 字段时不扫全量 messages；缺省才回落
+  // 未加载历史的会话仍可用已保存的预览排序。
   const {
     lastMsgAtByChat,
     lastBodyByChat,

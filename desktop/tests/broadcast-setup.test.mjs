@@ -22,6 +22,7 @@ async function fixture(draftIds=[]) {
   const oldStorage=globalThis.sessionStorage;globalThis.sessionStorage={getItem:k=>storage.get(k)||null,removeItem:k=>storage.delete(k)};
   const metrics={indexes:0,phones:0,confirmations:0,created:0,cached:[],started:0,input:null};
   const state={contacts,chats:[],messages:[],broadcastCampaigns:[],settings:{waAccounts:[{id:'a',label:'Account A'},{id:'b',label:'Account B'}],activeAccountId:'a',liveBaileysAccountId:'a',sendChannel:'baileys'},baileysUi:{connection:'open'},pushToast(){},requestConfirm:async()=>{metrics.confirmations++;return false;},createBroadcastCampaign(){metrics.created++;return {ok:true,id:'demo'};}};
+  state.bridge = { connected: false };
   const flags={warmup:false,connected:true,confirm:false,cacheFails:false};
   state.requestConfirm=async()=>{metrics.confirmations++;return flags.confirm;};
   state.createBroadcastCampaign=input=>{metrics.created++;metrics.input=input;return {ok:true,id:'demo'};};
@@ -33,7 +34,7 @@ async function fixture(draftIds=[]) {
   };
   globalThis.broadcastBindings={...template,BROADCAST_HARD_CAP,BROADCAST_DEFAULT_EXTRA_GAP_SEC,BROADCAST_DEFAULT_EXTRA_GAP_MAX_SEC,BROADCAST_MAX_VARIANTS,
     cacheMediaUrl:async(...args)=>{if(flags.cacheFails)throw Error('disk full');metrics.cached.push(args);},
-    useAppStore:selector=>selector(state),useShallow:fn=>fn,useI18n:()=>({t:(key,params)=>key+(params?JSON.stringify(params):'')}),
+    useAppStore:Object.assign(selector=>selector(state), { getState:()=>state }),useShallow:fn=>fn,useI18n:()=>({t:(key,params)=>key+(params?JSON.stringify(params):'')}),
     cn:(...parts)=>parts.filter(Boolean).join(' '),Button:'button',Input:'input',Textarea:'textarea',SectionLabel:'h4',SettingsNumberInput:'number-input',BroadcastPickStep:'picker',BroadcastMediaPicker:'media-picker',CampaignRunPanel:'run-panel',
     DEFAULT_RATE_LIMITS:{},applyAccountWarmup:()=>({active:flags.warmup,hoursLeft:24}),isWaAccountConnected:()=>flags.connected,lastContactedAccounts:()=>new Map(),recipientKey:(_account,phone)=>phone,salesStagesWithLabels:()=>[],formatAccountDisplay:account=>account.label,
     buildContactLookup:()=>{metrics.indexes++;return new Map();},contactSendablePhone:contact=>{metrics.phones++;return template.contactSendablePhone(contact);},
@@ -44,6 +45,32 @@ async function fixture(draftIds=[]) {
     account(){return nodes(tree).find(n=>n.type==='select');},all(){return nodes(tree);},close(){globalThis.sessionStorage=oldStorage;}};
   h.render();return h;
 }
+
+test('Android launches a contact-list text campaign without a QR account and binds it to the attached phone', async () => {
+  const h = await fixture(['c0']);
+  try {
+    h.state.settings.sendChannel = 'android_bridge';
+    h.state.settings.waAccounts = [];
+    h.render();
+    assert.equal(h.launch().props.disabled, true);
+    h.state.bridge = { connected: true, deviceId: 'phone-a', deviceName: 'Pixel' };
+    h.render();
+    assert.equal(h.launch().props.disabled, false);
+    const picker = h.all().find(n => n.type === 'media-picker');
+    picker.props.onChange([{id:'a',kind:'image',mime:'image/png'}],'single',{a:'data:image/png;base64,YQ=='});
+    h.render();
+    assert.equal(h.launch().props.disabled, true);
+    h.all().find(n => n.type === 'media-picker').props.onChange([], 'single', {});
+    h.render();
+    h.flags.confirm = true;
+    h.launch().props.onClick();
+    await new Promise(setImmediate);
+    assert.equal(h.metrics.input.accountId, 'phone-a');
+    assert.equal(h.metrics.input.channelId, 'android_bridge');
+    assert.deepEqual(h.metrics.input.contactIds, ['c0']);
+    assert.equal(h.metrics.started, 1);
+  } finally { h.close(); }
+});
 
 test('ordinary entry defaults to number paste and never builds the 20,000-contact list while pasting',async()=>{
   const h=await fixture();try{

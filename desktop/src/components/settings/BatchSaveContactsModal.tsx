@@ -93,6 +93,7 @@ export function BatchSaveContactsModal({
   const phones = useAppStore((state) => state.phones);
   const selectedPhoneId = useAppStore((state) => state.selectedPhoneId);
   const bridgeConnected = useAppStore((state) => state.bridge.connected);
+  const bridgeDeviceId = useAppStore((state) => state.bridge.deviceId);
   const [rows, setRows] = useState<Row[]>([]);
   const [pasteText, setPasteText] = useState("");
   const [prefix, setPrefix] = useState(todayPrefix);
@@ -103,7 +104,7 @@ export function BatchSaveContactsModal({
   const [targetPhoneId, setTargetPhoneId] = useState("");
   const [saving, setSaving] = useState(false);
   const opened = useRef(false);
-  const availablePhones = useMemo(() => phones.filter((phone) => phone.online), [phones]);
+  const availablePhones = useMemo(() => phones.filter((phone) => bridgeConnected && phone.id === bridgeDeviceId), [phones, bridgeConnected, bridgeDeviceId]);
   const selectedAccountConnected = connectedAccountIds.includes(selectedAccountId);
   const canSaveToWhatsapp = cloudAvailable && selectedAccountConnected;
 

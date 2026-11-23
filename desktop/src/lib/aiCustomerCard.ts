@@ -5,7 +5,7 @@ import type { Contact, Message, SalesStage } from "@/types/crm";
 import type { AppSettings } from "@/store/appStore";
 import type { AiSource } from "@/lib/aiSuggest";
 import { geminiGenerate } from "./gemini.ts";
-import { getOpenAiCompatibleConfig, hasAiCredentials, chatCompletionOptions } from "./aiProviders.ts";
+import { geminiCredentials, getOpenAiCompatibleConfig, hasAiCredentials, chatCompletionOptions } from "./aiProviders.ts";
 import { generateMuseWeb } from "./museWeb.ts";
 import { createMuseChatRedactor, museChatMessages } from "./museChatPrivacy.ts";
 import { TRANSLATE_LANGS } from "./translateDraft.ts";
@@ -65,8 +65,8 @@ export async function extractChatSheetFields(
   if (provider === "muse") {
     raw = await trackAiRequest({ provider: "muse", model: "muse-web", feature: "insight" }, () =>
       generateMuseWeb(redact(`${system}\n\n${user}`), undefined, JSON.stringify(["sheet-extract", accountId || contact.accountId || settings.activeAccountId, contact.id])));
-  } else if (provider === "gemini") {
-    raw = await geminiGenerate({ apiKey: settings.geminiKey, model: settings.aiModel.trim() || undefined, system, user, json: true, temperature: 0.2, maxOutputTokens: 1200, feature: "insight" });
+  } else if (provider === "gemini" || provider === "vertex") {
+    raw = await geminiGenerate({ ...geminiCredentials(settings), model: settings.aiModel.trim() || undefined, system, user, json: true, temperature: 0.2, maxOutputTokens: 1200, feature: "insight" });
   } else if (provider === "ollama") {
     const base = settings.ollamaUrl;
     raw = await trackAiRequest({ provider: "ollama", model: settings.aiModel.trim() || "llama3.2", endpoint: base, feature: "insight" }, async observe => {
@@ -305,7 +305,7 @@ async function geminiInsight(
   signal?: AbortSignal
 ): Promise<CustomerInsight> {
   const content = await geminiGenerate({
-    apiKey: settings.geminiKey,
+    ...geminiCredentials(settings),
     model: settings.aiModel.trim() || undefined,
     system: buildInsightSystem(outputLanguage),
     user: buildInsightUser(contact, messages),
@@ -380,9 +380,11 @@ export async function generateCustomerInsight(
               ? "未配置 Groq API Key"
               : provider === "gemini"
                 ? "未配置 Gemini API Key"
-                : provider === "openrouter"
-                  ? "未配置 OpenRouter API Key"
-                  : "未配置 AI"
+                : provider === "vertex"
+                  ? "未配置 Vertex AI 凭据"
+                  : provider === "openrouter"
+                    ? "未配置 OpenRouter API Key"
+                    : "未配置 AI"
           : undefined,
     };
   }
@@ -402,7 +404,7 @@ export async function generateCustomerInsight(
       const insight = await ollamaInsight(settings, contact, sorted, outputLanguage, signal);
       return { insight, source: "ollama", fallback: false };
     }
-    if (provider === "gemini") {
+    if (provider === "gemini" || provider === "vertex") {
       const insight = await geminiInsight(contact, sorted, settings, outputLanguage, signal);
       return { insight, source: provider, fallback: false };
     }

@@ -63,7 +63,8 @@ export function ensureIngestContact(
     contact.accountId || contact.boundPhoneId || DEFAULT_ACCOUNT_ID;
 
   // 批内 O(1) 命中；命中失败回退线性扫描，语义与原有 matchContact 完全一致
-  const lookup = (bag._contactLookup ??= createContactLookup(contacts));
+  if (bag._contactLookup?.source !== contacts) bag._contactLookup = createContactLookup(contacts);
+  const lookup = bag._contactLookup;
   let index = lookup.matchIndex({
     deviceId,
     channelAddress,
@@ -183,6 +184,7 @@ export function ensureIngestContact(
       if (nextSelectedContactId === dropId) nextSelectedContactId = keepId;
       if (nextSelectedChatId === dropChatId) nextSelectedChatId = keepChatId;
       contacts.splice(dupIdx, 1);
+      lookup.invalidate();
       if (dupIdx < index) index -= 1;
     }
   }
@@ -268,6 +270,8 @@ export function ensureIngestContact(
     );
     if (contactChanged) {
       contacts[index] = nextContact;
+      if (nextContact.phone !== prev.phone || nextContact.channelAddress !== prev.channelAddress ||
+          contactOwner(nextContact) !== contactOwner(prev)) lookup.invalidate();
       if (nextContact.name !== prev.name) {
         chats = applyNameToChats(chats, nextContact.id, nextContact.name, {
           isGroup: nextContact.isGroup,

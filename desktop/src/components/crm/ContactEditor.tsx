@@ -7,10 +7,11 @@ import { ContactLocalTime } from "./ContactLocalTime";
 import { Button, Input, Textarea } from "@/components/ui/primitives";
 import { ActivityTimeline } from "@/components/crm/ActivityTimeline";
 import { ContactTagsNotesEditor } from "@/components/crm/ContactTagsNotesEditor";
-import { SPEECH_LANG_OPTIONS } from "@/components/chat/speakMessage";
+import { speechLanguageOptions } from "@/components/chat/speakMessage";
 import { TimeZoneSelect } from "@/components/ui/TimeZoneSelect";
 import { ChatFollowUpDialog } from "@/components/chat/ChatFollowUpDialog";
 import { getNextOpenFollowUp } from "@/lib/todayBoard";
+import { useSystemVoices } from "@/lib/useSystemVoices";
 import { useAppStore } from "@/store/appStore";
 import { useI18n } from "@/i18n";
 import { SalesStageField } from "./SalesStageField";
@@ -52,7 +53,8 @@ export function ContactEditor({
   pushToast,
   compact,
 }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const speechLanguages = speechLanguageOptions(useSystemVoices(), locale);
   const followUps = useAppStore((state) => state.followUps);
   const cancelFollowUp = useAppStore((state) => state.cancelFollowUp);
   const nextFollowUp = getNextOpenFollowUp(followUps, contact.id);
@@ -196,7 +198,10 @@ export function ContactEditor({
           className="ui-control mt-1 w-full px-2.5 text-[13px]"
         >
           <option value="">{t("contact.autoDetect")}</option>
-          {SPEECH_LANG_OPTIONS.map((option) => (
+          {contact.language && !speechLanguages.some(({ code }) => code === contact.language) && (
+            <option value={contact.language}>{contact.language}</option>
+          )}
+          {speechLanguages.map((option) => (
             <option key={option.code} value={option.code}>
               {option.label}
             </option>

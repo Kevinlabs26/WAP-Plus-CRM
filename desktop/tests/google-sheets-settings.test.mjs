@@ -10,7 +10,7 @@ const mocks={
  '@/components/ui/primitives':'export const Button="button",SectionLabel="label";',
  '@/i18n':'export const useI18n=()=>({t:(key,params)=>key==="sheets.table.inherited"?`${params.folder} ← ${params.source} (inherited)`:Object.entries(params||{}).reduce((value,[name,item])=>value.replaceAll(`{${name}}`,String(item)),key)});',
  '@/lib/googleSheetApi':'export const spreadsheetId=v=>v.includes("abc")?"abc":null;',
- '@/lib/googleSheets':'export const DEFAULT_SHEET_ID="default";export const SHEET_TAG_COLORS=["amber","emerald","red","blue","violet","zinc"];export const normalizeSheetTagStyle=v=>v||{defaultColor:"zinc",rules:[]};export const sheetConnections=s=>s.config?[{id:"default",name:"Main table",config:s.config,data:s.data,error:s.error}]:[];export const removeSheetConnection=async()=>{};export const useGoogleSheets=()=>globalThis.sheetSettingsState;export const initializeSheets=async()=>{};export const letter=i=>String.fromCharCode(65+i);export const sheetHeaders=async()=>["Phone","Order"];export const saveSheetConfig=async(config,id,name,refresh)=>{globalThis.sheetSaved=config;globalThis.sheetSavedTarget={id,name};globalThis.sheetSavedRefresh=refresh;};export const saveSheetConfigs=async(entries,refreshIds)=>{globalThis.sheetSavedBatch=entries;globalThis.sheetSavedRefreshIds=[...refreshIds];};export const readSheet=async()=>({sheets:[]});export const connectSheets=async()=>{};export const cancelSheetsConnect=async()=>{globalThis.sheetConnectCancelled=true;};export const disconnectSheets=async()=>{globalThis.sheetDisconnected=true;};export const refreshSheets=async()=>{};',
+ '@/lib/googleSheets':'export const DEFAULT_SHEET_ID="default";export const SHEET_TAG_COLORS=["amber","emerald","red","blue","violet","zinc"];export const normalizeSheetTagStyle=v=>v||{defaultColor:"zinc",rules:[]};export const sheetConnections=s=>s.config?[{id:"default",name:"Main table",config:s.config,data:s.data,error:s.error}]:[];export const removeSheetConnection=async()=>{};export const useGoogleSheets=()=>globalThis.sheetSettingsState;export const initializeSheets=async()=>{};export const letter=i=>{let name="";for(let n=i+1;n>0;n=Math.floor((n-1)/26))name=String.fromCharCode(65+(n-1)%26)+name;return name;};export const sheetHeaders=async()=>globalThis.sheetHeaderFixture||["Phone","Order"];export const saveSheetConfig=async(config,id,name,refresh)=>{globalThis.sheetSaved=config;globalThis.sheetSavedTarget={id,name};globalThis.sheetSavedRefresh=refresh;};export const saveSheetConfigs=async(entries,refreshIds)=>{globalThis.sheetSavedBatch=entries;globalThis.sheetSavedRefreshIds=[...refreshIds];};export const readSheet=async()=>({sheets:[]});export const connectSheets=async()=>{};export const cancelSheetsConnect=async()=>{globalThis.sheetConnectCancelled=true;};export const disconnectSheets=async()=>{globalThis.sheetDisconnected=true;};export const refreshSheets=async()=>{};',
 };
 const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/settings/SettingsGoogleSheets.tsx',import.meta.url))],bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},plugins:[{name:'boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
 const {SettingsGoogleSheets}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
@@ -56,8 +56,19 @@ test('reopening a saved connection and reloading headers preserves custom labels
   tree.find(node=>node.type==='button'&&node.props['aria-label']==='sheets.edit').props.onClick();await new Promise(resolve=>setImmediate(resolve));render();effects.splice(0).forEach(fn=>fn());tree=render();
   assert.ok(tree.some(node=>node.type==='input'&&node.props.value==='https://docs.google.com/spreadsheets/d/abc/edit'));
   const columns=tree.find(node=>node.type==='button'&&node.props.children==='sheets.columns');
+  globalThis.sheetHeaderFixture=Array(215).fill('');
+  globalThis.sheetHeaderFixture[0]='Phone';
+  globalThis.sheetHeaderFixture[1]='Order';
+  globalThis.sheetHeaderFixture[3]=globalThis.sheetHeaderFixture[4]='Repeated';
+  globalThis.sheetHeaderFixture[214]='Far column';
   columns.props.onClick();await new Promise(resolve=>setImmediate(resolve));
   tree=render();effects.splice(0).forEach(fn=>fn());tree=render();
+  const textOf=node=>Array.isArray(node)?node.map(textOf).join(''):node?.props?textOf(node.props.children):typeof node==='string'?node:'';
+  assert.ok(tree.some(node=>node.type==='span'&&textOf(node)==='C · sheets.blankHeading'));
+  assert.ok(tree.some(node=>node.type==='span'&&textOf(node)==='D · Repeated'));
+  assert.ok(tree.some(node=>node.type==='span'&&textOf(node)==='sheets.duplicateHeading'));
+  assert.ok(tree.some(node=>node.type==='label'&&textOf(node)==='HG · Far column'));
+  delete globalThis.sheetHeaderFixture;
   assert.ok(tree.some(node=>node.props.value==='My order status'));
   assert.ok(tree.some(node=>node.props.type==='time'&&node.props.value==='14:30'));
   const save=tree.find(node=>node.type==='button'&&node.props.children==='sheets.save');
@@ -88,5 +99,5 @@ test('reopening a saved connection and reloading headers preserves custom labels
   render();effects.splice(0).forEach(fn=>fn());
   globalThis.sheetSettingsState={...globalThis.sheetSettingsState,email:'new@example.com'};
   assert.ok(!render().some(node=>node.type==='input'&&node.props.placeholder?.includes('spreadsheets')));
- }finally{globalThis.window=oldWindow;for(const key of ['sheetSettingsHooks','sheetSettingsState','sheetSaved','sheetSavedRefresh','sheetSavedBatch','sheetSavedRefreshIds','sheetCloseGuard','sheetDisconnectPrompt','sheetDisconnectApproved','sheetDisconnected'])delete globalThis[key];}
+ }finally{globalThis.window=oldWindow;for(const key of ['sheetSettingsHooks','sheetSettingsState','sheetHeaderFixture','sheetSaved','sheetSavedRefresh','sheetSavedBatch','sheetSavedRefreshIds','sheetCloseGuard','sheetDisconnectPrompt','sheetDisconnectApproved','sheetDisconnected'])delete globalThis[key];}
 });

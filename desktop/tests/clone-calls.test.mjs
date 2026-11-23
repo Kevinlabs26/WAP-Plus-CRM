@@ -7,6 +7,97 @@ const bundle=async(contents,mocks={})=>{const out=await build({stdin:{contents,r
 const {cloneCallTarget,cloneCallInvoke,cloneCallOwnerPhone,isWhatsAppCallLink,tryOpenBoundCallLink}=await bundle(`export * from './src/lib/cloneCalls.ts';`,{'@/lib/bridge':'export const isTauri=()=>false;'});
 const accounts=[{id:'one',label:'1',phoneE164:'+12025550101',historyPhoneE164:'+12025550101',status:'disconnected'},{id:'two',label:'2',phoneE164:'+12025550102',status:'connected'}];
 const chat={id:'c',accountId:'one',contactId:'person'},contact={id:'person',phone:'+33612345678'};
+const { folderCallRows, filterFolderCallRows, folderCallDecision, folderCallDirectTarget, runFolderCallQueue } = await bundle(
+  "export * from './src/lib/folderCallQueue.ts';",
+  { "@/lib/bridge": "export const isTauri=()=>false;" }
+);
+
+test("folder dialing keeps folder order, limits pasted numbers to members and checks the latest outgoing receipt", () => {
+  const second = { id: "second", accountId: "two", contactId: "second-person", lastMessage: "Hello" };
+  const sameNumber = { ...chat, id: "alias", accountId: "two", contactId: "alias-person" };
+  const state = {
+    chats: [chat, second, sameNumber],
+    contacts: [
+      contact,
+      { id: "second-person", phone: "+33623456789", name: "Reb" },
+      { ...contact, id: "alias-person", name: "Gabriel", avatarUrl: "https://example.test/avatar.jpg" },
+    ],
+    settings: {
+      waAccounts: accounts,
+      chatFolders: [{ id: "folder", scope: { type: "all" }, chatIds: ["second", "c"] }],
+      chatFolderClones: [{ folderId: "folder", sourceChatId: "alias" }],
+    },
+    messagesByChatId: {},
+  };
+  const rows = folderCallRows(state, "folder");
+  assert.equal(folderCallDecision(rows[1], state, []), "unknown");
+  assert.equal(folderCallDirectTarget(rows[1], state).ownerPhone, accounts[0].phoneE164);
+  assert.deepEqual(rows.map(row => [row.phone, row.chatIds]), [
+    ["+33623456789", ["second"]], [contact.phone, ["c", "alias"]],
+  ]);
+  assert.deepEqual(rows.map(row => [row.name, row.avatarUrl]), [
+    ["Reb", undefined], ["Gabriel", "https://example.test/avatar.jpg"],
+  ]);
+  assert.deepEqual(filterFolderCallRows(rows, "+33 6 12 34 56 78，0033623456789\n+4915123456789\nwrong"), {
+    selected: rows, invalid: 1, unmatched: 1,
+  });
+  const stored = { id: "out", chatId: "c", direction: "out", sentAt: "2026-01-01T10:00:00Z", deliveryStatus: "delivered" };
+  const newer = { ...stored, id: "later", chatId: "alias", sentAt: "2026-01-01T11:00:00Z", deliveryStatus: "server" };
+  assert.equal(folderCallDecision(rows[1], state, [stored, null]).ownerPhone, accounts[0].phoneE164);
+  state.messagesByChatId.alias = [newer, { ...newer, id: "reply", direction: "in", sentAt: "2026-01-01T12:00:00Z" }];
+  assert.equal(folderCallDecision(rows[1], state, [stored, null]), "single");
+  newer.deliveryStatus = "queued";
+  assert.equal(folderCallDecision(rows[1], state, [stored, null]), "unknown");
+  newer.deliveryStatus = "read";
+  assert.equal(folderCallDecision(rows[1], state, [stored, null]).ownerPhone, accounts[1].phoneE164);
+});
+
+test("folder calls wait for manual confirmation when end is unknown and wait five seconds between calls", async () => {
+  const rows = ["single", "first", "unknown", "second", "third"].map(phone => ({ phone, chatIds: [] }));
+  const events = [];
+  let confirm;
+  let pause;
+  const paused = new Promise(resolve => { pause = resolve; });
+  const run = runFolderCallQueue(rows, {
+    signal: new AbortController().signal,
+    check: async row => ["single", "unknown"].includes(row.phone) ? row.phone : { recipientPhone: row.phone },
+    dial: async target => { events.push(target.recipientPhone); return target.recipientPhone !== "first"; },
+    status: (index, status) => {
+      if (status === "paused") pause();
+      if (["single", "unknown"].includes(status)) events.push(status);
+    },
+    waitForUser: () => new Promise(resolve => { confirm = resolve; }),
+    wait: async ms => { events.push(ms); },
+  });
+  await paused;
+  assert.deepEqual(events, ["single", "first"]);
+  confirm();
+  await run;
+  assert.deepEqual(events, ["single", "first", 5000, "unknown", "second", 5000, "third"]);
+});
+
+test("stopping while waiting for a call result prevents another dial", async () => {
+  const controller = new AbortController();
+  const events = [];
+  let finish;
+  let dialing;
+  const dialed = new Promise(resolve => { dialing = resolve; });
+  const rows = ["first", "second"].map(phone => ({ phone, chatIds: [] }));
+  const run = runFolderCallQueue(rows, {
+    signal: controller.signal,
+    check: async row => ({ recipientPhone: row.phone }),
+    dial: target => new Promise(resolve => { events.push(target.recipientPhone); finish = resolve; dialing(); }),
+    status: () => {},
+    waitForUser: async () => assert.fail("stopped calls must not ask to continue"),
+    wait: async () => assert.fail("stopped calls must not advance"),
+  });
+  await dialed;
+  controller.abort();
+  finish(true);
+  await run;
+  assert.deepEqual(events, ["first"]);
+});
+
 test('calls follow the selected conversation account, including offline CRM sessions, without online/default fallback',()=>{
  assert.equal(cloneCallTarget(chat,contact,accounts).accountId,'one');
  assert.equal(cloneCallTarget(chat,contact,accounts,'two').ownerPhone,'+12025550102');

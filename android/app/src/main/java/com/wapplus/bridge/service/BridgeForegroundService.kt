@@ -21,6 +21,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -34,7 +36,9 @@ class BridgeForegroundService : Service() {
     private var overlay: CustomerCardOverlay? = null
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            server?.let { it.broadcast(it.deviceBattery()) }
+            server?.let {
+                it.broadcast(if (intent?.action == Intent.ACTION_BATTERY_CHANGED) it.deviceBattery() else it.deviceStatus())
+            }
         }
     }
 
@@ -42,8 +46,12 @@ class BridgeForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        isRunning = true
-        registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        registerReceiver(batteryReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_BATTERY_CHANGED)
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_USER_PRESENT)
+            addAction(Intent.ACTION_SCREEN_ON)
+        })
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -58,18 +66,19 @@ class BridgeForegroundService : Service() {
                 this,
                 BridgeApp.DEFAULT_WS_PORT,
                 BridgeApp.authToken(this),
+                onClientConnected = { WaAssistService.flushPendingMedia() },
                 onClientDisconnected = { main.post { overlay?.hide() } },
-            ) { envelope, reply ->
+            ) { envelope, isConnected, reply ->
                 android.util.Log.d(TAG, "recv bytes=${envelope.length}")
-                d.handle(envelope, reply)
+                d.handle(envelope, isConnected, reply)
             }
             server = bridge
             WaAssistService.eventSink = { bridge.broadcast(it) }
             WaAssistService.statusSink = { bridge.broadcast(bridge.deviceStatus()) }
-            WaAssistService.flushPendingMedia()
             scope.launch {
-                runCatching { server?.start() }
+                runCatching { bridge.start { main.post { if (server === bridge) listening.value = true } } }
                     .onFailure { android.util.Log.e(TAG, "server failed", it) }
+                main.post { if (server === bridge) stopSelf() }
             }
         } else {
             server?.let {
@@ -81,11 +90,12 @@ class BridgeForegroundService : Service() {
     }
 
     override fun onDestroy() {
-        isRunning = false
+        listening.value = false
         WaAssistService.eventSink = null
         WaAssistService.statusSink = null
         server?.let { it.broadcast(it.deviceStatus(online = false)) }
         server?.stop()
+        server = null
         overlay?.hide()
         runCatching { unregisterReceiver(batteryReceiver) }
         scope.cancel()
@@ -109,9 +119,8 @@ class BridgeForegroundService : Service() {
     }
 
     companion object {
-        @Volatile
-        var isRunning = false
-            private set
+        private val listening = MutableStateFlow(false)
+        val isRunning = listening.asStateFlow()
 
         private const val TAG = "BridgeService"
         private const val NOTIF_ID = 1001

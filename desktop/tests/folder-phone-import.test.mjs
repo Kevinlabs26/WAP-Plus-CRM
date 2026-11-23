@@ -224,4 +224,12 @@ assert.equal(mergedChats.chats[0]?.hasOutgoingHistory, true);
 assert.equal(mergedChats.messages[0]?.chatId, "chat-c-new");
 assert.equal(mergedChats.selectedChatId, "chat-c-new");
 
+const unassignedChat = { ...mergedChats.chats[0], accountId: "", phoneId: "" };
+const pendingChat = { ...mergedChats.chats[0], id: "bridge-chat-c-new" };
+const pendingMessage = { ...mergedChats.messages[0], chatId: pendingChat.id };
+const unassigned = mergeImportedContactChatDuplicates([unassignedChat, pendingChat], [pendingMessage]);
+assert.equal(unassigned.replacements.size, 0);
+assert.equal(unassigned.chats.length, 2);
+assert.equal(unassigned.messages[0].chatId, pendingChat.id);
+
 console.log("folderPhoneImport ok");

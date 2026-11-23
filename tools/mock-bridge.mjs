@@ -15,11 +15,13 @@ const server = net.createServer((socket) => {
     id: "hello",
     type: "device.hello",
     ts: Date.now(),
+    deviceId: "mock-phone",
     payload: {
       name: "MockPhone",
       model: "Mock Pixel",
       androidVersion: "14",
       bridgeVersion: "0.1.0-mock",
+      verifiedTextSend: true,
     },
   });
 
@@ -83,7 +85,12 @@ const server = net.createServer((socket) => {
           id: `ack-${msg.id || Date.now()}`,
           type: "ack",
           ts: Date.now(),
-          payload: { refId: msg.id, ok: true, echoType: msg.type },
+          payload: {
+            refId: msg.id,
+            ok: true,
+            echoType: msg.type,
+            ...(msg.type === "wa.open_and_send" ? { status: "clicked" } : {}),
+          },
         });
         socket.write(ack + "\n");
         console.log(`[>>] ${ack}`);

@@ -102,6 +102,7 @@ export function useSidebarData({
 
   const leadCandidates = useMemo(() => {
     const candidates = new Map<string, LeadCandidate>();
+    if (!leadInbox.enabled && !leadInbox.collectedChatIds?.length) return candidates;
     const dismissed = new Set(leadInbox.dismissedChatIds || []);
     const collected = new Set(leadInbox.collectedChatIds || []);
     const rangeStart =

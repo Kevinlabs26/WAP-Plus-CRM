@@ -14,6 +14,7 @@ import {
 } from "@/lib/idb";
 import { isTauri } from "@/lib/bridge";
 import { clearMediaCache } from "@/lib/mediaCache";
+import type { ChatPreview, Message } from "@/types/crm";
 
 export type StorageEngine = "sqlite" | "idb" | "none";
 
@@ -169,6 +170,7 @@ export interface PersistedAppState {
 
 type ChatMessageRemap = { fromChatId: string; toChatId: string; contactId: string; accountId: string };
 type ChatAccountRemap = { chatId: string; fromAccountId: string; toAccountId: string };
+type ChatRemapTarget = Pick<ChatPreview, "id" | "contactId" | "accountId" | "phoneId">;
 const pendingChatMessageRemaps = new Map<string, ChatMessageRemap>();
 const pendingChatAccountRemaps = new Map<string, ChatAccountRemap>();
 // 保存失败后增量基线会重置，删除意图必须留到真正落盘。
@@ -177,7 +179,7 @@ const pendingDeletedMessageIds = new Set<string>();
 /** 会话合并必须同时迁移尚未加载的磁盘历史，且与会话快照同事务保存。 */
 export function registerChatMessageReplacements(
   replacements: ReadonlyMap<string, string>,
-  chats: readonly { id: string; contactId: string; accountId?: string; phoneId?: string }[]
+  chats: readonly ChatRemapTarget[]
 ): void {
   const byId = new Map(chats.map((chat) => [chat.id, chat]));
   for (const [fromChatId, toChatId] of replacements) {
@@ -220,7 +222,7 @@ interface RustSnapshot {
   replace_messages?: boolean;
 }
 
-const SECRET_SETTING_KEYS = ["openaiKey", "groqKey", "geminiKey", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "transcriptionApiKey", "translationApiKey", "bridgeToken"];
+const SECRET_SETTING_KEYS = ["openaiKey", "groqKey", "geminiKey", "vertexCredential", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "transcriptionApiKey", "translationApiKey", "bridgeToken"];
 
 function publicSettings(settings: unknown): unknown {
   if (!settings || typeof settings !== "object") return settings;
@@ -502,6 +504,7 @@ export type SecureSecrets = {
   openaiKey: string;
   groqKey: string;
   geminiKey: string;
+  vertexCredential: string;
   openrouterKey: string;
   customAiKey: string;
   transcriptionApiKey: string;
@@ -516,6 +519,7 @@ export async function loadSecureSecrets(): Promise<SecureSecrets | null> {
     openai_key?: string;
     groq_key?: string;
     gemini_key?: string;
+    vertex_credential?: string;
     openrouter_key?: string;
     custom_ai_key?: string;
     transcription_api_key?: string;
@@ -527,6 +531,7 @@ export async function loadSecureSecrets(): Promise<SecureSecrets | null> {
         openaiKey: secrets.openai_key || "",
         groqKey: secrets.groq_key || "",
         geminiKey: secrets.gemini_key || "",
+        vertexCredential: secrets.vertex_credential || "",
         openrouterKey: secrets.openrouter_key || "",
         customAiKey: secrets.custom_ai_key || "",
         transcriptionApiKey: secrets.transcription_api_key || "",
@@ -544,6 +549,7 @@ export async function saveSecureSecrets(
       openai_key: secrets.openaiKey,
       groq_key: secrets.groqKey,
       gemini_key: secrets.geminiKey,
+      vertex_credential: secrets.vertexCredential,
       openrouter_key: secrets.openrouterKey,
       custom_ai_key: secrets.customAiKey,
       transcription_api_key: secrets.transcriptionApiKey,
@@ -557,12 +563,26 @@ export function saveAppState(
   data: PersistedAppState,
   opts?: { force?: boolean }
 ): Promise<void> {
-  const chatIds = new Set(data.chats.map((chat) => (chat as { id?: string }).id));
+  const chatsById = new Map((data.chats as ChatRemapTarget[]).map(chat => [chat.id, chat]));
   const remaps = data.replaceMessages || (data.dirty && !data.dirty.chats) ? [] : [...pendingChatMessageRemaps.values()]
-    .filter((remap) => chatIds.has(remap.toChatId) && !chatIds.has(remap.fromChatId));
+    .filter((remap) => chatsById.has(remap.toChatId) && !chatsById.has(remap.fromChatId));
   const mergedChatIds = new Set(remaps.map((remap) => remap.fromChatId));
   const accountRemaps = data.replaceMessages || (data.dirty && !data.dirty.chats) ? [] : [...pendingChatAccountRemaps.values()]
-    .filter((remap) => chatIds.has(remap.chatId) || mergedChatIds.has(remap.chatId));
+    .filter((remap) => chatsById.has(remap.chatId) || mergedChatIds.has(remap.chatId));
+  const repairsByChat = new Map(accountRemaps.map(repair => [repair.chatId, repair]));
+  const messageRemaps = remaps.map(remap => {
+    const target = chatsById.get(remap.toChatId)!;
+    const owner = target.accountId || target.phoneId || "";
+    const repair = repairsByChat.get(target.id);
+    if (owner !== remap.accountId && repair?.fromAccountId === remap.accountId && repair.toAccountId === owner) {
+      // The merged-out chat can still own messages on disk when login repairs its target.
+      if (!repairsByChat.has(remap.fromChatId)) {
+        repairsByChat.set(remap.fromChatId, { ...repair, chatId: remap.fromChatId });
+      }
+      return { ...remap, contactId: target.contactId, accountId: owner };
+    }
+    return { ...remap, contactId: target.contactId };
+  });
   const run = saveQueue.then(async () => {
     const writesMessages = !data.dirty || data.dirty.messages;
     const restoredIds = new Set(writesMessages && pendingDeletedMessageIds.size
@@ -572,7 +592,12 @@ export function saveAppState(
       ? [...new Set([...pendingDeletedMessageIds].filter(id => !restoredIds.has(id)).concat(data.deletedMessageIds || []))]
       : data.deletedMessageIds || [];
     try {
-      await saveAppStateNow({ ...data, chatMessageRemaps: remaps.length ? remaps : data.chatMessageRemaps, chatAccountRemaps: accountRemaps.length ? accountRemaps : data.chatAccountRemaps, deletedMessageIds: deletedIds }, opts);
+      await saveAppStateNow({
+        ...data,
+        chatMessageRemaps: messageRemaps.length ? messageRemaps : data.chatMessageRemaps,
+        chatAccountRemaps: repairsByChat.size ? [...repairsByChat.values()] : data.chatAccountRemaps,
+        deletedMessageIds: deletedIds,
+      }, opts);
     } catch (error) {
       if (writesMessages) for (const id of deletedIds) pendingDeletedMessageIds.add(id);
       throw error;
@@ -732,6 +757,23 @@ export type MessagesPageResult = {
   limit: number;
 };
 
+async function waitForChatHistory(chatId: string) {
+  await saveQueue;
+  if ([...pendingChatMessageRemaps.values()].some((remap) => remap.toChatId === chatId)) {
+    throw new Error("会话历史合并尚未保存，请稍后重试");
+  }
+  if (pendingChatAccountRemaps.has(chatId)) {
+    throw new Error("会话账号归属修复尚未保存，请稍后重试");
+  }
+}
+
+export async function loadLatestOutgoingMessage(chatId: string): Promise<Message | null> {
+  if (await resolveStorageEngine() !== "sqlite") throw new Error("本地聊天历史不可用");
+  await waitForChatHistory(chatId);
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<Message | null>("db_latest_outgoing_message", { chatId });
+}
+
 /** SQLite 冷历史分页；浏览器 IDB 无分页时返回 null */
 export async function loadMessagesPage(opts: {
   chatId: string;
@@ -741,13 +783,7 @@ export async function loadMessagesPage(opts: {
 }): Promise<MessagesPageResult | null> {
   const eng = await resolveStorageEngine();
   if (eng !== "sqlite") return null;
-  await saveQueue;
-  if ([...pendingChatMessageRemaps.values()].some((remap) => remap.toChatId === opts.chatId)) {
-    throw new Error("会话历史合并尚未保存，请稍后重试");
-  }
-  if (pendingChatAccountRemaps.has(opts.chatId)) {
-    throw new Error("会话账号归属修复尚未保存，请稍后重试");
-  }
+  await waitForChatHistory(opts.chatId);
   const page = await tryInvoke<MessagesPageResult>("db_load_messages_page", {
     chatId: opts.chatId,
     beforeSentAt: opts.beforeSentAt ?? null,

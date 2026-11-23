@@ -12,6 +12,8 @@ import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import {
   adbForward,
+  adbInstallBridge,
+  type AdbDevice,
   bridgeInvoke,
   connectBridge,
   disconnectBridge,
@@ -28,6 +30,7 @@ import {
 import { BaileysConnectCard } from "@/components/settings/BaileysConnectCard";
 import { AccountSlotCard } from "./AccountSlotCard";
 import { useCloneCallBindings } from "./CloneCallBinding";
+import { canUseCloneCalls } from "@/lib/cloneCalls";
 import { AndroidBridgePanel } from "./AndroidBridgePanel";
 import { applyAccountWarmup } from "@/lib/accountWarmup";
 import { DEFAULT_RATE_LIMITS } from "@/channels";
@@ -114,7 +117,10 @@ export function PhonesView() {
     setDeviceTab(tab);
   };
   const [adb, setAdb] = useState(() => t("phonesBridge.adbNotScanned"));
+  const [adbDevices, setAdbDevices] = useState<AdbDevice[]>([]);
+  const [adbSerial, setAdbSerial] = useState("");
   const [busy, setBusy] = useState(false);
+  const [installingBridge, setInstallingBridge] = useState(false);
   const [log, setLog] = useState("");
   const [menuId, setMenuId] = useState<string | null>(null);
 
@@ -152,6 +158,7 @@ export function PhonesView() {
       host: s.host || bridgeHost,
       port: s.port || bridgePort,
       deviceName: s.devices?.[0]?.name ?? null,
+      deviceId: s.connected ? s.devices?.[0]?.id ?? null : null,
       transport: s.devices?.[0]?.transport ?? null,
       lastError: s.last_error ?? null,
       tauriUnavailable: false,
@@ -161,12 +168,34 @@ export function PhonesView() {
   const scanAdb = async () => {
     setAdb(t("phonesBridge.scanning"));
     try {
-      const res = await bridgeInvoke<unknown>("list_adb_devices");
-      setAdb(JSON.stringify(res, null, 2));
+      const res = await bridgeInvoke<AdbDevice[]>("list_adb_devices");
+      const devices = Array.isArray(res) ? res : [];
+      const usable = devices.filter((device) => device.state === "device");
+      setAdbDevices(devices);
+      setAdbSerial((current) => usable.some((device) => device.serial === current) ? current : "");
+      setAdb(devices.length ? devices.map(({ serial, state }) => `${serial} · ${state}`).join("\n") : t("phonesBridge.noDevices"));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setAdb(msg);
       pushToast(msg, "error");
+    }
+  };
+
+  const doInstallBridge = async () => {
+    if (busy || installingBridge) return;
+    setInstallingBridge(true);
+    setLog(t("androidBridge.installing"));
+    try {
+      const installed = await adbInstallBridge(adbSerial || undefined);
+      const message = t(installed ? "androidBridge.installDone" : "androidBridge.alreadyInstalled");
+      setLog(message);
+      pushToast(message, installed ? "success" : "info");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setLog(message);
+      pushToast(message, "error");
+    } finally {
+      setInstallingBridge(false);
     }
   };
 
@@ -182,24 +211,12 @@ export function PhonesView() {
     setLog(t("phonesBridge.connectingLog", { host: bridgeHost, port: bridgePort }));
     const started = Date.now();
     try {
-      const s = await Promise.race([
-        connectBridge(bridgeHost, bridgePort, bridgeToken),
-        new Promise<never>((_, reject) =>
-          window.setTimeout(
-            () =>
-              reject(
-                new Error(
-                  t("phonesBridge.timeout")
-                )
-              ),
-            12_000
-          )
-        ),
-      ]);
+      const s = await connectBridge(bridgeHost, bridgePort, bridgeToken);
       applyStatus(s);
       const ms = Date.now() - started;
       if (s.connected) {
         const name = s.devices?.[0]?.name;
+        if (s.devices?.[0]?.id) setSelectedPhone(s.devices[0].id);
         setLog(
           t("phonesBridge.connectedLog", { host: s.host, port: s.port, name: name ? ` · ${name}` : "", ms })
         );
@@ -232,6 +249,7 @@ export function PhonesView() {
     if (busy) return;
     setBusy(true);
     setLog(t("phonesBridge.disconnecting"));
+    updateSettings({ autoConnectBridge: false });
     try {
       await disconnectBridge();
       applyStatus(await getBridgeStatus());
@@ -252,7 +270,7 @@ export function PhonesView() {
     setBusy(true);
     setLog(t("phonesBridge.forwarding", { port: bridgePort }));
     try {
-      const msg = String(await adbForward(bridgePort));
+      const msg = await adbForward(bridgePort, adbSerial || undefined);
       setLog(msg);
       pushToast(t("phonesBridge.forwarded"), "success");
     } catch (e) {
@@ -292,7 +310,8 @@ export function PhonesView() {
       ),
     [waAccounts, liveId]
   );
-  const cloneClients = useCloneCallBindings(deviceTab === "web" && accounts.length > 0);
+  const cloneCallsAvailable = canUseCloneCalls();
+  const cloneClients = useCloneCallBindings(cloneCallsAvailable && deviceTab === "web" && accounts.length > 0);
   const baseLimits = useMemo(
     () => ({
       ...DEFAULT_RATE_LIMITS,
@@ -574,8 +593,7 @@ export function PhonesView() {
     );
   };
 
-  const androidOnline =
-    androidPhones.some((p) => p.online) || connected;
+  const androidOnline = connected;
   const accountName = (id: string) => {
     const index = accounts.findIndex((a) => a.id === id);
     const account = accounts[index];
@@ -802,7 +820,7 @@ export function PhonesView() {
                     <AccountSlotCard
                       key={a.id}
                       account={a}
-                      cloneClients={cloneClients}
+                      cloneClients={cloneCallsAvailable ? cloneClients : undefined}
                       idx={idx}
                       isDefaultSend={isDefaultSend}
                       isConnectionFocus={isConnectionFocus}
@@ -871,6 +889,7 @@ export function PhonesView() {
             {androidPhones.length > 0 ? (
               <div className="grid gap-3 sm:grid-cols-2">
                 {androidPhones.map((p) => {
+                  const online = connected && bridgeRt.deviceId === p.id;
                   const bound = contacts.filter(
                     (c) => c.boundPhoneId === p.id
                   ).length;
@@ -901,8 +920,8 @@ export function PhonesView() {
                           </div>
                         </div>
                         <span className="flex shrink-0 items-center gap-1 text-2xs text-zinc-500">
-                          <OnlineDot online={p.online} />
-                          {p.online ? t("phonesBridge.online") : t("phonesBridge.offline")}
+                          <OnlineDot online={online} />
+                          {online ? t("phonesBridge.online") : t("phonesBridge.offline")}
                         </span>
                       </div>
                       <div className="mt-3 grid grid-cols-3 gap-1.5 text-center">
@@ -929,6 +948,7 @@ export function PhonesView() {
                         {t("phonesBridge.accessibility", { state: p.accessibilityEnabled ? t("phonesBridge.on") : t("phonesBridge.off") })}
                         {" · "}{t("phonesBridge.overlay", { state: p.overlayEnabled ? t("phonesBridge.on") : t("phonesBridge.off") })}
                         {p.charging ? ` · ${t("phonesBridge.charging")}` : ""}
+                        {online && p.phoneLocked ? ` · ${t("phonesBridge.screenLocked")}` : ""}
                       </div>
                     </button>
                   );
@@ -954,11 +974,16 @@ export function PhonesView() {
               connected={connected}
               log={log}
               adb={adb}
+              adbDevices={adbDevices}
+              adbSerial={adbSerial}
+              onAdbDeviceChange={setAdbSerial}
               onHostChange={(v) => updateSettings({ bridgeHost: v })}
               onPortChange={(v) =>
                 updateSettings({ bridgePort: v })
               }
               onConnect={() => void doConnect()}
+              installing={installingBridge}
+              onInstall={() => void doInstallBridge()}
               onDisconnect={() => void doDisconnect()}
               onScanAdb={() => void scanAdb()}
               onForward={() => void doForward()}

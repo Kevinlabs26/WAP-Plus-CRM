@@ -61,11 +61,13 @@ try {
   const deviceHello = await nextJson();
   assert.equal(deviceHello.type, "device.hello");
   assert.equal(deviceHello.payload.model, "Mock Pixel");
+  assert.equal(deviceHello.payload.verifiedTextSend, true);
 
   socket.write(JSON.stringify({
     id: "smoke-1",
     type: "wa.open_and_send",
     ts: Date.now(),
+    deviceId: deviceHello.deviceId,
     payload: { phoneE164: "+12025550123", text: "smoke" },
   }) + "\n");
 
@@ -73,6 +75,7 @@ try {
   assert.equal(ack.type, "ack");
   assert.equal(ack.payload.refId, "smoke-1");
   assert.equal(ack.payload.ok, true);
+  assert.equal(ack.payload.status, "clicked");
 
   socket.destroy();
   console.log("mock-bridge-smoke.test.mjs ok");

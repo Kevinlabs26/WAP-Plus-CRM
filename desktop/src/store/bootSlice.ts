@@ -74,6 +74,7 @@ export function createBootSlice({
         (legacySecrets?.openaiKey ||
           legacySecrets?.groqKey ||
           legacySecrets?.geminiKey ||
+          legacySecrets?.vertexCredential ||
           legacySecrets?.openrouterKey ||
           legacySecrets?.customAiKey ||
           legacySecrets?.transcriptionApiKey ||
@@ -84,6 +85,7 @@ export function createBootSlice({
           openaiKey: legacySecrets.openaiKey || "",
           groqKey: legacySecrets.groqKey || "",
           geminiKey: legacySecrets.geminiKey || "",
+          vertexCredential: legacySecrets.vertexCredential || "",
           openrouterKey: legacySecrets.openrouterKey || "",
           customAiKey: legacySecrets.customAiKey || "",
           transcriptionApiKey: legacySecrets.transcriptionApiKey || "",
@@ -96,6 +98,7 @@ export function createBootSlice({
             openaiKey: legacySecrets.openaiKey || "",
             groqKey: legacySecrets.groqKey || "",
             geminiKey: legacySecrets.geminiKey || "",
+            vertexCredential: legacySecrets.vertexCredential || "",
             openrouterKey: legacySecrets.openrouterKey || "",
             customAiKey: legacySecrets.customAiKey || "",
             transcriptionApiKey: legacySecrets.transcriptionApiKey || "",
@@ -105,7 +108,7 @@ export function createBootSlice({
         }
       }
       if (getStorageEngine() === "sqlite" && saved?.settings && secureSecrets &&
-          ["openaiKey", "groqKey", "geminiKey", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "transcriptionApiKey", "translationApiKey", "bridgeToken"].some(key => (saved.settings as unknown as Record<string, unknown>)[key])) {
+          ["openaiKey", "groqKey", "geminiKey", "vertexCredential", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "transcriptionApiKey", "translationApiKey", "bridgeToken"].some(key => (saved.settings as unknown as Record<string, unknown>)[key])) {
         await saveAppState({ phones: [], contacts: [], chats: [], messages: [], followUps: [],
           settings: saved.settings, broadcastCampaigns: saved.broadcastCampaigns, dirty: { settings: true } }, { force: true });
       }
@@ -516,6 +519,7 @@ export function createBootSlice({
           openaiKey: currentSettings.openaiKey,
           groqKey: currentSettings.groqKey,
           geminiKey: currentSettings.geminiKey,
+          vertexCredential: currentSettings.vertexCredential,
           openrouterKey: currentSettings.openrouterKey,
           customAiKey: currentSettings.customAiKey,
           transcriptionApiKey: currentSettings.transcriptionApiKey,

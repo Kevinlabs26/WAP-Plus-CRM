@@ -71,6 +71,9 @@ export interface DeviceHello {
   model: string;
   androidVersion?: string;
   bridgeVersion?: string;
+  verifiedTextSend?: boolean;
+  phoneSentConfirmation?: boolean;
+  maxRequestBytes?: number;
   battery?: number;
   accessibilityEnabled?: boolean;
 }
@@ -80,6 +83,7 @@ export interface BridgeAuth {
 }
 
 export interface DeviceStatus {
+  phoneLocked?: boolean;
   online: boolean;
   whatsappInstalled: boolean;
   accessibilityEnabled: boolean;
@@ -324,6 +328,7 @@ export interface WaSend {
 
 /** 一键：打开聊天 + 输入 + 发送 */
 export interface WaOpenAndSend {
+  confirmSent?: boolean;
   phoneE164: string;
   text: string;
   displayName?: string;
@@ -349,6 +354,9 @@ export interface WaSendMedia {
   mime: string;
   caption?: string;
 }
+
+export const ANDROID_MEDIA_MAX_BYTES = 14 * 1024 * 1024;
+export const ANDROID_VOICE_RETURN_MAX_BYTES = 8 * 1024 * 1024;
 
 export interface WaSearchContact {
   query: string;
@@ -380,6 +388,7 @@ export interface AckPayload {
     | "exists"
     | "authenticated"
     | "clicked"
+    | "phone_sent"
     | "delivered";
   error?: string;
   items?: unknown[];

@@ -12,6 +12,7 @@ import {
 import { useAppStore, flushPersist } from "@/store/appStore";
 import { copyNeverRepliedFolderNumbers } from "@/lib/folderUnreplied";
 import { findChatsWithInbound } from "@/lib/storage";
+import { isAndroidBridgePhone } from "@/store/deviceIngest";
 import { isDataRestoreActive } from "@/store/restoreGuard";
 import { useShallow } from "zustand/react/shallow";
 import { CreateGroupModal } from "@/components/chat/CreateGroupModal";
@@ -26,6 +27,7 @@ import {
 } from "@/lib/accountWaMeta";
 import { isWaAccountConnected } from "@/lib/accountConnection";
 import { bridgeInvoke } from "@/lib/bridge";
+import { canUseCloneCalls } from "@/lib/cloneCalls";
 import {
   baileysChatModify,
   baileysMessagesRead,
@@ -53,6 +55,7 @@ import { ChatSidebarRow } from "./ChatSidebarRow";
 import { ContactSidebarList } from "./ContactSidebarList";
 import { ContactManagementPanel } from "./ContactManagementPanel";
 import { FolderHeaderRow } from "./FolderHeaderRow";
+import { FolderCallDialog } from "./FolderCallDialog";
 import { FolderAiPromptDialog } from "./FolderAiPromptDialog";
 import { MuseFolderRoutingDialog } from "./MuseFolderRoutingDialog";
 import { ScheduledPlanDialog } from "@/components/chat/ScheduledPlanDialog";
@@ -115,6 +118,7 @@ const EMPTY_CLONES: NonNullable<
 
 export function PhoneSidebar() {
   const { t } = useI18n();
+  const [callFolder, setCallFolder] = useState<{ id: string; name: string } | null>(null);
   const copyingFolderNumbers = useRef(false);
   const copyFolderUnreplied = async (folderId: string) => {
     if (copyingFolderNumbers.current) return;
@@ -1538,9 +1542,10 @@ export function PhoneSidebar() {
     <aside className="crm-sidebar relative flex h-full min-h-0 w-72 shrink-0 flex-col border-r border-zinc-800/90 bg-zinc-950">
       {!isBaileys && (
         <PhoneListSection
-          phones={phones}
+          phones={phones.filter(isAndroidBridgePhone)}
           selectedPhoneId={selectedPhoneId}
           onSelect={setSelectedPhone}
+          onSwitchToQr={() => updateSettings({ sendChannel: "baileys" })}
         />
       )}
 
@@ -1741,6 +1746,8 @@ export function PhoneSidebar() {
                       onAiPrompt={() => setAiPromptFolderId(folder.id)}
                       onSchedule={() => setScheduleTarget({ folderId: folder.id })}
                       onBroadcast={() => setScheduleTarget({ folderId: folder.id, initialStartNow: true })}
+                      onCallByDelivery={canUseCloneCalls()
+                        ? () => setCallFolder({ id: folder.id, name: it.name }) : undefined}
                       onAutoReplyModeChange={mode => {
                         const current = useAppStore.getState();
                         current.updateSettings({ chatFolders: current.settings.chatFolders.map(item => item.id === folder.id ? { ...item, autoReplyMode: mode } : item) });
@@ -1956,6 +1963,7 @@ export function PhoneSidebar() {
       {aiPromptFolderId && <FolderAiPromptDialog key={aiPromptFolderId} folderId={aiPromptFolderId} onClose={() => setAiPromptFolderId(null)} />}
       {museFolderRoutingOpen && <MuseFolderRoutingDialog onClose={() => setMuseFolderRoutingOpen(false)} />}
       {scheduleTarget && <ScheduledPlanDialog {...scheduleTarget} onClose={() => setScheduleTarget(null)} />}
+      {callFolder && <FolderCallDialog folderId={callFolder.id} folderName={callFolder.name} onClose={() => setCallFolder(null)} />}
       {groupFolderDialog && (() => {
         const folder = chatFolders.find((item) => item.id === groupFolderDialog.folderId);
         if (!folder) return null;

@@ -65,6 +65,7 @@ export async function retryMessage({
     // 确认期间可能已收到回执、删掉消息或改了内容，不能继续发送旧快照。
     if (!message || message.deliveryStatus !== "failed" || message.body !== original.body
       || message.phoneE164 !== original.phoneE164 || message.accountId !== original.accountId
+      || message.deviceId !== original.deviceId || message.channelId !== original.channelId
       || message.mediaUrl !== original.mediaUrl) return;
   }
   const sendAccountId = message.accountId || chatAccountId;

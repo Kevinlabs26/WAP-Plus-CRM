@@ -13,7 +13,7 @@ import { formatFollowDueLabel } from "./chatPanelHelpers";
 import { ChatHeaderMoreMenu } from "./ChatHeaderMoreMenu";
 import { useI18n } from "@/i18n";
 import { CloneCallButton } from "./CloneCallButton";
-import { cloneCallTarget } from "@/lib/cloneCalls";
+import { canUseCloneCalls, cloneCallTarget } from "@/lib/cloneCalls";
 import { openAvatarCloudMenu } from "@/lib/googleDrive";
 
 type Props = {
@@ -248,7 +248,7 @@ export function ChatPanelHeader({
         )}
         {localOnlyChat && <div className="min-w-0 flex-1" />}
         <div className="flex shrink-0 items-center gap-1.5">
-          {activeChat && isBaileys && !localOnlyChat && !activeChat.isGroup && !activeContact?.isGroup && (
+          {canUseCloneCalls() && activeChat && isBaileys && !localOnlyChat && !activeChat.isGroup && !activeContact?.isGroup && (
             <CloneCallButton
               key={`${activeChat.id}:${callTarget?.accountId}:${callTarget?.ownerPhone}:${callTarget?.recipientPhone}`}
               target={callTarget}

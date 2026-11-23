@@ -65,13 +65,12 @@ for (const t of branchTypes) {
   );
 }
 
-// Android ACTION_CLICK is not delivery confirmation. Keep the explicit
-// clicked status on both send paths and require a delivered status in Rust.
-assert.match(dispatcherSrc, /"wa\.send"[\s\S]*?ack\(id, status = "clicked"\)/);
+// Targetless legacy commands cannot send. A click on the verified path is still uncertain.
+assert.match(dispatcherSrc, /"wa\.send"\s*->\s*\{\s*reply\(error\(id, "unsupported_message_type"/);
 assert.match(dispatcherSrc, /"wa\.open_and_send"[\s\S]*?ack\(id, status = "clicked"\)/);
 assert.match(commandsSrc, /pointer\("\/payload\/status"\)[\s\S]*?Some\("delivered"\)/);
-assert.match(commandsSrc, /"delivered": delivered/);
-assert.match(commandsSrc, /Android 已点击发送，但未收到 WhatsApp 回执/);
+assert.match(commandsSrc, /"delivered": status == "delivered"/);
+assert.match(commandsSrc, /Android 已尝试点击发送，但未收到 WhatsApp 回执/);
 
 // Bridge 认证必须先于 hello，避免未授权客户端读取设备信息或发送命令。
 assert.match(androidBridgeServerSrc, /authToken: String/);

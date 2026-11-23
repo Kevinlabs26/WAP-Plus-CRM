@@ -339,11 +339,12 @@ export const MessageBubble = memo(function MessageBubble({
   }, [m.body, m.mentionedJids]);
   const st = m.deliveryStatus;
   const uncertain = isDeliveryUncertain(m);
+  const phoneSharePending = st === "local" && m.channelId === "android_bridge" && !!m.mediaType;
   const showStatus =
     m.direction === "out" &&
     st &&
     st !== "sent" &&
-    st !== "local" &&
+    (st !== "local" || phoneSharePending) &&
     st !== "delivered" &&
     st !== "read" &&
     st !== "played" &&
@@ -351,6 +352,7 @@ export const MessageBubble = memo(function MessageBubble({
   const tick =
     m.direction === "out" &&
     st &&
+    !phoneSharePending &&
     !["failed", "queued", "pending"].includes(st)
       ? st === "read" || st === "played"
         ? "read"
@@ -431,7 +433,7 @@ export const MessageBubble = memo(function MessageBubble({
       )}
       title={localizedLastError || undefined}
     >
-      {uncertain ? t("messageBubble.deliveryUncertain") : st === "pending"
+      {phoneSharePending ? t("runtime.phoneShareConfirm") : uncertain ? t("messageBubble.deliveryUncertain") : st === "pending"
         ? m.mediaUpload
           ? m.mediaUpload.stage === "waiting"
             ? t("messageBubble.videoWaiting")

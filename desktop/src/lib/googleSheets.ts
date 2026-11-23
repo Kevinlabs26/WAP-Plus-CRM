@@ -52,7 +52,7 @@ const KEY = "google-sheet-connection-v1";
 let task: Promise<void> | null = null;
 let configWrite: Promise<void> | null = null;
 let initialized: Promise<void> | null = null;
-const refreshes=new Map<string,Promise<void>>();
+const refreshes=new Map<string,{force:boolean;promise:Promise<void>}>();
 export function initializeSheets() {
   return initialized ||= (async () => {
     if (!isTauri()) { useGoogleSheets.setState({ ready: true }); return; }
@@ -143,8 +143,9 @@ export async function removeSheetConnection(id:string){
   try{await configWrite;}finally{configWrite=null;}
 }
 interface SheetResponse { properties?: { title?: string }; sheets?: { properties: { sheetId: number; title: string } }[]; valueRanges?: { values?: string[][] }[] }
-interface GridCell { formattedValue?: string; hyperlink?: string; userEnteredValue?: { formulaValue?: string }; textFormatRuns?: { format?: { link?: { uri?: string } } }[] }
-interface GridResponse { sheets?: { data?: { rowData?: { values?: GridCell[] }[] }[] }[] }
+interface GridCell { hyperlink?: string; userEnteredValue?: { formulaValue?: string }; textFormatRuns?: { format?: { link?: { uri?: string } } }[] }
+interface GridColumn { startRow?: number; startColumn?: number; rowData?: { values?: GridCell[] }[] }
+interface GridResponse { sheets?: { data?: GridColumn[] }[] }
 export function readSheet(spreadsheet: string, ranges: string[] = []) {
   return invoke<SheetResponse>("google_sheets_read", { spreadsheetId: spreadsheet, ranges });
 }
@@ -161,6 +162,15 @@ function cellLinks(cell: GridCell | undefined, value: string): string[] {
 }
 async function readSheetGrid(spreadsheet: string, ranges: string[]) {
   return invoke<GridResponse>("google_sheets_read_grid", { spreadsheetId: spreadsheet, ranges });
+}
+async function readSheetBatches<T>(ranges: string[], read: (ranges: string[]) => Promise<T[]>): Promise<T[]> {
+  try { return await read(ranges); }
+  catch (error) {
+    if (ranges.length < 2 || !/response exceeds 32 MiB|\(414\)/i.test(String(error))) throw error;
+    const split = Math.ceil(ranges.length / 2);
+    const first = await readSheetBatches(ranges.slice(0, split), read);
+    return first.concat(await readSheetBatches(ranges.slice(split), read));
+  }
 }
 export function updateSheetCell(spreadsheet: string, tab: string, column: number, row: number, value: string) {
   return invoke<void>("google_sheets_update_cell", { spreadsheetId: spreadsheet, tab, column, row, value });
@@ -208,10 +218,13 @@ export async function sheetHeaders(spreadsheet: string, tab: string, row: number
   return (response.valueRanges?.[0]?.values || []).map(column => String(column[0] ?? ""));
 }
 export function refreshSheets(force = false,connectionId=DEFAULT_SHEET_ID): Promise<void> {
-  const queued=refreshes.get(connectionId);if(queued)return queued;
+  const queued=refreshes.get(connectionId);if(queued&&(!force||queued.force))return queued.promise;
   const previous=task,write=configWrite;
-  const current=(async()=>{if(write)await write;if(previous)await previous;await refreshConnection(force,connectionId);})().finally(()=>{refreshes.delete(connectionId);if(task===current)task=null;});
-  refreshes.set(connectionId,current);task=current;return current;
+  const current=(async()=>{if(write)await write;if(previous)await previous;await refreshConnection(force,connectionId);})().finally(()=>{
+    if(refreshes.get(connectionId)?.promise===current)refreshes.delete(connectionId);
+    if(task===current)task=null;
+  });
+  refreshes.set(connectionId,{force,promise:current});task=current;return current;
 }
 export async function refreshAllSheets(activeConnectionIds?:ReadonlySet<string>){for(const connection of sheetConnections())if(!activeConnectionIds||activeConnectionIds.has(connection.id))await refreshSheets(false,connection.id);}
 async function refreshConnection(force:boolean,connectionId:string):Promise<void>{
@@ -228,32 +241,39 @@ async function refreshConnection(force:boolean,connectionId:string):Promise<void
       if (indices.some(index => index === null)) throw new Error("Column headings changed or are duplicated. Please configure the mapping again.");
       const ranges = indices.map(index => `${tabRange(config.tab)}!${letter(index!)}:${letter(index!)}`);
       if (config.headerRow) ranges.push(`${tabRange(config.tab)}!${config.headerRow}:${config.headerRow}`);
-      const response = await readSheet(config.spreadsheet, ranges);
-      if (response.valueRanges?.length !== ranges.length) throw new Error("Incomplete Google Sheets response");
-      const currentHeaders = (response.valueRanges.at(-1)?.values || []).map(column => String(column[0] ?? ""));
+      const valueRanges = await readSheetBatches(ranges, async batch => {
+        const response = await readSheet(config.spreadsheet, batch);
+        if (response.valueRanges?.length !== batch.length) throw new Error("Incomplete Google Sheets response");
+        return response.valueRanges;
+      });
+      const currentHeaders = (valueRanges.at(-1)?.values || []).map(column => String(column[0] ?? ""));
       if (config.headerRow && JSON.stringify(currentHeaders) !== JSON.stringify(headers)) throw new Error("The sheet changed during refresh. Please try again.");
-      const columns = response.valueRanges.map(range => range.values?.[0] || []);
-      const actionFields = fields.filter(field => !!field.action);
-      const grid = actionFields.length ? await readSheetGrid(config.spreadsheet, actionFields.map(field => {
-        const index = resolveSheetColumn(headers, field.column)!;
-        return `${tabRange(config.tab)}!${letter(index)}:${letter(index)}`;
-      })) : null;
-      const gridColumns = grid?.sheets?.flatMap(sheet => sheet.data || []).map(data => data.rowData || []) || [];
+      const columns = valueRanges.map(range => range.values?.[0] || []);
+      const actionColumns = new Set(fields.flatMap((field, index) => field.action ? [indices[index + 1]!] : []));
+      const actionRanges = [...actionColumns].map(index => {
+        const column = letter(index);
+        return `${tabRange(config.tab)}!${column}${config.headerRow + 1}:${column}${columns[0].length}`;
+      });
+      const grid = actionRanges.length && columns[0].length > config.headerRow
+        ? await readSheetBatches(actionRanges, async batch => (await readSheetGrid(config.spreadsheet, batch)).sheets?.flatMap(sheet => sheet.data || []) || [])
+        : [];
+      const gridColumns = new Map(grid.map(column => [column.startColumn ?? 0, column]));
       const next = { ...data };
       fields.forEach((field, fieldIndex) => {
         const values: Record<string, (SheetCell | string)[]> = {};
-        const actionCells = field.action ? gridColumns[actionFields.indexOf(field)] || [] : [];
+        const columnIndex = indices[fieldIndex + 1]!;
+        const actionCells = field.action ? gridColumns.get(columnIndex) : undefined;
         columns[0].forEach((raw, row) => {
           if (row < config.headerRow) return;
           // WhatsApp stores international numbers without '+'. Sheet local numbers require explicit international formatting.
           const phone = sheetInternationalPhone(String(raw));
           if (phone) {
             const value = String(columns[fieldIndex + 1][row] ?? "");
-            const gridCell = actionCells[row]?.values?.[0];
+            const gridCell = actionCells?.rowData?.[row - (actionCells.startRow ?? 0)]?.values?.[0];
             (values[phone] ||= []).push(field.action ? { value, row: row + 1, links: field.action === "link" || field.action === "content" ? cellLinks(gridCell, value) : [], formula: !!gridCell?.userEnteredValue?.formulaValue } : value);
           }
         });
-        next[field.id] = { at: Date.now(), ...(field.action ? { columnIndex: indices[fieldIndex + 1]! } : {}), values };
+        next[field.id] = { at: Date.now(), ...(field.action ? { columnIndex } : {}), values };
       });
       updateConnection(connectionId,{data:next});
       await persist();

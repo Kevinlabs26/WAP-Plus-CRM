@@ -391,7 +391,8 @@ pub async fn clone_call_start(
     owner_phone: String,
     recipient_phone: String,
     request_id: String,
-) -> Result<(), String> {
+    wait_for_end: Option<bool>,
+) -> Result<bool, String> {
     if !valid_phone(&owner_phone)
         || !valid_phone(&recipient_phone)
         || owner_phone == recipient_phone
@@ -422,7 +423,12 @@ pub async fn clone_call_start(
         installed_app(id)?;
         #[cfg(windows)]
         {
-            platform::call(id, &recipient_phone, &cancelled)
+            platform::call(
+                id,
+                &recipient_phone,
+                &cancelled,
+                wait_for_end.unwrap_or(false),
+            )
         }
         #[cfg(not(windows))]
         {

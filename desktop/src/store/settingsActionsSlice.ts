@@ -43,7 +43,7 @@ export function createSettingsActionsSlice({
     const generation = ++secretSaveGeneration;
     const next = get().settings;
     const snapshot = {
-      openaiKey: next.openaiKey, groqKey: next.groqKey, geminiKey: next.geminiKey,
+      openaiKey: next.openaiKey, groqKey: next.groqKey, geminiKey: next.geminiKey, vertexCredential: next.vertexCredential,
       openrouterKey: next.openrouterKey, customAiKey: next.customAiKey,
       transcriptionApiKey: next.transcriptionApiKey, translationApiKey: next.translationApiKey, bridgeToken: next.bridgeToken,
     };
@@ -139,7 +139,7 @@ export function createSettingsActionsSlice({
         };
       });
       const secretPatch = patch.openaiKey !== undefined || patch.groqKey !== undefined ||
-        patch.geminiKey !== undefined ||
+        patch.geminiKey !== undefined || patch.vertexCredential !== undefined ||
         patch.openrouterKey !== undefined || patch.customAiKey !== undefined ||
         patch.transcriptionApiKey !== undefined || patch.translationApiKey !== undefined || patch.bridgeToken !== undefined;
       if (getStorageEngine() === "sqlite" && secretPatch && (changed || get().secretSaveStatus === "failed")) {

@@ -18,7 +18,7 @@ import { isDeliveryUncertain } from "@/store/outgoingRetry";
 import { gatedMediaSend, MediaGateBlockedError } from "@/channels/mediaGate";
 import { baileysSendVoice } from "@/lib/baileys";
 import { nextBatchTask } from "@/lib/scheduledPlans";
-import { broadcastItemMedia } from "@/lib/broadcastCampaign";
+import { broadcastItemMedia, campaignHasMedia } from "@/lib/broadcastCampaign";
 import { translateCurrent } from "@/i18n";
 
 type CampaignSendResult = {
@@ -26,6 +26,8 @@ type CampaignSendResult = {
   status?: string;
   message?: string;
   error?: string;
+  deliveryUncertain?: boolean;
+  deviceId?: string;
   retryAfterMs?: number;
   raw?: unknown;
 };
@@ -169,6 +171,10 @@ async function sendBroadcastMedia(opts: {
 
 const TICK_MS = 900;
 
+function androidCampaignReady(state: AppState, campaign: BroadcastCampaign) {
+  return state.settings.sendChannel === "android_bridge" && state.bridge.connected && state.bridge.deviceId === campaign.accountId;
+}
+
 export function CampaignRunner() {
   const lock = useRef(false);
 
@@ -192,7 +198,7 @@ export function CampaignRunner() {
               deliveryStatus: "failed", deliveryUncertain: true, retryCount: 5,
               nextAttemptAt: undefined, lastError: error,
             });
-            state.patchBroadcastItem(campaign.id, item.id, { status: "failed", error });
+            state.patchBroadcastItem(campaign.id, item.id, { status: "failed", deliveryUncertain: true, error });
             if (campaign.status === "running") state.pauseBroadcastCampaign(campaign.id);
           }
           await flushPersist(() => useAppStore.getState());
@@ -203,6 +209,12 @@ export function CampaignRunner() {
           (c) => c.status === "running"
         );
         if (!campaign) return;
+        const android = campaign.channelId === "android_bridge";
+        if (android && !androidCampaignReady(state, campaign)) {
+          state.pauseBroadcastCampaign(campaign.id);
+          state.pushToast(translateCurrent("broadcast.connectBridge"), "info");
+          return;
+        }
         if (nextBatchTask(state.settings.scheduledPlans || [],state.broadcastCampaigns) !== campaign.id) return;
 
         const item = campaign.items.find((i) => i.status === "pending");
@@ -210,7 +222,7 @@ export function CampaignRunner() {
           state.completeBroadcastCampaignIfIdle(campaign.id);
           return;
         }
-        const accountId = item.accountId || campaign.accountId;
+        const accountId = android ? campaign.accountId : item.accountId || campaign.accountId;
 
         const settings = state.settings;
         if ((settings.sendPausedAccountIds || []).includes(accountId)) {
@@ -219,7 +231,13 @@ export function CampaignRunner() {
           return;
         }
 
-        const channelId = normalizeChannelId(settings.sendChannel);
+        const channelId = campaign.channelId ?? "baileys";
+        const unsupportedMedia = android && campaignHasMedia(campaign);
+        if (normalizeChannelId(settings.sendChannel) !== channelId || unsupportedMedia) {
+          state.pauseBroadcastCampaign(campaign.id);
+          state.pushToast(translateCurrent(unsupportedMedia ? "broadcast.bridgeUnsupported" : "broadcast.connectWhatsApp"), "info");
+          return;
+        }
         if (
           channelId === "baileys" &&
           !isWaAccountConnected(
@@ -263,11 +281,12 @@ export function CampaignRunner() {
           const current = latest.broadcastCampaigns.find(c => c.id === campaign.id);
           return !cancelled && current?.status === "running" &&
             current.items.some(i => i.id === item.id && i.status === "sending") &&
-            normalizeChannelId(latest.settings.sendChannel) === channelId;
+            normalizeChannelId(latest.settings.sendChannel) === channelId && (!android || androidCampaignReady(latest, campaign));
         };
 
         // 复用已有气泡（限速/暂停后再试），避免重复出站行；仅文本路径需要
         let msgId = hasMedia ? null : (item.messageId || null);
+        const deviceId = android ? campaign.accountId : (msgId && state.messages.find(message => message.id === msgId)?.deviceId) || state.selectedPhoneId;
         if (!hasMedia && msgId) {
           state.updateMessageDelivery(msgId, {
             deliveryStatus: "pending",
@@ -282,7 +301,7 @@ export function CampaignRunner() {
             phoneE164: item.phoneE164,
             channelId,
             accountId,
-            deviceId: state.selectedPhoneId,
+            deviceId,
             deliveryStatus: "pending",
             // 禁止 SendQueueWatcher 自动重试（与战役 runner 双发）
             systemKind: "broadcast_campaign",
@@ -316,7 +335,8 @@ export function CampaignRunner() {
               displayName: item.contactName,
               contactId: item.contactId,
               accountId,
-              deviceId: state.selectedPhoneId,
+              deviceId,
+              confirmPhoneSend: android,
             },
             {
               channelId,
@@ -356,7 +376,9 @@ export function CampaignRunner() {
 
         // 取消只能阻止尚未发送的条目；在途请求成功则照实记 sent，
         // 失败则收口为 skipped，不能重新回到 pending。
-        if (latest.status === "cancelled" && !result.ok && result.error !== "baileys_delivery_unknown") {
+        const deliveryUnknown = result.deliveryUncertain || result.error === "baileys_delivery_unknown" ||
+          (android && result.ok && result.status !== "sent");
+        if (latest.status === "cancelled" && !result.ok && !deliveryUnknown) {
           if (msgId) {
             useAppStore.getState().updateMessageDelivery(msgId, {
               deliveryStatus: "local",
@@ -371,7 +393,7 @@ export function CampaignRunner() {
           return;
         }
 
-        if (result.ok) {
+        if (result.ok && !deliveryUnknown) {
           const waId = (() => {
             const raw = result.raw as { id?: string } | undefined;
             return raw && typeof raw.id === "string" ? raw.id : undefined;
@@ -389,6 +411,7 @@ export function CampaignRunner() {
             sentAt: new Date().toISOString(),
             messageId: msgId || undefined,
             error: undefined,
+            deliveryUncertain: false,
           });
         } else {
           const err = result.error || "";
@@ -397,7 +420,7 @@ export function CampaignRunner() {
             err === "overheated" ||
             err === "send_paused" ||
             err === "baileys_not_connected" ||
-            err === "baileys_delivery_unknown";
+            deliveryUnknown;
 
           if (err === "rate_limited") {
             // 气泡保持 pending（队列不捡 pending）；战役 item 仍 pending 待 runner 再试
@@ -427,12 +450,16 @@ export function CampaignRunner() {
               useAppStore.getState().updateMessageDelivery(msgId, {
                 deliveryStatus: "failed",
                 lastError: result.message || err || "发送失败",
-                deliveryUncertain: err === "baileys_delivery_unknown",
+                deliveryUncertain: deliveryUnknown,
+                ...(result.deviceId ? { deviceId: result.deviceId } : {}),
               });
             }
             useAppStore.getState().patchBroadcastItem(campaign.id, item.id, {
-              status: err === "baileys_delivery_unknown" ? "failed" : "pending",
-              error: result.message || err,
+              status: deliveryUnknown ? "failed" : "pending",
+              deliveryUncertain: deliveryUnknown,
+              error: deliveryUnknown && result.deliveryUncertain
+                ? translateCurrent("runtime.sendUnknown", { reason: result.message || err })
+                : result.message || err,
             });
             useAppStore.getState().pauseBroadcastCampaign(campaign.id);
             useAppStore
@@ -487,6 +514,7 @@ export function CampaignRunner() {
             }
             state.patchBroadcastItem(campaign.id, item.id, {
               status: "failed",
+              deliveryUncertain: uncertain,
               error: msg.slice(0, 200),
             });
           }
@@ -496,6 +524,14 @@ export function CampaignRunner() {
       }
     };
 
+    const unsubscribe = useAppStore.subscribe((state, previous) => {
+      if (state.bridge === previous.bridge && state.settings.sendChannel === previous.settings.sendChannel) return;
+      const campaign = state.broadcastCampaigns.find(item => item.status === "running" && item.channelId === "android_bridge");
+      if (campaign && !androidCampaignReady(state, campaign)) {
+        state.pauseBroadcastCampaign(campaign.id);
+        state.pushToast(translateCurrent("broadcast.connectBridge"), "info");
+      }
+    });
     const id = window.setInterval(() => {
       void tick();
     }, TICK_MS);
@@ -503,6 +539,7 @@ export function CampaignRunner() {
 
     return () => {
       cancelled = true;
+      unsubscribe();
       window.clearInterval(id);
     };
   }, []);

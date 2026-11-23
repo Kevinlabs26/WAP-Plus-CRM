@@ -21,10 +21,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.wapplus.bridge.service.BridgeForegroundService
@@ -142,13 +140,10 @@ private fun BridgeHome(
         SelectionContainer {
             Text(authToken, style = MaterialTheme.typography.bodySmall)
         }
-        var bridgeStarted by remember { mutableStateOf(BridgeForegroundService.isRunning) }
+        val bridgeStarted by BridgeForegroundService.isRunning.collectAsState()
         Button(
             enabled = !bridgeStarted,
-            onClick = {
-                onStartBridge()
-                bridgeStarted = true
-            }
+            onClick = onStartBridge
         ) {
             Text(if (bridgeStarted) "Bridge 服务已启动" else "启动 Bridge 服务")
         }

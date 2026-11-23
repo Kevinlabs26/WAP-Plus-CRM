@@ -4,7 +4,7 @@ import { Button, Input } from "@/components/ui/primitives";
 import { Avatar } from "@/components/ui/Avatar";
 import { useAppStore } from "@/store/appStore";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { prioritizeBatchTask, updateScheduledPlan } from "@/lib/scheduledPlanActions";
+import { cancelScheduledPlan, prioritizeBatchTask, updateScheduledPlan } from "@/lib/scheduledPlanActions";
 import { batchTaskOrder, nextBatchTask, planSteps, scheduledPlanOrder, scheduledPlanMatchesFilter, type ScheduledPlan, type ScheduledPlanFilter } from "@/lib/scheduledPlans";
 import { estimatePlanMinutes, planItemReceipt } from "@/lib/scheduledPlanProgress";
 import { sendRuntimeFromSettings } from "@/channels";
@@ -139,7 +139,7 @@ export function ScheduledPlansPanel({ filter, onFilterChange: setFilter }: { fil
   }
   async function cancel(plan: ScheduledPlan) {
     if (!await askConfirmation(t("planQueue.cancelHint"))) return;
-    await run(() => updateScheduledPlan(plan.id, p => ["done", "cancelled"].includes(p.status) ? p : { ...p, status: "cancelled", items: p.items.map(item => item.status === "pending" ? { ...item, status: "cancelled" } : item) }));
+    await run(() => cancelScheduledPlan(plan.id));
   }
   async function retry(plan: ScheduledPlan, itemId: string) {
     if (!await askConfirmation(t("planQueue.retryHint"))) return;

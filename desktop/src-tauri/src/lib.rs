@@ -6,6 +6,8 @@ mod baileys;
 mod bridge;
 #[cfg(windows)]
 mod clipboard;
+#[cfg(target_os = "macos")]
+mod clipboard_macos;
 mod clone_calls;
 mod commands;
 mod crm_backup;
@@ -107,6 +109,7 @@ pub fn run() {
             app.manage(app_instance::AppInstanceGuard::acquire(&app.path().app_data_dir()?)?);
             let conn = db::open_db(app.handle())?;
             app.manage(DbState(Mutex::new(conn)));
+            commands::start_chat_history_refresh(app.handle().clone());
 
             // 读线程 / connect 可向 WebView 推送 bridge://event 与 bridge://status
             #[cfg(not(test))]
@@ -204,6 +207,7 @@ pub fn run() {
             baileys::baileys_cancel_update,
             commands::list_adb_devices,
             commands::adb_forward,
+            commands::adb_install_bridge,
             commands::phone_screenshot,
             commands::bridge_status,
             commands::bridge_connect,
@@ -249,6 +253,7 @@ pub fn run() {
             image_library::image_library,
             commands::db_load_full_history,
             commands::db_load_messages_page,
+            commands::db_latest_outgoing_message,
             commands::db_chats_with_inbound,
             commands::db_search_messages,
             commands::db_get_message,
@@ -267,10 +272,16 @@ pub fn run() {
             commands::secure_save_secrets,
             commands::typing_diagnostic_write,
             voice::list_speech_models,
-            voice::save_speech_model,
+            voice::download_speech_model,
             voice::remove_speech_model,
             voice::speech_transcribe,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running WAP Plus CRM");
+        .build(tauri::generate_context!())
+        .expect("error while building WAP Plus CRM")
+        .run(|_app, _event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = _event {
+                show_main_window(_app);
+            }
+        });
 }

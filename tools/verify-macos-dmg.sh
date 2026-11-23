@@ -16,6 +16,8 @@ trap 'hdiutil detach "$mount" >/dev/null 2>&1 || true; rmdir "$mount" || true' E
 hdiutil attach -quiet -readonly -nobrowse -mountpoint "$mount" "$dmg"
 app="$mount/WAP Plus CRM.app"
 executables="$app/Contents/MacOS"
+test -s "$app/Contents/Resources/resources/android-bridge/bridge.apk"
+/usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescription' "$app/Contents/Info.plist" >/dev/null
 for name in wap-plus-crm wap-plus-baileys ffmpeg; do
   test -x "$executables/$name"
   test "$(lipo -archs "$executables/$name")" = "$ARCH"

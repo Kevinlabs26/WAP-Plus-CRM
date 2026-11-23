@@ -13,6 +13,7 @@ import {
   Megaphone,
 } from "lucide-react";
 import { useAppStore } from "@/store/appStore";
+import { getDataRestoreGeneration, isDataRestoreActive } from "@/store/restoreGuard";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 import type { Message } from "@/types/crm";
@@ -63,8 +64,10 @@ export function CommandPalette() {
   const setCommandOpen = useAppStore((s) => s.setCommandOpen);
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
-  const [diskMessages, setDiskMessages] = useState<Message[]>([]);
+  const [diskSearch, setDiskSearch] = useState<{ query: string; generation: number; messages: Message[] } | null>(null);
   const [diskLoading, setDiskLoading] = useState(false);
+  const pendingDiskSearch = useRef(Promise.resolve());
+  const restoreGeneration = getDataRestoreGeneration();
   const listRef = useRef<HTMLUListElement | null>(null);
   const contacts = useAppStore((s) => s.contacts);
   const chats = useAppStore((s) => s.chats);
@@ -94,7 +97,7 @@ export function CommandPalette() {
     if (open) {
       setQ("");
       setActive(0);
-      setDiskMessages([]);
+      setDiskSearch(null);
       setDiskLoading(false);
     }
   }, [open]);
@@ -104,29 +107,32 @@ export function CommandPalette() {
     if (!open) return;
     const query = q.trim();
     if (query.length < 2) {
-      setDiskMessages([]);
+      setDiskSearch(null);
       setDiskLoading(false);
       return;
     }
     let cancelled = false;
     setDiskLoading(true);
     const t = window.setTimeout(() => {
-      void searchMessagesGlobal(query, 48)
-        .then((hits) => {
-          if (!cancelled) setDiskMessages(hits);
-        })
-        .catch(() => {
-          if (!cancelled) setDiskMessages([]);
-        })
-        .finally(() => {
+      const isCurrent = () => !cancelled && !isDataRestoreActive() && getDataRestoreGeneration() === restoreGeneration;
+      pendingDiskSearch.current = pendingDiskSearch.current.then(async () => {
+        if (cancelled) return;
+        try {
+          if (!isCurrent()) return;
+          const messages = await searchMessagesGlobal(query, 48);
+          if (isCurrent()) setDiskSearch({ query, generation: restoreGeneration, messages });
+        } catch {
+          if (isCurrent()) setDiskSearch(null);
+        } finally {
           if (!cancelled) setDiskLoading(false);
-        });
+        }
+      });
     }, 220);
     return () => {
       cancelled = true;
       window.clearTimeout(t);
     };
-  }, [q, open, searchMessagesGlobal]);
+  }, [q, open, searchMessagesGlobal, restoreGeneration]);
 
   const jumpToMessage = async (m: Message) => {
     await ensureMessageInMemory(m.id);
@@ -297,9 +303,11 @@ export function CommandPalette() {
         if (!hay.includes(query)) continue;
         byId.set(m.id, m);
       }
-      for (const m of diskMessages) {
-        if (!m?.id) continue;
-        if (!byId.has(m.id)) byId.set(m.id, m);
+      if (diskSearch?.query === q.trim() && diskSearch.generation === restoreGeneration) {
+        for (const m of diskSearch.messages) {
+          if (!m?.id) continue;
+          if (!byId.has(m.id)) byId.set(m.id, m);
+        }
       }
       const scored = [...byId.values()]
         .map((m) => ({ m, score: scoreMessage(m, query) }))
@@ -353,7 +361,8 @@ export function CommandPalette() {
     contacts,
     chats,
     messages,
-    diskMessages,
+    diskSearch,
+    restoreGeneration,
     followUps,
     phones,
     setActiveNav,

@@ -155,6 +155,7 @@ function writeSettingsBackup(data: unknown): void {
       openaiKey: _o,
       groqKey: _g,
       geminiKey: _m,
+      vertexCredential: _vertex,
       deepseekKey: _d,
       qwenKey: _q,
       zhipuKey: _z,

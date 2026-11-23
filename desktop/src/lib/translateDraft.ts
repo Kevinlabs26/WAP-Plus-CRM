@@ -6,7 +6,7 @@ import type { Contact } from "@/types/crm";
 import type { AppSettings } from "@/store/appStore";
 import { franc } from "franc-min";
 import { geminiGenerate } from "./gemini.ts";
-import { getOpenAiCompatibleConfig, hasAiCredentials, chatCompletionOptions } from "./aiProviders.ts";
+import { geminiCredentials, getOpenAiCompatibleConfig, hasAiCredentials, chatCompletionOptions } from "./aiProviders.ts";
 
 export type TranslateLangCode =
   | "en"
@@ -329,6 +329,7 @@ export interface TranslateResult {
     | "groq"
     | "openrouter"
     | "gemini"
+    | "vertex"
     | "ollama"
     | "google"
     | "custom";
@@ -458,9 +459,9 @@ async function chatComplete(opts: {
   user: string;
   signal?: AbortSignal;
 }): Promise<string> {
-  if (opts.provider === "gemini") {
+  if (opts.provider === "gemini" || opts.provider === "vertex") {
     return geminiGenerate({
-      apiKey: opts.settings.geminiKey,
+      ...geminiCredentials(opts.settings),
       model: opts.settings.aiModel.trim() || undefined,
       system: opts.system,
       user: opts.user,

@@ -11,6 +11,7 @@ export interface PhoneDevice {
   online: boolean;
   battery: number;
   charging?: boolean;
+  phoneLocked?: boolean;
   whatsappInstalled?: boolean;
   accessibilityEnabled?: boolean;
   overlayEnabled?: boolean;

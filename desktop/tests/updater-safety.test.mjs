@@ -41,7 +41,12 @@ assert.equal(
 assert.match(hooks, /taskkill\.exe.*wap-plus-baileys\.exe/i);
 assert.match(releaseWorkflow, /releaseDraft:\s*true/);
 assert.match(releaseWorkflow, /smoke-windows-installer\.ps1/);
-assert.match(releaseWorkflow, /gh release edit.*--draft=false/);
+assert.match(releaseWorkflow, /needs: \[build-windows, build-macos\]/);
+const publishScript = await readFile(
+  new URL("../../.github/scripts/publish-desktop-release.sh", import.meta.url),
+  "utf8"
+);
+assert.match(publishScript, /gh release edit.*--draft=false/);
 assert.match(installerSmokeTest, /Start-Process[^\n]+\/S/);
 assert.match(installerSmokeTest, /wap-plus-crm\.exe/);
 assert.match(installerSmokeTest, /wap-plus-baileys\.exe/);
@@ -54,7 +59,7 @@ assert.match(appUpdate, /await update\.install[\s\S]*?await bridgeInvoke\("resta
 const assets = await mkdtemp(join(tmpdir(), "wap-macos-update-"));
 try {
   const script = fileURLToPath(new URL("../../.github/scripts/macos-update-manifest.mjs", import.meta.url));
-  const tag = "macos-unsigned-v0.1.81";
+  const tag = "v0.1.81";
   const args = [script, "0.1.81", tag, assets];
   for (const arch of ["arm64", "x86_64"]) {
     await writeFile(join(assets, `WAP-Plus-CRM-0.1.81-macOS-${arch}.app.tar.gz`), arch);
@@ -67,8 +72,8 @@ try {
   assert.deepEqual(Object.keys(manifest.platforms), ["darwin-aarch64", "darwin-x86_64"]);
   assert.equal(manifest.platforms["darwin-aarch64"].signature, "YXJt");
   assert.equal(manifest.platforms["darwin-x86_64"].signature, "aW50ZWw=");
-  assert.match(manifest.platforms["darwin-aarch64"].url, /macos-unsigned-v0\.1\.81\/.*-arm64\.app\.tar\.gz$/);
-  assert.match(manifest.platforms["darwin-x86_64"].url, /macos-unsigned-v0\.1\.81\/.*-x86_64\.app\.tar\.gz$/);
+  assert.match(manifest.platforms["darwin-aarch64"].url, /\/releases\/download\/v0\.1\.81\/.*-arm64\.app\.tar\.gz$/);
+  assert.match(manifest.platforms["darwin-x86_64"].url, /\/releases\/download\/v0\.1\.81\/.*-x86_64\.app\.tar\.gz$/);
 } finally {
   await rm(assets, { recursive: true, force: true });
 }

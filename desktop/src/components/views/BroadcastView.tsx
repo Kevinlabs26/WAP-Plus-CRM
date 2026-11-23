@@ -89,6 +89,8 @@ export function BroadcastView() {
     }))
   );
   const baileysUi = useAppStore((s) => s.baileysUi);
+  const bridge = useAppStore((s) => s.bridge);
+  const android = sendChannel === "android_bridge";
   const createBroadcastCampaign = useAppStore((s) => s.createBroadcastCampaign);
   const startBroadcastCampaign = useAppStore((s) => s.startBroadcastCampaign);
   const pauseBroadcastCampaign = useAppStore((s) => s.pauseBroadcastCampaign);
@@ -408,7 +410,9 @@ export function BroadcastView() {
   const invalidVersion = versionErrors.findIndex(Boolean);
   const templateError = invalidVersion < 0 ? "" : randomVersions
     ? `${t("broadcast.variant", { number: invalidVersion + 1 })}：${versionErrors[invalidVersion]}` : versionErrors[invalidVersion];
-  const launchBlockedReason = mediaBusy || themeBusy ? t("broadcast.mediaBusy") : !accountId
+  const bridgeBlocked = !bridge.connected || !bridge.deviceId ? t("broadcast.connectBridge")
+    : activeVersions.some(version => version.media.length > 0) ? t("broadcast.bridgeUnsupported") : "";
+  const launchBlockedReason = mediaBusy || themeBusy ? t("broadcast.mediaBusy") : !android && !accountId
     ? t("broadcast.selectAccountRequired")
     : !recipientCount
       ? t("broadcast.addRecipientsRequired")
@@ -416,11 +420,9 @@ export function BroadcastView() {
         ? t("broadcast.recipientLimit", { count: BROADCAST_HARD_CAP })
         : templateError
           ? templateError
-          : destinationWarmup
-            ? t("broadcast.warmupActive")
-            : sendChannel === "android_bridge"
-              ? t("broadcast.bridgeUnsupported")
-              : disconnectedAccount
+          : android && bridgeBlocked ? bridgeBlocked
+            : !android && destinationWarmup ? t("broadcast.warmupActive")
+              : !android && disconnectedAccount
                 ? t("broadcast.whatsappDisconnected")
                 : running
                   ? t("broadcast.broadcastRunning")
@@ -456,7 +458,7 @@ export function BroadcastView() {
 
   const validateSetup = () => {
     if (mediaBusy) { pushToast(t("broadcast.mediaBusy"), "error"); return false; }
-    if (!accountId) {
+    if (!android && !accountId) {
       pushToast(t("broadcast.selectAccountRequired"), "error");
       return false;
     }
@@ -477,7 +479,8 @@ export function BroadcastView() {
 
   const launch = async () => {
     if (!validateSetup()) return;
-    if (destinationWarmup) {
+    if (android && bridgeBlocked) { pushToast(bridgeBlocked, "error"); return; }
+    if (!android && destinationWarmup) {
       pushToast(
         t("broadcast.editWhileWarmup", {
           label: t("broadcast.warmupLabel", { hours: destinationWarmup.warmup.hoursLeft }),
@@ -486,7 +489,7 @@ export function BroadcastView() {
       );
       return;
     }
-    if (sendChannel === "android_bridge") {
+    if (android) {
       if (!useAppStore.getState().bridge.connected) {
         pushToast(t("broadcast.connectBridge"), "error");
         return;
@@ -517,9 +520,9 @@ export function BroadcastView() {
       title: t("broadcast.confirmStart"),
       description: [
         t("broadcast.confirmAccount", {
-          account: formatAccountDisplay({ label: account?.label, userName: account?.userName, index1: 1 }),
+          account: android ? bridge.deviceName || bridge.deviceId || "Android" : formatAccountDisplay({ label: account?.label, userName: account?.userName, index1: 1 }),
         }),
-        t("planQueue.accountRoutingSummary", { contacted: contactedCount, new: newContactCount }),
+        ...(!android ? [t("planQueue.accountRoutingSummary", { contacted: contactedCount, new: newContactCount })] : []),
         t("broadcast.confirmRecipients", { count: recipientCount, cap: BROADCAST_HARD_CAP }),
         mediaSummary,
         t("broadcast.confirmGap", { min: extraGapSec, max: extraGapMaxSec }),
@@ -547,7 +550,8 @@ export function BroadcastView() {
     }
 
     const input = {
-      accountId,
+      accountId: android ? bridge.deviceId! : accountId,
+      ...(android ? { channelId: "android_bridge" as const } : {}),
       template: versions[0].template,
       contactIds: [...selected],
       phoneNumbers: directPhones,
@@ -695,7 +699,7 @@ export function BroadcastView() {
                     <SectionLabel className="!mb-0">{t("broadcast.copy")}</SectionLabel>
                     <Button size="xs" variant="ghost" disabled={themeBusy || themeLocked} title={t("broadcast.copyHint")} aria-label={t("broadcast.copyHint")} onClick={() => insertTemplateVariable("{name}")}>{t("broadcast.name")}</Button>
                   </div>
-                  <label className="flex min-w-0 items-center gap-2 text-2xs text-zinc-500">
+                  {android ? <span className="text-2xs text-zinc-400">{bridge.deviceName || t("broadcast.connectBridge")}</span> : <label className="flex min-w-0 items-center gap-2 text-2xs text-zinc-500">
                     <span className="shrink-0">{t("broadcast.newContactAccount")}</span>
                     <select
                       value={accountId}
@@ -715,7 +719,7 @@ export function BroadcastView() {
                         </option>
                       ))}
                     </select>
-                  </label>
+                  </label>}
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-1.5" role="group" aria-label={t("broadcast.contentMode")}>
                   <Button size="sm" variant={!randomVersions ? "primary" : "secondary"} disabled={mediaBusy || themeBusy} aria-pressed={!randomVersions}

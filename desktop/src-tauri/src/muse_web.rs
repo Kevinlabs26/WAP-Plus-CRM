@@ -7,7 +7,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
-    Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindow,
+    Emitter, LogicalPosition, LogicalSize, Manager, Webview, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
 use tokio::sync::{oneshot, Mutex as AsyncMutex, OwnedMutexGuard};
@@ -825,7 +825,7 @@ fn check_cancelled(state: &MuseWebState, id: &str) -> Result<(), String> {
         Ok(())
     }
 }
-async fn evaluate(window: &WebviewWindow, expression: String) -> Result<serde_json::Value, String> {
+async fn evaluate(window: &Webview, expression: String) -> Result<serde_json::Value, String> {
     if !muse_origin(&window.url().map_err(|e| e.to_string())?) {
         return Err("请先在 Muse 窗口完成登录".into());
     }
@@ -1072,7 +1072,9 @@ async fn open_or_update_muse_workspace(
         .on_new_window(|_, _| tauri::webview::NewWindowResponse::Allow);
         #[cfg(target_os = "macos")]
         let content = if muse_has_isolated_profiles() {
-            content.data_store_identifier(muse_profile_identifier(account)?)
+            content
+                .data_store_identifier(muse_profile_identifier(account)?)
+                .background_throttling(tauri::utils::config::BackgroundThrottlingPolicy::Disabled)
         } else {
             content
         };
@@ -1745,14 +1747,33 @@ fn connection_settled_for_operation(
     connection_settled(state, login_since, now)
 }
 
+fn connection_retry_due(
+    state: &str,
+    retry_at: &mut Option<tokio::time::Instant>,
+    now: tokio::time::Instant,
+    deadline: tokio::time::Instant,
+    operation: bool,
+) -> bool {
+    if state == "loading" && retry_at.is_some_and(|at| now >= at) && (operation || now < deadline) {
+        *retry_at = None;
+        return true;
+    }
+    false
+}
+
 async fn wait_for_connection(
-    window: &WebviewWindow,
+    window: &Webview,
     operation: Option<(&MuseWebState, &str)>,
     timeout: Duration,
+    retry_status_probe: bool,
 ) -> Result<serde_json::Value, String> {
     let mut deadline = tokio::time::Instant::now() + timeout;
+    let mut retry_at = if operation.is_some() {
+        Some(deadline)
+    } else {
+        retry_status_probe.then(|| deadline - timeout / 2)
+    };
     let mut login_since = None;
-    let mut reloaded = false;
     loop {
         if let Some((state, id)) = operation {
             check_cancelled(state, id)?;
@@ -1790,16 +1811,22 @@ async fn wait_for_connection(
                 return Ok(data.clone());
             }
         }
-        if tokio::time::Instant::now() >= deadline {
-            if operation.is_some() && !reloaded && state_name == "loading" {
-                // The app retries from its saved per-chat thread, so it is safe to reload before submitting.
-                window.navigate("https://muse.ai/".parse().unwrap()).map_err(|_| "Muse 自动重连失败".to_string())?;
-                reloaded = true;
+        let now = tokio::time::Instant::now();
+        if connection_retry_due(&state_name, &mut retry_at, now, deadline, operation.is_some()) {
+            // Restart from the Muse entry point before submitting anything.
+            window.navigate("https://muse.ai/".parse().unwrap()).map_err(|_| "Muse 自动重连失败".to_string())?;
+            if operation.is_some() {
                 deadline = tokio::time::Instant::now() + timeout;
-                login_since = None;
-                continue;
             }
+            login_since = None;
+            continue;
+        }
+        if now >= deadline {
             let detail = match probe {
+                Ok(Some(data)) if operation.is_none() && state_name == "loading" => return Ok(data),
+                Ok(None) if operation.is_none() => return Ok(serde_json::json!({
+                    "state": "loading", "error": "后台窗口尚未载入 Muse 页面"
+                })),
                 Err(error) => error,
                 Ok(Some(data)) => page_error(&data),
                 Ok(None) => "后台窗口尚未载入 Muse 页面".into(),
@@ -1832,27 +1859,64 @@ pub async fn muse_web_status(
             parallel_media: true,
         });
     };
-    let existed = app.get_webview_window(&label).is_some();
-    let window = muse_window_for(&app, false, media, Some(&account.id))?;
-    let data_result = wait_for_connection(&window, None, Duration::from_secs(20)).await;
-    if !existed {
-        let _ = window.destroy();
-    }
-    let data = data_result?;
+    #[cfg(target_os = "macos")]
+    let workspace = {
+        let active = state.workspace_account.lock().map_err(|_| "Muse 工作台状态不可用")?;
+        if !media && active.as_deref() == Some(account.id.as_str()) {
+            app.get_webview(WORKSPACE_CONTENT_LABEL)
+        } else {
+            None
+        }
+    };
+    #[cfg(not(target_os = "macos"))]
+    let workspace: Option<Webview> = None;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let workspace_status = if let Some(workspace) = workspace.filter(|view| {
+        view.url().ok().is_some_and(|url| {
+            muse_origin(&url) && (matches!(url.path(), "/" | "/thread/new") || thread_path(url.path()))
+        })
+    }) {
+        // The user may be on Settings or another page without a ready chat. Leave it
+        // alone and check the account's dedicated window if this view is inconclusive.
+        let budget = Duration::from_secs(3);
+        let result = tokio::time::timeout(budget, wait_for_connection(&workspace, None, budget, false))
+            .await.ok().and_then(Result::ok);
+        let active = state.workspace_account.lock().map_err(|_| "Muse 工作台状态不可用")?;
+        result.filter(|data| {
+            active.as_deref() == Some(account.id.as_str())
+                && matches!(data.get("state").and_then(|v| v.as_str()), Some("ready" | "quota" | "busy" | "login"))
+        })
+    } else {
+        None
+    };
+    let data = if let Some(data) = workspace_status {
+        data
+    } else {
+        let existed = app.get_webview_window(&label).is_some();
+        let window = muse_window_for(&app, false, media, Some(&account.id))?;
+        let retry = cfg!(target_os = "macos") && !media
+            && window.is_visible().ok() == Some(false);
+        let timeout = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let result = wait_for_connection(window.as_ref(), None, timeout, retry).await;
+        if !existed {
+            let _ = window.destroy();
+        }
+        result?
+    };
     let status = data
         .get("state")
         .and_then(|v| v.as_str())
-        .unwrap_or("loading")
-        .to_string();
+        .unwrap_or("loading");
+    let pending = status == "loading";
     let result = MuseStatus {
         opened: true,
         ready: status == "ready",
-        state: status,
-        message: data
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Muse 已连接")
-            .to_string(),
+        state: if pending { "unconfirmed" } else { status }.into(),
+        message: if pending {
+            "Muse 聊天后台还未就绪，请打开该账号的聊天首页后重新检查".into()
+        } else {
+            data.get("error").and_then(|v| v.as_str()).unwrap_or("Muse 已连接").into()
+        },
         media_protocol: 8,
         parallel_media: true,
     };
@@ -1873,11 +1937,11 @@ pub async fn muse_web_collect_media(
         .is_some();
     let _guard = try_muse_operation(&state, &account.id, media)?;
     let window = muse_window_for(&app, true, media, Some(&account.id))?;
-    let status = wait_for_connection(&window, None, Duration::from_secs(60)).await?;
+    let status = wait_for_connection(window.as_ref(), None, Duration::from_secs(60), false).await?;
     if status.get("state").and_then(|v| v.as_str()) != Some("ready") {
         return Err(page_error(&status));
     }
-    let mut data = evaluate(&window, "window.__wapMuse.collect()".into()).await?;
+    let mut data = evaluate(window.as_ref(), "window.__wapMuse.collect()".into()).await?;
     let request = data
         .get("requestId")
         .and_then(|v| v.as_str())
@@ -1917,7 +1981,7 @@ pub async fn muse_web_collect_media(
             return Err("取回 Muse 图片超时，原图片仍保留在 Muse；未重新生成".into());
         }
         tokio::time::sleep(Duration::from_millis(350)).await;
-        data = evaluate(&window, format!("window.__wapMuse.poll({id})")).await?;
+        data = evaluate(window.as_ref(), format!("window.__wapMuse.poll({id})")).await?;
     }
 }
 
@@ -1947,11 +2011,11 @@ impl MuseRun<'_> {
         may_have_submitted: &mut bool,
     ) -> Result<MuseOutput, String> {
         *may_have_submitted = false;
-        let window = &self.window;
+        let window = self.window.as_ref();
         let result = async {
         check_cancelled(self.state, self.operation_id)?;
         let mut target = record.path.clone();
-        let status = wait_for_connection(window, Some((self.state,self.operation_id)), Duration::from_secs(60)).await?;
+        let status = wait_for_connection(window, Some((self.state,self.operation_id)), Duration::from_secs(60), false).await?;
         if status.get("state").and_then(|v| v.as_str()) != Some("ready") { return Err(page_error(&status)); }
         let fresh = format!("https://muse.ai/thread/new?wapRequest={request_id}");
         if target.as_deref() != Some(window.url().map_err(|e| e.to_string())?.path()) {
@@ -2045,7 +2109,7 @@ impl MuseRun<'_> {
                         submitted_prompt = with_profile;
                         submitted_profile_hash = Some(hash);
                     }
-                    let data = evaluate(&window, format!("window.__wapMuse.start({id},{},{},{owner},{reference},{expect_media})",serde_json::to_string(&submitted_prompt).map_err(|e| e.to_string())?,serde_json::to_string(&target).map_err(|e| e.to_string())?)).await?;
+                    let data = evaluate(window, format!("window.__wapMuse.start({id},{},{},{owner},{reference},{expect_media})",serde_json::to_string(&submitted_prompt).map_err(|e| e.to_string())?,serde_json::to_string(&target).map_err(|e| e.to_string())?)).await?;
                     if !matches!(data.get("state").and_then(|v| v.as_str()), Some("preparing"|"attaching")) { return Err(page_error(&data)); }
                     submitted=true;
                 },
@@ -2306,6 +2370,22 @@ mod tests {
                 now + Duration::from_secs(5)
             ));
         }
+    }
+    #[test]
+    fn a_stalled_background_status_probe_retries_once_within_its_original_budget() {
+        let now = tokio::time::Instant::now();
+        let halfway = now + Duration::from_secs(10);
+        let deadline = now + Duration::from_secs(20);
+        let mut retry_at = Some(halfway);
+        assert!(!connection_retry_due("loading", &mut retry_at, now, deadline, false));
+        assert!(!connection_retry_due("login", &mut retry_at, halfway, deadline, false));
+        assert!(!connection_retry_due("loading", &mut retry_at, deadline, deadline, false));
+        assert!(connection_retry_due("loading", &mut retry_at, halfway, deadline, false));
+        assert!(!connection_retry_due("loading", &mut retry_at, halfway, deadline, false));
+
+        let mut retry_at = Some(deadline);
+        assert!(!connection_retry_due("loading", &mut retry_at, halfway, deadline, true));
+        assert!(connection_retry_due("loading", &mut retry_at, deadline, deadline, true));
     }
     #[test]
     fn only_the_exact_https_muse_origin_can_receive_prompts() {

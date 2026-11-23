@@ -12,7 +12,7 @@ const mocks={
  react:'export const useState=v=>globalThis.folderMenuHooks.state(v);export const useRef=v=>globalThis.folderMenuHooks.ref(v);export const useEffect=(f,d)=>globalThis.folderMenuHooks.effect(f,d);export const useLayoutEffect=useEffect;',
  'react-dom':'export const createPortal=children=>children;',
  'react/jsx-runtime':'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;export const Fragment="fragment";',
- 'lucide-react':['CornerDownRight','UserRoundPlus','Clock3', 'Check','Copy','ChevronDown','ChevronRight','Folder','FolderPlus','Link2','GripVertical','LayoutGrid','MoreHorizontal','Pencil','Trash2','Upload','Users','UserRoundX'].map(n=>`export const ${n}="${n}";`).join(''),
+ 'lucide-react':['CornerDownRight','UserRoundPlus','Clock3', 'Check','Copy','ChevronDown','ChevronRight','Folder','FolderPlus','Link2','GripVertical','LayoutGrid','MoreHorizontal','Pencil','Phone','Trash2','Upload','Users','UserRoundX'].map(n=>`export const ${n}="${n}";`).join(''),
  '@/i18n':'export const useI18n=()=>({t:(k,p)=>globalThis.folderMenuTranslate(k,p)});',
 };
 const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/layout/FolderHeaderRow.tsx',import.meta.url))],bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',
@@ -63,6 +63,24 @@ function fixture(mode,rect={left:700,right:940,top:650,bottom:682}) {
  };
  ui.render();return ui;
 }
+
+test("the folder action opens delivery-based calling when supported", () => {
+  const ui = fixture();
+  try {
+    ui.open();
+    const callAction = () => ui.tree.find(node => node.props.role === "menuitem" && node.props.children?.includes?.(translate("zh-CN", "folderCall.title")));
+    assert.equal(callAction(), undefined);
+    let opened = 0;
+    ui.props.onCallByDelivery = () => opened++;
+    ui.render();
+    callAction().props.onClick();
+    ui.render();
+    assert.equal(opened, 1);
+    assert.equal(ui.root, undefined);
+  } finally {
+    ui.close();
+  }
+});
 
 test('reply settings are only in a submenu, preserve the selected rule and apply each option once',()=>{
  for(const initial of [undefined,'auto','manual']) {

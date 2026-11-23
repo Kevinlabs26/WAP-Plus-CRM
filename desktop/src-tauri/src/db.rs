@@ -158,7 +158,63 @@ CREATE INDEX IF NOT EXISTS idx_messages_history_facts ON messages(
 );
 "#;
 
-fn migrate(conn: &Connection) -> Result<(), String> {
+const BOOT_OUTBOX_FILTER: &str = r#"
+    json_extract(json, '$.direction') = 'out'
+    AND (
+        COALESCE(json_extract(json, '$.deliveryStatus'), 'sent') IN ('queued', 'pending')
+        OR (COALESCE(json_extract(json, '$.deliveryStatus'), 'sent') = 'failed'
+            AND COALESCE(json_extract(json, '$.nextAttemptAt'), '') != '')
+        OR (COALESCE(json_extract(json, '$.systemKind'), '') = 'ai_proactive'
+            AND COALESCE(json_extract(json, '$.deliveryUncertain'), 0) = 1
+            AND COALESCE(json_extract(json, '$.deliveryStatus'), '') NOT IN ('sent', 'server', 'delivered', 'read', 'played'))
+    )
+"#;
+
+const CHAT_HISTORY_SUMMARY_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS chat_history_summary (
+    chat_id TEXT PRIMARY KEY NOT NULL,
+    dirty INTEGER NOT NULL DEFAULT 1,
+    foreign_owner INTEGER NOT NULL DEFAULT 0,
+    has_outgoing INTEGER NOT NULL DEFAULT 0,
+    has_history INTEGER NOT NULL DEFAULT 0,
+    latest TEXT,
+    first TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_chat_history_dirty ON chat_history_summary(chat_id) WHERE dirty = 1;
+
+CREATE TRIGGER IF NOT EXISTS chat_history_chat_insert AFTER INSERT ON chats BEGIN
+    INSERT OR IGNORE INTO chat_history_summary(chat_id) VALUES (NEW.id);
+END;
+CREATE TRIGGER IF NOT EXISTS chat_history_chat_delete AFTER DELETE ON chats BEGIN
+    DELETE FROM chat_history_summary WHERE chat_id = OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS chat_history_chat_owner AFTER UPDATE OF json ON chats
+WHEN json_extract(OLD.json, '$.accountId') IS NOT json_extract(NEW.json, '$.accountId')
+  OR json_extract(OLD.json, '$.phoneId') IS NOT json_extract(NEW.json, '$.phoneId')
+BEGIN
+    UPDATE chat_history_summary SET dirty = 1 WHERE chat_id = NEW.id AND dirty = 0;
+END;
+CREATE TRIGGER IF NOT EXISTS chat_history_message_insert AFTER INSERT ON messages BEGIN
+    UPDATE chat_history_summary SET dirty = 1 WHERE chat_id = NEW.chat_id AND dirty = 0;
+END;
+CREATE TRIGGER IF NOT EXISTS chat_history_message_delete AFTER DELETE ON messages BEGIN
+    UPDATE chat_history_summary SET dirty = 1 WHERE chat_id = OLD.chat_id AND dirty = 0;
+END;
+CREATE TRIGGER IF NOT EXISTS chat_history_message_update AFTER UPDATE OF json, chat_id, sent_at ON messages
+WHEN OLD.chat_id IS NOT NEW.chat_id OR OLD.sent_at IS NOT NEW.sent_at
+  OR json_extract(OLD.json, '$.direction') IS NOT json_extract(NEW.json, '$.direction')
+  OR json_extract(OLD.json, '$.mediaType') IS NOT json_extract(NEW.json, '$.mediaType')
+  OR json_extract(OLD.json, '$.systemKind') IS NOT json_extract(NEW.json, '$.systemKind')
+  OR json_extract(OLD.json, '$.deliveryStatus') IS NOT json_extract(NEW.json, '$.deliveryStatus')
+  OR json_extract(OLD.json, '$.deliveryUncertain') IS NOT json_extract(NEW.json, '$.deliveryUncertain')
+  OR json_extract(OLD.json, '$.accountId') IS NOT json_extract(NEW.json, '$.accountId')
+  OR json_extract(OLD.json, '$.deviceId') IS NOT json_extract(NEW.json, '$.deviceId')
+BEGIN
+    UPDATE chat_history_summary SET dirty = 1 WHERE chat_id IN (OLD.chat_id, NEW.chat_id) AND dirty = 0;
+END;
+"#;
+
+pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS meta (
@@ -270,49 +326,45 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         );
     }
 
-    // v6: 重建派生搜索索引，修复旧版本曾吞掉写入错误而留下的不完整索引。
-    // 若编译的 SQLite 无 FTS5 则跳过，搜索走 LIKE。
-    if schema_version < 6 {
-        let fts_ok = conn
-            .execute_batch(
+    // Keep the search rowid stable even if SQLite rewrites the messages table's implicit rowids.
+    if schema_version < 6 || !fts_available(conn) {
+        let rebuilt = (|| -> rusqlite::Result<()> {
+            let tx = conn.unchecked_transaction()?;
+            tx.execute_batch(
                 r#"
-                CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                DROP TABLE IF EXISTS messages_fts_keys;
+                DROP TABLE IF EXISTS messages_fts;
+                CREATE VIRTUAL TABLE messages_fts USING fts5(
                   id UNINDEXED,
                   body,
                   caption,
                   filename,
                   tokenize = 'unicode61'
                 );
+                CREATE TABLE messages_fts_keys (
+                    rowid INTEGER PRIMARY KEY,
+                    id TEXT NOT NULL UNIQUE
+                );
+                INSERT INTO messages_fts_keys(id) SELECT id FROM messages;
+                INSERT INTO messages_fts(rowid, id, body, caption, filename)
+                SELECT k.rowid, m.id,
+                       coalesce(json_extract(m.json, '$.body'), ''),
+                       coalesce(json_extract(m.json, '$.mediaCaption'), ''),
+                       coalesce(json_extract(m.json, '$.mediaFileName'), '')
+                FROM messages m JOIN messages_fts_keys k ON k.id = m.id;
+                CREATE TRIGGER messages_fts_keys_delete AFTER DELETE ON messages_fts_keys
+                BEGIN
+                    DELETE FROM messages_fts WHERE rowid = OLD.rowid;
+                END;
                 "#,
-            )
-            .is_ok();
-        if fts_ok {
-            // 一次性从现有 messages 重建；失败时移除索引，让搜索明确走 LIKE。
-            let rebuilt = (|| -> rusqlite::Result<()> {
-                let tx = conn.unchecked_transaction()?;
-                tx.execute_batch(
-                    r#"
-                    DELETE FROM messages_fts;
-                    INSERT INTO messages_fts(id, body, caption, filename)
-                    SELECT
-                      id,
-                      coalesce(json_extract(json, '$.body'), ''),
-                      coalesce(json_extract(json, '$.mediaCaption'), ''),
-                      coalesce(json_extract(json, '$.mediaFileName'), '')
-                    FROM messages;
-                    "#,
-                )?;
-                tx.commit()
-            })();
-            if let Err(error) = rebuilt {
-                conn.execute_batch("DROP TABLE IF EXISTS messages_fts;")
-                    .map_err(|e| e.to_string())?;
-                tracing::warn!(%error, "sqlite FTS5 rebuild failed; search keeps LIKE fallback");
-            } else {
-                tracing::info!("sqlite migrate → v6 (messages_fts rebuilt)");
-            }
+            )?;
+            tx.commit()
+        })();
+        if let Err(error) = rebuilt {
+            drop_fts(conn).map_err(|e| e.to_string())?;
+            tracing::warn!(%error, "sqlite FTS5 rebuild failed; search keeps LIKE fallback");
         } else {
-            tracing::warn!("sqlite FTS5 unavailable; search keeps LIKE fallback");
+            tracing::info!("sqlite migrate → v6 (messages_fts rebuilt)");
         }
     }
 
@@ -360,11 +412,23 @@ fn migrate(conn: &Connection) -> Result<(), String> {
     }
 
     conn.execute_batch(HISTORY_FACTS_INDEX_SQL).map_err(|e| e.to_string())?;
-    conn.execute(
-        "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '5')",
-        [],
-    )
-    .map_err(|e| e.to_string())?;
+    conn.execute_batch(&format!(
+        "CREATE INDEX IF NOT EXISTS idx_messages_boot_outbox ON messages(id) WHERE {BOOT_OUTBOX_FILTER};"
+    )).map_err(|e| e.to_string())?;
+    let summary_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'chat_history_summary')", [], |row| row.get(0)
+    ).map_err(|e| e.to_string())?;
+    if schema_version < 7 || !summary_exists {
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        tx.execute_batch(CHAT_HISTORY_SUMMARY_SCHEMA).map_err(|e| e.to_string())?;
+        tx.execute("INSERT OR IGNORE INTO chat_history_summary(chat_id) SELECT id FROM chats", [])
+            .map_err(|e| e.to_string())?;
+        if schema_version < 7 {
+            tx.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '7')", [])
+                .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -494,6 +558,10 @@ fn fts_available(conn: &Connection) -> bool {
     .is_some()
 }
 
+fn drop_fts(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch("DROP TABLE IF EXISTS messages_fts_keys; DROP TABLE IF EXISTS messages_fts;")
+}
+
 /// 查询串是否包含 CJK 字符（中日韩）。FTS5 默认分词对 CJK 子串搜索无效，
 /// 这类查询需要保留 LIKE 回退路径。
 fn query_has_cjk(s: &str) -> bool {
@@ -514,15 +582,12 @@ fn upsert_message_fts(
     body: &str,
     caption: &str,
     filename: &str,
-    replace: bool,
 ) -> Result<(), String> {
-    // FTS 的 id 未建索引；新消息和回执更新不能逐条扫描整份搜索历史。
-    if replace {
-        tx.execute("DELETE FROM messages_fts WHERE id = ?1", params![id])
-            .map_err(|e| e.to_string())?;
-    }
+    tx.execute("INSERT OR IGNORE INTO messages_fts_keys(id) VALUES (?1)", [id])
+        .map_err(|e| e.to_string())?;
     tx.execute(
-        "INSERT INTO messages_fts(id, body, caption, filename) VALUES (?1, ?2, ?3, ?4)",
+        "INSERT OR REPLACE INTO messages_fts(rowid, id, body, caption, filename)
+         SELECT rowid, id, ?2, ?3, ?4 FROM messages_fts_keys WHERE id = ?1",
         params![id, body, caption, filename],
     )
     .map_err(|e| e.to_string())?;
@@ -904,9 +969,8 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
                         body,
                         caption,
                         filename,
-                        previous_search.is_some(),
                     ) {
-                        tx.execute_batch("DROP TABLE messages_fts;")
+                        drop_fts(&tx)
                             .map_err(|e| e.to_string())?;
                         has_fts = false;
                         tracing::warn!(%error, "sqlite FTS5 write failed; search keeps LIKE fallback");
@@ -923,8 +987,12 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
             total_deleted += tx
                 .execute("DELETE FROM messages WHERE id = ?1", params![id])
                 .map_err(|e| e.to_string())?;
-            if fts_available(&tx) {
-                let _ = tx.execute("DELETE FROM messages_fts WHERE id = ?1", params![id]);
+            if has_fts {
+                if let Err(error) = tx.execute("DELETE FROM messages_fts_keys WHERE id = ?1", params![id]) {
+                    drop_fts(&tx).map_err(|e| e.to_string())?;
+                    has_fts = false;
+                    tracing::warn!(%error, "sqlite FTS5 delete failed; search keeps LIKE fallback");
+                }
             }
         }
         if snap.replace_messages {
@@ -941,43 +1009,46 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
                     .map_err(|e| e.to_string())?;
                 }
             }
-            total_deleted += tx
+            let removed = tx
                 .execute(
                     "DELETE FROM messages WHERE id NOT IN (SELECT id FROM _keep_messages)",
                     [],
                 )
                 .map_err(|e| e.to_string())?;
-            if fts_available(&tx) {
-                let _ = tx.execute(
-                    "DELETE FROM messages_fts WHERE id NOT IN (SELECT id FROM messages)",
+            total_deleted += removed;
+            if has_fts && removed > 0 {
+                tx.execute(
+                    "DELETE FROM messages_fts_keys WHERE id NOT IN (SELECT id FROM messages)",
                     [],
-                );
+                ).map_err(|e| e.to_string())?;
             }
         }
         // 已删除的会话：清掉其磁盘消息（chats 表已按快照同步）
         // 仅当 chats 也在本轮写入时做，避免 dirty.messages-only 误删
         if dirty.chats && row_deltas.and_then(|delta| delta.chats.as_ref()).is_none() {
-            total_deleted += tx
+            let removed = tx
             .execute(
                 "DELETE FROM messages WHERE chat_id IS NOT NULL AND chat_id != '' AND chat_id NOT IN (SELECT id FROM chats) AND chat_id NOT IN (SELECT chat_id FROM blocked_chat_remaps)",
                 [],
             )
             .map_err(|e| e.to_string())?;
-            if fts_available(&tx) {
-                let _ = tx.execute(
-                    "DELETE FROM messages_fts WHERE id NOT IN (SELECT id FROM messages)",
+            total_deleted += removed;
+            if has_fts && removed > 0 {
+                tx.execute(
+                    "DELETE FROM messages_fts_keys WHERE id NOT IN (SELECT id FROM messages)",
                     [],
-                );
+                ).map_err(|e| e.to_string())?;
             }
         }
     } // end dirty.messages
 
     if dirty.chats {
         if let Some(ids) = row_deltas.and_then(|delta| delta.chats.as_ref()) {
+            let has_fts = fts_available(&tx);
             for id in ids {
                 if blocked.contains(id) || rejected_targets.contains(id.as_str()) { continue; }
-                if fts_available(&tx) {
-                    tx.execute("DELETE FROM messages_fts WHERE id IN (SELECT id FROM messages WHERE chat_id = ?1)", params![id]).map_err(|e| e.to_string())?;
+                if has_fts {
+                    tx.execute("DELETE FROM messages_fts_keys WHERE id IN (SELECT id FROM messages WHERE chat_id = ?1)", params![id]).map_err(|e| e.to_string())?;
                 }
                 total_deleted += tx
                     .execute("DELETE FROM messages WHERE chat_id = ?1", params![id])
@@ -1225,6 +1296,22 @@ pub fn load_messages_page(
     Ok(out)
 }
 
+pub fn latest_outgoing_message(conn: &Connection, chat_id: &str) -> Result<Option<Value>, String> {
+    let json = conn
+        .query_row(
+            "SELECT json FROM messages WHERE chat_id = ?1
+             AND json_extract(json, '$.direction') = 'out'
+             AND COALESCE(json_extract(json, '$.mediaType'), '') <> 'system'
+             ORDER BY julianday(sent_at) DESC, id DESC LIMIT 1",
+            [chat_id],
+            |row| read_json_text(row, 0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    json.map(|value| serde_json::from_str(&value).map_err(|error| error.to_string()))
+        .transpose()
+}
+
 pub fn count_messages_for_chat(conn: &Connection, chat_id: &str) -> Result<i64, String> {
     conn.query_row(
         "SELECT COUNT(*) FROM messages WHERE chat_id = ?1",
@@ -1390,65 +1477,72 @@ fn load_table(conn: &Connection, table: &str) -> Result<Vec<Value>, String> {
     Ok(out)
 }
 
-fn load_chats_with_history(conn: &Connection) -> Result<Vec<Value>, String> {
-    let mut chats = load_table(conn, "chats")?;
-    // Detect old conflicts before the app proposes an automatic merge at startup.
-    let mut owners = conn.prepare(
-        "SELECT id FROM chats c WHERE EXISTS (
-            SELECT 1 FROM messages m WHERE m.chat_id = c.id
-            AND COALESCE(NULLIF(json_extract(m.json, '$.accountId'), ''), NULLIF(json_extract(m.json, '$.deviceId'), ''), '')
-                NOT IN ('', COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''), NULLIF(json_extract(c.json, '$.phoneId'), ''), ''))
-            AND COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''), NULLIF(json_extract(c.json, '$.phoneId'), ''), '') != ''
-        ) UNION SELECT chat_id FROM blocked_chat_remaps"
+pub fn refresh_chat_history_batch(conn: &Connection) -> Result<bool, String> {
+    const BATCH: usize = 32;
+    let dirty = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM chat_history_summary WHERE dirty = 1)", [], |row| row.get::<_, bool>(0),
     ).map_err(|e| e.to_string())?;
-    let blocked = owners.query_map([], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?
-        .collect::<Result<HashSet<_>, _>>().map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare(
+    if !dirty { return Ok(false); }
+    conn.prepare_cached(
             r#"
-            WITH evidence AS (
-              SELECT m.chat_id, m.sent_at,
+            WITH pending AS MATERIALIZED (
+              SELECT s.chat_id,
+                     COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''),
+                              NULLIF(json_extract(c.json, '$.phoneId'), ''), '') AS owner
+              FROM chat_history_summary s CROSS JOIN chats c ON c.id = s.chat_id
+              WHERE s.dirty = 1 ORDER BY s.chat_id LIMIT ?1
+            ), evidence AS (
+              SELECT p.chat_id, p.owner, m.sent_at,
                      json_extract(m.json, '$.direction') AS direction,
+                     COALESCE(json_extract(m.json, '$.mediaType'), '') AS media,
                      COALESCE(json_extract(m.json, '$.systemKind'), '') AS kind,
                      COALESCE(json_extract(m.json, '$.deliveryStatus'), 'sent') AS delivery,
                      COALESCE(json_extract(m.json, '$.deliveryUncertain'), 0) AS uncertain,
                      COALESCE(NULLIF(json_extract(m.json, '$.accountId'), ''),
-                              NULLIF(json_extract(m.json, '$.deviceId'), ''), '') AS sender,
-                     COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''),
-                              NULLIF(json_extract(c.json, '$.phoneId'), ''), '') AS owner
-              FROM messages m INDEXED BY idx_messages_history_facts JOIN chats c ON c.id = m.chat_id
-              WHERE COALESCE(m.chat_id, '') != ''
-                AND COALESCE(json_extract(m.json, '$.mediaType'), '') != 'system'
+                              NULLIF(json_extract(m.json, '$.deviceId'), ''), '') AS sender
+              FROM pending p LEFT JOIN messages m INDEXED BY idx_messages_history_facts ON m.chat_id = p.chat_id
+            ), activity AS (
+              SELECT *, owner != '' AND sender NOT IN ('', owner) AS foreign_owner,
+                     chat_id != '' AND media != 'system' AND direction IN ('in', 'out')
+                       AND (direction = 'in' OR delivery NOT IN ('pending', 'queued', 'failed')) AS eligible
+              FROM evidence
             )
-            SELECT chat_id,
-                   MAX(CASE WHEN kind = '' AND direction = 'out'
-                             AND (sender = '' OR owner = '' OR sender = owner) THEN 1 ELSE 0 END),
-                   MAX(CASE WHEN kind = ''
-                             AND (sender = '' OR owner = '' OR sender = owner) THEN 1 ELSE 0 END),
-                   MAX(CASE WHEN direction = 'out' AND uncertain = 0
+            INSERT OR REPLACE INTO chat_history_summary(chat_id, dirty, foreign_owner, has_outgoing, has_history, latest, first)
+            SELECT chat_id, 0, MAX(foreign_owner),
+                   MAX(CASE WHEN eligible AND NOT foreign_owner AND kind = '' AND direction = 'out' THEN 1 ELSE 0 END),
+                   MAX(CASE WHEN eligible AND NOT foreign_owner AND kind = '' THEN 1 ELSE 0 END),
+                   MAX(CASE WHEN eligible AND direction = 'out' AND uncertain = 0
                              AND delivery IN ('sent', 'server', 'delivered', 'read', 'played')
                             THEN strftime('%Y-%m-%dT%H:%M:%fZ', sent_at) || '|' ||
                                  CASE WHEN sender != '' THEN sender ELSE owner END END),
-                   MIN(CASE WHEN (sender = '' OR owner = '' OR sender = owner)
+                   MIN(CASE WHEN eligible AND NOT foreign_owner
                              AND (kind = '' OR direction = 'out')
                              AND (direction = 'in' OR (uncertain = 0 AND delivery != 'local'))
                             THEN strftime('%Y-%m-%dT%H:%M:%fZ', sent_at) ||
                                  CASE WHEN direction = 'out' THEN '|0' ELSE '|1' END END)
-            FROM evidence
-            WHERE direction IN ('in', 'out')
-              AND (direction = 'in' OR delivery NOT IN ('pending', 'queued', 'failed'))
+            FROM activity
             GROUP BY chat_id
             "#,
-        )
-        .map_err(|e| e.to_string())?;
+    ).and_then(|mut statement| statement.execute([BATCH as i64]))
+        .map(|updated| updated == BATCH).map_err(|e| e.to_string())
+}
+
+fn load_chats_with_history(conn: &Connection) -> Result<Vec<Value>, String> {
+    while refresh_chat_history_batch(conn)? {}
+    let mut chats = load_table(conn, "chats")?;
+    let mut blocked = blocked_chat_remap_ids(conn)?;
+    let mut stmt = conn.prepare(
+        "SELECT chat_id, foreign_owner, has_outgoing, has_history, latest, first FROM chat_history_summary"
+    ).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, bool>(1)?,
                 row.get::<_, bool>(2)?,
-                row.get::<_, Option<String>>(3)?,
+                row.get::<_, bool>(3)?,
                 row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
             ))
         })
         .map_err(|e| e.to_string())?;
@@ -1457,7 +1551,10 @@ fn load_chats_with_history(conn: &Connection) -> Result<Vec<Value>, String> {
     let mut last_successful = HashMap::new();
     let mut first_conversation = HashMap::new();
     for row in rows {
-        let (id, outgoing, active, latest, first) = row.map_err(|e| e.to_string())?;
+        let (id, foreign_owner, outgoing, active, latest, first) = row.map_err(|e| e.to_string())?;
+        if foreign_owner {
+            blocked.insert(id.clone());
+        }
         if outgoing {
             outgoing_chat_ids.insert(id.clone());
         }
@@ -1529,7 +1626,7 @@ fn load_messages_boot(conn: &Connection) -> Result<Vec<Value>, String> {
         return load_table(conn, "messages");
     }
     let mut stmt = conn
-        .prepare(
+        .prepare(&format!(
             r#"
             WITH follow_up_chats AS MATERIALIZED (
                 SELECT reply.chat_id,
@@ -1567,16 +1664,7 @@ fn load_messages_boot(conn: &Connection) -> Result<Vec<Value>, String> {
                     ORDER BY sent_at DESC, id DESC LIMIT ?1
                 )
                 UNION
-                SELECT id FROM messages INDEXED BY idx_messages_history_facts
-                WHERE json_extract(json, '$.direction') = 'out'
-                AND (
-                    COALESCE(json_extract(json, '$.deliveryStatus'), 'sent') IN ('queued', 'pending')
-                    OR (COALESCE(json_extract(json, '$.deliveryStatus'), 'sent') = 'failed'
-                        AND COALESCE(json_extract(json, '$.nextAttemptAt'), '') != '')
-                    OR (COALESCE(json_extract(json, '$.systemKind'), '') = 'ai_proactive'
-                        AND COALESCE(json_extract(json, '$.deliveryUncertain'), 0) = 1
-                        AND COALESCE(json_extract(json, '$.deliveryStatus'), '') NOT IN ('sent', 'server', 'delivered', 'read', 'played'))
-                )
+                SELECT id FROM messages INDEXED BY idx_messages_boot_outbox WHERE {BOOT_OUTBOX_FILTER}
                 UNION
                 SELECT json_extract(task.value, '$.messageId')
                 FROM settings, json_each(settings.value, '$.scheduledMessages') AS task
@@ -1605,7 +1693,7 @@ fn load_messages_boot(conn: &Connection) -> Result<Vec<Value>, String> {
             )
             ORDER BY COALESCE(sent_at, '') DESC, id DESC
             "#,
-        )
+        ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![BOOT_MESSAGES_CAP], |row| {
@@ -1758,7 +1846,7 @@ pub fn clear_chat_messages(conn: &Connection, chat_id: &str) -> Result<(), Strin
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     if fts_available(&tx) {
         tx.execute(
-            "DELETE FROM messages_fts WHERE id IN (SELECT id FROM messages WHERE chat_id = ?1)",
+            "DELETE FROM messages_fts_keys WHERE id IN (SELECT id FROM messages WHERE chat_id = ?1)",
             params![chat_id],
         )
         .map_err(|e| e.to_string())?;
@@ -1786,7 +1874,7 @@ pub fn clear_remote_messages_before(
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     if fts_available(&tx) {
         tx.execute(
-            "DELETE FROM messages_fts WHERE id IN (
+            "DELETE FROM messages_fts_keys WHERE id IN (
                 SELECT id FROM messages
                 WHERE (
                     json_extract(json, '$.waKey.remoteJid') = ?1
@@ -1830,10 +1918,11 @@ pub fn delete_messages_by_keys(
 ) -> Result<(), String> {
     let account_id = account_id.unwrap_or("");
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let has_fts = fts_available(&tx);
     for key in keys.iter().filter(|key| !key.is_empty()) {
-        if fts_available(&tx) {
+        if has_fts {
             tx.execute(
-                "DELETE FROM messages_fts WHERE id IN (
+                "DELETE FROM messages_fts_keys WHERE id IN (
                     SELECT id FROM messages
                     WHERE (
                         id = ?1
@@ -1877,7 +1966,7 @@ pub fn delete_messages_by_keys(
 pub fn clear_all(conn: &Connection) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     if fts_available(&tx) {
-        tx.execute("DELETE FROM messages_fts", [])
+        tx.execute("DELETE FROM messages_fts_keys", [])
             .map_err(|e| e.to_string())?;
     }
     tx.execute_batch(
@@ -1991,6 +2080,38 @@ mod tests {
         assert!(chats_with_inbound(&conn, &["x".repeat(1001)]).is_err());
         assert!(chats_with_inbound(&conn, &vec!["empty".into(); 50_001]).is_err());
         assert_eq!(count_messages_for_chat(&conn, "text").unwrap(), 1);
+    }
+
+    #[test]
+    fn latest_outgoing_receipt_ignores_newer_inbound_and_system_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mut messages = vec![
+            serde_json::json!({"id":"older-double", "chatId":"cold", "direction":"out", "deliveryStatus":"delivered", "sentAt":"2025-01-02T00:00:00Z"}),
+            serde_json::json!({"id":"last-single", "chatId":"cold", "direction":"out", "deliveryStatus":"server", "sentAt":"2025-01-02T00:00:00.500Z"}),
+            serde_json::json!({"id":"system", "chatId":"cold", "direction":"out", "mediaType":"system", "sentAt":"2026-01-01T00:00:00.000Z"}),
+        ];
+        messages.extend((0..2002).map(|i| serde_json::json!({
+            "id": format!("incoming-{i}"), "chatId": "cold", "direction": "in", "sentAt": "2026-11-01T00:00:00.000Z"
+        })));
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: vec![serde_json::json!({"id":"cold"})],
+                messages,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(load_messages_boot(&conn)
+            .unwrap()
+            .iter()
+            .all(|message| message["id"] != "last-single"));
+        assert_eq!(
+            latest_outgoing_message(&conn, "cold").unwrap().unwrap()["id"],
+            "last-single"
+        );
+        assert!(latest_outgoing_message(&conn, "missing").unwrap().is_none());
     }
 
     #[test]
@@ -2907,6 +3028,93 @@ mod tests {
     }
 
     #[test]
+    fn history_summaries_seed_legacy_chats_and_refresh_one_batch_at_a_time() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        save_snapshot(&conn, &AppSnapshot {
+            chats: (0..65).map(|i| json!({"id": format!("chat-{i:02}"), "accountId":"wa-a"})).collect(),
+            messages: vec![json!({"id":"reply", "chatId":"chat-32", "direction":"in", "sentAt":"2026-11-01T10:00:00Z"})],
+            ..Default::default()
+        }).unwrap();
+        conn.execute_batch("DELETE FROM chat_history_summary; UPDATE meta SET value = '6' WHERE key = 'schema_version';").unwrap();
+        migrate(&conn).unwrap();
+        let pending = || conn.query_row("SELECT COUNT(*) FROM chat_history_summary WHERE dirty = 1", [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(pending(), 65);
+        assert!(refresh_chat_history_batch(&conn).unwrap());
+        assert_eq!(pending(), 33);
+        let chats = load_chats_with_history(&conn).unwrap();
+        assert_eq!(pending(), 0);
+        assert_eq!(chats.iter().find(|c| c["id"] == "chat-32").unwrap()["hasMessageHistory"], true);
+        let writes = conn.total_changes();
+        assert_eq!(load_chats_with_history(&conn).unwrap(), chats);
+        assert_eq!(conn.total_changes(), writes);
+    }
+
+    #[test]
+    fn history_summary_invalidates_only_changed_chats_with_the_message_transaction() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        save_snapshot(&conn, &AppSnapshot {
+            chats: vec![json!({"id":"a", "accountId":"wa-a"}), json!({"id":"b", "accountId":"wa-b"})],
+            messages: vec![
+                json!({"id":"m", "chatId":"a", "accountId":"wa-a", "direction":"out", "deliveryStatus":"pending", "sentAt":"2026-11-01T10:00:00Z"}),
+                json!({"id":"foreign", "chatId":"a", "accountId":"wa-b", "mediaType":"system"}),
+            ],
+            ..Default::default()
+        }).unwrap();
+        let state = |id: &str| conn.query_row(
+            "SELECT dirty FROM chat_history_summary WHERE chat_id = ?1", [id], |row| row.get::<_, i64>(0),
+        ).unwrap();
+        let chat_a = || load_chats_with_history(&conn).unwrap().into_iter().find(|c| c["id"] == "a").unwrap();
+        assert_eq!(chat_a()["historyRemapBlocked"], true);
+        let tx = conn.unchecked_transaction().unwrap();
+        tx.execute("DELETE FROM messages WHERE id = 'foreign'", []).unwrap();
+        assert_eq!(state("a"), 1);
+        tx.rollback().unwrap();
+        assert_eq!(state("a"), 0);
+        assert_eq!(chat_a()["historyRemapBlocked"], true);
+
+        delete_messages_by_keys(&conn, &["foreign".into()], Some("wa-b")).unwrap();
+        update_message_acks(&conn, &[json!({"id":"m", "ack":"sent"})], "wa-a").unwrap();
+        assert_eq!((state("a"), state("b")), (1, 0));
+        let sent = chat_a();
+        assert_eq!(sent["hasOutgoingHistory"], true);
+        assert_eq!(sent["lastSuccessfulOutgoing"]["accountId"], "wa-a");
+        assert!(sent.get("historyRemapBlocked").is_none());
+        clear_chat_messages(&conn, "a").unwrap();
+        assert_eq!((state("a"), state("b")), (1, 0));
+        assert_eq!(chat_a()["hasMessageHistory"], false);
+        assert!(chat_a().get("lastSuccessfulOutgoing").is_none());
+    }
+
+    #[test]
+    fn legacy_search_upgrade_assigns_stable_keys_and_rebuilds_only_once() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO meta VALUES ('schema_version', '5');
+             CREATE TABLE messages (id TEXT PRIMARY KEY, chat_id TEXT, sent_at TEXT, json TEXT NOT NULL);
+             INSERT INTO messages VALUES ('a', 'chat', '', '{\"id\":\"a\",\"body\":\"bonjour\"}');
+             INSERT INTO messages VALUES ('b', 'chat', '', '{\"id\":\"b\",\"body\":\"salut\"}');
+             CREATE VIRTUAL TABLE messages_fts USING fts5(id UNINDEXED, body, caption, filename);
+             INSERT INTO messages_fts(rowid, id, body) VALUES (90, 'a', 'obsolete');",
+        ).unwrap();
+
+        migrate(&conn).unwrap();
+        assert_eq!(search_messages(&conn, "bonjour", 10).unwrap()[0]["id"], "a");
+        assert!(search_messages(&conn, "obsolete", 10).unwrap().is_empty());
+        let writes = conn.total_changes();
+        migrate(&conn).unwrap();
+        assert_eq!(conn.total_changes(), writes);
+
+        conn.execute_batch("VACUUM").unwrap();
+        delete_messages_by_keys(&conn, &["a".into()], None).unwrap();
+        assert!(search_messages(&conn, "bonjour", 10).unwrap().is_empty());
+        assert_eq!(search_messages(&conn, "salut", 10).unwrap()[0]["id"], "b");
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM messages_fts", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+    }
+
+    #[test]
     fn delivery_and_media_updates_preserve_search_rows_while_text_edits_replace_them() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
@@ -2926,6 +3134,7 @@ mod tests {
         first["body"] = json!("bonsoir");
         first["mediaCaption"] = json!("invitation");
         save(vec![first]);
+        assert_eq!(row(), before, "text updates must keep the stable rowid");
         assert_eq!(conn.query_row("SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'bonjour'", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
         assert_eq!(conn.query_row("SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'bonsoir OR invitation'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(conn.query_row("SELECT count(*) FROM messages_fts", [], |r| r.get::<_, i64>(0)).unwrap(), 2);

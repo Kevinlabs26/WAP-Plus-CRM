@@ -94,6 +94,7 @@ export function MuseWebFields(){
     if(!status)return t('muse.statusUnknown');
     if(status.ready)return t('muse.statusReady');
     if(status.state==='checking'||status.state==='loading')return t('muse.statusChecking');
+    if(status.state==='unconfirmed')return t('muse.statusUnconfirmed');
     if(status.state==='login')return t('muse.statusLogin');
     if(status.state==='quota')return t('muse.statusQuota');
     if(status.state==='busy')return t('muse.statusBusy');
@@ -170,6 +171,7 @@ export function MuseWebFields(){
           <Button size="xs" variant="secondary" className={actionClass} aria-label={t('muse.check')} title={t('muse.check')} disabled={busy||queueBusy} onClick={()=>void run(async()=>{
             const status=await checkAccount(account.id);
             await flushPersist(()=>useAppStore.getState());
+            if(status.state==='unconfirmed')return t('muse.statusUnconfirmedHint');
             if(!status.ready)throw Error(status.message||t('muse.statusLogin'));
             return t('muse.statusReady');
           })}><RefreshCw className="h-3.5 w-3.5" aria-hidden="true" /></Button>

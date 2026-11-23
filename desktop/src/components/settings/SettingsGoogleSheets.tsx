@@ -131,7 +131,9 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
     });
     if (confirmed) await run(disconnectSheets);
   }
-  const unique = (header: string) => !!header && headers.filter(value => value === header).length === 1;
+  const headingCounts = new Map<string, number>();
+  for (const header of headers) headingCounts.set(header, (headingCounts.get(header) ?? 0) + 1);
+  const unique = (header: string) => !!header.trim() && headingCounts.get(header) === 1;
   const editingTagField = fields.find(field => field.id === tagStyleEditor?.fieldId);
   function editTagStyle(field: SheetField) {
     setTagStyleEditor({ fieldId: field.id, draft: normalizeSheetTagStyle(field.primaryTagStyle) });
@@ -296,7 +298,10 @@ export function SettingsGoogleSheets({ onCloseGuardChange }: { onCloseGuardChang
         <p className="text-xs">{t("sheets.fields")}</p>
         <p className="text-xs text-zinc-500">{t("sheets.columnLimit", { max: MAX_SHEET_DISPLAY_COLUMNS })}</p>
         {headers.map((header, index) => {
-          if (!unique(header)) return null;
+          if (!unique(header)) return <div key={index} className="flex flex-wrap items-center gap-2 border-b border-zinc-800/70 py-2 text-sm text-zinc-500">
+            <span>{letter(index)} · {header.trim() || t("sheets.blankHeading")}</span>
+            {!!header.trim() && <span className="text-xs">{t("sheets.duplicateHeading")}</span>}
+          </div>;
           const field = fields.find(field => "heading" in field.column && field.column.heading === header);
           const update = (patch: Partial<SheetField>) => setFields(values => values.map(value => value.id === field?.id ? { ...value, ...patch } : value));
           const setAction = (action: SheetAction | undefined) => {
