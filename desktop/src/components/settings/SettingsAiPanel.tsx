@@ -14,7 +14,10 @@ import { systemTimeZone } from "@/lib/timeZone";
 import { isChatModel, type ModelPurpose } from "@/lib/modelCapabilities";
 import { MuseWebFields } from "./MuseWebFields";
 import { geminiGenerate } from "@/lib/gemini";
-import { listVertexModels, parseVertexServiceAccount, VERTEX_CREDENTIAL_LIMIT, VERTEX_DEFAULT_MODEL } from "@/lib/vertexAi";
+import {
+  listVertexModels, packVertexCredentials, parseVertexServiceAccount, unpackVertexCredentials,
+  VERTEX_CREDENTIAL_LIMIT, VERTEX_DEFAULT_MODEL, type VertexCredentials,
+} from "@/lib/vertexAi";
 
 export function SettingsAiPanel() {
   const { t } = useI18n();
@@ -142,8 +145,11 @@ export function AiServiceFields({ settings, updateSettings, showMockHint = true,
 function VertexFields({ settings, updateSettings }: { settings: AppSettings; updateSettings: (patch: Partial<AppSettings>) => void }) {
   const { t } = useI18n();
   const credential = settings.vertexCredential?.trim() || "";
+  const credentials = unpackVertexCredentials(credential);
+  const { apiKey, serviceAccountJson, mode } = credentials;
+  const updateCredentials = (patch: Partial<VertexCredentials>) =>
+    updateSettings({ vertexCredential: packVertexCredentials({ ...credentials, ...patch }) });
   const model = settings.aiModel.trim() || VERTEX_DEFAULT_MODEL;
-  const imported = credential.startsWith("{");
   const fileInput = useRef<HTMLInputElement>(null);
   const pending = useRef<AbortController>();
   const [action, setAction] = useState<"import" | "models" | "verify">();
@@ -174,7 +180,7 @@ function VertexFields({ settings, updateSettings }: { settings: AppSettings; upd
   }
 
   return <>
-    {!imported && <SecretInput full label="Vertex Express API Key" value={settings.vertexCredential} placeholder="AIza…" onChange={vertexCredential => updateSettings({ vertexCredential })} />}
+    <SecretInput full label="Vertex Express API Key" value={apiKey} placeholder="AQ.… / AIza…" onChange={apiKey => updateCredentials({ apiKey })} />
     <div className="col-span-2">
       <p className="text-2xs text-zinc-500">{t("settingsAi.vertexImport")}</p>
       <input ref={fileInput} type="file" accept=".json,application/json" className="hidden" onChange={event => {
@@ -185,7 +191,7 @@ function VertexFields({ settings, updateSettings }: { settings: AppSettings; upd
           const raw = file.size <= VERTEX_CREDENTIAL_LIMIT ? await file.text() : "";
           signal.throwIfAborted();
           try {
-            updateSettings({ vertexCredential: JSON.stringify(parseVertexServiceAccount(raw)) });
+            updateCredentials({ serviceAccountJson: JSON.stringify(parseVertexServiceAccount(raw)) });
           } catch {
             throw Error(t("settingsAi.vertexInvalidJson"));
           }
@@ -195,12 +201,25 @@ function VertexFields({ settings, updateSettings }: { settings: AppSettings; upd
         <button type="button" className="ui-control px-2.5 disabled:opacity-50" disabled={busy} onClick={() => fileInput.current?.click()}>
           {t("contactImport.chooseFile")}
         </button>
-        {imported && <>
+        {serviceAccountJson && <>
           <span className="text-zinc-500">{t("settingsAi.vertexImported")}</span>
-          <button type="button" className="ui-control px-2.5" onClick={() => updateSettings({ vertexCredential: "" })}>{t("settingsAi.vertexRemove")}</button>
+          <button type="button" className="ui-control px-2.5" disabled={busy} onClick={() => updateCredentials({ serviceAccountJson: "" })}>{t("settingsAi.vertexRemove")}</button>
         </>}
       </div>
     </div>
+    {apiKey && serviceAccountJson && (
+      <label className="col-span-2 block text-2xs text-zinc-500">
+        {t("settingsAi.vertexAuthMethod")}
+        <select
+          className="ui-control mt-1 w-full px-2.5 text-[13px]"
+          value={mode}
+          onChange={event => updateCredentials({ mode: event.target.value === "service_account" ? "service_account" : "express" })}
+        >
+          <option value="express">Vertex Express API Key</option>
+          <option value="service_account">{t("settingsAi.vertexServiceAccount")}</option>
+        </select>
+      </label>
+    )}
     <div className="col-span-2 flex items-end gap-2">
       <label className="block min-w-0 flex-1 text-2xs text-zinc-500">
         {t("settingsAi.chatModel")}

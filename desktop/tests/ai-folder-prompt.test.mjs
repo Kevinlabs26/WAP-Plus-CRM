@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { resolveAiReplyProfile, resolveFolderAiProfile } from '../src/lib/aiPromptScope.ts';
 import { generateSuggestions, getSuggestionContextKey } from '../src/lib/aiSuggest.ts';
+import { evaluatePromptPlan, remapPromptPlanBindings } from '../src/lib/promptPlans.ts';
 
 const folder = (id, prompt, chatIds = [], scope = { type: 'account', accountId: 'a' }, parentId) =>
   ({ id, name: id, sort: 0, aiSystemPrompt: prompt, chatIds, scope, parentId });
@@ -70,14 +71,52 @@ test('all provider paths and manual/selected/automatic replies use one folder pr
     const text = '[{"text":"Hello there"}]';
     return Response.json({ choices: [{ message: { content: text } }], candidates: [{ content: { parts: [{ text }] } }], message: { content: text } });
   });
-  for (const aiProvider of ['custom', 'gemini', 'ollama']) for (const opts of [{}, { auto: true }, { replyTo: history[0] }]) {
-    const s = { ...base(), aiProvider, aiModel: 'test-model', customAiBaseUrl: 'https://example.invalid', customAiModel: 'test', customAiKey: 'test', geminiKey: 'test', ollamaUrl: 'http://localhost:11434' };
+  for (const aiProvider of ['custom', 'gemini', 'vertex', 'ollama']) for (const opts of [{}, { auto: true }, { replyTo: history[0] }]) {
+    const s = { ...base(), aiProvider, aiModel: 'test-model', customAiBaseUrl: 'https://example.invalid', customAiModel: 'test', customAiKey: 'test', geminiKey: 'test', vertexCredential: 'AQ.test-key', ollamaUrl: 'http://localhost:11434',
+      aiPromptTemplates: [{ id: 'daily', name: 'Day one', prompt: 'DAILY TEMPLATE' }] };
+    s.chatFolders[0].aiPromptPlan = { mode: 'fixed', templateId: 'daily' };
     const result = await generateSuggestions(contact, history, s, { accountId: 'a', ...opts });
     assert.equal(result.fallback, false);
     assert.ok(system.includes('PARENT ROLE'));
+    assert.ok(system.includes('DAILY TEMPLATE'));
     assert.ok(!system.includes('GLOBAL ROLE') && !system.includes('ACCOUNT A'));
     assert.ok(system.includes('no-invention rules'), 'folder prompts retain the existing safety rules');
   }
+});
+
+test('daily plans switch on local time, refresh the reply context and support per-chat overrides', t => {
+  let now = Date.parse('2026-10-25T00:29:00Z');
+  t.mock.method(Date, 'now', () => now);
+  const s = { ...base(), aiProvider: 'gemini', aiPromptTemplates: [
+    { id: 'a', name: 'Intro', prompt: 'INTRO STAGE' },
+    { id: 'b', name: 'Quote', prompt: 'QUOTE STAGE' },
+  ] };
+  const rotation = { mode: 'rotation', templateIds: ['a', 'b'], startDate: '2026-10-24',
+    switchTime: '02:30', timeZone: 'Europe/Paris', loop: true };
+  s.chatFolders[0].aiPromptPlan = rotation;
+  const prompt = () => resolveAiReplyProfile(s, 'a', 'chat').prompt;
+  const context = () => getSuggestionContextKey(contact, history, s, 'a', { chatId: 'chat', auto: true });
+  const before = context();
+  assert.match(prompt(), /INTRO STAGE/);
+  now = Date.parse('2026-10-25T00:30:00Z');
+  assert.match(prompt(), /QUOTE STAGE/);
+  assert.notEqual(context(), before);
+  now = Date.parse('2026-10-25T01:15:00Z');
+  assert.match(prompt(), /QUOTE STAGE/, 'repeated wall-clock hour cannot roll back');
+  now = Date.parse('2026-10-26T01:30:00Z');
+  assert.match(prompt(), /INTRO STAGE/, 'rotation loops');
+  const final = evaluatePromptPlan({ ...rotation, loop: false }, s.aiPromptTemplates, now);
+  assert.equal(final.current.id, 'b');
+  assert.equal(final.next, undefined);
+  assert.equal(evaluatePromptPlan(rotation, s.aiPromptTemplates, Date.parse('2026-10-23T00:00:00Z')).next.id, 'a');
+  s.aiPromptPlanByChat = { '["a","chat"]': { mode: 'fixed', templateId: 'b' } };
+  assert.match(prompt(), /QUOTE STAGE/);
+  assert.doesNotMatch(resolveAiReplyProfile(s, 'b', 'chat').prompt, /STAGE/);
+  assert.deepEqual(remapPromptPlanBindings(s.aiPromptPlanByChat, new Map([['chat', 'next']])), {
+    '["a","next"]': { mode: 'fixed', templateId: 'b' },
+  });
+  s.aiPromptTemplates.pop();
+  assert.match(resolveAiReplyProfile(s, 'a', 'chat').error, /模板或方案已不存在/);
 });
 
 test('folder additions compose dynamically with templates and parents without leaking another account',()=>{

@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
+import { packVertexCredentials, unpackVertexCredentials } from "../src/lib/vertexAi.ts";
 
 let sequence = 0;
 async function setup({ sqlite = false, readError = false, writeError = false, clearError = false, idbError = false, snapshot = null, fullHistory = null, fullHistoryError = false, secureReadError = false, secureWriteError = false, pageError = false, rowDeltas = true } = {}) {
   const values = new Map();
   const calls = [];
+  let secureSecrets = null;
   globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
   globalThis.indexedDB = {
     open() {
@@ -41,6 +43,8 @@ async function setup({ sqlite = false, readError = false, writeError = false, cl
     calls.push({ cmd, args });
     if (cmd === "secure_save_secrets" && secureWriteError) throw new Error("DPAPI write failed");
     if (cmd === "secure_load_secrets" && secureReadError) throw new Error("DPAPI unavailable");
+    if (cmd === "secure_save_secrets") { secureSecrets = structuredClone(args.secrets); return null; }
+    if (cmd === "secure_load_secrets") return structuredClone(secureSecrets);
     if (cmd === "db_info") return { engine: sqlite ? "sqlite" : "idb", snapshotRowDeltas: rowDeltas };
     if (cmd === "db_load" && readError) throw new Error("SQLite unavailable");
     if (cmd === "db_save" && writeError) throw new Error("SQLite write failed");
@@ -573,6 +577,19 @@ test("all shared save paths strip credentials without mutating runtime settings"
     assert.equal(settings.customAiKey, "secret");
     assert.equal(settings.transcriptionApiKey, "speech-secret");
   }
+});
+
+test("the secure store round-trips both Vertex credentials and their selected method", async () => {
+  const { api } = await setup({ sqlite: true });
+  const credentials = {
+    mode: "service_account",
+    apiKey: "AQ.vertex-test-key",
+    serviceAccountJson: '{"type":"service_account","private_key":"test"}',
+  };
+  const vertexCredential = packVertexCredentials(credentials);
+  assert.equal(await api.saveSecureSecrets({ vertexCredential }), true);
+  const loaded = await api.loadSecureSecrets();
+  assert.deepEqual(unpackVertexCredentials(loaded.vertexCredential), credentials);
 });
 
 test("encrypted secret read errors propagate instead of looking like missing keys", async () => {

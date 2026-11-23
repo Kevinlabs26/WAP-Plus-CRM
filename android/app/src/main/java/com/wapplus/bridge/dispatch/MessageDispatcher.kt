@@ -50,8 +50,6 @@ class MessageDispatcher(
             if (!root.isNull("deviceId") && requestedDevice != BridgeApp.deviceId(context)) {
                 return reply(error(id, "device_mismatch", "所选手机与实际连接的手机不匹配"))
             }
-            Log.i(TAG, "dispatch type=$type")
-
             when (type) {
                 "contacts.save" -> {
                     val name = payload.optString("name").trim()
@@ -254,8 +252,9 @@ class MessageDispatcher(
                 else -> reply(error(id, "unsupported_message_type", "不支持的消息类型：$type"))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "bad envelope", e)
-            reply(error("", "invalid_payload", e.message ?: "JSON envelope 无效"))
+            // Parser exceptions can include the original envelope.
+            Log.w(TAG, "Rejected bridge envelope: ${e.javaClass.simpleName}")
+            reply(error("", "invalid_payload", "JSON envelope 无效"))
         }
     }
 

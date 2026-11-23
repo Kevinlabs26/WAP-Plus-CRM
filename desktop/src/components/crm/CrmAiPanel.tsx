@@ -24,8 +24,10 @@ import {
 import { generateSuggestions, getSuggestionContextKey, hasRealAiKey, type GenerateSuggestionsResult } from "@/lib/aiSuggest";
 import { generateContactConversationSummary, getAiConversationSummaryStatus, subscribeAiConversationSummary } from "@/lib/aiConversationSummary";
 import { createSuggestionCache, SUGGESTION_MAX_AGE_MS } from "@/lib/aiSuggestionCache";
-import { resolveAiReplyProfile } from "@/lib/aiPromptScope";
+import { resolveAiReplyProfile, resolveChatPromptPlan } from "@/lib/aiPromptScope";
 import { PlaybookBinding } from "./PlaybookBinding";
+import { ChatPromptPlan } from "./ChatPromptPlan";
+import { usesPromptPlans } from "@/lib/promptPlans";
 import type { Message, WhatsAppLabel } from "@/types/crm";
 import { ContactAvatar } from "./ContactAvatar";
 import { GoogleSheetInfo } from "./GoogleSheetInfo";
@@ -214,11 +216,18 @@ export function CrmAiPanel() {
   const replyScope = resolveAutoReplyScope(settings, selectedChatId || "");
 
   const aiProfile = resolveAiReplyProfile(settings, aiAccountId, selectedChatId || undefined);
+  const promptPlansEnabled = usesPromptPlans(settings.aiProvider);
+  const chatPromptPlan = promptPlansEnabled ? resolveChatPromptPlan(settings, aiAccountId, selectedChatId || undefined) : {};
   const needsHuman=replyScope.mode==="auto"&&autoRuntime?.phase==="human"&&autoRuntime.inboundId===lastIn?.id&&(!autoRuntime.accountId||autoRuntime.accountId===aiAccountId);
   const expansionKey=JSON.stringify([selectedChatId,aiAccountId,replyScope.mode,needsHuman?lastIn?.id:""]);
   const suggestionsOpen=suggestionExpansion?.key===expansionKey?suggestionExpansion.open:replyScope.mode!=="auto"||needsHuman;
   const [planClock,setPlanClock]=useState(0);
-  useEffect(()=>{if(!settings.aiPlaybookPlans?.length)return;const timer=window.setInterval(()=>setPlanClock(Date.now()),30000);return()=>window.clearInterval(timer);},[settings.aiPlaybookPlans?.length]);
+  const watchPlan = promptPlansEnabled ? chatPromptPlan.plan?.mode === "rotation" : !!settings.aiPlaybookPlans?.length;
+  useEffect(() => {
+    if (!watchPlan) return;
+    const timer = window.setInterval(() => setPlanClock(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [watchPlan]);
   const suggestionKey = useMemo(() => getSuggestionContextKey(contact, thread, settings, aiAccountId, { chatId: selectedChatId || undefined,count:1 }),
     [selectedChatId, selectedContactId, contact, thread, settings, aiAccountId,planClock]);
   const latestSuggestionKey = useRef(suggestionKey);
@@ -360,8 +369,17 @@ export function CrmAiPanel() {
       setAiSource("unconfigured");
       return;
     }
+    const key = watchPlan ? getSuggestionContextKey(contact, thread, settings, aiAccountId, {
+      chatId: selectedChatId || undefined, count: 1,
+    }) : suggestionKey;
+    if (key !== suggestionKey) {
+      suggestionCache.cancelPending(suggestionKey);
+      previousSuggestionKey.current = key;
+      latestSuggestionKey.current = key;
+      useAppStore.setState({ aiSuggestions: [] });
+      setPlanClock(Date.now());
+    }
     const request = ++generation.current;
-    const key = suggestionKey;
     setSuggestionExpansion({key:expansionKey,open:true});
     setLoading(true);
     setAiError("");
@@ -604,7 +622,10 @@ export function CrmAiPanel() {
                 {t("contact.aiChatInstructionsHint")}
               </p>
             </section>
-            {selectedChatId && <PlaybookBinding accountId={aiAccountId} chatId={selectedChatId}/>}
+            {selectedChatId && settings.aiProvider === "muse" && <PlaybookBinding accountId={aiAccountId} chatId={selectedChatId} />}
+            {selectedChatId && aiAccountId && promptPlansEnabled && <ChatPromptPlan
+              key={JSON.stringify([aiAccountId, selectedChatId])} accountId={aiAccountId} chatId={selectedChatId}
+              inherited={resolveChatPromptPlan(settings, aiAccountId, selectedChatId, true)} />}
 
             {activeOrder && contact.stage !== "won" && contact.stage !== "after_sales" && (
               <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-2.5">

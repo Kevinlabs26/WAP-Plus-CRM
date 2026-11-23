@@ -7,25 +7,54 @@ const src = fileURLToPath(new URL("../src", import.meta.url));
 const mocks = {
   react: `export const useState = value => pairingHarness.state(value), useRef = value => pairingHarness.ref(value), useEffect = effect => pairingHarness.effect(effect);`,
   "react/jsx-runtime": `export const jsx = (type,props) => ({type,props}), jsxs = jsx, Fragment = 'fragment';`,
-  "@/i18n": `export const useI18n = () => ({t:key=>key});`,
+  "@/i18n": `export const useI18n = () => ({t:(key, params)=>params ? [key, ...Object.values(params)].join(" ") : key});`,
   "@/lib/bridge": `export const isTauri = () => true;`,
   "@/lib/baileys": `export const baileysStatus = id => pairingHarness.statuses.get(id), baileysPairingCode = (...args) => pairingHarness.pair(...args); export const baileysLogout = () => {}, baileysRestart = () => {}, baileysSync = () => {}, baileysUpdateProfile = () => {};`,
   "@/store/appStore": `export const useAppStore = selector => selector(pairingHarness.store); useAppStore.getState = () => pairingHarness.store;`,
-  "@/components/ui/primitives": `export const Button = 'button';`,
+  "@/components/ui/primitives": `export const Button = 'button', Input = 'input', SectionLabel = 'section-label';`,
   "@/components/ui/Avatar": `export const Avatar = 'avatar';`,
+  "@/components/crm/AccountHealthPanel": `export const AccountHealthPanel = 'account-health';`,
   "./BaileysPrivacyPanel": `export const BaileysPrivacyPanel = 'privacy';`,
 };
 const bundle = await build({
-  entryPoints: [`${src}/components/settings/BaileysConnectCard.tsx`],
+  stdin: {
+    contents: `export { BaileysConnectCard } from "./components/settings/BaileysConnectCard";
+      export { SettingsConnectionPanel } from "./components/settings/SettingsConnectionPanel";`,
+    resolveDir: src,
+  },
   alias: { "@": src }, bundle: true, format: "esm", write: false,
   plugins: [{ name: "pairing-boundaries", setup(builder) {
     builder.onResolve({ filter: /.*/ }, ({ path }) => mocks[path] ? { path, namespace: "mock" } : undefined);
     builder.onLoad({ filter: /.*/, namespace: "mock" }, ({ path }) => ({ contents: mocks[path] }));
   } }],
 });
-const { BaileysConnectCard } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
+const { BaileysConnectCard, SettingsConnectionPanel } = await import(`data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`);
 const nodes = tree => Array.isArray(tree) ? tree.flatMap(nodes) : tree?.props ? [tree, ...nodes(tree.props.children)] : [];
 const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test("connection settings show all accounts online count and the specific reconnect target", () => {
+  globalThis.pairingHarness = {
+    store: {
+      settings: {
+        sendChannel: "baileys",
+        activeAccountId: "wa-1",
+        liveBaileysAccountId: "wa-5",
+        waAccounts: Array.from({ length: 5 }, (_, index) => ({
+          id: `wa-${index + 1}`, label: String(index + 1), status: "connected",
+        })),
+      },
+      baileysUi: { connection: "reconnecting" },
+    },
+  };
+  try {
+    const tree = nodes(SettingsConnectionPanel());
+    assert.ok(tree.some(node => node.props.children === "settingsConnection.connectedAccounts 4 5"));
+    assert.ok(tree.some(node => node.props.children === "settingsConnection.accountForActions 5"));
+    assert.equal(tree.find(node => node.type === BaileysConnectCard)?.props.accountId, "wa-5");
+  } finally {
+    delete globalThis.pairingHarness;
+  }
+});
 
 test("account cards offer pairing with and without a QR code and keep requests in their own slots", async () => {
   const calls = [];

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
+const src = fileURLToPath(new URL('../src', import.meta.url));
 const mocks={
  './PlaybookLibrary':'export const PlaybookLibrary="playbook-library";',
  './MuseWebFields':'export const MuseWebFields="muse-fields";',
@@ -12,9 +13,9 @@ const mocks={
  '@/components/ui/primitives':'export const Input="input",SectionLabel="h4";',
  '@/i18n':'export const useI18n=()=>({t:globalThis.modelTranslate});',
  '@/lib/listModels':'export const listProviderModels=(provider,settings)=>new Promise((resolve,reject)=>globalThis.modelRequests.push({provider,key:settings.openaiKey||settings.groqKey,resolve,reject}));',
- '@/lib/vertexAi':'export const VERTEX_CREDENTIAL_LIMIT=16384,VERTEX_DEFAULT_MODEL="gemini-default",parseVertexServiceAccount=JSON.parse;export const listVertexModels=(key,model,signal)=>new Promise(resolve=>globalThis.modelRequests.push({key,model,signal,resolve}));',
+ '@/lib/vertexAi':'export { VERTEX_CREDENTIAL_LIMIT, VERTEX_DEFAULT_MODEL, parseVertexServiceAccount, packVertexCredentials, unpackVertexCredentials } from "./lib/vertexAi.ts"; export const listVertexModels=(key,model,signal)=>new Promise(resolve=>globalThis.modelRequests.push({key,model,signal,resolve}));',
 };
-const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/settings/SettingsAiPanel.tsx',import.meta.url))],bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},plugins:[{name:'mocks',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
+const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/settings/SettingsAiPanel.tsx',import.meta.url))],bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',alias:{'@':src},plugins:[{name:'mocks',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path],resolveDir:src}));}}]});
 const {AiServiceFields,ModelPicker}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
 const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
@@ -55,6 +56,41 @@ test('only the latest model request can update the list, including credential ch
   hooks.unmount();const before=hooks.writes();
   modelRequests[5].resolve([{id:'after-unmount',label:'Late'}]);await tick();assert.equal(hooks.writes(),before);
  }finally{hooks.close();}
+});
+
+test('importing and removing Vertex JSON preserves the Express key', async () => {
+ const hooks = setupHooks();
+ const apiKey = 'AQ.vertex-test-key';
+ const serviceAccountJson = JSON.stringify({
+  type: 'service_account', project_id: 'crm-project', client_email: 'crm@crm-project.iam.gserviceaccount.com',
+  private_key: '-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n',
+ });
+ let settings = { aiProvider: 'vertex', vertexCredential: apiKey, aiModel: '' };
+ const updateSettings = patch => { settings = { ...settings, ...patch }; };
+ const render = () => hooks.render(() => {
+  const vertex = nodes(AiServiceFields({ settings, updateSettings })).find(node => node.type?.name === 'VertexFields');
+  return vertex.type(vertex.props);
+ });
+ const authMethod = tree => tree.find(node => node.type === 'select'
+  && nodes(node).some(option => option.type === 'option' && option.props.value === 'service_account'));
+ try {
+  const input = render().find(node => node.type === 'input' && node.props.type === 'file');
+  input.props.onChange({ target: { files: [{ size: serviceAccountJson.length, text: async () => serviceAccountJson }] } });
+  await tick();
+  assert.equal(authMethod(render()).props.value, 'express');
+  assert.equal(JSON.parse(settings.vertexCredential).apiKey, apiKey);
+  authMethod(render()).props.onChange({ target: { value: 'service_account' } });
+  assert.equal(authMethod(render()).props.value, 'service_account');
+  assert.equal(JSON.parse(settings.vertexCredential).serviceAccountJson, serviceAccountJson);
+  render().find(node => node.type === 'button' && node.props.children === 'settingsAi.vertexRemove').props.onClick();
+  assert.equal(settings.vertexCredential, apiKey);
+  assert.equal(authMethod(render()), undefined);
+
+  settings.vertexCredential = serviceAccountJson;
+  render().find(node => node.type?.name === 'SecretInput').props.onChange(apiKey);
+  assert.equal(authMethod(render()).props.value, 'service_account');
+  assert.equal(JSON.parse(settings.vertexCredential).serviceAccountJson, serviceAccountJson);
+ } finally { hooks.unmount(); hooks.close(); }
 });
 
 test('Vertex pulls models on demand and requires a new choice if the saved model is unavailable',async()=>{

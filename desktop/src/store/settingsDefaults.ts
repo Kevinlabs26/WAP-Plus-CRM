@@ -50,7 +50,8 @@ import { normalizeVoiceInputLanguage } from "@/lib/voiceInputLanguage";
 import { resolveTranscriptionConfig, type TranscriptionProvider } from "@/lib/transcriptionConfig";
 import { resolveTranslationConfig, type TranslationProvider } from "@/lib/translationConfig";
 import { DEFAULT_ACCOUNT_ID } from "@/types/account";
-import { normalizePromptTemplates, type AiPromptTemplate } from "@/lib/aiPromptScope";
+import { normalizePromptFolders, normalizePromptTemplates, type AiPromptFolder, type AiPromptTemplate } from "@/lib/aiPromptScope";
+import { legacySavedPromptPlanSchedules, normalizePromptPlan, normalizePromptPlanBindings, normalizeSavedPromptPlans, type PromptPlan, type SavedPromptPlan } from "@/lib/promptPlans";
 import { isImmediateOutreach, nextScheduledOutreachAt, normalizeOutreachRule, normalizeOutreachRuns, type AiOutreachRule, type AiOutreachRun } from "@/lib/aiOutreachRules";
 import {
   DEFAULT_FOLLOW_UP_RULE_SETTINGS,
@@ -81,6 +82,7 @@ export interface SettingsChatFolder {
   aiSystemPrompt?: string;
   aiPromptMode?: "inherit" | "append" | "replace";
   aiPromptTemplateId?: string;
+  aiPromptPlan?: PromptPlan;
   aiPlaybookId?: string;
   sheetConnectionId?: string;
   aiPlaybookSchedule?: PlaybookSchedule;
@@ -210,7 +212,10 @@ export interface SettingsShape {
   aiSystemPrompt: string;
   /** WhatsApp 账号级身份覆盖；空值或无条目时继承 aiSystemPrompt */
   aiSystemPromptByAccountId: Record<string, string>;
+  aiPromptFolders: AiPromptFolder[];
   aiPromptTemplates: AiPromptTemplate[];
+  aiPromptPlans: SavedPromptPlan[];
+  aiPromptPlanByChat: Record<string, PromptPlan>;
   aiPlaybooks: AiPlaybook[];
   aiPlaybookPlans: PlaybookPlan[];
   aiPlaybookBindings: Record<string, string>;
@@ -436,7 +441,10 @@ export const defaultSettings: SettingsShape = {
   aiAutoReplyPolicyByAccountId: {},
   aiSystemPrompt: "",
   aiSystemPromptByAccountId: {},
+  aiPromptFolders: [],
   aiPromptTemplates: [],
+  aiPromptPlans: [],
+  aiPromptPlanByChat: {},
   aiPlaybooks: [],
   aiPlaybookPlans: [],
   aiPlaybookBindings: {},
@@ -842,7 +850,11 @@ export function normalizeLoadedSettings(
   merged.aiAutoFollowUpEnabled = merged.aiAutoFollowUpEnabled === true &&
     merged.aiAutoFollowUpEnabledAt > 0 && merged.aiAutoFollowUpDelaysMinutes.length > 0 &&
     merged.aiAutoFollowUpDelaysMinutes.every(value => value > 0);
-  merged.aiPromptTemplates = normalizePromptTemplates(merged.aiPromptTemplates);
+  merged.aiPromptFolders = normalizePromptFolders(merged.aiPromptFolders);
+  merged.aiPromptTemplates = normalizePromptTemplates(merged.aiPromptTemplates, new Set(merged.aiPromptFolders.map(folder => folder.id)));
+  const legacyPromptPlanSchedules = legacySavedPromptPlanSchedules(merged.aiPromptPlans);
+  merged.aiPromptPlans = normalizeSavedPromptPlans(merged.aiPromptPlans);
+  merged.aiPromptPlanByChat = normalizePromptPlanBindings(merged.aiPromptPlanByChat, legacyPromptPlanSchedules);
   merged.aiPlaybookPlans = normalizePlaybookPlans(merged.aiPlaybookPlans);
   merged.aiPlaybooks = normalizePlaybooks(merged.aiPlaybooks);
   merged.aiPlaybookBindings = normalizePlaybookBindings(merged.aiPlaybookBindings);
@@ -1224,6 +1236,7 @@ export function normalizeLoadedSettings(
           ? { aiSystemPrompt: f.aiSystemPrompt.trim().slice(0, 6000) } : {}),
         ...(f?.aiPromptMode === "inherit" || f?.aiPromptMode === "append" || f?.aiPromptMode === "replace" ? {aiPromptMode: f.aiPromptMode} : {}),
         ...(typeof f?.aiPromptTemplateId === "string" && f.aiPromptTemplateId ? {aiPromptTemplateId: f.aiPromptTemplateId.slice(0,120)} : {}),
+        ...(f?.aiPromptPlan ? { aiPromptPlan: normalizePromptPlan(f.aiPromptPlan, legacyPromptPlanSchedules) } : {}),
         ...(f?.aiPlaybookSchedule ? {aiPlaybookSchedule:normalizePlaybookSchedule(f.aiPlaybookSchedule)} : {}),
         ...(typeof f?.aiPlaybookId === "string" && f.aiPlaybookId ? {aiPlaybookId: f.aiPlaybookId.slice(0,120)} : {}),
         ...(aiOutreach ? {aiOutreach} : {}),

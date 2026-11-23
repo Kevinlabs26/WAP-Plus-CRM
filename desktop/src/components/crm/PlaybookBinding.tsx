@@ -17,8 +17,14 @@ export function PlaybookSelect({value, onChange}: {value: string; onChange: (id:
 export function PlaybookBinding({accountId, chatId}: {accountId?: string; chatId: string}) {
   const {t} = useI18n();
   const settings = useAppStore(state => state.settings);
+  const museProvider = settings.aiProvider === 'muse';
   const [,setClock]=useState(0);
-  useEffect(()=>{if(!settings.aiPlaybookPlans?.length)return;const timer=window.setInterval(()=>setClock(Date.now()),30000);return()=>window.clearInterval(timer);},[settings.aiPlaybookPlans?.length]);
+  useEffect(() => {
+    if (!museProvider || !settings.aiPlaybookPlans?.length) return;
+    const timer = window.setInterval(() => setClock(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [museProvider, settings.aiPlaybookPlans?.length]);
+  if (!museProvider) return null;
   const result = resolvePlaybook(settings, accountId, chatId);
   const key = accountId ? playbookBindingKey(accountId, chatId) : '';
   return <div className="space-y-2 border-t border-zinc-800/80 pt-2.5">
@@ -30,6 +36,6 @@ export function PlaybookBinding({accountId, chatId}: {accountId?: string; chatId
     }}/> : <p className="text-xs text-zinc-500">{t('playbook.accountRequired')}</p>}
     {result.plan&&!result.error&&<p role="status" className="text-2xs text-zinc-500">{result.plan.day?t('plan.current',{name:result.plan.name,day:result.plan.day}):t('plan.notStarted')}{result.plan.next?' · '+t('plan.next',{time:result.plan.next}):' · '+t('plan.finished')}</p>}
     {result.error && <p role="alert" className="text-xs text-rose-400">{result.error}</p>}
-    <button type="button" className="text-xs text-brand hover:underline" onClick={() => { const state = useAppStore.getState(); state.setSettingsCategory('ai'); state.setSettingsOpen(true); }}>{t('playbook.manage')}</button>
+    <button type="button" className="text-xs text-brand hover:underline" onClick={() => { const state = useAppStore.getState(); state.setSettingsCategory('playbook'); state.setSettingsOpen(true); }}>{t('playbook.manage')}</button>
   </div>;
 }

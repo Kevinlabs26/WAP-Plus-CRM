@@ -5,7 +5,7 @@ import { generateSuggestions } from "../src/lib/aiSuggest.ts";
 import { geminiGenerate, geminiGenerateImage } from "../src/lib/gemini.ts";
 import { translateDraftText } from "../src/lib/translateDraft.ts";
 import { getTranslationSettings, translationSettingsPatch } from "../src/lib/translationConfig.ts";
-import { listVertexModels, parseVertexServiceAccount, VERTEX_DEFAULT_MODEL } from "../src/lib/vertexAi.ts";
+import { listVertexModels, packVertexCredentials, parseVertexServiceAccount, unpackVertexCredentials, VERTEX_DEFAULT_MODEL } from "../src/lib/vertexAi.ts";
 
 const root = "https://aiplatform.googleapis.com/v1";
 const candidate = part => ({ candidates: [{ content: { parts: [part] } }] });
@@ -49,16 +49,16 @@ test("Vertex service-account model discovery reads the catalog and probes its pr
   assert.ok(fetchMock.mock.calls.every(call => !call.arguments[0].includes("-tts")));
 });
 
-test("Vertex Express streams suggestions and uses its own API key", async t => {
+test("Vertex Express streams suggestions with a dotted API key", async t => {
   t.mock.method(globalThis, "fetch", async (url, options) => {
     assert.equal(url, `${root}/publishers/google/models/${VERTEX_DEFAULT_MODEL}:streamGenerateContent?alt=sse`);
-    assert.equal(options.headers.get("x-goog-api-key"), "vertex-key");
+    assert.equal(options.headers.get("x-goog-api-key"), "AQ.vertex-test-key");
     assert.equal(options.headers.get("Authorization"), null);
     return new Response(`data: ${JSON.stringify(candidate({ text: '[{"text":"Bonjour"}]' }))}\n\n`);
   });
   const updates = [];
   const result = await generateSuggestions({ id: "c", name: "Client", tags: [] }, [],
-    { aiProvider: "vertex", vertexCredential: "vertex-key", geminiKey: "other-key", aiModel: "" },
+    { aiProvider: "vertex", vertexCredential: "AQ.vertex-test-key", geminiKey: "other-key", aiModel: "" },
     { onProgress: update => updates.push(update) });
   assert.equal(result.source, "vertex");
   assert.equal(result.suggestions[0].text, "Bonjour");
@@ -76,6 +76,11 @@ test("Vertex service account signs a Google OAuth assertion and calls its projec
   const oauth = "https://oauth2.googleapis.com/token";
   const fetchMock = t.mock.method(globalThis, "fetch", async (url, options) => {
     assert.equal(options.redirect, "error");
+    if (url === `${root}/publishers/google/models/custom-model:generateContent`) {
+      assert.equal(options.headers.get("x-goog-api-key"), "AQ.vertex-test-key");
+      assert.equal(options.headers.get("Authorization"), null);
+      return Response.json(candidate({ text: "Express OK" }));
+    }
     if (url === oauth) {
       assert.equal(options.method, "POST");
       assert.equal(options.body.get("grant_type"), "urn:ietf:params:oauth:grant-type:jwt-bearer");
@@ -98,6 +103,15 @@ test("Vertex service account signs a Google OAuth assertion and calls its projec
   assert.throws(() => parseVertexServiceAccount(credential.replace("crm-project", "crm-project/escape")));
   await assert.rejects(geminiGenerate({ vertexCredential: '{"type":"authorized_user"}', user: "Hello" }), /Invalid Google Cloud/);
   assert.equal(fetchMock.mock.callCount(), 2);
+
+  const credentials = { mode: "express", apiKey: "AQ.vertex-test-key", serviceAccountJson: credential };
+  const stored = packVertexCredentials(credentials);
+  assert.deepEqual(unpackVertexCredentials(stored), credentials);
+  assert.equal(await geminiGenerate({ vertexCredential: stored, model: "custom-model", user: "Hello" }), "Express OK");
+  assert.equal(fetchMock.mock.callCount(), 3);
+  const switched = packVertexCredentials({ ...unpackVertexCredentials(stored), mode: "service_account" });
+  assert.equal(await geminiGenerate({ vertexCredential: switched, model: "custom-model", user: "Hello" }), "OK");
+  assert.equal(fetchMock.mock.callCount(), 5);
 });
 
 test("Vertex image generation uses the Vertex publisher endpoint", async t => {

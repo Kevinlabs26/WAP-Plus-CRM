@@ -1,5 +1,6 @@
 import type { ChatPreview, Message, WaMessageKey } from "@/types/crm";
 import { remapPlaybookBindings } from "@/lib/aiPlaybooks";
+import { remapPromptPlanBindings } from "@/lib/promptPlans";
 import { getMessageFromDb, searchMessagesInDb } from "@/lib/storage";
 import { cacheMediaUrl, dropMediaCache } from "@/lib/mediaCache";
 import type { AppState, SliceContext } from "./types";
@@ -298,6 +299,7 @@ export function createMessageActionsSlice({
             chatFolders: folderRefs.folders,
             chatFolderClones: folderRefs.clones,
             aiPlaybookBindings: remapPlaybookBindings(state.settings.aiPlaybookBindings || {}, new Map([[chatId, null]])),
+            aiPromptPlanByChat: remapPromptPlanBindings(state.settings.aiPromptPlanByChat || {}, new Map([[chatId, null]])),
           },
         };
       });

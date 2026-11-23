@@ -3,11 +3,25 @@ import { Input, SectionLabel } from "@/components/ui/primitives";
 import { BaileysConnectCard } from "./BaileysConnectCard";
 import { AccountHealthPanel } from "@/components/crm/AccountHealthPanel";
 import { useI18n } from "@/i18n";
+import { formatAccountDisplay } from "@/lib/accountLabels";
+import { ensureAccounts, pruneGhostDefaultAccounts } from "@/lib/accounts";
+import { isWaAccountConnected } from "@/lib/accountConnection";
+import { DEFAULT_ACCOUNT_ID } from "@/types/account";
 
 export function SettingsConnectionPanel() {
   const { t } = useI18n();
   const settings = useAppStore((state) => state.settings);
   const updateSettings = useAppStore((state) => state.updateSettings);
+  const liveConnection = useAppStore((state) => state.baileysUi.connection);
+  const accountId = settings.liveBaileysAccountId || settings.activeAccountId;
+  const accounts = ensureAccounts(
+    pruneGhostDefaultAccounts(settings.waAccounts || [], { preferKeepId: accountId || undefined })
+  );
+  const accountIndex = accounts.findIndex((account) => account.id === accountId);
+  const account = accounts[accountIndex];
+  const connectedCount = accounts.filter((entry) =>
+    isWaAccountConnected(accounts, entry.id, accountId || DEFAULT_ACCOUNT_ID, liveConnection)
+  ).length;
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -33,7 +47,21 @@ export function SettingsConnectionPanel() {
         </label>
 
         {settings.sendChannel !== "android_bridge" ? (
-          <div className="mt-3"><BaileysConnectCard /></div>
+          <div className="mt-3 space-y-2">
+            {accounts.length > 0 && (
+              <p className="text-2xs text-zinc-500">
+                {t("settingsConnection.connectedAccounts", { count: connectedCount, total: accounts.length })}
+              </p>
+            )}
+            {account && (
+              <p className="text-[13px] font-medium text-zinc-300">
+                {t("settingsConnection.accountForActions", {
+                  account: formatAccountDisplay({ ...account, index1: accountIndex + 1 }),
+                })}
+              </p>
+            )}
+            <BaileysConnectCard key={accountId} accountId={accountId} />
+          </div>
         ) : (
           <div className="mt-3 space-y-3">
             <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2.5 text-[12px] leading-relaxed text-amber-100/90">

@@ -37,6 +37,7 @@ import { clearTrendBuckets } from "./trendBuckets";
 import { buildPersistSlice, flushPersist, primePersistBaseline } from "./persist";
 import { cacheMediaUrl, readMediaCache, dropMediaCache } from "@/lib/mediaCache";
 import { restoreChatDrafts } from "@/lib/chatDrafts";
+import { remapPromptPlanBindings } from "@/lib/promptPlans";
 
 const blankData = (settings: AppSettings = defaultSettings as AppSettings): PersistSlice => ({
   phones: [],
@@ -316,6 +317,9 @@ export function createBootSlice({
       );
       settingsNorm.chatFolders = cleanedFolderRefs.folders;
       settingsNorm.chatFolderClones = cleanedFolderRefs.clones;
+      if (mergedLocalChats.replacements.size) {
+        settingsNorm.aiPromptPlanByChat = remapPromptPlanBindings(settingsNorm.aiPromptPlanByChat, mergedLocalChats.replacements);
+      }
       const validLeadChatIds = new Set(chats.map((chat) => chat.id));
       settingsNorm.leadInbox = {
         ...settingsNorm.leadInbox,

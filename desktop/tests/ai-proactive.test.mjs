@@ -630,11 +630,11 @@ test('old completed records are archived without truncating recent deduplication
  }finally{h.close();}
 });
 
-test('a changed Playbook discards automatic follow-up output and the next attempt uses the new version',async()=>{
+test('a changed prompt template discards automatic follow-up output and the next attempt uses the new version',async()=>{
  const h=await fixture('draft');try{
   Object.assign(h.state.settings,{aiReplyMode:'auto',aiAutoFollowUpEnabled:true,aiAutoFollowUpEnabledAt:h.now-180_000,aiAutoFollowUpDelaysMinutes:[1]});
-  h.state.settings.chatFolders.find(folder=>folder.id==='folder').aiPlaybookId='book';
-  h.state.settings.aiPlaybooks=[{id:'book',name:'Follow-up',sourceName:'book.md',content:'Use original guidance.',summary:''}];
+  h.state.settings.chatFolders.find(folder=>folder.id==='folder').aiPromptPlan={mode:'fixed',templateId:'follow-up'};
+  h.state.settings.aiPromptTemplates=[{id:'follow-up',name:'Follow-up',prompt:'Use original guidance.'}];
   const base={chatId:'chat',contactId:'person',accountId:'a'};
   globalThis.outreachPatch({messages:[
    {...base,id:'inbound',direction:'in',body:'Please keep me informed.',sentAt:new Date(h.now-150_000).toISOString()},
@@ -643,10 +643,10 @@ test('a changed Playbook discards automatic follow-up output and the next attemp
   let release;h.gate(new Promise(resolve=>release=resolve));
   const pending=h.api.tickAiAutoFollowUps();
   while(!h.calls)await new Promise(resolve=>setImmediate(resolve));
-  h.state.settings.aiPlaybooks=[{...h.state.settings.aiPlaybooks[0],content:'Use updated guidance.'}];
+  h.state.settings.aiPromptTemplates=[{...h.state.settings.aiPromptTemplates[0],prompt:'Use updated guidance.'}];
   release();await pending;
   assert.equal(h.state.messages.length,2);
-  assert.match(h.state.messages[1].lastError,/Playbook/);
+  assert.match(h.state.messages[1].lastError,/提示词/);
   h.advance(60_000);
   await h.api.tickAiAutoFollowUps();
   assert.ok(h.requests[0].includes('Use original guidance.'));

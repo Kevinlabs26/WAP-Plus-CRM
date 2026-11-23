@@ -873,7 +873,7 @@ export async function tickAiAutoFollowUps(): Promise<void> {
         continue;
       }
       if (!freshContact || !freshChat || currentAutoReplyContext(fresh, { ...pendingContext, aiReplyMuseAccountId: result.museAccountId }) !== contextKey) {
-        fresh.patchMessage(source.id, { lastError: "生成期间聊天、Playbook 或 Muse 配置已变化，将重新生成" });
+        fresh.patchMessage(source.id, { lastError: "生成期间聊天、提示词计划、Playbook 或 AI 配置已变化，将重新生成" });
         continue;
       }
       const blocked = getAutoReplyOutputBlockReason(reply);

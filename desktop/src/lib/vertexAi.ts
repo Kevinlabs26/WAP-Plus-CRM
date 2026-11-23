@@ -7,6 +7,35 @@ const VERTEX_ROOT = `${VERTEX_HOST}/v1`;
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_MODELS = "publishers/google/models";
 
+export type VertexCredentials = {
+  mode: "express" | "service_account";
+  apiKey: string;
+  serviceAccountJson: string;
+};
+
+export function unpackVertexCredentials(raw: string): VertexCredentials {
+  const value = raw.trim();
+  if (value.startsWith("{")) {
+    try {
+      const saved = JSON.parse(value);
+      if (saved.type === "bridgecrm_vertex_credentials"
+        && (saved.mode === "express" || saved.mode === "service_account")
+        && typeof saved.apiKey === "string" && typeof saved.serviceAccountJson === "string") {
+        return { mode: saved.mode, apiKey: saved.apiKey, serviceAccountJson: saved.serviceAccountJson };
+      }
+    } catch {
+      // Preserve legacy JSON so the service account validator can report its error.
+    }
+    return { mode: "service_account", apiKey: "", serviceAccountJson: value };
+  }
+  return { mode: "express", apiKey: value, serviceAccountJson: "" };
+}
+
+export function packVertexCredentials({ mode, apiKey, serviceAccountJson }: VertexCredentials): string {
+  if (!apiKey.trim() || !serviceAccountJson) return apiKey.trim() || serviceAccountJson;
+  return JSON.stringify({ type: "bridgecrm_vertex_credentials", mode, apiKey: apiKey.trim(), serviceAccountJson });
+}
+
 // shortcut: Express has no catalog API. Probe the documented text models and sample IDs until Google adds one.
 const EXPRESS_TEXT_MODELS = [
   "gemini-3.8-flash", VERTEX_DEFAULT_MODEL, "gemini-3.5-flash-lite",
@@ -43,13 +72,14 @@ function base64Url(bytes: Uint8Array) {
 }
 
 export async function vertexRequest(credential: string, signal: AbortSignal) {
-  const value = credential.trim();
-  if (!value.startsWith("{")) {
-    if (!/^[A-Za-z0-9_-]{1,256}$/.test(value)) throw Error("Invalid Vertex AI API key");
+  const { mode, apiKey, serviceAccountJson } = unpackVertexCredentials(credential);
+  if (mode === "express") {
+    const value = apiKey.trim();
+    if (!/^[A-Za-z0-9._-]{1,256}$/.test(value)) throw Error("Invalid Vertex AI API key");
     return { base: `${VERTEX_ROOT}/${GOOGLE_MODELS}`, headers: new Headers({ "x-goog-api-key": value }) };
   }
 
-  const account = parseVertexServiceAccount(value);
+  const account = parseVertexServiceAccount(serviceAccountJson);
   const pem = account.private_key.replace(/-----[^-]+-----|\s/g, "");
   const key = await crypto.subtle.importKey("pkcs8", Uint8Array.from(atob(pem), char => char.charCodeAt(0)),
     { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);

@@ -1,5 +1,6 @@
 import { deferDuringRestore } from "./restoreGuard";
 import { remapPlaybookBindings } from "@/lib/aiPlaybooks";
+import { remapPromptPlanBindings } from "@/lib/promptPlans";
 import type { AppState, SliceContext } from "./types";
 import {
   applyMessagesAck,
@@ -640,6 +641,8 @@ export function createIngestSlice({
           }
           const aiPlaybookBindings = remapPlaybookBindings(state.settings.aiPlaybookBindings || {}, chatReplacements);
           if (aiPlaybookBindings !== state.settings.aiPlaybookBindings) settingsPatch = {...settingsPatch, aiPlaybookBindings};
+          const aiPromptPlanByChat = remapPromptPlanBindings(state.settings.aiPromptPlanByChat || {}, chatReplacements);
+          if (aiPromptPlanByChat !== state.settings.aiPromptPlanByChat) settingsPatch = { ...settingsPatch, aiPromptPlanByChat };
         }
         if (blocklist) {
           const byAcc = setAccountBlocklist(

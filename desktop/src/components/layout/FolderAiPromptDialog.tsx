@@ -14,6 +14,8 @@ import { lastContactedAccounts, recipientKey } from "@/lib/scheduledPlans";
 import { resolveSendTarget } from "@/lib/utils";
 import { AiOutreachPreview } from "@/components/settings/AiOutreachPreview";
 import { PlaybookSelect } from "@/components/crm/PlaybookBinding";
+import { PromptPlanBindingFields } from "@/components/settings/PromptPlanFields";
+import { evaluatePromptPlan, usesPromptPlans } from "@/lib/promptPlans";
 
 export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }: { folderId: string; onClose: () => void; hideReplyMode?:boolean }) {
   const { t } = useI18n();
@@ -25,6 +27,7 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
   const [templateId,setTemplateId]=useState(folder?.aiPromptTemplateId||"");
   const [playbookId,setPlaybookId]=useState(folder?.aiPlaybookId||"");
   const [schedule,setSchedule]=useState(folder?.aiPlaybookSchedule);
+  const [promptPlan, setPromptPlan] = useState(folder?.aiPromptPlan);
   const [replyMode,setReplyMode]=useState<"inherit"|"auto"|"manual">(folder?.autoReplyMode||"inherit");
   const [previewAccount,setPreviewAccount]=useState("");
   const [followingAccount]=useState(()=>{
@@ -40,6 +43,9 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
   const [forbidden,setForbidden]=useState(folder?.aiReplyForbiddenTerms?.join("\n")||"");
   if (!folder) return null;
   const custom=mode!=="inherit";
+  const promptPlansEnabled = usesPromptPlans(settings.aiProvider);
+  const museProvider = settings.aiProvider === "muse";
+  const showMusePlaybook = museProvider || !!settings.aiOutreachMuseAccountId;
   const accountId = folder.scope?.type === "all" ? previewAccount||followingAccount
     : folder.scope?.accountId || settings.liveBaileysAccountId || settings.activeAccountId;
   const inherited = resolveFolderAiProfile({ ...settings,
@@ -49,10 +55,12 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
   const forbiddenTerms=forbidden.split(/[\n,，]/).map(term=>term.trim()).filter(Boolean);
   const draftSettings:typeof settings={...settings,chatFolders:settings.chatFolders.map(item=>item.id===folderId?{...item,
     aiPromptMode:mode==="custom"?"replace":mode as "append"|"inherit",aiSystemPrompt:custom?draft:undefined,aiPromptTemplateId:custom?templateId||undefined:undefined,
-    aiReplyMaxChars:maxChars?Number(maxChars):undefined,aiReplyForbiddenTerms:forbiddenTerms,aiPlaybookId:playbookId||undefined,aiPlaybookSchedule:schedule,aiOutreach:outreach}:item)};
+    aiReplyMaxChars:maxChars?Number(maxChars):undefined,aiReplyForbiddenTerms:forbiddenTerms,aiPlaybookId:playbookId||undefined,aiPlaybookSchedule:schedule,aiPromptPlan:promptPlan,aiOutreach:outreach}:item)};
   const preview=resolveFolderAiProfile(draftSettings,folderId,accountId);
   const limits=resolveAiReplyConstraints(draftSettings,accountId,undefined,folderId);
-  const invalid=!!(schedule&&scheduledPlaybook(settings.aiPlaybookPlans||[],schedule).error)||custom&&!draft.trim()&&!templateId||!!preview.error||forbiddenTerms.length>50||forbiddenTerms.some(term=>term.length>100)||!!maxChars&&(!Number.isInteger(Number(maxChars))||Number(maxChars)<20||Number(maxChars)>2000);
+  const promptPlanError = promptPlansEnabled && evaluatePromptPlan(promptPlan, settings.aiPromptTemplates || [], undefined, settings.aiPromptPlans || []).error;
+  const playbookError = showMusePlaybook && schedule && scheduledPlaybook(settings.aiPlaybookPlans || [], schedule).error;
+  const invalid=!!promptPlanError||!!playbookError||custom&&!draft.trim()&&!templateId||!!preview.error||forbiddenTerms.length>50||forbiddenTerms.some(term=>term.length>100)||!!maxChars&&(!Number.isInteger(Number(maxChars))||Number(maxChars)<20||Number(maxChars)>2000);
   const immediate=outreach.enabled&&outreach.startMode==="immediate";
   const save = () => {
     if (invalid || immediate && (outreach.paused || settings.aiAutoReplyPaused || settings.aiOutreachPaused)) return;
@@ -63,7 +71,10 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
       :{...outreach,runNowAt:undefined,scheduleStartAt:scheduleChanged?nextScheduledOutreachAt(outreach)??undefined:outreach.scheduleStartAt};
     current.updateSettings({ chatFolders: current.settings.chatFolders.map(item => item.id === folderId
       ? { ...item, aiSystemPrompt: custom ? draft.trim().slice(0, 6000) : undefined,
-        aiPromptMode:mode==="custom"?"replace":mode as "append"|"inherit",aiPromptTemplateId:custom?templateId||undefined:undefined,aiPlaybookId:playbookId||undefined,aiPlaybookSchedule:schedule,aiOutreach:savedOutreach,...(hideReplyMode?{}:{autoReplyMode:replyMode==="inherit"?undefined:replyMode}),
+        aiPromptMode:mode==="custom"?"replace":mode as "append"|"inherit",aiPromptTemplateId:custom?templateId||undefined:undefined,
+        ...(showMusePlaybook ? { aiPlaybookId: playbookId || undefined, aiPlaybookSchedule: schedule } : {}),
+        ...(promptPlansEnabled ? { aiPromptPlan: promptPlan } : {}),
+        aiOutreach:savedOutreach,...(hideReplyMode?{}:{autoReplyMode:replyMode==="inherit"?undefined:replyMode}),
         aiReplyMaxChars:maxChars?Number(maxChars):undefined,aiReplyForbiddenTerms:forbiddenTerms } : item),
       ...(savedOutreach.enabled?{aiTaskDismissedIds:current.settings.aiTaskDismissedIds.filter(id=>id!==outreachFolderDismissal(folderId))}:{}) });
     if (immediate) {
@@ -136,8 +147,12 @@ export function FolderAiPromptDialog({ folderId, onClose, hideReplyMode=false }:
             placeholder={t("folderAi.placeholder")} onChange={event => setDraft(event.target.value)} />
           <span className="mt-1 block text-right text-zinc-500">{draft.length}/6000</span>
         </label>}
-        <fieldset disabled={!!schedule} className="disabled:opacity-50"><PlaybookSelect value={playbookId} onChange={setPlaybookId}/></fieldset>
-        <PlaybookScheduleFields value={schedule} onChange={setSchedule}/>
+        {showMusePlaybook && <section className="space-y-2">
+          {!museProvider && <h3 className="text-sm font-medium">{t("playbook.outreachLibrary")}</h3>}
+          <fieldset disabled={!!schedule} className="disabled:opacity-50"><PlaybookSelect value={playbookId} onChange={setPlaybookId}/></fieldset>
+          <PlaybookScheduleFields value={schedule} onChange={setSchedule}/>
+        </section>}
+        {promptPlansEnabled && <PromptPlanBindingFields value={promptPlan} onChange={setPromptPlan} inheritLabel={t("promptPlan.followParent")} />}
         <AiOutreachControls value={outreach} onChange={setOutreach}/>
         {outreach.enabled&&<div className="space-y-2">
           {settings.aiAutoReplyPaused&&<p role="status" className="text-xs text-amber-500">{t("aiChat.paused")}</p>}

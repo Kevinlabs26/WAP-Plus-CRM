@@ -71,17 +71,24 @@ test('missing or empty material blocks generation and only selected original sou
   assert.equal(resolveAiReplyProfile(s,'a','chat').error, undefined);
 });
 
-test('actual AI requests contain only selected original material and content edits invalidate cached suggestions', async t => {
+test('non-Muse requests use their own prompt plan and keep Muse material out', async t => {
   const s = {...config(), aiProvider:'custom', customAiKey:'test', customAiBaseUrl:'https://example.invalid/v1', customAiModel:'model'};
+  s.aiPromptTemplates = [{ id: 'daily', name: 'Daily', prompt: 'DAILY RULES' }];
+  s.aiPromptPlanByChat = { [playbookBindingKey('a','chat')]: { mode: 'fixed', templateId: 'daily' } };
   const contact = {id:'person',accountId:'a',name:'Customer',tags:[]};
   const messages = [{id:'message',chatId:'chat',accountId:'a',direction:'in',body:'Hello',sentAt:'2026-11-10T00:00:00Z'}];
   let body;
   t.mock.method(globalThis, 'fetch', async (_url, init) => {body=JSON.parse(init.body);return Response.json({choices:[{message:{content:'[{"text":"Hello"}]'}}]});});
   assert.equal((await generateSuggestions(contact,messages,s,{accountId:'a',chatId:'chat',count:1})).fallback,false);
-  assert.match(body.messages[0].content,/stage-a/); assert.doesNotMatch(body.messages[0].content,/stage-b/);
+  assert.match(body.messages[0].content,/DAILY RULES/); assert.doesNotMatch(body.messages[0].content,/stage-a|stage-b/);
   const before = getSuggestionContextKey(contact,messages,s,'a',{chatId:'chat'});
   s.aiPlaybooks.find(item=>item.id==='stage-a').content = 'UPDATED RULES';
+  assert.equal(getSuggestionContextKey(contact,messages,s,'a',{chatId:'chat'}),before);
+  s.aiPromptTemplates[0].prompt = 'UPDATED DAILY RULES';
   assert.notEqual(getSuggestionContextKey(contact,messages,s,'a',{chatId:'chat'}),before);
+  const muse = resolveAiReplyProfile({...s, aiProvider:'muse'},'a','chat');
+  assert.match(muse.prompt,/UPDATED RULES/);
+  assert.doesNotMatch(muse.prompt,/UPDATED DAILY RULES/);
 });
 
 const src=fileURLToPath(new URL('../src',import.meta.url));
@@ -112,6 +119,43 @@ test('library and account-scoped bindings survive settings reload and backup res
   assert.equal(Object.hasOwn(restored,'aiPlaybookOverviewId'),false);
   assert.equal(restored.aiPlaybookBindings[playbookBindingKey('a','chat')],'stage-b');
   assert.equal(restored.chatFolders.find(folder=>folder.id==='parent').aiPlaybookId,'stage-a');
+});
+
+test('prompt plans survive backup restoration for both folders and account-scoped chats', () => {
+  const plan = { mode: 'rotation', templateIds: ['daily'], startDate: '2026-11-23',
+    switchTime: '09:00', timeZone: 'Europe/Paris', loop: true };
+  const binding = playbookBindingKey('a', 'chat');
+  const settings = { ...defaultSettings, ...config(),
+    aiPromptTemplates: [{ id: 'daily', name: 'Daily', prompt: 'PROMPT' }],
+    aiPromptPlanByChat: { [binding]: { mode: 'fixed', templateId: 'daily' } },
+  };
+  settings.chatFolders[0].aiPromptPlan = plan;
+  const parsed = parseBackupJson({ version: 2, contacts: [{ id: 'person', name: 'Customer', phone: '+15551234567', tags: [] }], settingsSafe: buildSettingsSafe(settings) });
+  const restored = normalizeLoadedSettings(parsed.settingsSafe);
+  assert.deepEqual(restored.chatFolders.find(folder => folder.id === 'parent').aiPromptPlan, plan);
+  assert.deepEqual(restored.aiPromptPlanByChat[binding], settings.aiPromptPlanByChat[binding]);
+});
+
+test('legacy reusable rotation schedules migrate onto each folder and chat reference', () => {
+  const binding = playbookBindingKey('a', 'chat');
+  const oldDefinition = { mode: 'rotation', templateIds: ['daily'], loop: true,
+    startDate: '2026-11-23', switchTime: '09:15', timeZone: 'Europe/Paris' };
+  const restored = normalizeLoadedSettings({ ...defaultSettings,
+    aiPromptTemplates: [{ id: 'daily', name: 'Daily', prompt: 'PROMPT' }],
+    aiPromptPlans: [{ id: 'plan', name: 'Daily plan', plan: oldDefinition }],
+    aiPromptPlanByChat: { [binding]: { mode: 'saved', planId: 'plan' } },
+    chatFolders: [{ id: 'folder', name: 'Prospects', sort: 0, chatIds: [], scope: { type: 'all' },
+      aiPromptPlan: { mode: 'saved', planId: 'plan' } }],
+  });
+  const schedule = { startDate: oldDefinition.startDate, switchTime: oldDefinition.switchTime, timeZone: oldDefinition.timeZone };
+  assert.deepEqual(restored.aiPromptPlans[0].plan, { mode: 'rotation', templateIds: ['daily'], loop: true });
+  assert.deepEqual(restored.chatFolders.find(folder => folder.id === 'folder').aiPromptPlan, { mode: 'saved', planId: 'plan', ...schedule });
+  assert.deepEqual(restored.aiPromptPlanByChat[binding], { mode: 'saved', planId: 'plan', ...schedule });
+  const backup = parseBackupJson({ version: 2, settingsSafe: buildSettingsSafe(restored),
+    contacts: [{ id: 'person', name: 'Customer', phone: '+15551234567', tags: [] }], chats: [], messages: [] });
+  const roundTrip = normalizeLoadedSettings(backup.settingsSafe);
+  assert.deepEqual(roundTrip.chatFolders.find(folder => folder.id === 'folder').aiPromptPlan, restored.chatFolders.find(folder => folder.id === 'folder').aiPromptPlan);
+  assert.deepEqual(roundTrip.aiPromptPlanByChat[binding], restored.aiPromptPlanByChat[binding]);
 });
 
 test('conversation plans and folder schedules survive normalization and backup restore',()=>{

@@ -228,12 +228,11 @@ test('blocked queued AI replies explain expiry, missing metadata and newer incom
  }
 });
 
-test('a daily Playbook switch blocks a queued reply generated for the previous day',async t=>{
+test('a daily prompt plan switch blocks a queued reply generated for the previous day',async t=>{
  let now=Date.parse('2026-11-11T08:59:55Z');t.mock.method(Date,'now',()=>now);
  const {state,reply}=queuedAi();
- state.settings.aiPlaybooks=['one','two'].map(id=>({id,name:id,sourceName:id+'.md',content:'',summary:'Rules '+id}));
- state.settings.aiPlaybookPlans=[{id:'p',name:'Daily',days:['one','two']}];
- state.settings.chatFolders=[{id:'f',name:'F',chatIds:['chat'],scope:{type:'all'},aiPlaybookSchedule:{planId:'p',startDate:'2026-11-10',timeZone:'UTC',switchTime:'09:00'}}];
+ state.settings.aiPromptTemplates=['one','two'].map(id=>({id,name:id,prompt:'Rules '+id}));
+ state.settings.chatFolders=[{id:'f',name:'F',chatIds:['chat'],scope:{type:'all'},aiPromptPlan:{mode:'rotation',templateIds:['one','two'],startDate:'2026-11-10',timeZone:'UTC',switchTime:'09:00',loop:true}}];
  const key=getSuggestionContextKey(state.contacts[0],state.messages.filter(m=>m.id!==reply.id),state.settings,'wa-b',{auto:true});
  reply.aiReplyContextHash=createHash('sha256').update(key).digest('hex');
  now+=10000;SendQueueWatcher();for(let i=0;i<20;i++)await new Promise(resolve=>setImmediate(resolve));

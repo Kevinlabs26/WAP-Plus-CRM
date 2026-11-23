@@ -65,15 +65,29 @@ test('reopening a saved connection and reloading headers preserves custom labels
   tree=render();effects.splice(0).forEach(fn=>fn());tree=render();
   const textOf=node=>Array.isArray(node)?node.map(textOf).join(''):node?.props?textOf(node.props.children):typeof node==='string'?node:'';
   assert.ok(tree.some(node=>node.type==='span'&&textOf(node)==='C · sheets.blankHeading'));
-  assert.ok(tree.some(node=>node.type==='span'&&textOf(node)==='D · Repeated'));
-  assert.ok(tree.some(node=>node.type==='span'&&textOf(node)==='sheets.duplicateHeading'));
+  for (const [letter, index, action] of [['D', 3, 'edit'], ['E', 4, 'link']]) {
+    const label = tree.find(node => node.type === 'label' && textOf(node) === `${letter} · Repeated`);
+    label.props.children[0].props.onChange({target:{checked:true}});
+    tree = render();
+    tree.find(node => node.type === 'select' && node.props['aria-label'] === `sheets.action ${letter} · Repeated`).props.onChange({target:{value:action}});
+    assert.equal(tree.find(node => node.type === 'option' && node.props.value === index).props.disabled, false);
+    tree = render();
+  }
+  tree.find(node => node.type === 'select' && textOf(node).includes('D · Repeated')).props.onChange({target:{value:'4'}});
+  tree=render();effects.splice(0).forEach(fn=>fn());tree=render();
   assert.ok(tree.some(node=>node.type==='label'&&textOf(node)==='HG · Far column'));
   delete globalThis.sheetHeaderFixture;
   assert.ok(tree.some(node=>node.props.value==='My order status'));
   assert.ok(tree.some(node=>node.props.type==='time'&&node.props.value==='14:30'));
   const save=tree.find(node=>node.type==='button'&&node.props.children==='sheets.save');
   assert.equal(save.props.disabled,false);assert.equal(await globalThis.sheetCloseGuard.save(),true);
-  assert.deepEqual(globalThis.sheetSavedBatch[0].config.fields,fields);
+  const saved = globalThis.sheetSavedBatch[0].config;
+  assert.deepEqual(saved.fields[0], fields[0]);
+  assert.deepEqual(saved.phone, {position:4, expectedHeading:'Repeated'});
+  assert.deepEqual(saved.fields.slice(1).map(({column,action})=>({column,action})), [
+    {column:{position:3, expectedHeading:'Repeated'}, action:'edit'},
+    {column:{position:4, expectedHeading:'Repeated'}, action:'link'},
+  ]);
   assert.equal(globalThis.sheetSavedBatch[0].config.headerRow,2);
   assert.equal(globalThis.sheetSavedBatch[0].connectionId,'default');
   assert.equal(globalThis.sheetSavedBatch[0].name,'Main table');

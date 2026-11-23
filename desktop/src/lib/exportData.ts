@@ -115,7 +115,10 @@ export type SettingsSafeExport = {
   aiAutoReplyPolicyByAccountId: AppSettings["aiAutoReplyPolicyByAccountId"];
   aiSystemPrompt: string;
   aiSystemPromptByAccountId: Record<string, string>;
+  aiPromptFolders: AppSettings["aiPromptFolders"];
   aiPromptTemplates: AppSettings["aiPromptTemplates"];
+  aiPromptPlans?: AppSettings["aiPromptPlans"];
+  aiPromptPlanByChat?: AppSettings["aiPromptPlanByChat"];
   aiPlaybooks: AppSettings["aiPlaybooks"];
   aiPlaybookPlans?: AppSettings["aiPlaybookPlans"];
   aiPlaybookBindings: AppSettings["aiPlaybookBindings"];
@@ -236,7 +239,10 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     aiAutoReplyPolicyByAccountId: settings.aiAutoReplyPolicyByAccountId || {},
     aiSystemPrompt: settings.aiSystemPrompt || "",
     aiSystemPromptByAccountId: settings.aiSystemPromptByAccountId || {},
+    aiPromptFolders: settings.aiPromptFolders || [],
     aiPromptTemplates: settings.aiPromptTemplates || [],
+    aiPromptPlans: settings.aiPromptPlans || [],
+    aiPromptPlanByChat: settings.aiPromptPlanByChat || {},
     aiPlaybooks,
     aiPlaybookPlans,
     aiPlaybookBindings: Object.fromEntries(Object.entries(settings.aiPlaybookBindings || {}).filter(([,id]) => id === "off" || playbookIds.has(id))),
@@ -746,7 +752,7 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
   if (settingsSafe) {
     const allowed = [
       "quickReplies", "quickReplyCustomCategories", "quickReplyRemovedCategories", "quickReplyCategoryLabels", "quickReplyCategoryOrder", "quickReplyPinnedIds", "quickReplyRecentIds", "translateTargetLang", "enterTranslateSend", "myLang",
-      "voiceInputLang", "aiTimeZone", "leadInbox", "chatFolders", "chatFolderClones", "aiPromptTemplates", "aiPlaybooks", "aiPlaybookPlans", "aiPlaybookBindings", "aiPlaybookMuseMode", "broadcastThemes", "imagePromptTemplates", "aiContextMode", "aiOutreachRuns", "aiOutreachPaused", "aiOutreachExcludedRecipients",
+      "voiceInputLang", "aiTimeZone", "leadInbox", "chatFolders", "chatFolderClones", "aiPromptFolders", "aiPromptTemplates", "aiPromptPlans", "aiPromptPlanByChat", "aiPlaybooks", "aiPlaybookPlans", "aiPlaybookBindings", "aiPlaybookMuseMode", "broadcastThemes", "imagePromptTemplates", "aiContextMode", "aiOutreachRuns", "aiOutreachPaused", "aiOutreachExcludedRecipients",
       "aiReplyTaskRecords", "aiTaskDismissedIds", "scheduledMessages", "scheduledPlans", "waAccounts", "accountViewMode", "historySyncNote",
       "aiAutoFollowUpDelaysMinutes",
       "historySyncNoteByAccountId", "internalNotesByKey", "chatBackground",
