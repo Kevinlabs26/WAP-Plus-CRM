@@ -26,9 +26,10 @@ node .github/scripts/macos-update-manifest.mjs "$version" "$tag" "$assets" > "$a
 
 release=$(gh release view "$tag" --json isDraft,assets)
 jq -e --arg version "$version" '
-  [.assets[] | select(.size > 0) | .name] as $names |
+  [.assets[] | select(.size > 0 and .state == "uploaded") | .name] as $names |
   ($names | index("latest.json")) != null and
-  any($names[]; contains($version) and endswith("x64-setup.exe"))
+  any($names[]; contains($version) and endswith("x64-setup.exe")) and
+  any($names[]; contains($version) and contains("_x64") and endswith(".msi"))
 ' <<< "$release" > /dev/null
 
 if [[ $(jq -r .isDraft <<< "$release") == true ]]; then
@@ -36,7 +37,7 @@ if [[ $(jq -r .isDraft <<< "$release") == true ]]; then
 fi
 release=$(gh release view "$tag" --json isDraft,assets,body)
 for asset in "$assets"/*; do
-  jq -e --arg name "${asset##*/}" 'any(.assets[]; .name == $name and .size > 0)' <<< "$release" > /dev/null
+  jq -e --arg name "${asset##*/}" 'any(.assets[]; .name == $name and .size > 0 and .state == "uploaded")' <<< "$release" > /dev/null
 done
 if [[ $(jq -r .isDraft <<< "$release") == true ]]; then
   { printf '%s\n\n' "$mac_notes"; jq -r .body <<< "$release"; } > "$RUNNER_TEMP/desktop-release-notes.md"
