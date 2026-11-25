@@ -17,7 +17,7 @@ const mocks = {
 const result = await build({
   stdin: { contents: `export {CampaignRunner} from './src/components/bridge/CampaignRunner.tsx';
     export {setAppLockActive} from './src/lib/appLockRuntime.ts';
-    export {withSendGate} from './src/channels/sendGate.ts';export {clearRateLimitState,recordSend} from './src/channels/rateLimit.ts';`, resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
+    export {withSendGate} from './src/channels/sendGate.ts';export {clearRateLimitState,globalSendReadyAt,recordSend} from './src/channels/rateLimit.ts';`, resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
   bundle: true, format: "esm", platform: "browser", write: false,
   alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) },
   plugins: [{ name: "campaign-io", setup(b) {
@@ -25,7 +25,7 @@ const result = await build({
     b.onLoad({ filter: /.*/, namespace: "mock" }, a => ({ contents: mocks[a.path] }));
   } }],
 });
-const { CampaignRunner, setAppLockActive, withSendGate, clearRateLimitState, recordSend } = await import("data:text/javascript;base64," + Buffer.from(result.outputFiles[0].text+'\n//# sourceURL=campaign-safety-test.js').toString("base64"));
+const { CampaignRunner, setAppLockActive, withSendGate, clearRateLimitState, globalSendReadyAt, recordSend } = await import("data:text/javascript;base64," + Buffer.from(result.outputFiles[0].text+'\n//# sourceURL=campaign-safety-test.js').toString("base64"));
 const settle = () => new Promise(setImmediate);
 
 test('a matching late receipt updates broadcast history without resending or adopting another account receipt',async()=>{
@@ -240,7 +240,12 @@ test("Android campaign sends sequentially on the bound phone after a confirmed s
   const env = androidSetup();
   const previousTimer = globalThis.setTimeout;
   const previousNow = Date.now;
-  let now = Date.now();
+  const previousRandom = Math.random;
+  env.get().broadcastCampaigns[0].extraGapMaxSec = 20;
+  Object.assign(env.get().settings, { rateMinIntervalSec: 20, rateJitterSec: 2 });
+  const startedAt = Date.now();
+  Math.random = () => 0.99;
+  let now = startedAt;
   let gap;
   Date.now = () => now;
   globalThis.setTimeout = (fn, ms, ...args) => {
@@ -260,11 +265,19 @@ test("Android campaign sends sequentially on the bound phone after a confirmed s
     assert.ok(gap.ms >= 20_000);
     await env.tick(); await settle();
     assert.equal(env.sends.length, 1);
-    now += gap.ms + 1000;
+    const readyAt = Math.ceil(globalSendReadyAt(20));
+    assert.ok(readyAt > now + gap.ms, "the shared cooldown includes jitter");
+    now += gap.ms;
     gap.finish(); await settle();
     await env.tick(); await settle();
+    assert.equal(env.sends.length, 1);
+    now = readyAt;
+    await env.tick(); await settle();
+    assert.equal(env.sends.length, 1, "the bound phone still has its account cooldown");
+    now = startedAt + 22_000;
+    await env.tick(); await settle();
     assert.deepEqual(env.sends, ["+12025550100", "+12025550101"]);
-  } finally { Date.now = previousNow; env.cleanup(); }
+  } finally { Math.random = previousRandom; Date.now = previousNow; env.cleanup(); }
 });
 
 test("a click-only result pauses Android and is never requeued by reconnect", async () => {
