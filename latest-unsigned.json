@@ -1,13 +1,13 @@
 {
-  "version": "0.1.87",
+  "version": "0.1.89",
   "platforms": {
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUOWgvb3ZtN0psekthYUpocE4rVFNKVDc2SzEyMlcyN041NE52Nnd6UzJVUEdJMGRwcE40REVJR3djb2RMMjBoTVZLS2twaG81WXlLakY1SXhqNDFKUmF3SjdlWStKaVFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NDU4MzMzCWZpbGU6V0FQIFBsdXMgQ1JNLmFwcC50YXIuZ3oJdmVyc2lvbjowLjEuODcKbXlWQzFLZjFsOW4rMGM4cG1idXVGSllPWTQzckErRHRxTFFjeUhUSk5zUVV2R3YzQ1BRNWU1aUNRZHZWMjlKcFF0aXJJTGE0ZWxwNmc2MHlMU1ZDQXc9PQo=",
-      "url": "https://github.com/Kevinlabs26/WAP-Plus-CRM/releases/download/v0.1.87/WAP-Plus-CRM-0.1.87-macOS-arm64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUOWgvb3ZtN0psek1PdkFFRGxGbHlOcUF0cnVJdE9ybnR5QmQvT3lKR0dod3ZiUVVNYjRyQlNmRTRaUTJvd1krOUxzbWR6RFBSVlF5N0pvTzkwbWRRSGpONWx6dVd0TlFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NjIzNzAzCWZpbGU6V0FQIFBsdXMgQ1JNLmFwcC50YXIuZ3oJdmVyc2lvbjowLjEuODkKWVoxNmh2NDFDQkpBcE5tbWtyVkgvS1EwM2dPSUsyRjJoblloTjA1K3dpTVFZMFZlVTYyZWFOSHMvaytvNE8yQkl5QnpnTlpwNVU4R1h2R0JFR0RsQ3c9PQo=",
+      "url": "https://github.com/Kevinlabs26/WAP-Plus-CRM/releases/download/v0.1.89/WAP-Plus-CRM-0.1.89-macOS-arm64.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUOWgvb3ZtN0psek5hUmxuU2JIMGJkTStRQVFnQ2hndjI1TlFrZm4wYndVR1dyT1N4Z3o2UEJ1cW5COStXREdVcndVaVJMQXdQZ0d4UE05SUV1Yy95bjY2Y1A0YmpuWmdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NDU4OTMyCWZpbGU6V0FQIFBsdXMgQ1JNLmFwcC50YXIuZ3oJdmVyc2lvbjowLjEuODcKRC9kRDBMTVRvMmsxYjI5anVJdll3ckkzazZvZjExSnFKUGFvUHZubGZGUTBqSHN3SXlhZmlNL0d2RmRreHZkR3oxK2Y3b013bDhCcWxQYk8rdUhoRFE9PQo=",
-      "url": "https://github.com/Kevinlabs26/WAP-Plus-CRM/releases/download/v0.1.87/WAP-Plus-CRM-0.1.87-macOS-x86_64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUOWgvb3ZtN0pselBsazJ1YjFaeFQrTUJNRXdCbUhYS21DUUJoc05NQWJYaWxkbW4vZXVzKzZ0WFJrUzMzaU5VRnQyZ1FXMjVzYlpYRU96V2ZHZVJ6TlZwMTZDNjZjTHdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NjI0NTQ3CWZpbGU6V0FQIFBsdXMgQ1JNLmFwcC50YXIuZ3oJdmVyc2lvbjowLjEuODkKTUxLeG1ORjBSUU41b2pYNzZrQ3I5a2FmMUhGVlN2S2o2ZG1nUmkwenFGVGplUm94MWhLVXc0K2x3VWZ5bkRVWWR4MGJBc1AzeDRwMVRmYjEybGhaQlE9PQo=",
+      "url": "https://github.com/Kevinlabs26/WAP-Plus-CRM/releases/download/v0.1.89/WAP-Plus-CRM-0.1.89-macOS-x86_64.app.tar.gz"
     }
   }
 }
