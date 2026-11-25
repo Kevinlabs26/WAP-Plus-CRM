@@ -28,20 +28,21 @@ test('copying a template creates a separate entry and leaves existing folder ref
 test('new drafts have a create action, and switching templates only discards edits after confirmation', async () => {
  const h = fixture();
  const select = id => h.render().find(node => node.props['data-prompt-template'] === id).props.onClick();
- const fill = (type, value) => h.render().find(node => node.type === type && node.props.maxLength).props.onChange({ target: { value } });
+ const fill = (type, value) => h.render().find(node => node.type === type && (type === "textarea" || node.props.maxLength)).props.onChange({ target: { value } });
  const prompt = () => h.render().find(node => node.type === 'textarea').props.value;
  await h.button('aiLibrary.new').props.onClick();
  fill('input', ' Draft ');
- fill('textarea', ' My instructions ');
+ const longPrompt = 'Instruction. '.repeat(2600).trim();
+ fill('textarea', longPrompt);
  assert.ok(h.button('aiLibrary.new'));
  let confirmations = 0;
  promptState.requestConfirm = async () => { confirmations++; return false; };
  select('template');
  await Promise.resolve();
  assert.equal(confirmations, 1);
- assert.equal(prompt(), ' My instructions ');
+ assert.equal(prompt(), longPrompt);
  h.button('aiLibrary.createAndSave').props.onClick();
- assert.equal(promptState.settings.aiPromptTemplates.at(-1).prompt, 'My instructions');
+ assert.equal(promptState.settings.aiPromptTemplates.at(-1).prompt, longPrompt);
  assert.equal(h.render().filter(node => node.props['data-prompt-template']).length, 2);
  assert.equal(h.render().some(node => node.props.role === 'status'), false);
  fill('textarea', 'Edited draft');

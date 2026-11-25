@@ -71,16 +71,18 @@ export function useTextSend(opts: UseTextSendOptions) {
       opts.selectedContactId
     );
 
-  const sendText = async () => {
-    const draft = opts.getDraft?.() ?? useAppStore.getState().draftReply;
+  const sendText = async (textOverride?: string, preserveDraft = false) => {
+    const draft = textOverride ?? opts.getDraft?.() ?? useAppStore.getState().draftReply;
     const text = draft.trim();
     if (!text || opts.sending || sendLockRef.current) return;
     if (!opts.guardBlockedSend()) return;
     sendLockRef.current = true;
     const sameContext = () => latestOptsRef.current.selectedChatId === opts.selectedChatId
       && latestOptsRef.current.chatAccountId === opts.chatAccountId;
-    const clearDraft = () => clearSentChatDraft(useAppStore.getState(), opts.selectedChatId, text,
-      latestOptsRef.current.selectedChatId === opts.selectedChatId ? latestOptsRef.current.getDraft?.() : undefined);
+    const clearDraft = () => {
+      if (!preserveDraft) clearSentChatDraft(useAppStore.getState(), opts.selectedChatId, text,
+        latestOptsRef.current.selectedChatId === opts.selectedChatId ? latestOptsRef.current.getDraft?.() : undefined);
+    };
 
     try {
       // 编辑已发消息
@@ -221,7 +223,7 @@ export function useTextSend(opts: UseTextSendOptions) {
       accountId: opts.chatAccountId,
       }).catch(() => undefined);
 
-      const mentions = opts.mentionTrackerRef.current;
+      const mentions = preserveDraft ? [] : opts.mentionTrackerRef.current;
       const mentionedJid =
       contact.isGroup || opts.activeChat?.isGroup
         ? resolveMentionsForSend(
@@ -234,7 +236,7 @@ export function useTextSend(opts: UseTextSendOptions) {
       // 消息已进入出站记录；先腾空输入框，回执不能再清理下一条草稿。
       clearDraft();
       if (opts.replyTo) opts.setReplyTo(null);
-      opts.mentionTrackerRef.current = [];
+      if (!preserveDraft) opts.mentionTrackerRef.current = [];
       let failed = false;
 
       await sendTextMessage({
@@ -261,7 +263,7 @@ export function useTextSend(opts: UseTextSendOptions) {
       setSending: opts.setSending,
       pushToast: opts.pushToast,
       });
-      if (failed && opts.selectedChatId && sameContext() && !latestOptsRef.current.editingId) {
+      if (failed && !preserveDraft && opts.selectedChatId && sameContext() && !latestOptsRef.current.editingId) {
         const state = useAppStore.getState();
         const current = latestOptsRef.current.getDraft?.() ?? state.draftReplyByChatId[opts.selectedChatId] ?? "";
         const nextReply = latestOptsRef.current.replyTo;

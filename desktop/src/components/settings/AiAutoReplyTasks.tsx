@@ -8,6 +8,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { Button, Switch } from "@/components/ui/primitives";
 import { useI18n } from "@/i18n";
 import { resolveAutoReplyScope } from "@/lib/autoReplyScope";
+import { generateSuggestions, getSuggestionContextKey } from "@/lib/aiSuggest";
 import { AiDecisionDetailsView } from "./AiDecisionDetailsView";
 
 type Row={id:string;chatId:string;accountId?:string;task?:AutoReplyRuntime;record?:AiReplyTaskRecord;message?:Message;followUp?:{step:number;dueAt:number;inboundId:string}};
@@ -23,6 +24,7 @@ export function AiAutoReplyTasks(){
   const [limit,setLimit]=useState(30),[busy,setBusy]=useState(""),[showHistory,setShowHistory]=useState(false);
   const [search,setSearch]=useState(""),[account,setAccount]=useState(""),[filter,setFilter]=useState("all"),[date,setDate]=useState("");
   const [expandedGroups,setExpandedGroups]=useState<Set<string>>(()=>new Set());
+  const [retryDraft,setRetryDraft]=useState<{row:Row;text:string;contextKey:string}|null>(null);
   const autoRepliesPaused=settings.aiAutoReplyPaused||settings.aiAutoReplyDisabled;
   const hidden=new Set(settings.aiTaskDismissedIds||[]);
   const chatsById=useMemo(()=>new Map(chats.map(chat=>[chat.id,chat])),[chats]);
@@ -97,6 +99,39 @@ export function AiAutoReplyTasks(){
       await flushPersist(useAppStore.getState);
     }catch(error){useAppStore.getState().pushToast(String(error),"error");}finally{setBusy("");}
   };
+  const draftContext=(row:Row)=>{
+    const state=useAppStore.getState();
+    const chat=state.chats.find(item=>item.id===row.chatId);
+    const contact=state.contacts.find(item=>item.id===chat?.contactId);
+    const thread=state.messagesByChatId?.[row.chatId]||state.messages.filter(item=>item.chatId===row.chatId);
+    const options={chatId:row.chatId,accountId:row.accountId,count:1 as const};
+    const key=getSuggestionContextKey(contact,thread,state.settings,row.accountId,options);
+    return {state,contact,thread,options,key};
+  };
+  const retryAsDraft=async(row:Row)=>{
+    if(busy)return;
+    setBusy(row.id);
+    setRetryDraft(null);
+    try{
+      const {state,contact,thread,options,key}=draftContext(row);
+      if(!contact){state.pushToast(t("aiOutreach.stale"),"info");return;}
+      const result=await generateSuggestions(contact,thread,state.settings,options);
+      const text=result.suggestions[0]?.text;
+      if(result.fallback||!text){state.pushToast(result.error||t("aiOutreach.status.failed"),"error");return;}
+      if(draftContext(row).key!==key){state.pushToast(t("aiOutreach.stale"),"info");return;}
+      setRetryDraft({row,text,contextKey:key});
+    }catch(error){useAppStore.getState().pushToast(String(error),"error");}finally{setBusy("");}
+  };
+  const insertRetryDraft=()=>{
+    if(!retryDraft)return;
+    const {row,text,contextKey}=retryDraft;
+    const {state,contact,key}=draftContext(row);
+    if(!contact||key!==contextKey){state.pushToast(t("aiOutreach.stale"),"info");setRetryDraft(null);return;}
+    state.setSelectedChat(row.chatId,row.accountId);
+    state.applyAiSuggestion(text,"append");
+    state.goToChats("all");
+    setRetryDraft(null);
+  };
   const disableContact=async(group:ContactGroup)=>{
     if(busy||!group.chatIds.length)return;setBusy(`contact:${group.id}`);
     try{
@@ -145,7 +180,15 @@ export function AiAutoReplyTasks(){
             {(latest.record?.at||latest.message?.sentAt)&&<time dateTime={latest.record?.at||latest.message?.sentAt} className="text-zinc-500">{new Date(latest.record?.at||latest.message?.sentAt||"").toLocaleString()}</time>}
           </div>
           <Button size="xs" disabled={!!busy||!group.chatIds.length} onClick={()=>void disableContact(group)}>{t("aiTasks.disablePerson")}</Button>
+          {human(latest)&&!latest.message?.deliveryUncertain&&<Button size="xs" disabled={!!busy} onClick={()=>void retryAsDraft(latest)}>{t(busy===latest.id?"crmPanel.generating":"aiTasks.retryDraft")}</Button>}
         </div>
+        {retryDraft&&group.rows.some(row=>row.id===retryDraft.row.id)&&<div className="space-y-2 border-t border-zinc-800/70 p-2.5">
+          <p className="whitespace-pre-wrap text-sm">{retryDraft.text}</p>
+          <div className="flex gap-2">
+            <Button size="xs" onClick={insertRetryDraft}>{t("aiTasks.insertRetryDraft")}</Button>
+            <Button size="xs" onClick={()=>setRetryDraft(null)}>{t("common.cancel")}</Button>
+          </div>
+        </div>}
         {expanded&&<div id={groupBodyId} className="divide-y divide-zinc-800/70 border-t border-zinc-800/70">
           {group.rows.map(row=>{
             const activityAt=row.record?.at||row.message?.sentAt;
@@ -175,7 +218,8 @@ export function AiAutoReplyTasks(){
               <div className="flex flex-wrap gap-2 border-t border-zinc-800/70 pt-2 sm:col-span-2">
                 {pending(row)&&<Button size="xs" disabled={!!busy} onClick={()=>void act(row,"stop")}>{t("aiTasks.stopOnce")}</Button>}
                 {row.message?.deliveryStatus==="failed"&&!row.message.deliveryUncertain&&<Button size="xs" disabled={!!busy||autoRepliesPaused} onClick={()=>void act(row,"retry")}>{t("aiTasks.retrySend")}</Button>}
-                {(failed(row)||human(row))&&!row.message?.deliveryUncertain&&<Button size="xs" disabled={!!busy||autoRepliesPaused} onClick={()=>void act(row,"regenerate")}>{t(human(row)?"outreachPreview.refresh":"aiOutreach.retry")}</Button>}
+                {human(row)&&row.id!==latest.id&&!row.message?.deliveryUncertain&&<Button size="xs" disabled={!!busy} onClick={()=>void retryAsDraft(row)}>{t(busy===row.id?"crmPanel.generating":"aiTasks.retryDraft")}</Button>}
+                {failed(row)&&!human(row)&&!row.message?.deliveryUncertain&&<Button size="xs" disabled={!!busy||autoRepliesPaused} onClick={()=>void act(row,"regenerate")}>{t("aiOutreach.retry")}</Button>}
                 <Button size="xs" disabled={!!busy} title={t("aiTasks.replyRecordsHint")} onClick={()=>void act(row,"delete")}>{t("common.delete")}</Button>
               </div>
             </article>;

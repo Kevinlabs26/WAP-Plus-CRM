@@ -1137,9 +1137,11 @@ pub async fn muse_web_open(
     app: tauri::AppHandle,
     media: Option<bool>,
     account_id: Option<String>,
+    reply_window: Option<bool>,
 ) -> Result<(), String> {
-    if media.unwrap_or(false) {
-        return muse_window_for(&app, true, true, account_id.as_deref()).map(|_| ());
+    let media = media.unwrap_or(false);
+    if media || reply_window.unwrap_or(false) {
+        return muse_window_for(&app, true, media, account_id.as_deref()).map(|_| ());
     }
     let root = app.path().app_local_data_dir().map_err(|error| error.to_string())?;
     let pool = load_muse_account_pool(&root)?;
@@ -1767,12 +1769,8 @@ async fn wait_for_connection(
     timeout: Duration,
     retry_status_probe: bool,
 ) -> Result<serde_json::Value, String> {
-    let mut deadline = tokio::time::Instant::now() + timeout;
-    let mut retry_at = if operation.is_some() {
-        Some(deadline)
-    } else {
-        retry_status_probe.then(|| deadline - timeout / 2)
-    };
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut retry_at = (operation.is_some() || retry_status_probe).then(|| deadline - timeout / 2);
     let mut login_since = None;
     loop {
         if let Some((state, id)) = operation {
@@ -1815,9 +1813,6 @@ async fn wait_for_connection(
         if connection_retry_due(&state_name, &mut retry_at, now, deadline, operation.is_some()) {
             // Restart from the Muse entry point before submitting anything.
             window.navigate("https://muse.ai/".parse().unwrap()).map_err(|_| "Muse 自动重连失败".to_string())?;
-            if operation.is_some() {
-                deadline = tokio::time::Instant::now() + timeout;
-            }
             login_since = None;
             continue;
         }
@@ -2030,6 +2025,7 @@ impl MuseRun<'_> {
         let mut submitted = false;
         let mut counted = false;
         let mut recovery_attempted = false;
+        let mut reconnect_deadline = None;
         let mut submitted_prompt = String::new();
         let mut submitted_profile_hash = None;
         loop {
@@ -2043,18 +2039,32 @@ impl MuseRun<'_> {
             let previously_submitted = *may_have_submitted;
             // poll can click Send even if its result never reaches the desktop.
             if submitted { *may_have_submitted = true; }
-            let data = if expired {
-                let recovered = evaluate(window, format!("window.__wapMuse.recover({id}, true)")).await?;
-                if recovered.get("state").and_then(|v| v.as_str()) != Some("done") { return Err(timeout.into()); }
-                recovered
-            } else {
-                match evaluate(window, expression).await {
-                    Ok(data) => data,
-                    Err(_) if !submitted => { tokio::time::sleep(Duration::from_millis(400)).await; continue; }
-                    Err(error) => {
-                        let recovered = evaluate(window, format!("window.__wapMuse.recover({id}, true)")).await?;
-                        if !matches!(recovered.get("state").and_then(|v| v.as_str()), Some("done" | "generating")) { return Err(error); }
-                        recovered
+            let polled = if expired { None } else { evaluate(window, expression).await.ok() };
+            let data = match polled {
+                Some(data) if !submitted || data.get("requestId").and_then(|v| v.as_str()) == Some(request_id) => {
+                    reconnect_deadline = None;
+                    data
+                }
+                _ if !submitted => { tokio::time::sleep(Duration::from_millis(400)).await; continue; }
+                _ => {
+                    let path = if counted { &record.path } else { &target };
+                    let context = serde_json::json!({"path": path, "owner": &self.owner, "expectMedia": expect_media});
+                    let recovered = evaluate(window, format!("window.__wapMuse.recover({id}, true, {context})")).await.ok();
+                    match recovered {
+                        Some(data) if data.get("state").and_then(|v| v.as_str()) == Some("done") => data,
+                        _ if expired => return Err(timeout.into()),
+                        Some(data) if data.get("state").and_then(|v| v.as_str()) == Some("generating") => {
+                            reconnect_deadline = None;
+                            data
+                        }
+                        _ => {
+                            let until = reconnect_deadline.get_or_insert_with(|| tokio::time::Instant::now() + Duration::from_secs(15));
+                            if tokio::time::Instant::now() >= *until {
+                                return Err("Muse 暂时无法重新连接并定位本次请求，请查看原对话；未重复发送".into());
+                            }
+                            tokio::time::sleep(Duration::from_millis(400)).await;
+                            continue;
+                        }
                     }
                 }
             };

@@ -131,12 +131,21 @@ test('folder additions compose dynamically with templates and parents without le
  s.chatFolders[1].aiPromptMode='replace';assert.equal(resolveAiReplyProfile(s,'a','chat').prompt,'UPDATED LIBRARY\n\nLOCAL EXTRA');
 });
 
-test('missing templates and oversized composed instructions stop generation instead of silently dropping requirements',async()=>{
+test('missing templates stop generation and long composed instructions reach the API intact',async t=>{
  const s={...base(),aiProvider:'custom',customAiKey:'test',customAiBaseUrl:'https://example.invalid',customAiModel:'test'};
  s.chatFolders[1]={...s.chatFolders[1],aiPromptMode:'append',aiPromptTemplateId:'missing'};
  assert.ok(resolveAiReplyProfile(s,'a','chat').error);assert.equal((await generateSuggestions(contact,history,s,{auto:true,accountId:'a'})).suggestions.length,0);
  s.chatFolders=Array.from({length:5},(_,i)=>({...folder(String(i),'x'.repeat(6000),i===4?['chat']:[]),aiPromptMode:'append',parentId:i?String(i-1):undefined}));
- const profile=resolveAiReplyProfile(s,'a','chat');assert.ok(profile.error);assert.equal(profile.prompt,'');
+ const profile=resolveAiReplyProfile(s,'a','chat');
+ assert.equal(profile.error, undefined);
+ assert.ok(profile.prompt.length > 30_000);
+ let systemPrompt;
+ t.mock.method(globalThis,'fetch',async(_url,opts)=>{
+   systemPrompt=JSON.parse(opts.body).messages[0].content;
+   return Response.json({choices:[{message:{content:'[{"text":"Bonjour !"}]'}}]});
+ });
+ await generateSuggestions(contact,history,s,{auto:true,accountId:'a'});
+ assert.ok(systemPrompt.includes(profile.prompt));
 });
 
 test('compact context reduces sent history while keeping all configured instructions and a single proactive task',async t=>{

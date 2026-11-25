@@ -13,6 +13,7 @@ import type { AppState, SliceContext } from "./types";
 import { deferDuringRestore, isDataRestoreActive } from "./restoreGuard";
 import { persist } from "./persist";
 import type { ScheduledMessage } from "@/types/crm";
+import { isGroupWelcomeTask } from "@/lib/groupWelcome";
 import { removeSalesStage, resolveSalesStageLabel } from "@/lib/contactWorkflow";
 import { MAX_QUICK_REPLIES, MAX_RECENT_QUICK_REPLIES, normalizeQuickReplyIds } from "@/lib/quickReplies";
 
@@ -128,6 +129,9 @@ export function createSettingsActionsSlice({
         if (patch.quickReplies !== undefined || patch.quickReplyRecentIds !== undefined) {
           next.quickReplyRecentIds = normalizeQuickReplyIds(next.quickReplyRecentIds, next.quickReplies, MAX_RECENT_QUICK_REPLIES);
         }
+        if (patch.composerQuickAccessTabs !== undefined) {
+          next.composerQuickAccessTabs = [...new Set((next.composerQuickAccessTabs || []).filter(tab => tab === "quick-replies" || tab === "images"))];
+        }
         return {
           settings: next,
           ...(accountViewChanged
@@ -150,13 +154,18 @@ export function createSettingsActionsSlice({
         // 否则用户马上刷新时，内存里的新分组会被旧数据库覆盖回来。
         const structureChanged =
           patch.chatFolders !== undefined || patch.chatFolderClones !== undefined ||
-          patch.salesStageOrder !== undefined || patch.salesStageLabels !== undefined;
+          patch.salesStageOrder !== undefined || patch.salesStageLabels !== undefined ||
+          patch.musePrivacyByAccountId !== undefined || patch.groupWelcomeRules !== undefined;
         persist(get, structureChanged);
       }
     },
 
     scheduleMessage: (input) => {
-      if ((get().settings.scheduledMessages || []).length >= 200) {
+      if (input.channelId === "android_bridge" && !input.deviceId?.trim()) {
+        get().pushToast("请先选择发送这条定时消息的 Android 手机", "error");
+        return null;
+      }
+      if ((get().settings.scheduledMessages || []).filter(task => !isGroupWelcomeTask(task.id)).length >= 200) {
         get().pushToast("定时记录已达 200 条，请先删除已结束的记录", "error");
         return null;
       }
@@ -205,6 +214,10 @@ export function createSettingsActionsSlice({
         const due = Date.parse(patch.dueAt);
         const text = (patch.text ?? current?.text ?? "").trim();
         if (!current || current.status !== "expired" || !Number.isFinite(due) || due <= Date.now() || !text || text.length > 4000) return false;
+        if (current.channelId === "android_bridge" && !current.deviceId?.trim()) {
+          get().pushToast("定时消息没有绑定 Android 手机，请重新创建", "error");
+          return false;
+        }
         patch = { ...patch, dueAt: new Date(due).toISOString(), text, status: "pending", messageId: undefined, error: undefined };
       }
       let changed = false;

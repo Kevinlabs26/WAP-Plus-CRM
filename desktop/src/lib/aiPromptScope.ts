@@ -4,7 +4,6 @@ import { evaluatePromptPlan, usesPromptPlans, type PromptPlan, type SavedPromptP
 
 export type AiPromptFolder = { id: string; name: string; parentId?: string };
 export type AiPromptTemplate = { id: string; name: string; prompt: string; folderId?: string };
-export const MAX_EFFECTIVE_PROMPT_CHARS = 24_000;
 export function normalizePromptFolders(value: unknown): AiPromptFolder[] {
   const seen = new Set<string>();
   const folders = (Array.isArray(value) ? value : []).slice(0, 100).flatMap(item => {
@@ -43,7 +42,7 @@ export function normalizePromptTemplates(value: unknown, folderIds?: ReadonlySet
         typeof item.name !== "string" || !item.name.trim() || typeof item.prompt !== "string" || !item.prompt.trim()) return [];
     seen.add(item.id);
     const folderId = typeof item.folderId === "string" && (!folderIds || folderIds.has(item.folderId)) ? item.folderId : undefined;
-    return [{id: item.id, name: item.name.trim().slice(0,80), prompt: item.prompt.trim().slice(0,6000), ...(folderId ? { folderId } : {})}];
+    return [{id: item.id, name: item.name.trim().slice(0,80), prompt: item.prompt.trim(), ...(folderId ? { folderId } : {})}];
   });
 }
 type PromptSettings = Pick<SettingsShape, "aiSystemPrompt" | "aiSystemPromptByAccountId" | "chatFolders" | "liveBaileysAccountId" | "activeAccountId" | "leadInbox"> & Omit<PlaybookSettings, 'chatFolders'> & {aiPromptTemplates?: AiPromptTemplate[]; aiPromptPlans?: SavedPromptPlan[]; aiPromptPlanByChat?: Record<string, PromptPlan>};
@@ -58,7 +57,7 @@ function defaultProfile(settings: PromptSettings, accountId?: string): AiReplyPr
   const account = accountId && settings.aiSystemPromptByAccountId?.[accountId]?.trim();
   const prompt = account || settings.aiSystemPrompt?.trim() || "";
   const source = account ? "account" : prompt ? "global" : "default";
-  return prompt.length > MAX_EFFECTIVE_PROMPT_CHARS ? {prompt:"",source,error:"提示词超过 24000 字符，请精简后重试"} : {prompt, source};
+  return {prompt, source};
 }
 
 /** Only ancestors in the same account scope can supply a folder's identity. */
@@ -75,8 +74,9 @@ export function resolveFolderAiProfile(settings: PromptSettings, folderId: strin
   while (folder && !seen.has(folder.id) && scopeKey(settings, folder) === scope) {
     seen.add(folder.id);
     if (folder.aiPromptMode !== "inherit") {
-      const template = folder.aiPromptTemplateId ? settings.aiPromptTemplates?.find(item => item.id === folder!.aiPromptTemplateId) : undefined;
-      if (folder.aiPromptTemplateId && !template) return {prompt: "", source: "folder", folderId: folder.id, error: "提示词模板已不存在，请重新选择"};
+      const templateId = settings.aiProvider === "muse" ? undefined : folder.aiPromptTemplateId;
+      const template = templateId ? settings.aiPromptTemplates?.find(item => item.id === templateId) : undefined;
+      if (templateId && !template) return {prompt: "", source: "folder", folderId: folder.id, error: "提示词模板已不存在，请重新选择"};
       const prompt = [template?.prompt.trim(), folder.aiSystemPrompt?.trim()].filter(Boolean).join("\n\n");
       if (prompt) {
         if(template)templateIds.add(template.id);
@@ -88,10 +88,9 @@ export function resolveFolderAiProfile(settings: PromptSettings, folderId: strin
     folder = folder.parentId ? byId.get(folder.parentId) : undefined;
   }
   base ||= defaultProfile(settings, accountId);
-  if (base.error) return base;
   const prompt = [base.prompt, ...additions].filter(Boolean).join("\n\n");
   const profile: AiReplyProfile = source ? {prompt, source: "folder", folderId: source.id, folderName: source.name,templateIds:[...templateIds]} : {...base, prompt};
-  return prompt.length > MAX_EFFECTIVE_PROMPT_CHARS ? {...profile, prompt: "", error: "合并后的提示词超过 24000 字符，请精简；已停止生成，避免截断要求"} : profile;
+  return profile;
 }
 
 /** Membership is primary-only and independent of the sidebar's current view or clones. */
@@ -177,7 +176,5 @@ export function resolveAiReplyProfile(
     .filter(Boolean)
     .join("\n\n");
   const book = playbook && settings.aiPlaybooks?.find(item => item.id === playbook.id);
-  const resolved = {...profile, prompt, readMuseFiles: playbook?.readMuseFiles, musePlaybookPaths:playbook?.musePaths, museMaterials:playbook?.museMaterials, playbookName: book?.name, playbookVersion: book?.museRevision, workspacePlaybook:!!book?.musePath};
-  return prompt.length > MAX_EFFECTIVE_PROMPT_CHARS
-    ? {...resolved, prompt: '', error: '合并提示词和联系人补充说明后超过 24000 字符，请精简后重试'} : resolved;
+  return {...profile, prompt, readMuseFiles: playbook?.readMuseFiles, musePlaybookPaths:playbook?.musePaths, museMaterials:playbook?.museMaterials, playbookName: book?.name, playbookVersion: book?.museRevision, workspacePlaybook:!!book?.musePath};
 }

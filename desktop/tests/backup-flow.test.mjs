@@ -44,7 +44,7 @@ test('restore preserves local credentials and protections, persists no keys and 
   assert.equal(settings.customAiBaseUrl, 'https://local.invalid'); assert.equal(settings.bridgeToken, 'private-token'); assert.equal(settings.customAiKey, 'private-ai-key'); assert.equal(settings.aiReplyMode, 'semi');
   assert.equal(settings.transcriptionApiKey, 'private-speech-key'); assert.equal(settings.transcriptionBaseUrl, 'https://speech.invalid/v1');
   assert.equal(settings.waAccounts[0].warmupExempt, false); assert.equal(settings.waAccounts[0].createdAt, '2026-09-30T00:00:00Z');
-  assert.equal(settings.scheduledMessages[0].status, 'failed');
+  assert.equal(settings.scheduledMessages[0].status, 'expired');
   for (const key of ['customAiKey', 'transcriptionApiKey', 'openaiKey', 'bridgeToken']) assert.equal(globalThis.restoreSaved.settings[key], '');
   assert.equal(globalThis.restoreSaved.messages[0].mediaUrl, undefined);
   assert.equal(globalThis.restoreMedia.get('media'), mediaUrl);

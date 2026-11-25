@@ -4,15 +4,16 @@ import { generateSuggestions, hasRealAiKey } from "./aiSuggest";
 import { hashAiReplyContext } from "./aiReplyContext";
 import { outreachCandidate, inspectOutreachCandidate, outreachContextKey, currentOutreachContext, isOutreachOptOut, outreachFolderChatIds, unresolvedOutreachRecipients, type OutreachReason } from "./aiOutreachContext";
 import { getAutoReplyOutputBlockReason } from "./aiSafety";
-import { resolveSendTarget } from "./utils";
 import type { AiOutreachRun } from "./aiOutreachRules";
 import { normalizeOutreachRule, outreachGoal, isImmediateOutreach, outreachRunClock, nextOutreachWindow, isPendingOutreachRun, outreachRunExpired, OUTREACH_IMMEDIATE_WINDOW_MS } from "./aiOutreachRules";
 import type { Message } from "@/types/crm";
 import { retainMessageChats } from "@/store/messageMemory";
 import { hydrateOutreachHistory } from "./aiOutreachHistory";
 import { lastContactedAccounts, recipientKey } from "./scheduledPlans";
+import { extendScheduledFirstContactAssignments, firstContactHistory } from "./aiOutreachAllocation";
 import { translateCurrent } from "@/i18n";
 import { isAppLockActive } from "./appLockRuntime";
+import { alternateSendAccounts } from "./alternateSendAccounts";
 
 type RoundCheck={at?:number;day:string;blocked:ReadonlyMap<string,OutreachReason>};
 type SchedulerStatus={at:number;phase:"idle"|"checking"|"history"|"generating"|"waiting"|"error";error:string;folderId?:string;checks:ReadonlyMap<string,RoundCheck>};
@@ -134,11 +135,19 @@ export async function queueOutreachDraft(id:string,approved=true) {
     if (!key||hash!==run.contextHash) {await saveRun({...run,status:"cancelled",error:"上下文或规则已变化，请重新生成"});return false;}
     if (outreachContextKey(state,run.folderId,run.chatId,run.id)!==key||state.settings.aiOutreachRuns.find(item=>item.id===id)?.status!=="draft") return false;
     const candidate=outreachCandidate(state,run.folderId,run.chatId,Date.now(),run.id);
-    if (!candidate) return false;
-    const recipient=resolveSendTarget({phone:candidate.contact.phone,channelAddress:candidate.contact.channelAddress,entityId:candidate.contact.id});
+    if (!candidate || !approved && candidate.reviewOnly) return false;
+    const recipient=candidate.recipient;
     if (!recipient) {await saveRun({...run,status:"failed",error:"联系人号码不可用"});return false;}
+    let sendChatId=run.chatId;
+    const sourceAccountId=candidate.chat.accountId||candidate.contact.accountId||state.settings.liveBaileysAccountId||state.settings.activeAccountId;
+    if (candidate.rule.firstContactQuotas && (candidate.historyChatId!==run.chatId || sourceAccountId!==run.accountId)) {
+      const target=candidate.historyChatId!==run.chatId ? candidate.historyChatId : state.ensureChatForContact(candidate.contact.id,run.accountId);
+      if (!target) {await saveRun({...run,status:"failed",error:"无法打开分配账号的会话"});return false;}
+      if (!state.chats.some(chat=>chat.id===target)) state.patchChat(target,{hasMessageHistory:false});
+      sendChatId=target;
+    }
     const draft=state.draftReply;
-    const messageId=state.enqueueOutgoingMessage({chatId:run.chatId,contactId:candidate.contact.id,body:run.text,accountId:run.accountId,
+    const messageId=state.enqueueOutgoingMessage({chatId:sendChatId,contactId:candidate.contact.id,body:run.text,accountId:run.accountId,
       channelId:"baileys",deviceId:run.accountId,phoneE164:recipient,systemKind:"ai_proactive",aiReplyContextHash:run.contextHash,
       deliveryStatus:"pending"});
     if (useAppStore.getState().draftReply!==draft) useAppStore.getState().setDraftReply(draft);
@@ -216,24 +225,36 @@ export async function tickAiOutreach(now=Date.now(),force=false) {
     for(const run of state.settings.aiOutreachRuns||[])lastRunByFolder.set(run.folderId,Math.max(lastRunByFolder.get(run.folderId)||0,Date.parse(run.at)||0));
     folders.sort((a,b)=>(lastRunByFolder.get(a.id)||0)-(lastRunByFolder.get(b.id)||0));
     const chats=new Map(state.chats.map(chat=>[chat.id,chat])),contacts=new Map(state.contacts.map(contact=>[contact.id,contact]));
-    const lastAccounts=folders.some(folder=>folder.scope?.type==="all")?lastContactedAccounts(state.chats,state.contacts,state.messages):undefined;
+    const allocationHistory=folders.some(folder=>folder.scope?.type==="all"&&folder.aiOutreach?.firstContactQuotas)?firstContactHistory(state):undefined;
+    const lastAccounts=allocationHistory?.lastAccounts ?? (folders.some(folder=>folder.scope?.type==="all")?lastContactedAccounts(state.chats,state.contacts,state.messages):undefined);
     const unresolvedRecipients=unresolvedOutreachRecipients(state);
     let planningState=state;
     const planned:AiOutreachRun[]=[];
+    let assignmentsChanged = false;
     for (const folder of folders) {
       if (!folder.aiOutreach?.enabled) continue;
-      const rule=normalizeOutreachRule(folder.aiOutreach),clock=outreachRunClock(rule,now);
+      let rule=normalizeOutreachRule(folder.aiOutreach);
+      const clock=outreachRunClock(rule,now);
       if((rule.startMode==="immediate"&&!isImmediateOutreach(rule,now))||(rule.startMode==="scheduled"&&rule.scheduleStartAt!==undefined&&now<rule.scheduleStartAt))continue;
       const roundAt=isImmediateOutreach(rule,now)?rule.runNowAt:undefined;
       if(roundAt===undefined&&(blocked||folder.aiOutreach.paused||clock.time<rule.time))continue;
       const members=new Set(outreachFolderChatIds(planningState,folder.id));
+      if (folder.scope?.type === "all") {
+        const updatedRule = extendScheduledFirstContactAssignments(planningState, members, rule);
+        if (updatedRule !== rule) {
+          rule = updatedRule;
+          planningState = {...planningState, settings: {...planningState.settings, chatFolders: planningState.settings.chatFolders.map(item =>
+            item.id === folder.id ? {...item, aiOutreach: rule} : item)}};
+          assignmentsChanged = true;
+        }
+      }
       const currentRoundRuns=new Map(planningState.settings.aiOutreachRuns.filter(run=>run.folderId===folder.id&&run.roundAt===roundAt&&run.day===clock.day).map(run=>[run.chatId,run]));
       const reasons=new Map<string,OutreachReason>();
       for (const chatId of members) {
         const existing=currentRoundRuns.get(chatId);
         if(existing&&existing.status!=="waiting")continue;
         const chat=chats.get(chatId),contact=chat&&contacts.get(chat.contactId);
-        const check=inspectOutreachCandidate(planningState,folder.id,chatId,now,existing?.id,undefined,chat&&contact?{chat,contact,members,rule,clock,lastAccounts,unresolvedRecipients}:undefined);
+        const check=inspectOutreachCandidate(planningState,folder.id,chatId,now,existing?.id,undefined,chat&&contact?{chat,contact,members,rule,clock,lastAccounts,unresolvedRecipients,firstContactHistory:allocationHistory}:undefined);
         if(!check.candidate){
           reasons.set(chatId,check.reason);
           continue;
@@ -246,8 +267,9 @@ export async function tickAiOutreach(now=Date.now(),force=false) {
       }
       checks.set(folder.id,{at:roundAt,day:clock.day,blocked:reasons});
     }
-    if(planned.length){
-      useAppStore.getState().updateSettings({aiOutreachRuns:planningState.settings.aiOutreachRuns});
+    if(planned.length || assignmentsChanged){
+      useAppStore.getState().updateSettings({aiOutreachRuns:planningState.settings.aiOutreachRuns,
+        ...(assignmentsChanged ? {chatFolders:planningState.settings.chatFolders} : {})});
       await flushPersist(useAppStore.getState);
     }
     publishScheduler({checks});
@@ -258,8 +280,12 @@ export async function tickAiOutreach(now=Date.now(),force=false) {
       const rule=fresh.settings.chatFolders.find(folder=>folder.id===run.folderId)?.aiOutreach;
       if(rule?.mode==="auto"&&outreachCandidate(fresh,run.folderId,run.chatId,Date.now(),run.id))await queueOutreachDraft(run.id,false);
     }
+    const runs=useAppStore.getState().settings.aiOutreachRuns;
+    const previous=runs.reduce<AiOutreachRun|undefined>((latest,run)=>
+      run.status!=="waiting" && !!run.text && (!latest || run.at>=latest.at) ? run : latest,undefined);
+    const waiting=alternateSendAccounts(runs.filter(run=>run.status==="waiting"),run=>run.accountId,previous?.accountId);
     let generated=0;
-    for(const run of useAppStore.getState().settings.aiOutreachRuns.filter(item=>item.status==="waiting")){
+    for(const run of waiting){
       if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return;
       if(useAppStore.getState().settings.aiOutreachRuns.find(item=>item.id===run.id)?.status!=="waiting")continue;
       const check=inspectOutreachCandidate(useAppStore.getState(),run.folderId,run.chatId,Date.now(),run.id);
@@ -288,7 +314,7 @@ async function generateOutreach(folderId:string,chatId:string,id:string) {
   const routed=outreachCandidate(routingState,folderId,chatId,Date.now(),id);
   if(!routed)return false;
   publishScheduler({at:Date.now(),phase:"history",folderId,error:""});
-  await hydrateOutreachHistory(chatId);
+  await hydrateOutreachHistory(routed.historyChatId);
   if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return false;
   const now=Date.now();
   const state=useAppStore.getState(),candidate=outreachCandidate(state,folderId,chatId,now,id);
@@ -328,9 +354,9 @@ async function generateOutreach(folderId:string,chatId:string,id:string) {
   controller=new AbortController();
   try {
     const currentSettings=useAppStore.getState().settings;
-    const useDecision=currentSettings.aiProvider==="muse"||!!currentSettings.aiOutreachMuseAccountId;
+    const useDecision=candidate.rule.mode==="auto"||currentSettings.aiProvider==="muse"||!!currentSettings.aiOutreachMuseAccountId;
     const result=await generateSuggestions(candidate.contact,candidate.thread,currentSettings,
-      {auto:true,accountId:candidate.accountId,chatId,outreach:outreachGoal(candidate.rule),outreachDecision:useDecision,allowSidebarData:candidate.rule.allowSidebarData===true,signal:controller.signal,
+      {auto:true,accountId:candidate.accountId,chatId,outreach:outreachGoal(candidate.rule),outreachDecision:useDecision,firstContactVerified:candidate.rule.mode==="auto"&&candidate.firstContactVerified,allowSidebarData:candidate.rule.allowSidebarData===true,signal:controller.signal,
         beforeSubmit:()=>{
           const fresh=useAppStore.getState();
           if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch||fresh.settings.aiOutreachRuns.find(item=>item.id===id)?.status!=="generating"||outreachContextKey(fresh,folderId,chatId,id)!==key) {
@@ -363,9 +389,9 @@ async function generateOutreach(folderId:string,chatId:string,id:string) {
     if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return false;
     if(await expireIfNeeded()||await parkIfPaused())return false;
     if(useAppStore.getState().settings.aiOutreachRuns.find(item=>item.id===id)?.status!=="generating"||outreachContextKey(useAppStore.getState(),folderId,chatId,id)!==key)return false;
-    const autoEvidence = result.outreachDecision?.action === "send" && !!result.decisionDetails?.evidence;
+    const autoEvidence = !candidate.reviewOnly && result.outreachDecision?.action === "send" && !!result.decisionDetails?.evidence;
     const decisionDetails = {...result.decisionDetails,
-      reason:result.decisionDetails?.reason || "缺少可核对的联系依据，需要人工确认"};
+      reason:candidate.reviewOnly ? translateCurrent("outreachReason.historyReview") : result.decisionDetails?.reason || "缺少可核对的联系依据，需要人工确认"};
     run={...run,status:"draft",text,contextHash:hash,autoEvidence,decisionDetails};
     await saveRun(run);
     if(candidate.rule.mode==="auto" && autoEvidence)await queueOutreachDraft(id,false);

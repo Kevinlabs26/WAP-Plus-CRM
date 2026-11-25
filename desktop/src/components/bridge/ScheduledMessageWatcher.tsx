@@ -84,6 +84,13 @@ export function ScheduledMessageWatcher() {
             continue;
           }
           const accountId = task.accountId;
+          if (task.channelId === "android_bridge" && !task.deviceId?.trim()) {
+            latest.updateScheduledMessage(task.id, {
+              status: "failed",
+              error: "定时消息没有绑定 Android 手机，请重新创建",
+            });
+            continue;
+          }
           if (task.channelId === "baileys" &&
               (!accountId || !latest.settings.waAccounts.some((account) => account.id === accountId))) {
             latest.updateScheduledMessage(task.id, {

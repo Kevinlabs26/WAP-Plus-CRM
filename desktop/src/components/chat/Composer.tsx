@@ -60,9 +60,11 @@ import { VOICE_INPUT_LANGUAGES } from "@/lib/voiceInputLanguage";
 import { getChatDraftValue, MAX_CHAT_DRAFT_LENGTH } from "@/lib/chatDrafts";
 import { toggleComposerBold } from "@/lib/composerFormatting";
 import { useI18n } from "@/i18n";
-import { onQuickReplyMedia, quickReplyMediaToFile } from "@/lib/quickReplyMedia";
+import { emitQuickReplyMedia, onQuickReplyMedia, quickReplyMediaToFile } from "@/lib/quickReplyMedia";
 import { ContactVcfDialog } from "./ContactVcfDialog";
 import { ContactLinksDialog } from "./ContactLinksDialog";
+import { ComposerQuickShelf } from "./ComposerQuickShelf";
+import { getQuickReplyCategories } from "@/lib/quickReplies";
 
 const TYPING_DEBUG_ENABLED = isTypingDiagnosticsEnabled();
 const EmojiStickerGifPanel = lazy(() =>
@@ -103,6 +105,7 @@ type Props = {
   voicePaused: boolean;
   recordSec: number;
   onSend: () => void | Promise<void>;
+  onSendQuickReply: (reply: AppSettings["quickReplies"][number], body: string) => boolean | void | Promise<boolean | void>;
   /** ↑ 空输入框时编辑最近一条自己发送的文字消息。 */
   onEditLatest?: () => boolean;
   onSendImage: (file: File, caption?: string) => boolean | Promise<boolean>;
@@ -158,6 +161,7 @@ function ComposerInner({
   voicePaused,
   recordSec,
   onSend,
+  onSendQuickReply,
   onEditLatest,
   onSendImage,
   onSendAudio,
@@ -190,6 +194,12 @@ function ComposerInner({
       backTranslate: s.settings.backTranslate,
       emojiEnabled: s.settings.emojiEnabled,
       voiceInputLang: s.settings.voiceInputLang,
+      quickReplies: s.settings.quickReplies,
+      quickReplyCustomCategories: s.settings.quickReplyCustomCategories,
+      quickReplyRemovedCategories: s.settings.quickReplyRemovedCategories,
+      quickReplyCategoryLabels: s.settings.quickReplyCategoryLabels,
+      quickReplyCategoryOrder: s.settings.quickReplyCategoryOrder,
+      composerQuickAccessTabs: s.settings.composerQuickAccessTabs,
     }))
   );
   const crmPanelCollapsed = useAppStore((s) => s.crmPanelCollapsed);
@@ -214,6 +224,7 @@ function ComposerInner({
     const state = useAppStore.getState();
     return getChatDraftValue(state.draftReplyByChatId, resetKey);
   })();
+  const composerCategories = useMemo(() => getQuickReplyCategories(settingsUi.quickReplyCustomCategories || [], settingsUi.quickReplyRemovedCategories || [], settingsUi.quickReplyCategoryLabels || {}, settingsUi.quickReplyCategoryOrder || []), [settingsUi.quickReplyCustomCategories, settingsUi.quickReplyRemovedCategories, settingsUi.quickReplyCategoryLabels, settingsUi.quickReplyCategoryOrder]);
   const [dragOver, setDragOver] = useState(false);
   const [attachmentOpen, setAttachmentOpen] = useState(false);
   const [vcfOpen, setVcfOpen] = useState(false);
@@ -978,6 +989,57 @@ function ComposerInner({
     emitComposing();
   };
 
+  const quickReplyBody = (reply: AppSettings["quickReplies"][number]) =>
+    reply.translation?.trim() || reply.body.trim();
+
+  const quickReplySendLockRef = useRef(false);
+  const insertComposerQuickReply = (reply: AppSettings["quickReplies"][number]) => {
+    if (sending || recording || inputLocked || editingId || mediaSendingIndex >= 0) return;
+    const body = quickReplyBody(reply);
+    if (reply.media) {
+      const accepted = emitQuickReplyMedia({ ...reply.media, caption: body, token: `${reply.id}-${Date.now()}`, target: "main", chatId: resetKey || undefined });
+      if (!accepted) { pushToast(t("quickShelf.insertUnavailable"), "info"); return; }
+      pushToast(t("quickShelf.mediaInserted"), "success");
+    } else {
+      if (!body) return;
+      const current = readDraft().trim();
+      const next = current ? `${current}\n${body}` : body;
+      if (next.length > MAX_CHAT_DRAFT_LENGTH) { pushToast(t("links.longDraft"), "error"); return; }
+      setDraftLocal(next);
+      flushDraftNow(next);
+      setTranslateOriginal(null);
+      setTranslatedDraft(null);
+      setBackTranslation(null);
+      backTranslationRequestRef.current++;
+      setBackTranslating(false);
+      if (translatingRef.current) {
+        translationRequestRef.current++;
+        translatingRef.current = false;
+        pendingSendAfterTranslationRef.current = false;
+        setTranslating(false);
+      }
+      emitComposing();
+      pushToast(t("crmPanel.appended"), "success");
+    }
+    useAppStore.getState().recordQuickReplyUsage(reply.id);
+    requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
+  };
+
+  const sendComposerQuickReply = async (reply: AppSettings["quickReplies"][number]) => {
+    if (quickReplySendLockRef.current || sending || recording || inputLocked || editingId || mediaSendingIndex >= 0) return;
+    const body = quickReplyBody(reply);
+    if (!reply.media && !body) return;
+    quickReplySendLockRef.current = true;
+    try {
+      const sent = await onSendQuickReply(reply, body);
+      if (sent !== false) useAppStore.getState().recordQuickReplyUsage(reply.id);
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : t("runtime.sendFailed"), "error");
+    } finally {
+      quickReplySendLockRef.current = false;
+    }
+  };
+
   return (
     <div
       ref={containerRef}
@@ -1068,6 +1130,10 @@ function ComposerInner({
           if (f) stageMedia([f], "gif");
         }}
       />
+      <ComposerQuickShelf tabs={settingsUi.composerQuickAccessTabs || []} quickReplies={settingsUi.quickReplies} categories={composerCategories} chatId={resetKey} canSendReply={!sending && !recording && !inputLocked && !editingId && mediaSendingIndex < 0} onToggleTab={tab => {
+        const tabs = useAppStore.getState().settings.composerQuickAccessTabs || [];
+        useAppStore.getState().updateSettings({ composerQuickAccessTabs: tabs.includes(tab) ? tabs.filter(item => item !== tab) : [...tabs, tab] });
+      }} onInsertReply={insertComposerQuickReply} onSendReply={sendComposerQuickReply} />
       {pendingMedia.length > 0 && (
         <MediaSendPreview
           items={pendingMedia}

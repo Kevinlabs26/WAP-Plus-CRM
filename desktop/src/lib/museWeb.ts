@@ -1,7 +1,8 @@
 import { isTauri } from './bridge.ts';
 import { trackAiRequest } from './aiUsage.ts';
 import { enqueueMuseTask, museQueueSnapshot } from './museQueue.ts';
-import { assertMuseContentAllowed, createMuseChatRedactor, musePrivacyGateMessage, musePrivacyIdentities, museTrainingDisabledConfirmed } from './museChatPrivacy.ts';
+import { redactAiContent } from './aiPrivacy.ts';
+import { createMuseChatRedactor, musePrivacyGateError, musePrivacyIdentities, museTrainingDisabledConfirmed } from './museChatPrivacy.ts';
 
 export type MuseWebStatus = { opened:boolean; ready:boolean; state:string; message:string; mediaProtocol?:number;parallelMedia?:boolean };
 export type MuseWebAccount = {id:string;name:string;note:string;selected:boolean;primary:boolean};
@@ -31,6 +32,7 @@ async function native<T>(command:string,args:Record<string,unknown>={}) {
   }
 }
 export const openMuseWeb=(media=false,accountId?:string)=>native<void>('muse_web_open',{media,accountId});
+export const openMuseReplyWindow=(accountId:string)=>native<void>('muse_web_open',{accountId,replyWindow:true});
 export const museWebWorkspaceAccount=()=>native<string>('muse_web_workspace_account');
 export const setMuseWorkspaceContentVisible=(visible:boolean)=>native<void>('muse_web_workspace_content_visible',{visible});
 export const setMuseWorkspaceSidebarCollapsed=(collapsed:boolean)=>native<void>('muse_web_workspace_sidebar_set_collapsed',{collapsed});
@@ -102,19 +104,25 @@ export async function nextMuseAutoReplyAccount(accountIds?:readonly string[]):Pr
   const allowed=accountIds?new Set(accountIds):undefined;
   const eligible=pool.accounts.filter(account=>museTrainingDisabledConfirmed(account.id)&&(!allowed||allowed.has(account.id)));
   let ready=eligible.filter(account=>isAccountReady(account.id) && !isRetryDeferred(account.id));
+  const unprobed=eligible.filter(account=>!isAccountReady(account.id) && !isRetryDeferred(account.id));
   if (!ready.length) {
-    const due = eligible.filter(account => !isRetryDeferred(account.id));
-    for (let i = 0; i < due.length; i += 2) {
-      await Promise.all(due.slice(i, i + 2).map(account => probeAutoReplyAccount(account.id)));
+    for (let i = 0; i < unprobed.length; i += 2) {
+      await Promise.all(unprobed.slice(i, i + 2).map(account => probeAutoReplyAccount(account.id)));
     }
     ready=eligible.filter(account=>isAccountReady(account.id) && !isRetryDeferred(account.id));
     if (!ready.length && eligible.some(account => isRetryDeferred(account.id))) {
       throw Error('Muse 自动回复账号暂不可用，将稍后重新检查');
     }
+  } else if (unprobed.length) {
+    // Warm up unprobed secondary accounts in the background without delaying the ready turn.
+    for (const account of unprobed.slice(0, 2)) {
+      void probeAutoReplyAccount(account.id);
+    }
   }
   if(!ready.length)return '';
   const account=ready[nextAutoReplyAccount%ready.length]!;
-  nextAutoReplyAccount=(nextAutoReplyAccount+1)%ready.length;
+  // Avoid wrapping modulo current ready.length so newly warmed accounts enter on the very next turn.
+  nextAutoReplyAccount=(nextAutoReplyAccount+1)%1_000_000;
   return account.id;
 }
 export async function readyMuseAutoReplyAccounts(accountIds?:readonly string[]):Promise<string[]>{
@@ -154,18 +162,18 @@ export function collectMuseWebMedia(accountId?:string):Promise<MuseGeneratedMedi
 }
 export async function generateMuseWebOutput(prompt:string,signal?:AbortSignal,conversationKey?:string,context?:MuseWebContext,referenceImage?:MuseReferenceImage | MuseReferenceImage[],expectMedia=false,priority=0,onStart?:()=>void|Promise<void>,accountId?:string):Promise<MuseWebOutput> {
   const targetAccount=accountId||(await museWebAccounts()).selectedId;
-  if(!museTrainingDisabledConfirmed(targetAccount))throw Error(musePrivacyGateMessage());
-  assertMuseContentAllowed(prompt,context);
+  if(!museTrainingDisabledConfirmed(targetAccount))throw musePrivacyGateError(targetAccount);
   return enqueueMuseTask(expectMedia?'media':'text',async(signal)=>{
     signal?.throwIfAborted();
-    if(!museTrainingDisabledConfirmed(targetAccount))throw Error(musePrivacyGateMessage());
+    if(!museTrainingDisabledConfirmed(targetAccount))throw musePrivacyGateError(targetAccount);
     if(context || conversationKey?.startsWith('["sheet-extract",') || conversationKey?.startsWith('["customer-insight",')){
       const redact=createMuseChatRedactor(musePrivacyIdentities());
       if(context){
         if(prompt!==context.prefix+context.history.map(item=>item.text).join('\n')+context.suffix)throw Error('Muse 聊天上下文不一致，未发送');
         const redactKeepingPaths=(value:string)=>{
           const pathBlock=/<read_only_muse_workspace_files>[\s\S]*?<\/read_only_muse_workspace_files>/.exec(value)?.[0];
-          return pathBlock?redact(value.replace(pathBlock,'__MUSE_WORKSPACE_PATHS__')).replace('__MUSE_WORKSPACE_PATHS__',pathBlock):redact(value);
+          const result=pathBlock?redact(value.replace(pathBlock,'__MUSE_WORKSPACE_PATHS__')).replace('__MUSE_WORKSPACE_PATHS__',pathBlock):redact(value);
+          return redactAiContent(result)||'';
         };
         context={...context,profile:redactKeepingPaths(context.profile||''),prefix:redactKeepingPaths(context.prefix),history:context.history.map(item=>({...item,text:redact(item.text)})),suffix:redact(context.suffix)};
         prompt=context.prefix+context.history.map(item=>item.text).join('\n')+context.suffix;
@@ -173,11 +181,10 @@ export async function generateMuseWebOutput(prompt:string,signal?:AbortSignal,co
       // Older threads and handoff summaries may still contain unredacted personal data.
       conversationKey=conversationKey?JSON.stringify(['private-chat-v1',conversationKey]):undefined;
       signal?.throwIfAborted();
-    }
+    }else prompt=redactAiContent(prompt)||'';
     await onStart?.();
     signal?.throwIfAborted();
-    if (!museTrainingDisabledConfirmed(targetAccount)) throw Error(musePrivacyGateMessage());
-    assertMuseContentAllowed(prompt,context);
+    if (!museTrainingDisabledConfirmed(targetAccount)) throw musePrivacyGateError(targetAccount);
     if(expectMedia){
       const status=await museWebStatus(true, targetAccount);
       signal?.throwIfAborted();

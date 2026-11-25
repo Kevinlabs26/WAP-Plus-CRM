@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso } from "react-virtuoso";
-import { Download, FilePlus2, Plus, Trash2, MessageSquare } from "lucide-react";
+import { Download, FilePlus2, GitMerge, Maximize2, Plus, Trash2, MessageSquare } from "lucide-react";
 import { useAppStore, flushPersist } from "@/store/appStore";
 import { Button, Input } from "@/components/ui/primitives";
 import { ContactImportModal } from "@/components/settings/ContactImportModal";
+import { DuplicateContactsCleanupModal } from "@/components/settings/DuplicateContactsCleanupModal";
 import { contactsToCsv, downloadText } from "@/lib/exportData";
 import { contactSendablePhone } from "@/lib/broadcastTemplate";
 import { contactCopiesForAccount } from "@/lib/contactManagement";
+import { findDuplicateContactGroups } from "@/lib/contactDeduplication";
 import { formatAccountDisplay } from "@/lib/accountLabels";
 import { baileysSaveContacts } from "@/lib/baileys";
 import { useI18n } from "@/i18n";
@@ -26,9 +28,26 @@ export function ContactManagementPanel({contacts, accounts, accountId, connected
   const [tag, setTag] = useState("");
   const [dueAt, setDueAt] = useState("");
   const [importing, setImporting] = useState(false);
+  const [dedupeOpen, setDedupeOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const people = useMemo(() => contacts.filter(contact => !contact.isGroup && !contact.channelAddress?.endsWith("@g.us")), [contacts]);
+  const duplicateGroups = useMemo(() => {
+    const storeState = useAppStore.getState();
+    return findDuplicateContactGroups({
+      contacts: people,
+      chats: storeState.chats || [],
+      messages: storeState.messages || [],
+      accountId: accountId || undefined,
+      liveAccountId:
+        storeState.settings?.liveBaileysAccountId ||
+        storeState.settings?.activeAccountId,
+    });
+  }, [people, accountId]);
+  const duplicateExtraCount = useMemo(
+    () => duplicateGroups.reduce((sum, group) => sum + group.duplicates.length, 0),
+    [duplicateGroups]
+  );
   const picked = people.filter(contact => selected.has(contact.id));
   const ids = picked.map(contact => contact.id);
   useEffect(() => {
@@ -69,7 +88,7 @@ export function ContactManagementPanel({contacts, accounts, accountId, connected
   };
   const exportPicked = () => downloadText(`contacts-${new Date().toISOString().slice(0,10)}.csv`,
     `\ufeff${contactsToCsv(picked)}`, "text/csv;charset=utf-8");
-  return <div className="flex h-full min-h-0 flex-1 flex-col">
+  return <div className="flex min-h-0 flex-[1_1_0px] flex-col">
     <div className="shrink-0 space-y-2 border-b border-zinc-800/70 pb-2 text-[12px]">
       <div className="flex items-center gap-1">
         {[
@@ -77,10 +96,27 @@ export function ContactManagementPanel({contacts, accounts, accountId, connected
           {Icon: FilePlus2, label: t("crm.import"), run: () => setImporting(true), disabled: isBaileys && !target},
           {Icon: Download, label: t("crm.export"), run: exportPicked, disabled: !picked.length},
           {Icon: Trash2, label: t("common.delete"), run: () => void remove(), disabled: !picked.length},
+          {Icon: Maximize2, label: t("contactsTable.openFullView"), run: () => useAppStore.getState().setActiveNav("contacts")},
         ].map(({Icon, label, run, disabled}) => <button key={label} type="button" aria-label={label} title={label}
           disabled={saving || disabled} onClick={run} className="rounded-md p-2 text-zinc-400 hover:bg-zinc-800 disabled:opacity-40"><Icon className="h-4 w-4" /></button>)}
         <button type="button" disabled={saving} onClick={() => onPaste(target)} className="ml-auto text-brand disabled:opacity-40">{t("contactManage.paste")}</button>
       </div>
+      {duplicateGroups.length > 0 && (
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => setDedupeOpen(true)}
+          className="flex w-full items-center gap-1.5 rounded-md border border-amber-500/35 bg-amber-500/10 px-2.5 py-1.5 text-left text-[11px] font-medium text-amber-300 transition-colors hover:bg-amber-500/20 disabled:opacity-40"
+        >
+          <GitMerge className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">
+            {t("contactManage.dedupeBanner", {
+              groups: duplicateGroups.length,
+              extra: duplicateExtraCount,
+            })}
+          </span>
+        </button>
+      )}
       {isBaileys && <label className="block text-zinc-400">{t("contactManage.target")}
         <select className="ui-control mt-1 h-8 w-full px-2" aria-label={t("contactManage.target")} disabled={saving} value={target} onChange={event => setTarget(event.target.value)}>
           <option value="">{t("batchContacts.selectConnectedAccount")}</option>
@@ -113,19 +149,28 @@ export function ContactManagementPanel({contacts, accounts, accountId, connected
       </>}
       <p role="status" className="text-[11px] text-zinc-500">{t(saving ? "contactManage.saving" : "contactManage.hint")}</p>
     </div>
-    <Virtuoso className="min-h-0 flex-1" data={people} computeItemKey={(_, contact) => contact.id} defaultItemHeight={68}
-      itemContent={(_, contact) => <div className="flex items-center gap-2 border-b border-zinc-800/50 py-2">
-        <input type="checkbox" disabled={saving} aria-label={t("contactManage.select", {name: contact.name || contact.phone})}
-          checked={selected.has(contact.id)} onChange={() => toggle(contact.id)} />
-        <div className="min-w-0 flex-1"><input key={`${contact.id}:${contact.name}`} defaultValue={contact.name} maxLength={100} disabled={saving}
-          aria-label={t("contact.name")} className="w-full rounded bg-transparent p-1 text-[13px] outline-none focus:bg-zinc-900 focus:ring-1 focus:ring-brand"
-          onBlur={event => {const value=event.target.value.trim(); if (value && value !== contact.name) useAppStore.getState().updateContact(contact.id, {name: value}); else event.target.value=contact.name;}} />
-          <div className="truncate pl-1 text-[11px] text-zinc-500">{contact.phone}</div>
-          {!!contact.tags.length && <div className="truncate pl-1 text-[11px] text-brand">{contact.tags.join(" · ")}</div>}
-        </div>
-        <button type="button" title={t("nav.chats")} aria-label={t("nav.chats")} onClick={() => useAppStore.getState().openContactWorkspace(contact.id)} className="p-1 text-zinc-500 hover:text-brand"><MessageSquare className="h-4 w-4" /></button>
-      </div>} />
-    {!people.length && <p className="py-3 text-[12px] text-zinc-500">{t("sidebar.noContacts")}</p>}
+    {people.length > 0 ? (
+      <Virtuoso className="min-h-0 flex-[1_1_0px]" data={people} computeItemKey={(_, contact) => contact.id} defaultItemHeight={68}
+        itemContent={(_, contact) => <div className="flex items-center gap-2 border-b border-zinc-800/50 py-2">
+          <input type="checkbox" disabled={saving} aria-label={t("contactManage.select", {name: contact.name || contact.phone})}
+            checked={selected.has(contact.id)} onChange={() => toggle(contact.id)} />
+          <div className="min-w-0 flex-1"><input key={`${contact.id}:${contact.name}`} defaultValue={contact.name} maxLength={100} disabled={saving}
+            aria-label={t("contact.name")} className="w-full rounded bg-transparent p-1 text-[13px] outline-none focus:bg-zinc-900 focus:ring-1 focus:ring-brand"
+            onBlur={event => {const value=event.target.value.trim(); if (value && value !== contact.name) useAppStore.getState().updateContact(contact.id, {name: value}); else event.target.value=contact.name;}} />
+            <div className="truncate pl-1 text-[11px] text-zinc-500">{contact.phone}</div>
+            {!!contact.tags.length && <div className="truncate pl-1 text-[11px] text-brand">{contact.tags.join(" · ")}</div>}
+          </div>
+          <button type="button" title={t("nav.chats")} aria-label={t("nav.chats")} onClick={() => useAppStore.getState().openContactWorkspace(contact.id)} className="p-1 text-zinc-500 hover:text-brand"><MessageSquare className="h-4 w-4" /></button>
+        </div>} />
+    ) : (
+      <p className="py-3 text-[12px] text-zinc-500">{t("sidebar.noContacts")}</p>
+    )}
     <ContactImportModal open={importing} accountId={isBaileys ? target : undefined} onClose={() => setImporting(false)} />
+    <DuplicateContactsCleanupModal
+      open={dedupeOpen}
+      accountId={accountId || undefined}
+      groups={duplicateGroups}
+      onClose={() => setDedupeOpen(false)}
+    />
   </div>;
 }

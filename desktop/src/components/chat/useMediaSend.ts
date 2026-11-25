@@ -47,7 +47,8 @@ type UseMediaSendOptions = {
 export function useMediaSend(opts: UseMediaSendOptions) {
   const latestOptsRef = useRef(opts);
   latestOptsRef.current = opts;
-  const draftCleanup = () => {
+  const draftCleanup = (preserveDraft = false) => {
+    if (preserveDraft) return { getDraftReply: () => "", setDraftReply: () => {} };
     const draft = opts.getDraft?.() ?? useAppStore.getState().draftReply;
     return {
       getDraftReply: () => draft.trim(),
@@ -56,7 +57,7 @@ export function useMediaSend(opts: UseMediaSendOptions) {
           ? latestOptsRef.current.getDraft?.() : undefined),
     };
   };
-  const sendFile = (file: File, captionOverride?: string) => {
+  const sendFile = (file: File, captionOverride?: string, preserveDraft = false) => {
     if (!opts.guardBlockedSend()) return false;
     return sendFileMessage(file, captionOverride, {
       sending: opts.sending,
@@ -67,7 +68,7 @@ export function useMediaSend(opts: UseMediaSendOptions) {
       chatConnected: opts.chatConnected,
       setBaileysLoginOpen: opts.setBaileysLoginOpen,
       setSending: opts.setSending,
-      ...draftCleanup(),
+      ...draftCleanup(preserveDraft),
       enqueueOutgoingMessage: opts.enqueueOutgoingMessage,
       chatId: opts.chatId,
       patchMessage: opts.patchMessage,
@@ -103,7 +104,8 @@ export function useMediaSend(opts: UseMediaSendOptions) {
   const sendImage = (
     file: File,
     asSticker = false,
-    captionOverride?: string
+    captionOverride?: string,
+    preserveDraft = false
   ) => {
     if (!opts.guardBlockedSend()) return false;
     return sendImageMessage(file, asSticker, captionOverride, {
@@ -116,7 +118,7 @@ export function useMediaSend(opts: UseMediaSendOptions) {
       setBaileysLoginOpen: opts.setBaileysLoginOpen,
       setSending: opts.setSending,
       toStickerDataUrl: opts.toStickerDataUrl,
-      ...draftCleanup(),
+      ...draftCleanup(preserveDraft),
       enqueueOutgoingMessage: opts.enqueueOutgoingMessage,
       chatId: opts.chatId,
       patchMessage: opts.patchMessage,

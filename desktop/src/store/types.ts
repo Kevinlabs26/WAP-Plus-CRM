@@ -30,6 +30,7 @@ import type {
 export type NavId =
   | "phones"
   | "chats"
+  | "contacts"
   | "stats"
   | "today"
   | "broadcast"
@@ -273,6 +274,8 @@ export interface AppState extends PersistSlice {
     template: string;
     contactIds: string[];
     phoneNumbers?: string[];
+    firstContactQuotas?: Record<string, number>;
+    expectedAccountByPhone?: Record<string, string>;
     extraGapSec?: number;
     extraGapMaxSec?: number;
     media?: import("@/types/broadcast").BroadcastMedia[];
@@ -360,6 +363,12 @@ export interface AppState extends PersistSlice {
   ) => number;
   /** 以 keep 为主统一客户资料；各账号联系人和会话独立保留。 */
   mergeContacts: (keepId: string, dropIds: string[]) => boolean;
+  /** Merge duplicate contacts sharing the same normalized phone within an account scope. */
+  dedupeAccountContacts: (accountId?: string) => {
+    groupsMerged: number;
+    removedContacts: number;
+    removedEmptyChats: number;
+  };
   addContact: (c: Omit<Contact, "id">) => void;
   /** 批量导入联系人：静默建联系人+会话行，返回新增数 */
   importContacts: (contacts: Omit<Contact, "id">[]) => number;

@@ -21,9 +21,11 @@ fn sync_cache_key(auth_dir: &std::path::Path) -> Result<String, String> {
         let key=match std::fs::read(&path) {
             Ok(protected)=>crate::commands::unprotect_secrets(&protected)?,
             Err(error) if error.kind()==std::io::ErrorKind::NotFound=>{
-                // A missing key must never silently replace the key of an encrypted backlog.
+                // A missing key must never silently replace the key of an encrypted backlog or auth state.
                 let cache=auth_dir.with_file_name(format!("{name}-sync-events"));
-                if cache.exists() { return Err("同步缓存密钥缺失，已保留缓存，拒绝生成新密钥".into()); }
+                let has_encrypted_auth = std::fs::read(auth_dir.join("creds.json"))
+                    .is_ok_and(|bytes| bytes.starts_with(b"WAP-AUTH-1\0"));
+                if cache.exists() || has_encrypted_auth { return Err("同步或会话加密密钥缺失，已保留原数据，拒绝生成新密钥".into()); }
                 let mut bytes=[0u8;32];ring::rand::SystemRandom::new().fill(&mut bytes).map_err(|_|"无法生成同步加密密钥")?;
                 let protected=crate::commands::protect_secrets(&bytes)?;
                 match std::fs::OpenOptions::new().write(true).create_new(true).open(&path){

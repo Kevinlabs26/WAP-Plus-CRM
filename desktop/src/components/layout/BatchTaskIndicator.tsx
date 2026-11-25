@@ -5,6 +5,7 @@ import { useI18n, type TranslationKey } from "@/i18n";
 import { nextBatchTask } from "@/lib/scheduledPlans";
 import { cancelScheduledPlan, updateScheduledPlan } from "@/lib/scheduledPlanActions";
 import { useAppStore } from "@/store/appStore";
+import { canBatchSendWithAccount } from "@/lib/accountConnection";
 
 export function BatchTaskIndicator() {
   const { t } = useI18n();
@@ -19,11 +20,14 @@ export function BatchTaskIndicator() {
     ...plans.filter(plan => ["pending", "running", "paused"].includes(plan.status) || open && plan.id === focusedPlanId).map(plan => ({ ...plan, kind: "plan" as const })),
     ...campaigns.filter(campaign => ["draft", "running", "paused"].includes(campaign.status)).map(campaign => ({ ...campaign, kind: "campaign" as const })),
   ].sort((a, b) => Number(b.id === focusedPlanId) - Number(a.id === focusedPlanId) || rank(a.status) - rank(b.status));
+  const focusedPlanStatus = plans.find(plan => plan.id === focusedPlanId)?.status;
+  const hasOtherActiveTask = active.some(task => (task.kind !== "plan" || task.id !== focusedPlanId) && ["draft", "pending", "running", "paused"].includes(task.status));
   const running = active.some(task => task.status === "running");
   const allPaused = active.every(task => task.status === "paused");
   const sentTotal = active.reduce((sum, task) => sum + task.items.filter(item => item.status === "sent").length, 0);
   const recipientTotal = active.reduce((sum, task) => sum + task.items.length, 0);
-  const nextId = nextBatchTask(plans, campaigns, now);
+  const batchState = useAppStore.getState();
+  const nextId = nextBatchTask(plans, campaigns, now, id => canBatchSendWithAccount(batchState,id));
   const cooldown = Math.max(0, ...plans.map(plan => Date.parse(plan.cooldownUntil || "") || 0));
   useEffect(() => {
     const showProgress = (event: Event) => {
@@ -34,9 +38,17 @@ export function BatchTaskIndicator() {
     return () => window.removeEventListener("wap:open-batch-progress", showProgress);
   }, []);
   useEffect(() => {
+    if (!open || !focusedPlanId || focusedPlanStatus !== "done") return;
+    const timer = window.setTimeout(() => {
+      setFocusedPlanId(id => id === focusedPlanId ? null : id);
+      if (!hasOtherActiveTask) setOpen(false);
+    }, 2200);
+    return () => window.clearTimeout(timer);
+  }, [open, focusedPlanId, focusedPlanStatus, hasOtherActiveTask]);
+  useEffect(() => {
     if (!open) return;
-    const outside = (event: PointerEvent) => { if (event.target instanceof Node && !root.current?.contains(event.target)) setOpen(false); };
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    const outside = (event: PointerEvent) => { if (event.target instanceof Node && !root.current?.contains(event.target)) { setOpen(false); setFocusedPlanId(null); } };
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { setOpen(false); setFocusedPlanId(null); } };
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     document.addEventListener("pointerdown", outside);
     window.addEventListener("keydown", escape);
@@ -45,7 +57,7 @@ export function BatchTaskIndicator() {
   if (!active.length) return null;
 
   return <div ref={root} className="relative">
-    <button type="button" aria-label={t("planQueue.progressTitle")} aria-expanded={open} onClick={() => setOpen(value => !value)} className="ui-btn-secondary flex !min-h-8 items-center gap-1.5 px-2 text-xs text-brand" title={t("planQueue.progressTitle")}>
+    <button type="button" aria-label={t("planQueue.progressTitle")} aria-expanded={open} onClick={() => { if (open) setFocusedPlanId(null); setOpen(value => !value); }} className="ui-btn-secondary flex !min-h-8 items-center gap-1.5 px-2 text-xs text-brand" title={t("planQueue.progressTitle")}>
       {allPaused ? <Pause className="h-3.5 w-3.5" /> : <LoaderCircle className={running ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />}
       <span className="hidden sm:inline">{t("planQueue.progressTitle")}{allPaused ? " · " + t("planQueue.status.paused") : ""}</span>
       <span className="tabular-nums">{sentTotal}/{recipientTotal}</span>
@@ -73,7 +85,7 @@ export function BatchTaskIndicator() {
             {task.status === "running" && !error && current?.status !== "sending" && nextId && nextId !== task.id && <p className="mt-1 text-xs text-zinc-500">{t("planQueue.waitingTurn")}</p>}
             {task.status === "running" && waitSec > 0 && current?.status !== "sending" && <p className="mt-1 text-xs text-zinc-500">{t("planQueue.wait", { seconds: waitSec })}</p>}
             <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-              <button type="button" className="text-brand hover:underline" onClick={() => { setOpen(false); if (task.kind === "plan") useAppStore.getState().setSettingsOpen(true, "scheduled"); else useAppStore.getState().setActiveNav("broadcast"); }}>{t("planQueue.details")}</button>
+              <button type="button" className="text-brand hover:underline" onClick={() => { setOpen(false); setFocusedPlanId(null); if (task.kind === "plan") useAppStore.getState().setSettingsOpen(true, "scheduled"); else useAppStore.getState().setActiveNav("broadcast"); }}>{t("planQueue.details")}</button>
               {canCancel && <button type="button" className="text-rose-600 hover:underline dark:text-rose-400" onClick={async () => {
                 const state = useAppStore.getState();
                 const confirmed = await state.requestConfirm({

@@ -1379,6 +1379,15 @@ pub fn db_chats_with_inbound(
 }
 
 #[tauri::command(async)]
+pub fn db_latest_conversation_by_chat(
+    state: State<'_, DbState>,
+    chat_ids: Vec<String>,
+) -> Result<Vec<(String, String)>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::latest_conversation_by_chat(&conn, &chat_ids)
+}
+
+#[tauri::command(async)]
 pub fn db_latest_outgoing_message(
     state: State<'_, DbState>,
     chat_id: String,

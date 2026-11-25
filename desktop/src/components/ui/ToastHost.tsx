@@ -1,7 +1,7 @@
 import { useAppStore } from "@/store/appStore";
 import { cn } from "@/lib/utils";
 import { X } from "lucide-react";
-import bridgeCrmIcon from "@/assets/wap-plus-crm-trimmed.svg";
+import bridgeCrmIcon from "@/assets/wap-plus-crm-mark.png";
 import { useI18n } from "@/i18n";
 
 export function ToastHost() {

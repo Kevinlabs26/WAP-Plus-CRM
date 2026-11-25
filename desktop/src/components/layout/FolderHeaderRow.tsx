@@ -65,6 +65,7 @@ type FolderHeaderRowProps = {
   onClear: () => void;
   onClearTree: () => void;
   onCopyUnreplied?: () => void;
+  onCopyInactive?: () => void;
   onBatchMove: () => void;
   onBatchDelete: () => void;
   onDelete: () => void;
@@ -104,6 +105,7 @@ export function FolderHeaderRow({
   onClear,
   onClearTree,
   onCopyUnreplied,
+  onCopyInactive,
   onBatchMove,
   onBatchDelete,
   onDelete,
@@ -174,7 +176,7 @@ export function FolderHeaderRow({
     setChoosingMoveTarget(false);
     const rect = anchor.getBoundingClientRect();
     const width = kind === "appearance" ? 352 : 224;
-    const height = kind === "appearance" ? 420 : kind === "reply" ? 184 : kind === "organize" && onCopyUnreplied ? 144 : 112;
+    const height = kind === "appearance" ? 420 : kind === "reply" ? 184 : kind === "organize" && (onCopyUnreplied || onCopyInactive) ? 184 : 112;
     setSubmenu({
       kind,
       left: Math.max(8, Math.min(rect.right + 2 + width <= window.innerWidth - 8 ? rect.right + 2 : rect.left - width - 2, window.innerWidth - width - 8)),
@@ -508,6 +510,9 @@ export function FolderHeaderRow({
           {submenu.kind === "organize" && !choosingMoveTarget && <div>
           {onCopyUnreplied && <button type="button" role="menuitem" className={itemClass} onClick={() => run(onCopyUnreplied)}>
             <Copy className="h-3.5 w-3.5 text-zinc-500" />{t("folder.copyUnreplied")}
+          </button>}
+          {onCopyInactive && <button type="button" role="menuitem" className={itemClass} onClick={() => run(onCopyInactive)}>
+            <Clock3 className="h-3.5 w-3.5 text-brand" />{t("folder.copyInactive")}
           </button>}
           <button
             type="button"

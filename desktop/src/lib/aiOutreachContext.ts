@@ -1,4 +1,4 @@
-import { isImmediateOutreach, outreachRunClock, outreachRunExpired, type AiOutreachRun } from './aiOutreachRules';
+import { isImmediateOutreach, outreachRunClock, outreachRunExpired, type AiOutreachRun } from './aiOutreachRules.ts';
 import type { AppState } from "../store/types";
 import type { Message, ChatPreview, Contact } from "../types/crm";
 import { normalizeOutreachRule, outreachClock, outreachGoal } from "./aiOutreachRules.ts";
@@ -6,14 +6,15 @@ import { resolveAiReplyProfile } from "./aiPromptScope.ts";
 import { getSuggestionContextKey, hasRealAiKey, outreachAiSettings } from "./aiSuggest.ts";
 import { isWaAccountConnected } from "./accountConnection.ts";
 import { getAutoReplyOutputBlockReason, isWithinAutoReplyHours, resolveAutoReplyPolicy } from "./aiSafety.ts";
-import { resolveSendTarget } from "./utils";
-import { getAiOutputConstraintError } from "./aiReplyConstraints";
-import { lastContactedAccounts, recipientKey } from "./scheduledPlans";
+import { resolveSendTarget } from "./utils.ts";
+import { getAiOutputConstraintError } from "./aiReplyConstraints.ts";
+import { lastContactedAccounts, recipientKey } from "./scheduledPlans.ts";
 import { deliveryAckRank } from "../store/bridgeIngestHelpers.ts";
+import { firstContactHistory } from "./aiOutreachAllocation.ts";
 
 export type OutreachState = Pick<AppState,"settings"|"chats"|"contacts"|"messages"|"messagesByChatId"|"baileysUi">;
-export type OutreachReason = "ready"|"disabled"|"folder_paused"|"not_member"|"all_paused"|"master_paused"|"unsupported_channel"|"missing_ai"|"invalid_contact"|"invalid_recipient"|"person_excluded"|"latest_account"|"invalid_account"|"account_paused"|"offline"|"manual_optout"|"outside_hours"|"not_time"|"delivery_pending"|"takeover"|"optout"|"stale_history"|"changed_context"|"already_contacted"|"unanswered"|"missing_prompt"|"expired"|"duplicate";
-type Candidate = {chat:ChatPreview;contact:Contact;accountId:string;recipient:string;rule:ReturnType<typeof normalizeOutreachRule>;day:string;basisAt:string;thread:Message[];policy:ReturnType<typeof resolveAutoReplyPolicy>};
+export type OutreachReason = "ready"|"disabled"|"folder_paused"|"not_member"|"all_paused"|"master_paused"|"unsupported_channel"|"missing_ai"|"invalid_contact"|"invalid_recipient"|"person_excluded"|"latest_account"|"invalid_account"|"account_paused"|"offline"|"manual_optout"|"outside_hours"|"not_time"|"delivery_pending"|"takeover"|"optout"|"stale_history"|"changed_context"|"already_contacted"|"unanswered"|"missing_prompt"|"expired"|"duplicate"|"unallocated";
+type Candidate = {chat:ChatPreview;historyChatId:string;contact:Contact;accountId:string;recipient:string;rule:ReturnType<typeof normalizeOutreachRule>;day:string;basisAt:string;thread:Message[];policy:ReturnType<typeof resolveAutoReplyPolicy>;firstContactVerified:boolean;reviewOnly:boolean};
 export type OutreachCheck = {candidate:Candidate;reason:"ready"}|{candidate:null;reason:Exclude<OutreachReason,"ready">};
 
 export function unresolvedOutreachRecipients(state: OutreachState): Map<string, string[]> {
@@ -57,7 +58,7 @@ export function outreachFolderChatIds(state: OutreachState, folderId: string): s
   return [...ids];
 }
 
-export function inspectOutreachCandidate(state: OutreachState, folderId: string, chatId: string, now=Date.now(), runId?:string, ownMessage?:Message, lookup?:{chat:ChatPreview;contact:Contact;members:ReadonlySet<string>;clock:ReturnType<typeof outreachClock>;lastAccounts?:ReadonlyMap<string,string>;rule?:ReturnType<typeof normalizeOutreachRule>;recipientRuns?:readonly AiOutreachRun[];unresolvedRecipients?:ReadonlyMap<string,readonly string[]>},allowOffline=false):OutreachCheck {
+export function inspectOutreachCandidate(state: OutreachState, folderId: string, chatId: string, now=Date.now(), runId?:string, ownMessage?:Message, lookup?:{chat:ChatPreview;contact:Contact;members:ReadonlySet<string>;clock:ReturnType<typeof outreachClock>;lastAccounts?:ReadonlyMap<string,string>;rule?:ReturnType<typeof normalizeOutreachRule>;recipientRuns?:readonly AiOutreachRun[];unresolvedRecipients?:ReadonlyMap<string,readonly string[]>;firstContactHistory?:ReturnType<typeof firstContactHistory>},allowOffline=false):OutreachCheck {
   const settings=state.settings,folder=settings.chatFolders.find(item=>item.id===folderId);
   const runs=settings.aiOutreachRuns||[], run=runId?runs.find(item=>item.id===runId):undefined;
   if(run&&outreachRunExpired(run,folder?.aiOutreach,now))return {candidate:null,reason:"expired"};
@@ -80,26 +81,60 @@ export function inspectOutreachCandidate(state: OutreachState, folderId: string,
   const recipientId=recipientKey("",recipient);
   if((lookup?.unresolvedRecipients??unresolvedOutreachRecipients(state)).get(recipientId)?.some(id=>id!==ownMessage?.id))return {candidate:null,reason:"delivery_pending"};
   if(settings.aiOutreachExcludedRecipients?.includes(recipientKey("",recipient)))return {candidate:null,reason:"person_excluded"};
-  const accountId=chat.accountId||contact.accountId||settings.liveBaileysAccountId||settings.activeAccountId;
-  if(folder.scope?.type==="all") {
+  const sourceAccountId=chat.accountId||contact.accountId||settings.liveBaileysAccountId||settings.activeAccountId;
+  let accountId=sourceAccountId;
+  let allocated=false;
+  let historyChat=chat;
+  let historyContact=contact;
+  let firstContactVerified=false;
+  let reviewOnly=false;
+  if (folder.scope?.type==="all" && rule.firstContactQuotas) {
+    const history=lookup?.firstContactHistory||firstContactHistory(state);
+    const existing=history.known.get(recipientId);
+    if (existing) {
+      if (!existing.accountId) return {candidate:null,reason:"latest_account"};
+      if (existing.accountId!==sourceAccountId) {
+        const linked=history.chatsByRecipient.get(recipientId)?.filter(item=>
+          (item.accountId||history.contacts.get(item.contactId)?.accountId||item.phoneId)===existing.accountId)
+          .sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt))[0];
+        const linkedContact=linked&&history.contacts.get(linked.contactId);
+        if (!linked || !linkedContact) return {candidate:null,reason:"latest_account"};
+        accountId=existing.accountId;
+        historyChat=linked;
+        historyContact=linkedContact;
+        allocated=true;
+      }
+    } else if (history.unknown.has(recipientId)) {
+      reviewOnly=true;
+    } else {
+      const assigned = Object.hasOwn(rule.scheduledFirstContactAssignments || {}, recipientId)
+        ? rule.scheduledFirstContactAssignments?.[recipientId] : rule.firstContactAssignments?.[recipientId];
+      if (!assigned) return {candidate:null,reason:"unallocated"};
+      accountId=assigned;
+      allocated=true;
+      firstContactVerified=true;
+    }
+  }
+  if(folder.scope?.type==="all" && !rule.firstContactQuotas) {
     const preferred=(lookup?.lastAccounts||lastContactedAccounts(state.chats,state.contacts,state.messages)).get(recipientKey("",recipient));
     if(preferred&&preferred!==accountId)return {candidate:null,reason:"latest_account"};
   }
-  if (!accountId || !settings.waAccounts.some(account=>account.id===accountId) || contact.accountId && contact.accountId!==accountId || folder.scope?.type==="account" && folder.scope.accountId!==accountId)return {candidate:null,reason:"invalid_account"};
+  if (!accountId || !settings.waAccounts.some(account=>account.id===accountId) || !allocated && contact.accountId && contact.accountId!==accountId || folder.scope?.type==="account" && folder.scope.accountId!==accountId)return {candidate:null,reason:"invalid_account"};
   if(settings.sendPausedAccountIds?.includes(accountId))return {candidate:null,reason:"account_paused"};
   if(!allowOffline&&!isWaAccountConnected(settings.waAccounts,accountId,settings.liveBaileysAccountId,state.baileysUi.connection))return {candidate:null,reason:"offline"};
-  if(settings.aiAutoReplyManualChatIds?.includes(chatId))return {candidate:null,reason:"manual_optout"};
+  if(settings.aiAutoReplyManualChatIds?.includes(chatId)||settings.aiAutoReplyManualChatIds?.includes(historyChat.id))return {candidate:null,reason:"manual_optout"};
+  if (allocated && accountId!==sourceAccountId && state.chats.some(item=>item.contactId===contact.id && (item.accountId||item.phoneId)===accountId && settings.aiAutoReplyManualChatIds?.includes(item.id))) return {candidate:null,reason:"manual_optout"};
   const policy=resolveAutoReplyPolicy(settings.aiAutoReplyPolicy,settings.aiAutoReplyPolicyByAccountId,accountId);
   if (!isWithinAutoReplyHours(policy,new Date(now))) return {candidate:null,reason:"outside_hours"};
   const clock=outreachRunClock(rule,now);
   if(!isImmediateOutreach(rule,now)&&outreachClock(rule.timeZone,now).time<rule.time)return {candidate:null,reason:"not_time"};
-  const thread=(state.messagesByChatId ? state.messagesByChatId[chatId]||[] : state.messages.filter(item=>item.chatId===chatId)).filter(item=>item.id!==ownMessage?.id);
+  const thread=(state.messagesByChatId ? state.messagesByChatId[historyChat.id]||[] : state.messages.filter(item=>item.chatId===historyChat.id)).filter(item=>item.id!==ownMessage?.id);
   if (thread.some(item=>item.direction==="out" && (["queued","pending"].includes(item.deliveryStatus||"")||item.deliveryUncertain&&deliveryAckRank(item.deliveryStatus)===0))) return {candidate:null,reason:"delivery_pending"};
   if (thread.some(item=>item.direction==="out"&&!item.systemKind&&now-Date.parse(item.sentAt)<policy.takeoverMinutes*60_000)) return {candidate:null,reason:"takeover"};
   const lastInbound=[...thread].reverse().find(item=>item.direction==="in");
   if (lastInbound&&isOutreachOptOut(lastInbound.transcript||lastInbound.body)) return {candidate:null,reason:"optout"};
-  const ownPreview=!!ownMessage && chat.updatedAt===ownMessage.sentAt && chat.lastMessage===ownMessage.body;
-  const basisAt=ownPreview ? run?.basisAt||"" : chat.updatedAt;
+  const ownPreview=ownMessage?.chatId===historyChat.id && historyChat.updatedAt===ownMessage.sentAt && historyChat.lastMessage===ownMessage.body;
+  const basisAt=ownPreview ? run?.basisAt||"" : historyChat.updatedAt;
   const basis=Date.parse(basisAt);
   if (!Number.isFinite(basis)||basis>now||thread.some(item=>Date.parse(item.sentAt)>basis)) return {candidate:null,reason:"stale_history"};
   if (run && (run.accountId!==accountId||run.day!==clock.day||run.basisAt!==basisAt||run.recipient&&run.recipient!==recipient)) return {candidate:null,reason:"changed_context"};
@@ -111,7 +146,8 @@ export function inspectOutreachCandidate(state: OutreachState, folderId: string,
       return !!priorRule&&!outreachRunExpired(item,priorRule,now);
     }
     if(item.status==="queued")return true;
-    const priorRound=rule.startMode==="immediate"&&rule.runNowAt!==undefined&&(item.roundAt??Date.parse(item.at))<rule.runNowAt;
+    const priorRound=(rule.startMode==="immediate"&&rule.runNowAt!==undefined&&(item.roundAt??Date.parse(item.at))<rule.runNowAt)
+      ||(rule.startMode==="scheduled"&&rule.scheduleStartAt!==undefined&&Date.parse(item.at)<rule.scheduleStartAt);
     if(priorRound&&item.status==="skipped")return false;
     if(priorRound&&item.folderId===folderId&&(item.status==="failed"||item.status==="cancelled")){
       if(!item.messageId)return false;
@@ -122,14 +158,14 @@ export function inspectOutreachCandidate(state: OutreachState, folderId: string,
     }
     return item.day===clock.day;
   })) return {candidate:null,reason:"already_contacted"};
-  if(chat.lastMessageDirection==="in"&&(!chat.replyHandledAt||chat.replyHandledAt<basisAt)||chat.replyPendingSince&&(!chat.replyHandledAt||chat.replyHandledAt<chat.replyPendingSince))return {candidate:null,reason:"unanswered"};
+  if(historyChat.lastMessageDirection==="in"&&(!historyChat.replyHandledAt||historyChat.replyHandledAt<basisAt)||historyChat.replyPendingSince&&(!historyChat.replyHandledAt||historyChat.replyHandledAt<historyChat.replyPendingSince))return {candidate:null,reason:"unanswered"};
   const routing=outreachAiSettings(settings,outreachGoal(rule));
-  let profile=resolveAiReplyProfile(routing,accountId,chatId,undefined,contact.aiChatInstructions);
+  let profile=resolveAiReplyProfile(routing,accountId,chatId,undefined,historyContact.aiChatInstructions);
   if (profile.workspacePlaybook && profile.error && routing.aiPlaybookMuseMode !== "shared") {
-    profile=resolveAiReplyProfile(routing,accountId,chatId,undefined,contact.aiChatInstructions,true);
+    profile=resolveAiReplyProfile(routing,accountId,chatId,undefined,historyContact.aiChatInstructions,true);
   }
   if (profile.error||!profile.prompt) return {candidate:null,reason:"missing_prompt"};
-  return {candidate:{chat,contact,accountId,recipient,rule,day:clock.day,basisAt,thread,policy},reason:"ready"};
+  return {candidate:{chat,historyChatId:historyChat.id,contact:historyContact,accountId,recipient,rule,day:clock.day,basisAt,thread,policy,firstContactVerified,reviewOnly},reason:"ready"};
 }
 
 export function outreachCandidate(...args:Parameters<typeof inspectOutreachCandidate>){return inspectOutreachCandidate(...args).candidate;}
@@ -138,15 +174,18 @@ export function outreachContextKey(state: OutreachState, folderId:string,chatId:
   const candidate=outreachCandidate(state,folderId,chatId,now,runId,ownMessage,undefined,!!ownMessage);
   if (!candidate) return null;
   const rule={...candidate.rule,scheduleStartAt:undefined};
+  // Adding a different recipient to a scheduled plan does not invalidate this draft.
+  delete rule.scheduledFirstContactAssignments;
   return JSON.stringify([folderId,chatId,candidate.accountId,candidate.recipient,candidate.day,candidate.basisAt,rule,
     state.settings.aiOutreachMuseAccountId,
-    getSuggestionContextKey(candidate.contact,candidate.thread,state.settings,candidate.accountId,{auto:true,chatId,outreach:outreachGoal(candidate.rule),outreachDecision:state.settings.aiProvider==="muse"||!!state.settings.aiOutreachMuseAccountId,allowSidebarData:candidate.rule.allowSidebarData===true})]);
+    getSuggestionContextKey(candidate.contact,candidate.thread,state.settings,candidate.accountId,{auto:true,chatId,outreach:outreachGoal(candidate.rule),outreachDecision:candidate.rule.mode==="auto"||state.settings.aiProvider==="muse"||!!state.settings.aiOutreachMuseAccountId,allowSidebarData:candidate.rule.allowSidebarData===true}),
+    ...(candidate.firstContactVerified ? ["verified-first-contact"] : candidate.reviewOnly ? ["history-review"] : [])]);
 }
 
 export function currentOutreachContext(state: OutreachState,message: Message) {
   const run=state.settings.aiOutreachRuns?.find(item=>item.messageId===message.id);
   if(run&&state.settings.aiTaskDismissedIds?.includes(`outreach:${run.id}`))return null;
-  if (!run||run.status!=="queued"||message.systemKind!=="ai_proactive"||message.accountId!==run.accountId||message.chatId!==run.chatId||message.channelId!=="baileys"||message.body!==run.text||message.aiReplyContextHash!==run.contextHash) return null;
+  if (!run||run.status!=="queued"||message.systemKind!=="ai_proactive"||message.accountId!==run.accountId||message.channelId!=="baileys"||message.body!==run.text||message.aiReplyContextHash!==run.contextHash) return null;
   if (!run.approved && (!run.autoEvidence || !run.decisionDetails?.evidence || !run.decisionDetails.reason)) return null;
   const museAccountId = run.decisionDetails?.museAccountId;
   if (museAccountId && !state.settings.musePrivacyByAccountId?.[museAccountId]?.trainingDisabledConfirmedAt) return null;
@@ -154,5 +193,7 @@ export function currentOutreachContext(state: OutreachState,message: Message) {
   if (folder?.aiOutreach?.mode!=="auto"&&!run.approved) return null;
   const candidate=outreachCandidate(state,run.folderId,run.chatId,Date.now(),run.id,message,undefined,true);
   if (!candidate||message.contactId!==candidate.contact.id||message.phoneE164!==candidate.recipient||getAutoReplyOutputBlockReason(message.body)||getAiOutputConstraintError(state.settings,run.accountId,run.chatId,message.body)) return null;
+  if (candidate.reviewOnly && !run.approved) return null;
+  if (message.chatId!==run.chatId && (!candidate.rule.firstContactQuotas || !state.chats.some(chat=>chat.id===message.chatId && chat.contactId===candidate.contact.id && (chat.accountId||chat.phoneId)===run.accountId))) return null;
   return outreachContextKey(state,run.folderId,run.chatId,run.id,Date.now(),message);
 }

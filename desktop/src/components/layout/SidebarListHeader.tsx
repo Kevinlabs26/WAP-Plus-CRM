@@ -229,151 +229,153 @@ export function SidebarListHeader({
           </div>}
         </div>}
       </div>
-      <div className="mb-2 space-y-2">
-        <div className="flex flex-wrap items-center gap-1.5">
-          {listTab === "chats" && listFilter !== "all" && <button type="button" onClick={onClearFilter} title={t("sidebar.showAllChats")} aria-label={t("sidebar.showAllChats")} className="flex max-w-full items-center gap-1 rounded-full bg-brand/10 px-2 py-1 text-2xs text-brand"><span className="truncate">{listFilter === "unread" ? t("sidebar.filterUnread", { count: filteredCount }) : listFilter === "today" ? t("sidebar.filterToday", { count: filteredCount }) : listFilter === "awaiting" ? t("today.awaitingReply") + " · " + filteredCount : t("leadInbox.filterActive", { count: filteredCount })}</span><span aria-hidden="true">×</span></button>}
-          {listTab === "chats" && (
-            <div className="relative min-w-0 flex-1" ref={groupFilterRef}>
-              <button
-                type="button"
-                aria-pressed={groupFilter !== "all"}
-                aria-haspopup="menu"
-                aria-expanded={groupFilterOpen}
-                aria-label={t("sidebar.groupFilterTitle")}
-                title={`${t("sidebar.groupFilterTitle")} · ${t(GROUP_FILTER_LABELS[groupFilter])}`}
-                onClick={() => {
-                  if (!groupFilterOpen) setGroupFilterCounts(getGroupFilterCounts());
-                  setActionsOpen(false);
-                  if (sortOpen) onToggleSort();
-                  setGroupFilterOpen(open => !open);
-                }}
-                className={cn("inline-flex min-h-7 max-w-full items-center gap-1 rounded-md px-1.5 text-2xs",
-                  groupFilter !== "all" ? "bg-brand/10 text-brand" : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100")}
-              >
-                <UsersRound className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">{t(GROUP_FILTER_LABELS[groupFilter])}</span>
-                <ChevronDown className="h-3 w-3 shrink-0" />
-              </button>
-              {groupFilterOpen && (
-                <div
-                  role="menu"
-                  className="absolute left-0 top-[calc(100%+4px)] z-50 w-64 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/50"
+      {listTab === "chats" && (
+        <div className="mb-2 space-y-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {listTab === "chats" && listFilter !== "all" && <button type="button" onClick={onClearFilter} title={t("sidebar.showAllChats")} aria-label={t("sidebar.showAllChats")} className="flex max-w-full items-center gap-1 rounded-full bg-brand/10 px-2 py-1 text-2xs text-brand"><span className="truncate">{listFilter === "unread" ? t("sidebar.filterUnread", { count: filteredCount }) : listFilter === "today" ? t("sidebar.filterToday", { count: filteredCount }) : listFilter === "awaiting" ? t("today.awaitingReply") + " · " + filteredCount : t("leadInbox.filterActive", { count: filteredCount })}</span><span aria-hidden="true">×</span></button>}
+            {listTab === "chats" && (
+              <div className="relative min-w-0 flex-1" ref={groupFilterRef}>
+                <button
+                  type="button"
+                  aria-pressed={groupFilter !== "all"}
+                  aria-haspopup="menu"
+                  aria-expanded={groupFilterOpen}
+                  aria-label={t("sidebar.groupFilterTitle")}
+                  title={`${t("sidebar.groupFilterTitle")} · ${t(GROUP_FILTER_LABELS[groupFilter])}`}
+                  onClick={() => {
+                    if (!groupFilterOpen) setGroupFilterCounts(getGroupFilterCounts());
+                    setActionsOpen(false);
+                    if (sortOpen) onToggleSort();
+                    setGroupFilterOpen(open => !open);
+                  }}
+                  className={cn("inline-flex min-h-7 max-w-full items-center gap-1 rounded-md px-1.5 text-2xs",
+                    groupFilter !== "all" ? "bg-brand/10 text-brand" : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-100")}
                 >
-                  <p className="px-2.5 pb-1 pt-1.5 text-2xs text-zinc-500">
-                    {t("sidebar.groupFilterTitle")}
-                  </p>
-                  {GROUP_FILTER_OPTIONS.map((option) => {
-                    const active = option.id === groupFilter;
-                    return (
-                      <button
-                        key={option.id}
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={active}
-                        className={cn(
-                          "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px]",
-                          active
-                            ? "bg-zinc-800 text-zinc-50"
-                            : "text-zinc-300 hover:bg-zinc-800/80 hover:text-zinc-50"
-                        )}
-                        onClick={() => {
-                          onGroupFilterChange(option.id);
-                          setGroupFilterOpen(false);
-                        }}
-                      >
-                        <span className="min-w-0 flex-1 truncate">
-                          {t(option.labelKey)}
-                        </span>
-                        <span className="text-2xs tabular-nums text-zinc-500">
-                          {groupFilterCounts?.[option.id] ?? 0}
-                        </span>
-                        {active && (
-                          <Check className="h-3.5 w-3.5 shrink-0 text-brand" />
-                        )}
-                      </button>
-                    );
-                  })}
-                  {(groupFilterCounts?.unread ?? 0) > 0 && (
-                    <>
-                      <div className="my-1 border-t border-zinc-800" />
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-zinc-200 hover:bg-zinc-800/80 hover:text-zinc-50"
-                        onClick={() => {
-                          setGroupFilterOpen(false);
-                          onMarkAllGroupsRead();
-                        }}
-                      >
-                        <CheckCheck className="h-3.5 w-3.5 shrink-0 text-brand" />
-                        <span className="min-w-0 flex-1 truncate">
-                          {t("sidebar.markAllGroupsRead")}
-                        </span>
-                        <span className="text-2xs tabular-nums text-zinc-500">
-                          {groupFilterCounts?.unread ?? 0}
-                        </span>
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-          {listTab === "chats" && (
-            <div className="relative min-w-0 flex-1" ref={sortRef}>
-              <button
-                type="button"
-                title={t("sidebar.sortPinnedHint", { label: localizedSortLabel })}
-                aria-label={t("sidebar.sortTitle")}
-                aria-expanded={sortOpen}
-                onClick={() => { setGroupFilterOpen(false); setActionsOpen(false); onToggleSort(); }}
-                className={cn(
-                  "inline-flex min-h-7 max-w-full items-center gap-1 rounded-md px-1.5 text-2xs transition-colors",
-                  sortOpen
-                    ? "bg-zinc-900 text-zinc-100"
-                    : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200"
+                  <UsersRound className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{t(GROUP_FILTER_LABELS[groupFilter])}</span>
+                  <ChevronDown className="h-3 w-3 shrink-0" />
+                </button>
+                {groupFilterOpen && (
+                  <div
+                    role="menu"
+                    className="absolute left-0 top-[calc(100%+4px)] z-50 w-64 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/50"
+                  >
+                    <p className="px-2.5 pb-1 pt-1.5 text-2xs text-zinc-500">
+                      {t("sidebar.groupFilterTitle")}
+                    </p>
+                    {GROUP_FILTER_OPTIONS.map((option) => {
+                      const active = option.id === groupFilter;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={active}
+                          className={cn(
+                            "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px]",
+                            active
+                              ? "bg-zinc-800 text-zinc-50"
+                              : "text-zinc-300 hover:bg-zinc-800/80 hover:text-zinc-50"
+                          )}
+                          onClick={() => {
+                            onGroupFilterChange(option.id);
+                            setGroupFilterOpen(false);
+                          }}
+                        >
+                          <span className="min-w-0 flex-1 truncate">
+                            {t(option.labelKey)}
+                          </span>
+                          <span className="text-2xs tabular-nums text-zinc-500">
+                            {groupFilterCounts?.[option.id] ?? 0}
+                          </span>
+                          {active && (
+                            <Check className="h-3.5 w-3.5 shrink-0 text-brand" />
+                          )}
+                        </button>
+                      );
+                    })}
+                    {(groupFilterCounts?.unread ?? 0) > 0 && (
+                      <>
+                        <div className="my-1 border-t border-zinc-800" />
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-zinc-200 hover:bg-zinc-800/80 hover:text-zinc-50"
+                          onClick={() => {
+                            setGroupFilterOpen(false);
+                            onMarkAllGroupsRead();
+                          }}
+                        >
+                          <CheckCheck className="h-3.5 w-3.5 shrink-0 text-brand" />
+                          <span className="min-w-0 flex-1 truncate">
+                            {t("sidebar.markAllGroupsRead")}
+                          </span>
+                          <span className="text-2xs tabular-nums text-zinc-500">
+                            {groupFilterCounts?.unread ?? 0}
+                          </span>
+                        </button>
+                      </>
+                    )}
+                  </div>
                 )}
-              >
-                <ArrowUpDown className="h-3 w-3 shrink-0 text-zinc-500" />
-                <span className="truncate">{localizedSortLabel}</span>
-                <ChevronDown
+              </div>
+            )}
+            {listTab === "chats" && (
+              <div className="relative min-w-0 flex-1" ref={sortRef}>
+                <button
+                  type="button"
+                  title={t("sidebar.sortPinnedHint", { label: localizedSortLabel })}
+                  aria-label={t("sidebar.sortTitle")}
+                  aria-expanded={sortOpen}
+                  onClick={() => { setGroupFilterOpen(false); setActionsOpen(false); onToggleSort(); }}
                   className={cn(
-                    "h-3 w-3 shrink-0 text-zinc-500 transition-transform",
-                    sortOpen && "rotate-180"
+                    "inline-flex min-h-7 max-w-full items-center gap-1 rounded-md px-1.5 text-2xs transition-colors",
+                    sortOpen
+                      ? "bg-zinc-900 text-zinc-100"
+                      : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200"
                   )}
-                />
-              </button>
-              {sortOpen && (
-                <div className="absolute right-0 top-[calc(100%+4px)] z-50 min-w-[9.5rem] overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/50">
-                  {CHAT_SORT_OPTIONS.map((opt) => {
-                    const active = opt.id === sortMode;
-                    return (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        className={cn(
-                          "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px]",
-                          active
-                            ? "bg-zinc-800 text-zinc-50"
-                            : "text-zinc-300 hover:bg-zinc-800/80 hover:text-zinc-50"
-                        )}
-                        onClick={() => onSortChange(opt.id)}
-                      >
-                        <span className="min-w-0 flex-1 truncate">
-                          {t(SORT_LABEL_KEYS[opt.id])}
-                        </span>
-                        {active && (
-                          <Check className="h-3.5 w-3.5 shrink-0 text-brand" />
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
+                >
+                  <ArrowUpDown className="h-3 w-3 shrink-0 text-zinc-500" />
+                  <span className="truncate">{localizedSortLabel}</span>
+                  <ChevronDown
+                    className={cn(
+                      "h-3 w-3 shrink-0 text-zinc-500 transition-transform",
+                      sortOpen && "rotate-180"
+                    )}
+                  />
+                </button>
+                {sortOpen && (
+                  <div className="absolute right-0 top-[calc(100%+4px)] z-50 min-w-[9.5rem] overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/50">
+                    {CHAT_SORT_OPTIONS.map((opt) => {
+                      const active = opt.id === sortMode;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          className={cn(
+                            "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px]",
+                            active
+                              ? "bg-zinc-800 text-zinc-50"
+                              : "text-zinc-300 hover:bg-zinc-800/80 hover:text-zinc-50"
+                          )}
+                          onClick={() => onSortChange(opt.id)}
+                        >
+                          <span className="min-w-0 flex-1 truncate">
+                            {t(SORT_LABEL_KEYS[opt.id])}
+                          </span>
+                          {active && (
+                            <Check className="h-3.5 w-3.5 shrink-0 text-brand" />
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

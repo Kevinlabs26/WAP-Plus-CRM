@@ -6,7 +6,7 @@ import { useI18n, type TranslationKey } from "@/i18n";
 import { DuplicateScheduledPlanError, saveScheduledPlan } from "@/lib/scheduledPlanActions";
 import { parsePhoneEntries } from "@/lib/phoneEntries";
 import { PlanVoiceRecorder } from "./PlanVoiceRecorder";
-import { lastContactedAccounts, recipientKey, scheduledAudioMode, scheduledFolderChatIds, scheduledPlanTargets, MAX_SCHEDULED_PLAN_ITEMS, MIN_SCHEDULED_GAP_SEC, MAX_PLAN_STEPS, type ScheduledPlan, type ScheduledPlanStep } from "@/lib/scheduledPlans";
+import { scheduledPlanHistoryAccounts, recipientKey, scheduledAudioMode, scheduledFolderChatIds, scheduledPlanTargets, MAX_SCHEDULED_PLAN_ITEMS, MIN_SCHEDULED_GAP_SEC, MAX_PLAN_STEPS, type ScheduledPlan, type ScheduledPlanStep } from "@/lib/scheduledPlans";
 
 function localTime() {
   const date = new Date(Date.now() + 5 * 60_000);
@@ -58,7 +58,7 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
   const gapInput = useRef<HTMLInputElement>(null);
   const folder = settings.chatFolders.find(item => item.id === folderId);
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const lastContacted = useMemo(() => lastContactedAccounts(chats, contacts, messages), [chats, contacts, messages]);
+  const lastContacted = useMemo(() => scheduledPlanHistoryAccounts({chats, contacts, messages}), [chats, contacts, messages]);
   const candidates = useMemo(() => {
     let ids = folderId ? scheduledFolderChatIds(settings, folderId, includeChildren) : chatIds;
     if (folder && folder.scope?.type !== "all") {
@@ -80,6 +80,7 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
     });
   }, [settings, chats, contacts, messages, chatIds, folderId, includeChildren, defaultAccountId]);
   const chosen = candidates.filter(item => selected.has(item.chatId));
+  const defaultAccountCount = chosen.filter(item => !item.recipient.endsWith("@g.us") && !lastContacted.has(recipientKey("", item.recipient))).length;
   const numberEntries = useMemo(() => new Set(parsePhoneEntries(numberQuery)), [numberQuery]);
   const numberMatchIds = useMemo(() => new Set(candidates.filter(item =>
     /^\+?\d{7,15}$/.test(item.recipient) && numberEntries.has(item.recipient.replace(/\D/g, ""))
@@ -185,7 +186,7 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
         <aside className="flex min-h-0 min-w-0 flex-col gap-3 md:overflow-y-auto">
           <h3 className="text-sm font-medium text-zinc-200">{t("planQueue.targets", { count: chosen.length })} {folder ? "· " + folder.name : ""}</h3>
           <label className="block space-y-1 text-xs text-zinc-400"><span>{t("planQueue.newContactAccount")}</span><select className="ui-control w-full px-2" value={defaultAccountId} onChange={event => setDefaultAccountId(event.target.value)}>{settings.waAccounts.map(account => <option key={account.id} value={account.id}>{account.label || account.id}</option>)}</select><span className="block">{t("planQueue.accountRoutingHint")}</span></label>
-          <p className="text-xs text-zinc-500">{t("planQueue.accountRoutingSummary", { contacted: chosen.filter(item => lastContacted.has(recipientKey("", item.recipient))).length, new: chosen.filter(item => !lastContacted.has(recipientKey("", item.recipient))).length })}</p>
+          <p className="text-xs text-zinc-500">{t("planQueue.accountRoutingSummary", { contacted: chosen.length - defaultAccountCount, new: defaultAccountCount })}</p>
           {folderId && !review && <label className="flex items-center gap-2 text-xs text-zinc-400"><input type="checkbox" aria-label={t("planQueue.includeChildren")} checked={includeChildren} onChange={event => {
             const include = event.target.checked; setIncludeChildren(include); setSelected(new Set(scheduledFolderChatIds(settings, folderId, include))); setPage(0);
           }} />{t("planQueue.includeChildren")}</label>}

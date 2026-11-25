@@ -4,6 +4,7 @@ import type { ScheduledMessage } from "@/types/crm";
 
 export const GROUP_WELCOME_LIVE_WINDOW = 5 * 60_000;
 const PREFIX = "group-welcome:";
+const MAX_GROUP_WELCOME_TASKS = 200;
 export const groupWelcomePendingWrites = new Set<string>();
 export const groupWelcomeKey = (accountId: string, jid: string) => JSON.stringify([accountId, jid]);
 export const isGroupWelcomeTask = (id: string) => id.startsWith(PREFIX);
@@ -65,6 +66,8 @@ export function buildGroupWelcomeQueue(state: AppState, events: readonly BridgeE
   const seen = recentWelcomeEvents(state.settings.groupWelcomeSeen, now);
   const tasks = [...state.settings.scheduledMessages];
   const added: ScheduledMessage[] = [];
+  let capacitySkipped = 0;
+  let welcomeCount = tasks.filter(task => isGroupWelcomeTask(task.id)).length;
   for (const event of arrivals) {
     const payload = event.payload as { accountId?: string; groupJid?: string; messageId?: string; joinedAt?: number; live?: boolean };
     const { groupJid, messageId, joinedAt } = payload;
@@ -83,11 +86,12 @@ export function buildGroupWelcomeQueue(state: AppState, events: readonly BridgeE
     const chat = contact && state.chats.find(item => item.contactId === contact.id &&
       (item.accountId || item.phoneId || contact.accountId || contact.boundPhoneId) === accountId);
     if (!contact || !chat) continue;
-    if (tasks.length >= 200) {
+    if (welcomeCount >= MAX_GROUP_WELCOME_TASKS) {
       const completed = tasks.findIndex(task => isGroupWelcomeTask(task.id) &&
         ["sent", "failed", "expired", "cancelled"].includes(task.status));
-      if (completed < 0) continue;
+      if (completed < 0) { capacitySkipped++; continue; }
       tasks.splice(completed, 1);
+      welcomeCount--;
     }
     const time = new Date(now).toISOString();
     const template = rule.templates[Math.floor(Math.random() * rule.templates.length)]!;
@@ -100,6 +104,7 @@ export function buildGroupWelcomeQueue(state: AppState, events: readonly BridgeE
     seen[id] = joinedAt;
     tasks.push(task);
     added.push(task);
+    welcomeCount++;
   }
-  if (added.length) return { tasks, seen, added };
+  if (added.length || capacitySkipped) return { tasks, seen, added, capacitySkipped };
 }

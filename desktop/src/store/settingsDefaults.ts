@@ -37,6 +37,8 @@ export interface SettingsQuickReply {
   };
 }
 
+export type ComposerQuickAccessTab = "quick-replies" | "images";
+
 import type { AccountViewMode, FolderScope, WaAccount } from "@/types/account";
 import type { ScheduledMessage, SalesStage } from "@/types/crm";
 import { BROADCAST_MAX_THEMES, BROADCAST_MAX_VARIANTS, type BroadcastMedia, type BroadcastMediaMode, type BroadcastTheme } from "@/types/broadcast";
@@ -269,6 +271,7 @@ export interface SettingsShape {
   quickReplyCategoryOrder: string[];
   quickReplyPinnedIds: string[];
   quickReplyRecentIds: string[];
+  composerQuickAccessTabs: ComposerQuickAccessTab[];
   translateTargetLang: string;
   /** 自动根据联系人资料和最近入站消息判断对方语言。 */
   autoDetectContactLanguage: boolean;
@@ -490,6 +493,7 @@ export const defaultSettings: SettingsShape = {
   quickReplyCategoryOrder: [],
   quickReplyPinnedIds: [],
   quickReplyRecentIds: [],
+  composerQuickAccessTabs: [],
   translateTargetLang: "en",
   autoDetectContactLanguage: true,
   incomingTranslateEnabled: false,
@@ -722,6 +726,9 @@ export function normalizeLoadedSettings(
   }
   merged.quickReplyPinnedIds = normalizeQuickReplyIds(merged.quickReplyPinnedIds, merged.quickReplies, MAX_QUICK_REPLIES);
   merged.quickReplyRecentIds = normalizeQuickReplyIds(merged.quickReplyRecentIds, merged.quickReplies, MAX_RECENT_QUICK_REPLIES);
+  merged.composerQuickAccessTabs = Array.isArray(merged.composerQuickAccessTabs)
+    ? [...new Set(merged.composerQuickAccessTabs.filter(tab => tab === "quick-replies" || tab === "images"))]
+    : [];
   merged.notificationPrivacy = merged.notificationPrivacy === "name" || merged.notificationPrivacy === "hidden"
     ? merged.notificationPrivacy : "full";
   merged.theme = merged.theme === "light" ? "light" : "dark";
@@ -1241,7 +1248,7 @@ export function normalizeLoadedSettings(
         ...(f?.autoReplyMode === "auto" || f?.autoReplyMode === "manual" ? { autoReplyMode: f.autoReplyMode } : {}),
         ...(typeof f?.sheetConnectionId==="string"&&/^[\w-]{1,120}$/.test(f.sheetConnectionId)?{sheetConnectionId:f.sheetConnectionId}:{}),
         ...(typeof f?.aiSystemPrompt === "string" && f.aiSystemPrompt.trim()
-          ? { aiSystemPrompt: f.aiSystemPrompt.trim().slice(0, 6000) } : {}),
+          ? { aiSystemPrompt: f.aiSystemPrompt.trim() } : {}),
         ...(f?.aiPromptMode === "inherit" || f?.aiPromptMode === "append" || f?.aiPromptMode === "replace" ? {aiPromptMode: f.aiPromptMode} : {}),
         ...(typeof f?.aiPromptTemplateId === "string" && f.aiPromptTemplateId ? {aiPromptTemplateId: f.aiPromptTemplateId.slice(0,120)} : {}),
         ...(f?.aiPromptPlan ? { aiPromptPlan: normalizePromptPlan(f.aiPromptPlan, legacyPromptPlanSchedules) } : {}),

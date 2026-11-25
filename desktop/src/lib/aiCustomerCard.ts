@@ -1,6 +1,6 @@
 import { readAiJson } from "./aiResponse.ts";
 import { trackAiRequest } from "./aiUsage.ts";
-import { assertAiContentAllowed, checkAiMessages } from "./aiPrivacy.ts";
+import { checkAiMessages, redactAiContent } from "./aiPrivacy.ts";
 import type { Contact, Message, SalesStage } from "@/types/crm";
 import type { AppSettings } from "@/store/appStore";
 import type { AiSource } from "@/lib/aiSuggest";
@@ -60,17 +60,18 @@ export async function extractChatSheetFields(
     fields,
     conversation: history,
   });
-  assertAiContentAllowed(system, user);
+  const safeSystem = redactAiContent(system) || "";
+  const safeUser = redactAiContent(user) || "";
   let raw = "";
   if (provider === "muse") {
     raw = await trackAiRequest({ provider: "muse", model: "muse-web", feature: "insight" }, () =>
-      generateMuseWeb(redact(`${system}\n\n${user}`), undefined, JSON.stringify(["sheet-extract", accountId || contact.accountId || settings.activeAccountId, contact.id])));
+      generateMuseWeb(redact(`${safeSystem}\n\n${safeUser}`), undefined, JSON.stringify(["sheet-extract", accountId || contact.accountId || settings.activeAccountId, contact.id])));
   } else if (provider === "gemini" || provider === "vertex") {
-    raw = await geminiGenerate({ ...geminiCredentials(settings), model: settings.aiModel.trim() || undefined, system, user, json: true, temperature: 0.2, maxOutputTokens: 1200, feature: "insight" });
+    raw = await geminiGenerate({ ...geminiCredentials(settings), model: settings.aiModel.trim() || undefined, system: safeSystem, user: safeUser, json: true, temperature: 0.2, maxOutputTokens: 1200, feature: "insight" });
   } else if (provider === "ollama") {
     const base = settings.ollamaUrl;
     raw = await trackAiRequest({ provider: "ollama", model: settings.aiModel.trim() || "llama3.2", endpoint: base, feature: "insight" }, async observe => {
-      const response = await fetch(`${base.replace(/\/$/, "")}/api/chat`, { method: "POST", signal: AbortSignal.timeout(60_000), headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: settings.aiModel.trim() || "llama3.2", stream: false, format: "json", messages: [{ role: "system", content: system }, { role: "user", content: user }] }) });
+      const response = await fetch(`${base.replace(/\/$/, "")}/api/chat`, { method: "POST", signal: AbortSignal.timeout(60_000), headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: settings.aiModel.trim() || "llama3.2", stream: false, format: "json", messages: [{ role: "system", content: safeSystem }, { role: "user", content: safeUser }] }) });
       if (!response.ok) throw Error(`Ollama ${response.status}`);
       const data = await readAiJson(response, observe) as { message?: { content?: string }; response?: string };
       return data.message?.content || data.response || "";
@@ -79,7 +80,7 @@ export async function extractChatSheetFields(
     const config = getOpenAiCompatibleConfig(settings);
     if (!config?.apiKey.trim() || !config.model.trim()) throw Error("AI 服务未配置完整");
     raw = await trackAiRequest({ provider, model: config.model, endpoint: config.baseUrl, feature: "insight" }, async observe => {
-      const response = await fetch(`${config.baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", signal: AbortSignal.timeout(60_000), headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` }, body: JSON.stringify({ model: config.model, ...chatCompletionOptions(provider, config.model, 0.2, 1200), messages: [{ role: "system", content: system }, { role: "user", content: user }] }) });
+      const response = await fetch(`${config.baseUrl.replace(/\/$/, "")}/chat/completions`, { method: "POST", signal: AbortSignal.timeout(60_000), headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` }, body: JSON.stringify({ model: config.model, ...chatCompletionOptions(provider, config.model, 0.2, 1200), messages: [{ role: "system", content: safeSystem }, { role: "user", content: safeUser }] }) });
       if (!response.ok) throw Error(`${config.label} ${response.status}`);
       const data = await readAiJson(response, observe) as { choices?: { message?: { content?: string } }[] };
       return data.choices?.[0]?.message?.content || "";

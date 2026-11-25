@@ -17,6 +17,8 @@ import type { AppSettings } from "@/store/appStore";
 import type { WaAccount } from "@/types/account";
 import type { BroadcastCampaign } from "@/types/broadcast";
 import { normalizeCampaigns } from "@/lib/broadcastCampaign";
+import { isGroupWelcomeTask, normalizeGroupWelcomeRules } from "./groupWelcome.ts";
+import { isDeliveryUncertain } from "../store/outgoingRetry.ts";
 
 /** v2：可恢复；settingsSafe 含多号槽但不含 API Key */
 export type ExportBundleV2 = {
@@ -72,6 +74,7 @@ export type SettingsSafeExport = {
   quickReplyCategoryOrder: AppSettings["quickReplyCategoryOrder"];
   quickReplyPinnedIds: string[];
   quickReplyRecentIds: string[];
+  composerQuickAccessTabs: AppSettings["composerQuickAccessTabs"];
   translateTargetLang: string;
   autoDetectContactLanguage: boolean;
   incomingTranslateEnabled: boolean;
@@ -86,6 +89,7 @@ export type SettingsSafeExport = {
   chatFolders: AppSettings["chatFolders"];
   chatFolderClones: AppSettings["chatFolderClones"];
   scheduledMessages: AppSettings["scheduledMessages"];
+  groupWelcomeRules: AppSettings["groupWelcomeRules"];
   scheduledPlans: AppSettings["scheduledPlans"];
   /** 账号槽：去掉大体量 data: 头像，恢复后可重拉 */
   waAccounts: WaAccount[];
@@ -198,6 +202,7 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     quickReplyCategoryOrder: settings.quickReplyCategoryOrder || [],
     quickReplyPinnedIds: settings.quickReplyPinnedIds || [],
     quickReplyRecentIds: settings.quickReplyRecentIds || [],
+    composerQuickAccessTabs: settings.composerQuickAccessTabs || [],
     translateTargetLang: settings.translateTargetLang,
     autoDetectContactLanguage: settings.autoDetectContactLanguage !== false,
     incomingTranslateEnabled: settings.incomingTranslateEnabled === true,
@@ -212,6 +217,7 @@ export function buildSettingsSafe(settings: AppSettings): SettingsSafeExport {
     chatFolders,
     chatFolderClones: settings.chatFolderClones,
     scheduledMessages: settings.scheduledMessages || [],
+    groupWelcomeRules: normalizeGroupWelcomeRules(settings.groupWelcomeRules),
     scheduledPlans: settings.scheduledPlans || [],
     waAccounts: stripAccountAvatars(settings.waAccounts || []),
     activeAccountId: settings.activeAccountId,
@@ -710,10 +716,10 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
   const chats = asArr(o.chats)
     .map(sanitizeChat)
     .filter((x): x is ChatPreview => Boolean(x));
-  const messages = asArr(o.messages)
+  const backupMessages = asArr(o.messages)
     .map(sanitizeMessage)
-    .filter((x): x is Message => Boolean(x))
-    .map((message) => {
+    .filter((x): x is Message => Boolean(x));
+  const messages = backupMessages.map((message) => {
       const unfinished =
         message.direction === "out" &&
         (message.deliveryStatus === "pending" ||
@@ -754,9 +760,9 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
   // 只恢复客户数据与界面偏好；端点、密钥、自动发送及保护策略沿用本机。
   if (settingsSafe) {
     const allowed = [
-      "quickReplies", "quickReplyCustomCategories", "quickReplyRemovedCategories", "quickReplyCategoryLabels", "quickReplyCategoryOrder", "quickReplyPinnedIds", "quickReplyRecentIds", "translateTargetLang", "enterTranslateSend", "myLang",
+      "quickReplies", "quickReplyCustomCategories", "quickReplyRemovedCategories", "quickReplyCategoryLabels", "quickReplyCategoryOrder", "quickReplyPinnedIds", "quickReplyRecentIds", "composerQuickAccessTabs", "translateTargetLang", "enterTranslateSend", "myLang",
       "voiceInputLang", "aiTimeZone", "leadInbox", "chatFolders", "chatFolderClones", "aiPromptFolders", "aiPromptTemplates", "aiPromptPlans", "aiPromptPlanByChat", "aiPlaybooks", "aiPlaybookPlans", "aiPlaybookBindings", "aiPlaybookMuseMode", "broadcastThemes", "imagePromptTemplates", "aiContextMode", "aiOutreachRuns", "aiOutreachPaused", "aiOutreachExcludedRecipients",
-      "aiReplyTaskRecords", "aiTaskDismissedIds", "scheduledMessages", "scheduledPlans", "waAccounts", "accountViewMode", "historySyncNote",
+      "aiReplyTaskRecords", "aiTaskDismissedIds", "scheduledMessages", "groupWelcomeRules", "scheduledPlans", "waAccounts", "accountViewMode", "historySyncNote",
       "aiAutoFollowUpDelaysMinutes",
       "historySyncNoteByAccountId", "internalNotesByKey", "chatBackground",
       "salesStageLabels", "salesStageOrder", "theme", "folderDefaultColor", "folderColorDepth", "folderRowDensity", "showContactTagsInChatList",
@@ -767,6 +773,10 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
     ) as Partial<SettingsSafeExport>;
     if (Object.hasOwn(settingsSafe, "aiTimeZone")) settingsSafe.aiTimeZone = validTimeZone(settingsSafe.aiTimeZone) || "";
     settingsSafe.aiPlaybookAutoSync = false;
+    if (Object.hasOwn(settingsSafe, "groupWelcomeRules")) {
+      settingsSafe.groupWelcomeRules = Object.fromEntries(Object.entries(normalizeGroupWelcomeRules(settingsSafe.groupWelcomeRules))
+        .map(([key, rule]) => [key, {...rule, enabled:false}]));
+    }
     if (Array.isArray(settingsSafe.chatFolders)) {
       settingsSafe.aiOutreachPaused = true;
       settingsSafe.chatFolders = settingsSafe.chatFolders.map(folder => {
@@ -776,11 +786,30 @@ export function parseBackupJson(raw: unknown): ParsedBackup {
       });
     }
     if (Array.isArray(settingsSafe.scheduledMessages)) {
-      settingsSafe.scheduledMessages = settingsSafe.scheduledMessages.map((task) =>
-        task && (task.status === "pending" || task.status === "queued")
-          ? { ...task, status: "failed", messageId: undefined, error: "从备份恢复：请重新确认发送时间" }
-          : task
-      );
+      const byId = new Map(backupMessages.map((message, index) => [message.id, { message, index }]));
+      settingsSafe.scheduledMessages = settingsSafe.scheduledMessages.map((task) => {
+        if (!task || (task.status !== "pending" && task.status !== "queued")) return task;
+        const entry = task.messageId ? byId.get(task.messageId) : undefined;
+        const message = entry?.message;
+        const linked = message?.direction === "out" && message.chatId === task.chatId;
+        if (linked && ["sent", "server", "delivered", "read", "played"].includes(message.deliveryStatus || "")) {
+          return { ...task, status: "sent", error: undefined };
+        }
+        if (entry && linked && (message.deliveryStatus === "pending" || isDeliveryUncertain(message))) {
+          messages[entry.index] = { ...messages[entry.index], deliveryUncertain: true };
+          return { ...task, status: "failed", error: "从备份恢复：之前的发送结果未知，请核对原会话" };
+        }
+        if (typeof task.id === "string" && isGroupWelcomeTask(task.id)) {
+          return { ...task, status: "cancelled", error: "从备份恢复：已停止原入群欢迎任务" };
+        }
+        if (task.channelId === "android_bridge" && (typeof task.deviceId !== "string" || !task.deviceId.trim())) {
+          return { ...task, status: "failed", error: "定时消息没有绑定 Android 手机，请重新创建" };
+        }
+        if ((task.status === "pending" && !task.messageId) || (linked && message.deliveryStatus === "queued")) {
+          return { ...task, status: "expired", messageId: undefined, error: "从备份恢复：请重新确认发送时间" };
+        }
+        return { ...task, status: "failed", error: "从备份恢复：无法核对之前的发送结果，请查看原会话" };
+      });
     }
     if (Array.isArray(settingsSafe.scheduledPlans)) {
       settingsSafe.scheduledPlans = settingsSafe.scheduledPlans.map(plan => plan && !["done", "cancelled"].includes(plan.status)

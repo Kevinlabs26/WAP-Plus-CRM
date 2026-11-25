@@ -48,6 +48,9 @@ export function SettingsTranslationPanel() {
               <option value="ru">Русский</option>
               <option value="ar">العربية</option>
               <option value="sw">Kiswahili</option>
+              <option value="hy">Հայերեն</option>
+              <option value="hi">हिन्दी</option>
+              <option value="id">Bahasa Indonesia</option>
               <option value="ja">日本語</option>
               <option value="ko">한국어</option>
             </select>
@@ -77,6 +80,9 @@ export function SettingsTranslationPanel() {
             <option value="ru">Русский</option>
             <option value="ar">العربية</option>
             <option value="sw">Kiswahili</option>
+            <option value="hy">Հայերեն</option>
+            <option value="hi">हिन्दी</option>
+            <option value="id">Bahasa Indonesia</option>
             <option value="ja">日本語</option>
             <option value="ko">한국어</option>
           </select>

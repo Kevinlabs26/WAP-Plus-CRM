@@ -134,6 +134,8 @@ const built = await build({
   alias: { "@": fileURLToPath(new URL("../src/", import.meta.url)) },
   plugins: [{ name: "translation-auto-ui-mocks", setup(builder) {
     const mocks = {
+      react: "export const useRef=value=>({current:value});export const useLayoutEffect=()=>{};",
+      "react/jsx-runtime": "export const jsx=(type,props)=>({type,props});export const jsxs=jsx;export const Fragment='fragment';",
       "@/i18n": "export const useI18n = () => ({ t: key => key });",
       "lucide-react": "export const Languages = () => null; export const Loader2 = () => null; export const Undo2 = () => null;",
     };

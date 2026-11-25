@@ -732,6 +732,22 @@ export async function findChatsWithInbound(chatIds: string[]): Promise<string[]>
   return ids;
 }
 
+export async function findLatestChatActivity(chatIds: string[]): Promise<ReadonlyMap<string, number>> {
+  const latest = new Map<string, number>();
+  if (!chatIds.length || await resolveStorageEngine() !== "sqlite") return latest;
+  await saveQueue;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const rows = await invoke<unknown>("db_latest_conversation_by_chat", { chatIds });
+  const requested = new Set(chatIds);
+  if (!Array.isArray(rows)) throw new Error("Invalid chat activity result");
+  for (const row of rows) {
+    if (!Array.isArray(row) || row.length !== 2 || !requested.has(row[0]) || typeof row[1] !== "string") throw new Error("Invalid chat activity result");
+    const at = Date.parse(row[1]);
+    if (Number.isFinite(at)) latest.set(row[0], at);
+  }
+  return latest;
+}
+
 export type FullHistoryResult = {
   messages: unknown[];
   activities: unknown[];

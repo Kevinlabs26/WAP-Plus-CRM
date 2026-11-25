@@ -578,7 +578,7 @@ function ImageGenerationDialog({ busy, error, canGenerate, referenceImage, refer
   </dialog>;
 }
 
-function ImageLibraryPreview({ image, busy, saveError, canInsert, categories, onClose, onInsert, onSave }: { image: LibraryImage; busy: boolean; saveError: string; canInsert: boolean; categories: string[]; onClose: () => void; onInsert: (image: LibraryImage) => void; onSave: (image: LibraryImage) => void }) {
+export function ImageLibraryPreview({ image, busy, saveError, canInsert, categories, onClose, onInsert, onSave }: { image: LibraryImage; busy: boolean; saveError: string; canInsert: boolean; categories: string[]; onClose: () => void; onInsert: (image: LibraryImage) => void; onSave: (image: LibraryImage) => void }) {
   const { t } = useI18n();
   const dialog = useRef<HTMLDialogElement>(null);
   const [data, setData] = useState("");
@@ -587,15 +587,21 @@ function ImageLibraryPreview({ image, busy, saveError, canInsert, categories, on
   const [category, setCategory] = useState(image.category);
   const [caption, setCaption] = useState(image.caption || "");
   useEffect(() => { dialog.current?.showModal(); let stopped = false; readLibraryImage(image.id).then(value => { if (!stopped) setData(value); }).catch(e => { if (!stopped) setError(String(e)); }); return () => { stopped = true; }; }, [image.id]);
-  return <dialog ref={dialog} aria-labelledby="image-library-preview-title" onClose={onClose} className="m-auto max-h-[90vh] w-[min(900px,94vw)] overflow-y-auto rounded-xl border border-zinc-700 bg-zinc-900 p-4 text-zinc-100 shadow-xl backdrop:bg-black/60">
+  return <dialog ref={dialog} aria-labelledby="image-library-preview-title" onClose={onClose} className="fixed left-1/2 top-1/2 right-auto bottom-auto m-0 max-h-[90vh] w-[min(960px,94vw)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-zinc-700 bg-zinc-900 p-4 text-zinc-100 shadow-xl backdrop:bg-black/60">
     <h3 id="image-library-preview-title" className="mb-3 text-sm font-semibold">{t("quickShelf.preview")}</h3>
-    {error ? <p role="alert" className="text-xs text-rose-400">{error}</p> : data ? <img src={data} alt={image.title} className="max-h-[45vh] w-full object-contain" /> : <p className="text-xs">{t("gallery.loading")}</p>}
-    <p className="my-2 text-2xs text-zinc-500">{image.mime} · {(image.size / 1024 / 1024).toFixed(2)} MB</p>
-    <label className="block text-xs">{t("gallery.name")}<input value={title} disabled={busy} maxLength={160} onChange={e => setTitle(e.target.value)} className="ui-control my-1 w-full px-2" /></label>
-    <label className="block text-xs">{t("gallery.category")}<input value={category} disabled={busy} list="image-preview-categories" maxLength={60} onChange={e => setCategory(e.target.value)} className="ui-control my-1 w-full px-2" /></label>
-    <datalist id="image-preview-categories">{categories.map(value => <option key={value} value={value} />)}</datalist>
-    <label className="block text-xs">{t("gallery.caption")}<textarea value={caption} disabled={busy} maxLength={2000} onChange={e => setCaption(e.target.value)} className="ui-control my-1 w-full px-2" /></label>
-    {saveError && <p role="alert" className="text-xs text-rose-400">{saveError}</p>}
-    <div className="mt-3 flex justify-end gap-2"><Button size="sm" disabled={busy} onClick={onClose}>{t("common.close")}</Button><Button size="sm" disabled={busy || !title.trim()} onClick={() => onSave({ ...image, title, category, caption })}>{t("common.save")}</Button><Button size="sm" variant="primary" disabled={busy || !title.trim() || !canInsert || !data || !!error} onClick={() => onInsert({ ...image, title, category, caption })}>{t("gallery.saveInsert")}</Button></div>
+    <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="flex min-h-56 min-w-0 items-center justify-center overflow-hidden rounded-lg bg-zinc-800/30 p-2">
+        {error ? <p role="alert" className="text-xs text-rose-400">{error}</p> : data ? <img src={data} alt={image.title} className="max-h-[40vh] max-w-full object-contain md:max-h-[72vh]" /> : <p className="text-xs">{t("gallery.loading")}</p>}
+      </div>
+      <div className="flex min-w-0 flex-col gap-2">
+        <p className="text-2xs text-zinc-500">{image.mime} · {(image.size / 1024 / 1024).toFixed(2)} MB</p>
+        <label className="block text-xs">{t("gallery.name")}<input value={title} disabled={busy} maxLength={160} onChange={e => setTitle(e.target.value)} className="ui-control mt-1 w-full px-2" /></label>
+        <label className="block text-xs">{t("gallery.category")}<input value={category} disabled={busy} list="image-preview-categories" maxLength={60} onChange={e => setCategory(e.target.value)} className="ui-control mt-1 w-full px-2" /></label>
+        <datalist id="image-preview-categories">{categories.map(value => <option key={value} value={value} />)}</datalist>
+        <label className="block text-xs">{t("gallery.caption")}<textarea value={caption} disabled={busy} maxLength={2000} onChange={e => setCaption(e.target.value)} className="ui-control mt-1 min-h-24 w-full resize-y p-2" /></label>
+        {saveError && <p role="alert" className="text-xs text-rose-400">{saveError}</p>}
+        <div className="mt-auto flex flex-wrap justify-end gap-2 pt-2"><Button size="sm" disabled={busy} onClick={onClose}>{t("common.close")}</Button><Button size="sm" disabled={busy || !title.trim()} onClick={() => onSave({ ...image, title, category, caption })}>{t("common.save")}</Button><Button size="sm" variant="primary" disabled={busy || !title.trim() || !canInsert || !data || !!error} onClick={() => onInsert({ ...image, title, category, caption })}>{t("gallery.saveInsert")}</Button></div>
+      </div>
+    </div>
   </dialog>;
 }

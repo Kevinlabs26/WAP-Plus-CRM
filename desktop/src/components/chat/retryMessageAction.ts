@@ -10,6 +10,7 @@ import {
 } from "@/lib/baileys";
 import type { Message } from "@/types/crm";
 import { translateCurrent } from "@/i18n";
+import { MAX_VOICE_NOTE_SECONDS } from "@/lib/mediaBlob";
 import { isDeliveryUncertain } from "@/store/outgoingRetry";
 
 type RetryMessageActionDeps = {
@@ -134,7 +135,7 @@ export async function retryMessage({
                     ? baileysSendVoice(target, mediaUrl, {
                         seconds: message.mediaSeconds,
                         mimetype: message.mediaMime,
-                        ptt: message.mediaPtt !== false,
+                        ptt: message.mediaPtt !== false && (message.mediaSeconds ?? 0) < MAX_VOICE_NOTE_SECONDS,
                         accountId: sendAccountId,
                       })
                     : Promise.reject(new Error(translateCurrent("runtime.mediaRetryUnsupported")))

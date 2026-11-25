@@ -86,8 +86,22 @@ const unsafe = parseBackupJson({ version: 2, contacts: restored.contacts, settin
 assert.equal(unsafe.settingsSafe.theme, "light");
 assert.equal(unsafe.settingsSafe.internalNotesByKey.customer, "saved note");
 for (const key of ["bridgeToken", "customAiKey", "customAiBaseUrl", "aiReplyMode", "rateLimitEnabled", "blockSendWhenOverheated", "unknownSetting"]) assert.equal(Object.hasOwn(unsafe.settingsSafe, key), false);
-assert.deepEqual(unsafe.settingsSafe.scheduledMessages.map(x => x.status), ["failed", "failed", "sent"]);
-assert.equal(unsafe.settingsSafe.scheduledMessages[1].messageId, undefined);
+assert.deepEqual(unsafe.settingsSafe.scheduledMessages.map(x => x.status), ["expired", "failed", "sent"]);
+assert.equal(unsafe.settingsSafe.scheduledMessages[1].messageId, "out");
+const restoredSchedule = parseBackupJson({
+  version: 2,
+  messages: ["queued", "pending", "delivered"].map(status => ({
+    id: status, chatId: "chat", direction: "out", deliveryStatus: status,
+  })),
+  settingsSafe: { scheduledMessages: ["queued", "pending", "delivered", "missing"].map(messageId => ({
+    id: "task-" + messageId, status: "queued", chatId: "chat", messageId,
+  })).concat({ id: "group-welcome:stale", status: "pending" }) },
+});
+assert.deepEqual(restoredSchedule.settingsSafe.scheduledMessages.map(task => [task.status, task.messageId]), [
+  ["expired", undefined], ["failed", "pending"], ["sent", "delivered"], ["failed", "missing"], ["cancelled", undefined],
+]);
+assert.equal(restoredSchedule.messages.find(message => message.id === "pending").deliveryUncertain, true);
+assert.equal(restoredSchedule.messages.find(message => message.id === "queued").retryCount, 5);
 for (const value of ["=1+1", "+cmd", "-cmd", "@SUM(1)", "  =1+1", "\t=1+1", "＝1+1"]) {
   const csv = contactsToCsv([{ ...restored.contacts[0], name: value, phone: "001234" }]);
   assert.ok(csv.includes('"\'' + value + '"'));

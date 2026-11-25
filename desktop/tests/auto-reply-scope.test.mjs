@@ -71,7 +71,7 @@ test('folder prompts survive normalization and backup restore without enabling a
  assert.equal(settings.chatFolders.find(f=>f.id==='profile').aiSystemPrompt,'FOLDER ROLE');
  assert.equal(settings.chatFolders.find(f=>f.id==='blank').aiSystemPrompt,undefined);
  assert.equal(settings.chatFolders.find(f=>f.id==='bad').aiSystemPrompt,undefined);
- assert.equal(settings.chatFolders.find(f=>f.id==='long').aiSystemPrompt.length,6000);
+ assert.equal(settings.chatFolders.find(f=>f.id==='long').aiSystemPrompt.length,7000);
  const restarted=normalizeLoadedSettings(JSON.parse(JSON.stringify(settings)));
  assert.equal(restarted.chatFolders.find(f=>f.id==='profile').aiSystemPrompt,'FOLDER ROLE');
  assert.equal(resolveAutoReplyScope(restarted,'a').mode,'manual');

@@ -6,8 +6,9 @@ import {translate} from '../src/i18n/core.ts';
 const mocks={
  react:'export const useState=v=>globalThis.inviteHooks.state(v);export const useRef=v=>globalThis.inviteHooks.ref(v);export const useEffect=(f,d)=>globalThis.inviteHooks.effect(f,d);',
  'react/jsx-runtime':'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;export const Fragment="fragment";',
- 'lucide-react':'export const Ban="icon",BellOff="icon",BellRing="icon",CalendarPlus="icon",Clock3="icon",ChevronRight="icon",Download="icon",Images="icon",Link2="icon",Loader2="icon",Mail="icon",MoreVertical="icon",Pin="icon",PinOff="icon",Search="icon",StickyNote="icon",UserRound="icon",UserPlus="icon",Users="icon";',
+ 'lucide-react':'export const Ban="icon",BellOff="icon",BellRing="icon",CalendarPlus="icon",Clock3="icon",ChevronRight="icon",Download="icon",Images="icon",Link2="icon",Loader2="icon",Mail="icon",MoreVertical="icon",Pin="icon",PinOff="icon",Search="icon",StickyNote="icon",UserRound="icon",UserPlus="icon",Users="icon",X="icon";',
  '@/components/ui/primitives':'export const Button="button";',
+ './GroupWelcomeSettings':'export const GroupWelcomeSettings="group-welcome";',
  '@/i18n':'export const useI18n=()=>({t:(k,p)=>globalThis.inviteTranslate(k,p)});',
  '@/lib/baileysGroups':'export const baileysGroupInviteCode=(...args)=>globalThis.inviteRequest(...args);',
  '@/store/appStore':'export const useAppStore={getState:()=>({pushToast:(...args)=>globalThis.inviteToasts.push(args)})};',

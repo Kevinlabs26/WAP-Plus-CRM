@@ -28,7 +28,12 @@ export interface BroadcastItem {
   mediaId?: string;
   status: BroadcastItemStatus;
   deliveryUncertain?: boolean;
+  /** Machine-readable reason for the latest non-successful attempt. */
+  errorCode?: string;
   error?: string;
+  /** Latest send attempt start time, including attempts that failed or were blocked. */
+  attemptedAt?: string;
+  retryAt?: string;
   sentAt?: string;
   /** 本地出站消息 id */
   messageId?: string;

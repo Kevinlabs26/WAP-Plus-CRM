@@ -283,3 +283,16 @@ test('the bridge blocks sync and send if the session has the wrong number or no 
     assert.equal(status,409); assert.match(body.error,/号码不一致/);
   }
 });
+
+test('merged account rows follow the latest actual message even when cached previews disagree', () => {
+  const bothActive = chats.slice(0, 2).map(chat => ({ ...chat, hasMessageHistory: true }));
+  const contactsById = new Map(contacts.map(contact => [contact.id, contact]));
+  const activity = new Map([
+    ['chat-a', '2026-10-20T21:26:00Z'],
+    ['chat-b', '2026-10-19T08:04:00Z'],
+  ]);
+  const [row] = mod.collapseAllAccountFolderChats(bothActive, contactsById, activity);
+  assert.equal(row.chat.id, 'chat-a');
+  assert.equal(row.accountCount, 2);
+  assert.deepEqual(row.memberChatIds, ['chat-a', 'chat-b']);
+});

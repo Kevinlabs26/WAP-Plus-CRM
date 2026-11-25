@@ -377,6 +377,7 @@ export function createMessageActionsSlice({
         contactId,
         contactName: contact.name || contact.phone || contactId,
         lastMessage: "",
+        hasMessageHistory: false,
         unread: 0,
         updatedAt: new Date().toISOString(),
         phoneId:

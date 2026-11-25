@@ -2,18 +2,24 @@ import { AI_OUTPUT_TRUNCATED, readAiJson } from "./aiResponse.ts";
 import { trackAiRequest } from "./aiUsage.ts";
 import { checkAiMessages } from "./aiPrivacy.ts";
 import type { AiDecisionDetails } from "./aiDecisionDetails.ts";
-import { generateMuseWeb, museWebAccounts, nextMuseAutoReplyAccount } from "./museWeb.ts";
+import { generateMuseWeb } from "./museWeb.ts";
+import { prepareMuseAccountPlaybook, selectTargetMuseAccount } from "./museAccountRouting.ts";
 import type { Contact, Message } from "@/types/crm";
 import type { AppSettings } from "@/store/appStore";
 import { geminiGenerate } from "./gemini.ts";
 import { geminiCredentials, getOpenAiCompatibleConfig, hasAiCredentials, chatCompletionOptions } from "./aiProviders.ts";
 import { ingestString } from "../store/bridgeIngestHelpers.ts";
-import { resolveAiReplyProfile, MAX_EFFECTIVE_PROMPT_CHARS } from "./aiPromptScope.ts";
+import { resolveAiReplyProfile } from "./aiPromptScope.ts";
 import { buildAiTimeContext, resolveAiTimeZones } from "./aiTimeContext.ts";
 import { resolveAiReplyConstraints, getAiOutputConstraintError } from "./aiReplyConstraints.ts";
 import { createMuseChatRedactor, museChatMessages } from "./museChatPrivacy.ts";
 import { sheetConnections } from "./googleSheets.ts";
 import { museSidebarData, museSidebarDataVersion } from "./museSidebarData.ts";
+import {
+  collectNonMuseOutreachSources,
+  isNonMuseOutreachEvidenceGrounded,
+  tryParseStructuredOutreachDecision,
+} from "./outreachDecisionHelpers.ts";
 
 export interface SuggestResult {
   id: string;
@@ -45,6 +51,8 @@ export interface GenerateSuggestionsResult {
   retryable?: boolean;
   submissionUncertain?: boolean;
 }
+
+const VERIFIED_FIRST_CONTACT = "CRM verified this is an assigned first contact with no prior WhatsApp conversation.";
 
 const STAGE_HINT: Record<string, string> = {
   new: "new contact",
@@ -101,6 +109,7 @@ export function getSuggestionContextKey(
     profile.playbookName, profile.playbookVersion, settings.aiPlaybookMuseMode, settings.aiPlaybookMuseAccountId,
     profile.workspacePlaybook && settings.aiPlaybookMuseAttemptAt > settings.aiPlaybookMuseSyncedAt,
     opts?.auto && !opts.outreachDecision && usesMuse ? settings.museAutoReplyAccountIds : undefined,
+    usesMuse ? settings.musePrivacyByAccountId : undefined,
     settings.customAiBaseUrl, settings.ollamaUrl,
     resolveAiTimeZones(contact, settings),
     usesMuse ? museSidebarDataVersion(profile.prompt, settings, chatId || "", contact?.phone || "", sheetConnections(), opts?.allowSidebarData) : "",
@@ -123,10 +132,14 @@ export async function generateSuggestions(
   contact: Contact | undefined,
   recent: Message[],
   settings: AppSettings,
-  opts?: { auto?: boolean; count?: 1 | 3; accountId?: string; chatId?: string; replyTo?: Message; signal?: AbortSignal; outreach?: string; outreachDecision?: boolean; allowSidebarData?: boolean; beforeSubmit?: () => void; onProgress?: (result: GenerateSuggestionsResult) => void; onMuseQueue?:(running:boolean)=>void },
+  opts?: { auto?: boolean; count?: 1 | 3; accountId?: string; chatId?: string; replyTo?: Message; signal?: AbortSignal; outreach?: string; outreachDecision?: boolean; firstContactVerified?: boolean; allowSidebarData?: boolean; beforeSubmit?: () => void; onProgress?: (result: GenerateSuggestionsResult) => void; onMuseQueue?:(running:boolean)=>void },
   usePrimaryPlaybook = false
 ): Promise<GenerateSuggestionsResult> {
   const proactive = opts?.outreachDecision === true;
+  const verifiedFirstContact = proactive && opts?.firstContactVerified === true;
+  const outreachTask = verifiedFirstContact
+    ? `${opts?.outreach || ""}\nProgram-provided CRM fact: ${VERIFIED_FIRST_CONTACT} If the configured rules permit a neutral first message and no additional required facts are missing, return action "send" with a reason. The CRM already has the verified first-contact fact and will record it directly. The absence of a chat, name, or gender by itself does not require review. If the configured rules require any unverified fact, return a draft. If a rule excludes this recipient, return skip.`
+    : opts?.outreach;
   settings = outreachAiSettings(settings, proactive ? opts?.outreach : undefined);
   const name = contact?.name ?? "there";
   const sorted = [...recent].sort((a, b) => a.sentAt.localeCompare(b.sentAt));
@@ -149,81 +162,54 @@ export async function generateSuggestions(
       opts?.chatId || opts?.replyTo?.chatId || recent[0]?.chatId, undefined, contact?.aiChatInstructions, true);
     if (!source.error && source.readMuseFiles) return generateSuggestions(contact, recent, settings, opts, true);
   };
-  if (provider === "muse" && opts?.auto && !opts.outreach && !usePrimaryPlaybook &&
-      settings.aiPlaybookMuseMode !== "shared" && profile.readMuseFiles) {
-    const fallback = await primaryFallback(settings.aiPlaybookMuseAccountId || "");
-    if (fallback) return fallback;
-  }
-  if(provider==="muse"&&profile.readMuseFiles&&!usePrimaryPlaybook){
-    try{
-      const { shareMusePlaybooks } = await import("./musePlaybookSync.ts");
-      const { useAppStore } = await import("@/store/appStore");
-      await shareMusePlaybooks(profile.musePlaybookPaths||[],opts?.signal);
-      settings=outreachAiSettings(useAppStore.getState().settings, proactive ? opts?.outreach : undefined);
-      profile=resolveAiReplyProfile(settings,opts?.accountId||contact?.accountId,opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId,undefined,contact?.aiChatInstructions);
-    }catch(error){
-      if (opts?.auto && !opts.outreach) {
-        const fallback = await primaryFallback(settings.aiPlaybookMuseAccountId || "");
-        if (fallback) return fallback;
-      }
-      return {suggestions:[],source:"muse",fallback:true,error:error instanceof Error?error.message:String(error)};
-    }
-  }
   let museAccountId:string|undefined;
   let museAccountName:string|undefined;
   let primaryMuseId = "";
   let useMuseWorkspacePlaybook=false;
   if(provider==="muse"){
     try{
-      const workspaceMode=settings.aiPlaybookMuseMode!=="shared";
-      const pool=await museWebAccounts();
-      primaryMuseId = pool.primaryId;
-      if (opts?.auto && profile.workspacePlaybook && settings.aiPlaybookMuseAccountId !== primaryMuseId) {
-        throw Error("Playbook 来源与当前主 Muse 不一致，请重新同步版本");
+      const routedChatId = opts?.chatId || opts?.replyTo?.chatId || recent[0]?.chatId;
+      const routedAccountId = opts?.accountId || contact?.accountId;
+      const selected = await selectTargetMuseAccount({
+        settings,
+        profile,
+        auto: opts?.auto,
+        proactive,
+        usePrimaryPlaybook,
+      });
+      primaryMuseId = selected.primaryMuseId;
+      museAccountId = selected.museAccountId;
+      museAccountName = selected.museAccountName;
+      const prepared = await prepareMuseAccountPlaybook({
+        settings,
+        profile,
+        accountId: routedAccountId,
+        chatId: routedChatId,
+        contactInstructions: contact?.aiChatInstructions,
+        museAccountId,
+        primaryMuseId,
+        auto: opts?.auto,
+        proactive,
+        outreach: opts?.outreach,
+        usePrimaryPlaybook,
+        signal: opts?.signal,
+        applyOutreachSettings: (latestSettings) => outreachAiSettings(latestSettings, proactive ? opts?.outreach : undefined),
+      });
+      settings = prepared.settings;
+      profile = prepared.profile;
+      useMuseWorkspacePlaybook = prepared.useMuseWorkspacePlaybook;
+      if (prepared.shouldTryPrimaryFallback) {
+        const fallback = await primaryFallback(primaryMuseId);
+        if (fallback) return fallback;
+        const inline = resolveAiReplyProfile(settings, routedAccountId, routedChatId, undefined, contact?.aiChatInstructions);
+        if (inline.error || inline.readMuseFiles) {
+          throw prepared.fallbackError instanceof Error
+            ? prepared.fallbackError
+            : Error(inline.error || "主 Muse Playbook 原文尚未读取，无法交给副号使用");
+        }
+        profile = inline;
+        console.warn("[muse-playbook] Workspace 副本未通过校验且主号不可回退，本次改用 CRM 中的原文", prepared.fallbackError);
       }
-      if (usePrimaryPlaybook) {
-        if (!primaryMuseId || primaryMuseId !== settings.aiPlaybookMuseAccountId || !profile.readMuseFiles)
-          throw Error("主 Muse 账号与 Playbook 来源不一致，请重新同步 Workspace");
-        if (opts?.auto && !proactive && settings.museAutoReplyAccountIds != null &&
-            !settings.museAutoReplyAccountIds.includes(primaryMuseId)) throw Error("主 Muse 未勾选为自动回复账号");
-        if (opts?.auto && !proactive && await nextMuseAutoReplyAccount([primaryMuseId]) !== primaryMuseId) {
-          throw Error("主 Muse 未通过自动回复可用性或隐私检查");
-        }
-        museAccountId = primaryMuseId;
-      } else if(proactive){
-        museAccountId=settings.aiOutreachMuseAccountId||pool.primaryId||pool.selectedId||pool.accounts[0]?.id;
-        if(!museAccountId||!pool.accounts.some(account=>account.id===museAccountId))throw Error("主动联系没有可用的 Muse 账号，请在 Muse 账号池中选择一个账号");
-      }else if(opts?.auto){
-        museAccountId=await nextMuseAutoReplyAccount(settings.museAutoReplyAccountIds??undefined);
-        if(!museAccountId)throw Error("没有已勾选且可用的 Muse 自动回复账号：请确认账号已登录可用，并已确认关闭模型训练");
-      }else museAccountId=pool.selectedId;
-      museAccountName=pool.accounts.find(account=>account.id===museAccountId)?.name;
-      if(!usePrimaryPlaybook&&workspaceMode&&profile.museMaterials?.length){
-        const { trainMuseAccountPlaybooks } = await import("./musePlaybookSync.ts");
-        const { useAppStore } = await import("@/store/appStore");
-        const materials=profile.museMaterials;
-        if (opts?.auto && !opts.outreach) {
-          const copy = resolveAiReplyProfile(settings, opts.accountId || contact?.accountId,
-            opts.chatId || opts.replyTo?.chatId || recent[0]?.chatId, museAccountId, contact?.aiChatInstructions);
-          if (!copy.error && copy.readMuseFiles) useMuseWorkspacePlaybook = true;
-          else {
-            const fallback = await primaryFallback(primaryMuseId);
-            if (fallback) return fallback;
-          }
-        }
-        if (!useMuseWorkspacePlaybook) {
-          try{await trainMuseAccountPlaybooks(museAccountId,materials,opts?.signal);useMuseWorkspacePlaybook=true;}
-          catch(error){
-            if(opts?.signal?.aborted)throw error;
-            settings=outreachAiSettings(useAppStore.getState().settings, proactive ? opts?.outreach : undefined);
-            const inline=resolveAiReplyProfile(settings,opts?.accountId||contact?.accountId,opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId,undefined,contact?.aiChatInstructions);
-            if(inline.error||inline.readMuseFiles)throw Error(inline.error||"主 Muse Playbook 原文尚未读取，无法交给副号使用");
-            console.warn("[muse-playbook] Workspace 副本未通过校验，本次改用 CRM 中的原文",error);
-          }
-          settings=outreachAiSettings(useAppStore.getState().settings, proactive ? opts?.outreach : undefined);
-        }
-      }
-      if (!usePrimaryPlaybook) profile=resolveAiReplyProfile(settings,opts?.accountId||contact?.accountId,opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId,workspaceMode&&useMuseWorkspacePlaybook?museAccountId:undefined,contact?.aiChatInstructions);
     }catch(error){
       const message = error instanceof Error ? error.message : String(error);
       if (message === "Muse 自动回复账号暂不可用，将稍后重新检查") {
@@ -233,7 +219,7 @@ export async function generateSuggestions(
         const fallback = await primaryFallback(primaryMuseId);
         if (fallback) return fallback;
       }
-      return {suggestions:[],source:"muse",fallback:true,error:error instanceof Error?error.message:String(error)};
+      return {suggestions:[],source:"muse",fallback:true,error:message};
     }
   }
   if (profile.error) {
@@ -259,13 +245,6 @@ export async function generateSuggestions(
   const chatId=opts?.chatId||opts?.replyTo?.chatId||recent[0]?.chatId,accountId=opts?.accountId||contact?.accountId;
   const constraints=resolveAiReplyConstraints(settings,accountId,chatId);
   const effectivePrompt=constraints.maxChars||constraints.forbiddenTerms.length ? `${prompt}\n\nProgram-enforced reply constraints: ${JSON.stringify(constraints)}. Respect these limits in every text.` : prompt;
-  if (effectivePrompt.length > MAX_EFFECTIVE_PROMPT_CHARS) {
-    if (!usePrimaryPlaybook && opts?.auto && !opts.outreach && profile.museMaterials?.length) {
-      const fallback = await primaryFallback(primaryMuseId);
-      if (fallback) return fallback;
-    }
-    return {suggestions:[],source:"mock",fallback:true,error:"提示词和硬性约束合计超过 24000 字符，请精简后重试"};
-  }
   const effectiveSettings =
     effectivePrompt === settings.aiSystemPrompt ? settings : { ...settings, aiSystemPrompt: effectivePrompt };
   const finish=(suggestions:SuggestResult[],source:AiSource):GenerateSuggestionsResult=>{
@@ -318,7 +297,7 @@ export async function generateSuggestions(
         const redact=createMuseChatRedactor([contact||{},...(settings.waAccounts||[])],thread);
         const system=buildSystemPrompt(undefined,effectiveSettings,opts?.auto,opts?.replyTo,opts?.count,false,opts?.outreachDecision);
         const privateMessage=(message:Message):Message=>({...message,body:message.contactCard?"[shared contact omitted]":redact(message.body),transcript:message.transcript?redact(message.transcript):undefined,mediaCaption:message.mediaCaption?redact(message.mediaCaption):undefined,quoted:message.quoted?{...message.quoted,body:redact(message.quoted.body)}:undefined});
-        const user=buildUserContext(undefined,thread.map(privateMessage),opts?.auto,opts?.replyTo?privateMessage(opts.replyTo):undefined,buildAiTimeContext(contact,effectiveSettings),{count:opts?.count,outreach:opts?.outreach,outreachDecision:opts?.outreachDecision,compact:settings.aiContextMode==="compact",minimal:true});
+        const user=buildUserContext(undefined,thread.map(privateMessage),opts?.auto,opts?.replyTo?privateMessage(opts.replyTo):undefined,buildAiTimeContext(contact,effectiveSettings),{count:opts?.count,outreach:outreachTask,outreachDecision:opts?.outreachDecision,compact:settings.aiContextMode==="compact",minimal:true});
         const museTools = profile.readMuseFiles
           ? "You may use Muse workspace file tools only to read the exact user-selected Playbook paths listed in the current profile. If the same revision was already read and is still available in this same Muse account and customer conversation, reuse it without reopening or repeating its contents. Read again only for a changed revision or a new conversation thread; never reuse across accounts or customers. Do not read any other workspace files. Do not browse external sites, contact anyone, or execute commands."
           : "Do not use tools, browse, contact anyone, or execute tasks.";
@@ -381,21 +360,92 @@ export async function generateSuggestions(
       if(opts?.outreachDecision){
         const decision=parseOutreachDecision(raw.raw);
         if(decision.action==="skip")return {suggestions:[],source:"muse",fallback:false,outreachDecision:decision,decisionDetails:{...decisionDetails,reason:decision.reason}};
-        const evidence = decision.evidence;
-        const grounded = !!evidence && raw.sources.some(source =>
-          source.trim() === evidence && !/^\[(?:[^\]]* omitted|voice[^\]]*)\]$/i.test(evidence));
+        const localEvidence = verifiedFirstContact && decision.action === "send" ? VERIFIED_FIRST_CONTACT : undefined;
+        const cited = decision.evidence;
+        const evidence = localEvidence || (cited && raw.sources.some(source =>
+          source.trim() === cited && !/^\[(?:[^\]]* omitted|voice[^\]]*)\]$/i.test(cited)) ? cited : undefined);
+        const grounded = !!evidence;
         const needsReview = decision.action === "draft" || !grounded || !decision.reason;
         const reason = needsReview
           ? decision.action === "draft" && decision.reason ? decision.reason : "缺少可核对的联系依据，需要人工确认"
           : decision.reason;
         const result=finish([{id:`ai-${Date.now()}-outreach`,text:decision.text}],"muse");
         return result.fallback?result:{...result,outreachDecision:{action:needsReview?"draft":"send",text:decision.text},
-          decisionDetails:{...decisionDetails,reason,...(grounded?{evidence}:{})}};
+          decisionDetails:{...decisionDetails,reason,...(evidence?{evidence}:{})}};
       }
       const result=finish(parseSuggestionsJson(raw.raw,"Muse",opts?.auto||opts?.replyTo||opts?.count===1?1:3),"muse");
       return result.fallback?result:{...result,museAccountId,museAccountName};
     }
+    const finalizeNonMuseOutreachDecision = (
+      rawContent: string,
+      source: AiSource,
+      toneLabel: string
+    ): GenerateSuggestionsResult => {
+      const decision = tryParseStructuredOutreachDecision(rawContent);
+      if (decision) {
+        if (decision.action === "skip") {
+          return {
+            suggestions: [],
+            source,
+            fallback: false,
+            outreachDecision: decision,
+            decisionDetails: { ...decisionDetails, reason: decision.reason },
+          };
+        }
+        const sources = collectNonMuseOutreachSources(contact, sorted);
+        const evidence = verifiedFirstContact && decision.action === "send"
+          ? VERIFIED_FIRST_CONTACT
+          : isNonMuseOutreachEvidenceGrounded(decision.evidence, sources) ? decision.evidence : undefined;
+        const grounded = !!evidence;
+        const needsReview = decision.action === "draft" || !grounded || !decision.reason;
+        const reason = needsReview
+          ? decision.action === "draft" && decision.reason
+            ? decision.reason
+            : "缺少可核对的联系依据，需要人工确认"
+          : decision.reason;
+        const built = finish([{ id: `ai-${Date.now()}-outreach`, text: decision.text }], source);
+        return built.fallback
+          ? built
+          : {
+              ...built,
+              outreachDecision: { action: needsReview ? "draft" : "send", text: decision.text },
+              decisionDetails: {
+                ...decisionDetails,
+                reason,
+                ...(evidence ? { evidence } : {}),
+              },
+            };
+      }
+      const fallbackList = parseSuggestionsJson(rawContent, toneLabel, 1);
+      const built = finish(fallbackList, source);
+      return built.fallback
+        ? built
+        : {
+            ...built,
+            outreachDecision: { action: "draft", text: built.suggestions[0]!.text },
+            decisionDetails: {
+              ...decisionDetails,
+              reason: "模型未返回结构化发送依据，已转为草稿待人工确认",
+            },
+          };
+    };
+
     if (provider === "ollama") {
+      if (opts?.outreachDecision) {
+        const rawContent = await ollamaSuggestRaw(
+          settings.ollamaUrl,
+          contact,
+          sorted,
+          effectiveSettings,
+          opts?.auto,
+          opts?.replyTo,
+          opts?.signal,
+          outreachTask,
+          opts?.count,
+          true
+        );
+        return finalizeNonMuseOutreachDecision(rawContent, "ollama", "Ollama");
+      }
       const suggestions = await ollamaSuggest(
         settings.ollamaUrl,
         contact,
@@ -410,6 +460,20 @@ export async function generateSuggestions(
       return finish(suggestions,"ollama");
     }
     if (provider === "gemini" || provider === "vertex") {
+      if (opts?.outreachDecision) {
+        const rawContent = await geminiSuggestRaw(
+          contact,
+          sorted,
+          effectiveSettings,
+          opts?.auto,
+          opts?.replyTo,
+          opts?.signal,
+          outreachTask,
+          opts?.count,
+          true
+        );
+        return finalizeNonMuseOutreachDecision(rawContent, provider, "Gemini");
+      }
       const suggestions = await geminiSuggest(
         contact,
         sorted,
@@ -426,6 +490,24 @@ export async function generateSuggestions(
     const config = getOpenAiCompatibleConfig(settings);
     if (config) {
       if (!config.model) throw new Error("自定义提供商缺少模型名");
+      if (opts?.outreachDecision) {
+        const rawContent = await openAiCompatibleSuggestRaw({
+          baseUrl: config.baseUrl,
+          apiKey: config.apiKey,
+          model: config.model,
+          contact,
+          messages: sorted,
+          toneLabel: config.label,
+          settings: effectiveSettings,
+          auto: opts?.auto,
+          count: opts?.count,
+          replyTo: opts?.replyTo,
+          signal: opts?.signal,
+          outreach: outreachTask,
+          outreachDecision: true,
+        });
+        return finalizeNonMuseOutreachDecision(rawContent, provider as AiSource, config.label);
+      }
       const suggestions = await openAiCompatibleSuggest({
         baseUrl: config.baseUrl,
         apiKey: config.apiKey,
@@ -493,7 +575,7 @@ function buildSystemPrompt(
     "You are a WhatsApp conversation assistant helping the configured person communicate naturally.",
     "Support the conversation purpose defined by the user's profile, including everyday social conversation, relationship building, invitations, education, sales or support. Do not assume a customer-service role.",
     outreachDecision
-      ? `Return ONLY one JSON object: {"action":"send","text":"...","reason":"why all contact conditions are met","evidence":"one complete incoming WhatsApp message or fresh authorized sidebar cell value, copied verbatim"}, {"action":"draft","text":"safe draft for human review","reason":"which information is missing or uncertain"}, or {"action":"skip","reason":"why the recipient must not be contacted"}. Never manufacture evidence or cite the Playbook itself as evidence about the recipient. Use no other keys.`
+      ? `Return ONLY one JSON object: {"action":"send","text":"...","reason":"why all contact conditions are met","evidence":"one complete incoming WhatsApp message, fresh authorized sidebar cell value, or explicitly supplied program-verified first-contact fact, copied verbatim"}, {"action":"draft","text":"safe draft for human review","reason":"which information is missing or uncertain"}, or {"action":"skip","reason":"why the recipient must not be contacted"}. Never manufacture evidence or cite the Playbook itself as evidence about the recipient. Use no other keys.`
       : `Return ONLY a JSON array of exactly ${count} object${count === 1 ? "" : "s"}: {\"text\":\"...\",\"tone\":\"short label\"}.`,
     "No markdown or explanation. Do not add keys outside the required output schema.",
     ...(outreachDecision ? [] : ["Each text must be ready to send in an everyday WhatsApp conversation. Usually one or two short sentences are enough; add detail only when the message needs it."]),
@@ -689,6 +771,64 @@ function parseOutreachDecision(raw:string):NonNullable<GenerateSuggestionsResult
   throw new Error("Muse 主动联系决策格式无效；本次未发送");
 }
 
+async function openAiCompatibleSuggestRaw(opts: {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  contact?: Contact;
+  messages: Message[];
+  toneLabel: string;
+  settings?: AppSettings;
+  auto?: boolean;
+  count?: 1 | 3;
+  replyTo?: Message;
+  signal?: AbortSignal;
+  outreach?: string;
+  outreachDecision?: boolean;
+}): Promise<string> {
+  const url = `${opts.baseUrl.replace(/\/$/, "")}/chat/completions`;
+  return trackAiRequest({provider:opts.settings?.aiProvider||"custom",model:opts.model,endpoint:opts.baseUrl,feature:opts.outreach?"outreach":opts.auto?"autoReply":"suggestion"},async observe=>{
+    const res = await fetch(url, {
+      method: "POST",
+      signal: opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${opts.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: opts.model,
+        ...chatCompletionOptions(opts.settings?.aiProvider||"custom",opts.model,opts.auto?0.3:0.7,SINGLE_REPLY_TOKENS),
+        messages: checkAiMessages([
+          {
+            role: "system",
+            content: buildSystemPrompt(opts.contact, opts.settings, opts.auto, opts.replyTo, opts.count, true, opts.outreachDecision),
+          },
+          {
+            role: "user",
+            content: buildUserPrompt(opts.contact, opts.messages, opts.auto, opts.replyTo, buildAiTimeContext(opts.contact, opts.settings || {}), {count:opts.count,outreach:opts.outreach,outreachDecision:opts.outreachDecision,compact:opts.settings?.aiContextMode === "compact"}),
+          },
+        ]),
+      }),
+    });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        const errBody = (await readAiJson(res,observe)) as { error?: { message?: string } };
+        detail = errBody.error?.message || detail;
+      } catch { /* ignore */ }
+      throw new Error(`${opts.toneLabel} ${res.status}: ${detail}`);
+    }
+    const data = (await readAiJson(res,observe)) as {
+      choices?: { finish_reason?: string; message?: { content?: string } }[];
+    };
+    if (data.choices?.[0]?.finish_reason === "length") throw new Error(AI_OUTPUT_TRUNCATED);
+    if (data.choices?.[0]?.finish_reason && data.choices[0].finish_reason !== "stop") throw new Error(`${opts.toneLabel} 回复被阻止或未正常完成`);
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) throw new Error(`${opts.toneLabel} 空响应`);
+    return content;
+  });
+}
+
 async function openAiCompatibleSuggest(opts: {
   baseUrl: string;
   apiKey: string;
@@ -808,6 +948,30 @@ async function openAiCompatibleSuggest(opts: {
   });
 }
 
+async function geminiSuggestRaw(
+  contact: Contact | undefined,
+  messages: Message[],
+  settings: AppSettings,
+  auto?: boolean,
+  replyTo?: Message,
+  signal?: AbortSignal,
+  outreach?: string,
+  count?: 1 | 3,
+  outreachDecision?: boolean
+): Promise<string> {
+  return geminiGenerate({
+    ...geminiCredentials(settings),
+    model: settings.aiModel.trim() || undefined,
+    system: buildSystemPrompt(contact, settings, auto, replyTo, count, true, outreachDecision),
+    user: buildUserPrompt(contact, messages, auto, replyTo, buildAiTimeContext(contact, settings), {count,outreach,outreachDecision,compact:settings.aiContextMode === "compact"}),
+    temperature: auto ? 0.3 : 0.7,
+    json: true,
+    maxOutputTokens: SINGLE_REPLY_TOKENS,
+    signal,
+    feature:outreach?"outreach":auto?"autoReply":"suggestion",
+  });
+}
+
 async function geminiSuggest(
   contact: Contact | undefined,
   messages: Message[],
@@ -859,6 +1023,50 @@ function completedSuggestions(raw: string, toneLabel: string, maxSuggestions: nu
   try {
     return parseSuggestionsJson(raw.slice(start, end + 1) + "]", toneLabel, maxSuggestions);
   } catch { return []; }
+}
+
+async function ollamaSuggestRaw(
+  base: string,
+  contact: Contact | undefined,
+  messages: Message[],
+  settings?: AppSettings,
+  auto?: boolean,
+  replyTo?: Message,
+  signal?: AbortSignal,
+  outreach?: string,
+  count?: 1 | 3,
+  outreachDecision?: boolean
+): Promise<string> {
+  return trackAiRequest({provider:"ollama",model:settings?.aiModel.trim()||"llama3.2",endpoint:base,feature:outreach?"outreach":auto?"autoReply":"suggestion"},async observe=>{
+    const res = await fetch(`${base.replace(/\/$/, "")}/api/chat`, {
+      method: "POST",
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: settings?.aiModel.trim() || "llama3.2",
+        stream: false,
+        format: "json",
+        options: { num_predict: SINGLE_REPLY_TOKENS },
+        messages: checkAiMessages([
+          {
+            role: "system",
+            content: buildSystemPrompt(contact, settings, auto, replyTo, count, true, outreachDecision),
+          },
+          { role: "user", content: buildUserPrompt(contact, messages, auto, replyTo, buildAiTimeContext(contact, settings || {}), {count,outreach,outreachDecision,compact:settings?.aiContextMode === "compact"}) },
+        ]),
+      }),
+    });
+    if (!res.ok) throw new Error(`Ollama ${res.status}`);
+    const data = (await readAiJson(res,observe)) as {
+      message?: { content?: string };
+      response?: string;
+      done_reason?: string;
+    };
+    if (data.done_reason === "length") throw new Error(AI_OUTPUT_TRUNCATED);
+    const content = data.message?.content ?? data.response;
+    if (!content) throw new Error("Ollama 空响应");
+    return content;
+  });
 }
 
 async function ollamaSuggest(

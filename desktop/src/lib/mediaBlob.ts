@@ -1,4 +1,6 @@
 // 普通音频与 bridge 统一使用 16 MiB，其它媒体由调用方指定上限。
+export const MAX_VOICE_NOTE_SECONDS = 600;
+export const MAX_VOICE_NOTE_BYTES = 14_000_000;
 export const MAX_AUDIO_BYTES = 16 * 1024 * 1024;
 const audioTooLarge = () => new Error("音频文件超过 16 MiB 上限");
 export const VIDEO_DATA_URL_MAX_CHARS = 4 * Math.ceil(100 * 1024 * 1024 / 3) + 64;

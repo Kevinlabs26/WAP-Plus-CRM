@@ -3,6 +3,7 @@ import type { SettingsShape, SettingsQuickReply } from "../store/settingsDefault
 import { resolveSendTarget } from "./utils";
 import { MAX_QUICK_REPLY_MEDIA_BYTES } from "./quickReplies";
 import type { BroadcastCampaign } from "../types/broadcast";
+import { firstContactHistory } from "./aiOutreachAllocation";
 
 export type ScheduledPlanItem = {
   id: string; chatId: string; contactId: string; contactName: string; recipient: string; accountId: string;
@@ -38,6 +39,21 @@ export const scheduledAudioMode = (plan: Pick<ScheduledPlan, "audioMode" | "nati
 export const MAX_PLAN_STEPS = 20;
 export const planSteps = (plan: Pick<ScheduledPlan, "text" | "media" | "steps">): ScheduledPlanStep[] => [{ text: plan.text, media: plan.media }, ...(plan.steps || [])];
 export const activePlanStep = (plan: ScheduledPlan, item: ScheduledPlanItem) => planSteps(plan)[item.stepIndex || 0];
+export function reconcileScheduledPlanReceipt(plan: ScheduledPlan, item: ScheduledPlanItem, message?: Message): ScheduledPlanItem {
+  if (!message || message.id !== item.messageId || message.accountId !== item.accountId ||
+      message.direction !== "out" || !["sent", "server", "delivered", "read", "played"].includes(message.deliveryStatus || "") ||
+      !["sending", "failed", "unknown"].includes(item.status)) return item;
+  const stepIndex = (item.stepIndex || 0) + 1;
+  const complete = stepIndex >= planSteps(plan).length;
+  return {
+    ...item, stepIndex,
+    status: complete ? "sent" : plan.status === "cancelled" || item.retired ? "cancelled" : "pending",
+    sentAt: complete ? message.sentAt : undefined,
+    messageId: complete ? message.id : undefined,
+    messageIds: [...new Set([...(item.messageIds || []), message.id])],
+    error: undefined,
+  };
+}
 export const recipientKey = (account: string, recipient: string) => `${account}:${resolveSendTarget({ phone: recipient, channelAddress: recipient }).replace(/^\+/, "")}`;
 export function inQuietHours(plan: Pick<ScheduledPlan, "quietHours" | "timeZone">, now = Date.now()) {
   if (!plan.quietHours) return false;
@@ -56,9 +72,25 @@ export function batchTaskOrder(a: BatchTask, b: BatchTask) {
   const activity = (p: BatchTask) => ownsBatchTurn(p) ? Math.max(0,...(p.items||[]).filter(i=>i.status==="pending"&&(i.stepIndex||0)>0).map(i=>Date.parse(i.sequenceActivityAt||"")||0)) : 0;
   return Number(sending(b)) - Number(sending(a)) || Number(ownsBatchTurn(b)) - Number(ownsBatchTurn(a)) || activity(b) - activity(a) || (b.priority || 0) - (a.priority || 0) || Date.parse(a.dueAt || a.startedAt || a.createdAt) - Date.parse(b.dueAt || b.startedAt || b.createdAt) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
 }
-export function nextBatchTask(plans: ScheduledPlan[], campaigns: BroadcastCampaign[] = [], now = Date.now()) {
-  return [...plans.filter(p => (p.status === "running" || p.status === "pending" && Date.parse(p.dueAt) <= now) && (ownsBatchTurn(p) && !p.offlineSince || !(Date.parse(p.nextAttemptAt || "") > now)) && !(p.endAt && Date.parse(p.endAt) <= now) && !inQuietHours(p, now)),
-    ...campaigns.filter(c => c.status === "running")].sort(batchTaskOrder)[0]?.id;
+export function scheduledPlanCanTakeTurn(plan: ScheduledPlan, now: number) {
+  return (plan.status === "running" || plan.status === "pending" && Date.parse(plan.dueAt) <= now) &&
+    (ownsBatchTurn(plan) && !plan.offlineSince || !(Date.parse(plan.nextAttemptAt || "") > now)) &&
+    !(plan.endAt && Date.parse(plan.endAt) <= now) && !inQuietHours(plan, now);
+}
+
+export function nextBatchTask(plans: ScheduledPlan[], campaigns: BroadcastCampaign[] = [], now = Date.now(), broadcastAccountAvailable = (_id: string) => true) {
+  return [...plans.filter(plan => scheduledPlanCanTakeTurn(plan, now)),
+    ...campaigns.filter(c => {
+      if (c.status !== "running") return false;
+      const pending = (c.items || []).filter(item => item.status === "pending" && (c.channelId === "android_bridge" || broadcastAccountAvailable(item.accountId || c.accountId)));
+      const cooling = broadcastCoolingAccounts(c, now);
+      return c.items?.some(item => item.status === "sending") || !pending.length || pending.some(item => !cooling.has(item.accountId || c.accountId));
+    })].sort(batchTaskOrder)[0]?.id;
+}
+
+export function broadcastCoolingAccounts(campaign: BroadcastCampaign, now: number) {
+  return new Set((campaign.items || []).filter(item => item.status === "pending" && Date.parse(item.retryAt || "") > now)
+    .map(item => item.accountId || campaign.accountId));
 }
 export const MAX_SCHEDULED_PLANS = 100;
 export const MAX_SCHEDULED_PLAN_ITEMS = 1000;
@@ -74,11 +106,20 @@ export function scheduledMediaBytes(media: SettingsQuickReply["media"]): number 
 
 type TargetState = { chats: ChatPreview[]; contacts: Contact[]; messages?: Message[]; settings: Pick<SettingsShape, "waAccounts" | "liveBaileysAccountId" | "activeAccountId" | "chatFolders" | "chatFolderClones" | "leadInbox"> };
 
-export function lastContactedAccounts(chats: ChatPreview[], contacts: Contact[], messages: Message[]) {
+const indexedRecipients = new WeakMap<Contact, string | null>();
+
+export function indexedContactRecipient(contact: Contact): string | null {
+  if (indexedRecipients.has(contact)) return indexedRecipients.get(contact) ?? null;
+  const recipient = resolveSendTarget({phone: contact.phone, channelAddress: contact.channelAddress, entityId: contact.id}) || null;
+  indexedRecipients.set(contact, recipient);
+  return recipient;
+}
+
+function indexContactedChats(chats: ChatPreview[], contacts: Contact[]) {
   const contactsById = new Map(contacts.map(contact => [contact.id, contact]));
   const chatsById = new Map(chats.flatMap(chat => {
     const contact = contactsById.get(chat.contactId);
-    const recipient = contact && resolveSendTarget({ phone: contact.phone, channelAddress: contact.channelAddress, entityId: contact.id });
+    const recipient = contact && indexedContactRecipient(contact);
     return recipient ? [[chat.id, { recipientKey: recipientKey("", recipient), accountId: chat.accountId || contact.accountId }]] : [];
   }));
   const latest = new Map<string, { at: number; accountId: string }>();
@@ -87,6 +128,17 @@ export function lastContactedAccounts(chats: ChatPreview[], contacts: Contact[],
     const accountId=chat.lastSuccessfulOutgoing?.accountId||target?.accountId;
     if(target&&accountId&&Number.isFinite(at)&&at>(latest.get(target.recipientKey)?.at??-Infinity))latest.set(target.recipientKey,{at,accountId});
   }
+  return { chatsById, latest };
+}
+
+let lastContactedChatIndex: {chats: ChatPreview[]; contacts: Contact[]; index: ReturnType<typeof indexContactedChats>} | undefined;
+
+export function lastContactedAccounts(chats: ChatPreview[], contacts: Contact[], messages: Message[]) {
+  if (lastContactedChatIndex?.chats !== chats || lastContactedChatIndex.contacts !== contacts) {
+    lastContactedChatIndex = {chats, contacts, index: indexContactedChats(chats, contacts)};
+  }
+  const { chatsById } = lastContactedChatIndex.index;
+  const latest = new Map(lastContactedChatIndex.index.latest);
   for (const message of messages) {
     if (message.direction !== "out" || message.mediaType==="system" || message.deliveryUncertain || message.deliveryStatus && !["sent", "server", "delivered", "read", "played"].includes(message.deliveryStatus)) continue;
     const chat = chatsById.get(message.chatId);
@@ -98,23 +150,37 @@ export function lastContactedAccounts(chats: ChatPreview[], contacts: Contact[],
   return new Map([...latest].map(([key, value]) => [key, value.accountId]));
 }
 
-/** Resolve by the most recent successful outgoing message, then the selected default account. */
+export function scheduledPlanHistoryAccounts(state: Pick<TargetState, "chats" | "contacts" | "messages">) {
+  const history = firstContactHistory({...state,messages:state.messages || []});
+  const accounts = new Map(history.lastAccounts);
+  for (const [key, contact] of history.known) {
+    if (contact.accountId) accounts.set(key, contact.accountId);
+  }
+  return accounts;
+}
+
+/** Preserve the conversation account, including when only the customer has sent a message. */
 export function scheduledPlanTargets(state: TargetState, chatIds?: string[], defaultAccountId?: string) {
   const contacts = new Map(state.contacts.map(contact => [contact.id, contact]));
   const selected = chatIds ? new Set(chatIds) : null;
   const seen = new Set<string>();
-  const latestAccounts = lastContactedAccounts(state.chats, state.contacts, state.messages || []);
+  const { known, unknown } = firstContactHistory({ ...state, messages: state.messages || [] });
   const items: ScheduledPlanItem[] = [];
   for (const chat of state.chats) {
     if (selected && !selected.has(chat.id)) continue;
     const contact = contacts.get(chat.contactId);
     if (!contact) continue;
-    const sourceAccountId = chat.accountId || contact.accountId || "wa-default";
-    if (contact.isGroup && chat.accountId && contact.accountId && chat.accountId !== contact.accountId) continue;
     const recipient = resolveSendTarget({ phone: contact.phone, channelAddress: contact.channelAddress, entityId: contact.id });
     if (!recipient || (!/^\+?\d{7,15}$/.test(recipient) && !/^[\w.-]+@(g\.us|s\.whatsapp\.net|c\.us|lid)$/.test(recipient))) continue;
+    const isGroup = chat.isGroup || contact.isGroup || recipient.endsWith("@g.us");
+    const contactAccountId = contact.accountId || contact.boundPhoneId;
+    if (isGroup && chat.accountId && contactAccountId && chat.accountId !== contactAccountId) continue;
     const key = recipientKey("", recipient);
-    const accountId = latestAccounts.get(key) || defaultAccountId || sourceAccountId;
+    const original = known.get(key)?.accountId;
+    if (!isGroup && !original && (known.has(key) || unknown.has(key))) continue;
+    const accountId = isGroup ? chat.accountId || contactAccountId || chat.phoneId
+      : original || defaultAccountId || chat.accountId || contact.accountId || "wa-default";
+    if (!accountId) continue;
     if (!state.settings.waAccounts.some(account => account.id === accountId)) continue;
     if (seen.has(key)) continue;
     seen.add(key);

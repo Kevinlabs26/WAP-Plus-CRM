@@ -1,9 +1,9 @@
 /**
  * 多账号浏览/发送范围 — 纯函数，不进巨型 appStore
  */
-import type { AccountViewMode } from "@/types/account";
-import type { ChatPreview, Contact } from "@/types/crm";
-import { DEFAULT_ACCOUNT_ID } from "@/types/account";
+import type { AccountViewMode } from "../types/account.ts";
+import type { ChatPreview, Contact } from "../types/crm.ts";
+import { DEFAULT_ACCOUNT_ID } from "../types/account.ts";
 
 export function resolveEntityAccountId(
   accountId?: string | null,

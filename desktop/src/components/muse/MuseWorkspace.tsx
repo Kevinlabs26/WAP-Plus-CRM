@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { addMuseWebAccount, advanceMuseWebSideChatCleanup, cancelMuseWebSideChatCleanup, deleteMuseWebSideChats, museWebAccounts, museWebCleanupSchedules, museWebSideChats, museWebStatus, museWebWorkspaceAccount, openMuseWeb, removeMuseWebAccount, scheduleMuseWebSideChatCleanup, setMuseWorkspaceContentVisible, setMuseWorkspaceSidebarCollapsed, updateMuseWebAccount, updateMuseWebSideChatCleanup, type MuseSideChat, type MuseSideChatCleanup, type MuseWebAccount, type MuseWebAccountPool, type MuseWebStatus } from "@/lib/museWeb";
 import { museQueueSnapshot, subscribeMuseQueue } from "@/lib/museQueue";
 import { useI18n } from "@/i18n";
-import { resumeMuseWebSideChatCleanup } from "@/lib/museWeb";
+import { openMuseReplyWindow, resumeMuseWebSideChatCleanup } from "@/lib/museWeb";
 
 type WorkspaceWindow = Window & { __museWorkspaceAccount?: string };
 type AccountStatus = Pick<MuseWebStatus, "ready" | "state" | "message"> & { checkedAt: number };
@@ -605,6 +605,15 @@ export function MuseWorkspace() {
           <button type="button" className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 disabled:opacity-50" disabled={!pool || busy || checking || queueBusy || cleanupOpen || !!editingAccount || !!removingAccount} onClick={() => void checkAll(true)}>
             {checking ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />}
             {checking ? t("muse.statusChecking") : t("muse.checkAll")}
+          </button>
+          <button type="button" className="inline-flex h-9 items-center rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50" disabled={!activeAccount} onClick={() => {
+            if (!activeAccount) return;
+            void openMuseReplyWindow(activeAccount.id).catch(cause => {
+              setError(true);
+              setMessage(cause instanceof Error ? cause.message : String(cause));
+            });
+          }}>
+            {t("muse.openReplyWindow")}
           </button>
           <button type="button" className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-xs font-medium text-slate-700 shadow-sm transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50" disabled={!activeAccount || busy || queueBusy || cleanupOpen || !!editingAccount || !!removingAccount || cleanupInProgress} onClick={() => void openCleanup()}>
             <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />{t("muse.cleanupAction")}

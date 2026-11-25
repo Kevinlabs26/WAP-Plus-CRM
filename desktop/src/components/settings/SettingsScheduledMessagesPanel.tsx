@@ -88,6 +88,8 @@ function LegacyScheduledMessagesPanel({ filter, onFilterChange: setFilter }: { f
   const { locale, t } = useI18n();
   const tasks = useAppStore((state) => state.settings.scheduledMessages || []);
   const chats = useAppStore((state) => state.chats);
+  const messages = useAppStore((state) => state.messages);
+  const uncertainIds = useMemo(() => new Set((messages || []).filter(message => message.deliveryUncertain).map(message => message.id)), [messages]);
   const setOpen = useAppStore((state) => state.setSettingsOpen);
   const setActiveNav = useAppStore((state) => state.setActiveNav);
   const setSelectedChat = useAppStore((state) => state.setSelectedChat);
@@ -150,7 +152,9 @@ function LegacyScheduledMessagesPanel({ filter, onFilterChange: setFilter }: { f
             setRescheduling(null); setFilter("active"); pushToast(t("scheduled.replanned"), "success");
           } else pushToast(t("scheduled.replanFailed"), "error");
         }} />}
-      {visibleTasks.map((task) => (
+      {visibleTasks.map((task) => {
+        const uncertain = task.status === "failed" && !!task.messageId && uncertainIds.has(task.messageId);
+        return (
         <article
           key={task.id}
           className="rounded-lg border border-zinc-800 bg-zinc-900/55 p-3"
@@ -162,8 +166,8 @@ function LegacyScheduledMessagesPanel({ filter, onFilterChange: setFilter }: { f
                 <button type="button" className="truncate text-left text-[12px] font-medium text-zinc-200 hover:text-brand" aria-label={t("settingsScheduled.openChat")} title={t("settingsScheduled.openChat")} onClick={() => openChat(task)}>
                   {task.contactName || task.recipient}
                 </button>
-                <span className={`rounded border px-1.5 py-0.5 text-[10px] ${statusClass(task.status)}`}>
-                  {t(STATUS_LABEL[task.status])}
+                <span className={`rounded border px-1.5 py-0.5 text-[10px] ${statusClass(uncertain ? "expired" : task.status)}`}>
+                  {t(uncertain ? "broadcast.run.item.uncertain" : STATUS_LABEL[task.status])}
                 </span>
               </div>
               <div className="mt-1 text-2xs text-zinc-500">
@@ -186,7 +190,7 @@ function LegacyScheduledMessagesPanel({ filter, onFilterChange: setFilter }: { f
             </div>
           </div>
         </article>
-      ))}
+      );})}
     </div>
   );
 }

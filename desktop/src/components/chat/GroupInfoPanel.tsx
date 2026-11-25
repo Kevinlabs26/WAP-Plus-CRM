@@ -13,7 +13,6 @@ import {
   GroupMemberRowActions,
 } from "@/components/chat/GroupInfoActions";
 import { GroupJoinRequests } from "@/components/chat/GroupJoinRequests";
-import { GroupWelcomeSettings } from "@/components/chat/GroupWelcomeSettings";
 import {
   buildDmContact,
   findExistingDmContact,
@@ -389,10 +388,6 @@ export const GroupInfoPanel = memo(function GroupInfoPanel({
             </span>
           )}
         </section>
-
-        {accountId && decodedJid.endsWith("@g.us") && (
-          <GroupWelcomeSettings key={JSON.stringify([accountId, decodedJid])} accountId={accountId} groupJid={decodedJid} />
-        )}
 
         {decodedJid.endsWith("@g.us") && (
           <GroupJoinRequests

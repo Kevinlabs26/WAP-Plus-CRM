@@ -18,6 +18,7 @@ import {
   UserRound,
   UserPlus,
   Users,
+  X,
 } from "lucide-react";
 import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { getAccountBlocklist, isJidBlocked } from "@/lib/accountWaMeta";
@@ -29,6 +30,7 @@ import { baileysGroupInviteCode } from "@/lib/baileysGroups";
 import { useAppStore } from "@/store/appStore";
 import { jidFromBridgeEntityId } from "@/lib/utils";
 import { copyLink } from "@/lib/copyLink";
+import { GroupWelcomeSettings } from "./GroupWelcomeSettings";
 
 type Props = {
   chat: ChatPreview;
@@ -68,18 +70,46 @@ type Props = {
 const itemClass =
   "flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] text-zinc-200 hover:bg-zinc-800 disabled:opacity-50";
 
+function GroupWelcomeDialog({ accountId, groupJid, groupName, onClose }: {
+  accountId: string; groupJid: string; groupName: string; onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    dialog.current?.showModal();
+  }, []);
+  return <dialog ref={dialog} aria-label={t("groupWelcome.settings")} onClose={onClose}
+    onClick={event => { if (event.target === event.currentTarget) dialog.current?.close(); }}
+    className="m-auto max-h-[85vh] w-[calc(100%_-_2rem)] max-w-xl overflow-y-auto rounded-xl border border-zinc-700 bg-zinc-900 p-0 text-zinc-100 shadow-2xl backdrop:bg-black/65">
+    <header className="sticky top-0 z-10 flex items-center gap-3 border-b border-zinc-800 bg-zinc-900 px-4 py-3">
+      <div className="min-w-0 flex-1">
+        <h2 className="text-sm font-semibold">{t("groupWelcome.settings")}</h2>
+        {groupName&&<p className="truncate text-xs text-zinc-400">{groupName}</p>}
+      </div>
+      <button type="button" className="ui-btn-ghost !min-h-7 !px-1.5" title={t("common.close")} aria-label={t("common.close")} onClick={() => dialog.current?.close()}>
+        <X className="h-4 w-4" aria-hidden="true" />
+      </button>
+    </header>
+    <GroupWelcomeSettings accountId={accountId} groupJid={groupJid} />
+  </dialog>;
+}
+
 export function ChatHeaderMoreMenu(props: Props) {
   const { t } = useI18n();
   const [muteOpen, setMuteOpen] = useState(false);
   const [copyBusy, setCopyBusy] = useState(false);
   const [copyError, setCopyError] = useState("");
   const [inviteUrl, setInviteUrl] = useState("");
+  const [welcomeContext, setWelcomeContext] = useState<string | null>(null);
   const { chat, contact } = props;
   const isGroup = Boolean(contact?.isGroup || chat.isGroup);
   const accountId = props.chatAccountId || chat.accountId || contact?.accountId;
   const groupJid = [contact?.channelAddress, contact?.id, chat.contactId, chat.id,
     jidFromBridgeEntityId(contact?.id), jidFromBridgeEntityId(chat.contactId), jidFromBridgeEntityId(chat.id)]
     .find(value => /^[\w.-]+@g\.us$/.test(value || "")) || "";
+  const welcomeKey = JSON.stringify([chat.id, accountId, groupJid]);
+  const canEditWelcome = isGroup && !!accountId && !!groupJid && !props.localOnlyChat;
+  useEffect(() => { setWelcomeContext(null); }, [welcomeKey]);
   const contextKey = `${chat.id}:${accountId}:${props.open}`;
   const requestRef = useRef({ key: contextKey, version: 0, busy: false });
   if (requestRef.current.key !== contextKey) requestRef.current = { key: contextKey, version: requestRef.current.version + 1, busy: false };
@@ -149,6 +179,9 @@ export function ChatHeaderMoreMenu(props: Props) {
             <button type="button" role="menuitem" className={itemClass} onClick={() => fire(props.onOpenGroupInfo)}>
               <Users className="h-3.5 w-3.5 text-zinc-400" />{t("chat.groupInfo")}
             </button>
+            {canEditWelcome&&<button type="button" role="menuitem" className={itemClass} onClick={() => fire(() => setWelcomeContext(welcomeKey))}>
+              <UserPlus className="h-3.5 w-3.5 text-zinc-400" aria-hidden="true" />{t("groupWelcome.settings")}
+            </button>}
             <button type="button" role="menuitem" className={itemClass} disabled={copyBusy || !!copyUnavailable}
               title={copyUnavailable || t("group.copyInviteLink")} aria-busy={copyBusy} onClick={() => void copyInvite()}>
               {copyBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" /> : <Link2 className="h-3.5 w-3.5 text-zinc-400" />}
@@ -265,6 +298,10 @@ export function ChatHeaderMoreMenu(props: Props) {
           )}
         </div>
       )}
+      {canEditWelcome && accountId && welcomeContext === welcomeKey && <GroupWelcomeDialog key={welcomeKey}
+        accountId={accountId} groupJid={groupJid} groupName={contact?.name || chat.contactName || ""}
+        onClose={() => { setWelcomeContext(null); props.menuRef.current?.querySelector("button")?.focus(); }}
+      />}
     </div>
   );
 }

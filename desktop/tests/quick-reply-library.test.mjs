@@ -341,7 +341,7 @@ test('default categories can be deleted by right click, while All and Other rema
  const h=harness([reply('a',{category:'opening',media})]);try{
  h.state.requestConfirm=async()=>true;h.render();
  const category=label=>h.nodes().find(n=>n.type==='button'&&Array.isArray(n.props.children)&&n.props.children[0]?.props?.children===label);
- assert.equal(category('starred.all').props.onContextMenu,undefined);assert.equal(category('quickReply.category.other').props.onContextMenu,undefined);
+ assert.equal(category('starred.all').props.onContextMenu,undefined);assert.equal(category('quickReply.category.other'),undefined);
  category('quickReply.category.opening').props.onClick();h.render();
  category('quickReply.category.opening').props.onContextMenu({preventDefault(){}});await new Promise(setImmediate);h.render();
  assert.ok(h.find('quickLibrary.deleteCategoryOnly'));

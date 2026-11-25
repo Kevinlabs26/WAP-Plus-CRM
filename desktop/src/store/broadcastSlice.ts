@@ -7,7 +7,8 @@ import {
 import type { AppState, SliceContext } from "./types";
 import { resolveActiveSalesStage } from "@/lib/contactWorkflow";
 import { accountCreatedAtOf, persist } from "./persist";
-import { lastContactedAccounts, planSteps, recipientKey } from "@/lib/scheduledPlans";
+import { planSteps, recipientKey } from "@/lib/scheduledPlans";
+import { routeBroadcastAccounts } from "@/lib/broadcastAccountRouting";
 import { applyAccountWarmup } from "@/lib/accountWarmup";
 import { DEFAULT_RATE_LIMITS } from "@/channels/rateLimit";
 import {
@@ -64,16 +65,22 @@ export function createBroadcastSlice({
         });
         contactIds.push(id);
       }
-      const lastContacted = android ? new Map<string, string>() : lastContactedAccounts(state.chats, state.contacts, state.messages);
-      const accountByPhone: Record<string, string> = {};
       const selectedContactIds = new Set(contactIds);
-      for (const contact of contacts) {
-        if (!selectedContactIds.has(contact.id)) continue;
-        const phone = contactSendablePhone(contact);
-        if (phone) accountByPhone[phone] = lastContacted.get(recipientKey("", phone)) || input.accountId;
+      const phones = contacts.flatMap(contact => selectedContactIds.has(contact.id) && contactSendablePhone(contact) || []);
+      const routing: ReturnType<typeof routeBroadcastAccounts> = android
+        ? {accountByPhone: {}, contacted: 0, unclear: 0, unassigned: 0}
+        : routeBroadcastAccounts(state, phones, input.accountId, input.firstContactQuotas);
+      const {accountByPhone} = routing;
+      if (routing.unclear) return {ok:false, reason:"有收件人的原发送账号无法确认，请核对名单"};
+      if (routing.unassigned) return {ok:false, reason:"首次联系人数尚未全部分配，请调整各账号人数"};
+      const expected = input.expectedAccountByPhone;
+      if (!android && expected && (Object.keys(expected).length !== Object.keys(accountByPhone).length ||
+          Object.entries(accountByPhone).some(([phone, account]) => expected[phone] !== account))) {
+        return {ok:false, reason:"收件人的发送账号已变化，请返回预览重新确认"};
       }
-      for (const phone of parseBroadcastPhones((input.phoneNumbers || []).join("\n"))) {
-        accountByPhone[phone] = lastContacted.get(recipientKey("", phone)) || input.accountId;
+      for (const contact of contacts.slice(state.contacts.length)) {
+        const phone = contactSendablePhone(contact);
+        if (phone && accountByPhone[phone]) contact.accountId = accountByPhone[phone];
       }
       const rateLimits = {
         ...DEFAULT_RATE_LIMITS,
@@ -145,7 +152,7 @@ export function createBroadcastSlice({
                 status: "running",
                 startedAt: x.startedAt || new Date().toISOString(),
                 items: x.items.map((i) =>
-                  i.status === "pending" ? { ...i, status: "pending", error: undefined } : i
+                  i.status === "pending" ? { ...i, status: "pending", errorCode: undefined, error: undefined } : i
                 ),
               }
             : x
@@ -207,7 +214,7 @@ export function createBroadcastSlice({
                 finishedAt: undefined,
                 items: item.items.map((entry) =>
                   entry.status === "failed" && retryIds.has(entry.id)
-                    ? { ...entry, status: "pending", deliveryUncertain: false, error: undefined }
+                    ? { ...entry, status: "pending", deliveryUncertain: false, errorCode: undefined, error: undefined }
                     : entry
                 ),
               }

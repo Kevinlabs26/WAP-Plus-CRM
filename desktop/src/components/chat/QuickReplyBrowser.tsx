@@ -1,4 +1,4 @@
-import { FileText, GripVertical, Image as ImageIcon, Music2, Pin, Play, Search, Send, X } from "lucide-react";
+import { FileText, GripVertical, Image as ImageIcon, Loader2, Music2, Pin, Play, Search, Send, Trash2, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Button, Input, Textarea } from "@/components/ui/primitives";
@@ -16,7 +16,7 @@ const QuickReplyImport = lazy(() => import("@/components/settings/SettingsQuickR
 type ReplyTarget = { title: string; account: string };
 const mediaSize = (size: number) => size < 1024 * 1024 ? `${Math.max(1, Math.ceil(size / 1024))} KB` : `${(size / 1024 / 1024).toFixed(1)} MB`;
 
-export function QuickReplyBrowser({ replies, categories = [], removedCategories = EMPTY_IDS, categoryLabels = {}, categoryOrder = EMPTY_IDS, contextKey, onInsert, pinnedIds = EMPTY_IDS, recentIds = EMPTY_IDS, onTogglePin, onUsed, target, disabled = false, compact = false, onManage }: {
+export function QuickReplyBrowser({ replies, categories = [], removedCategories = EMPTY_IDS, categoryLabels = {}, categoryOrder = EMPTY_IDS, contextKey, onInsert, onSend, pinnedIds = EMPTY_IDS, recentIds = EMPTY_IDS, onTogglePin, onUsed, target, disabled = false, compact = false, onManage }: {
   replies: SettingsQuickReply[];
   categories?: QuickReplyCategoryOption[];
   removedCategories?: string[];
@@ -24,6 +24,7 @@ export function QuickReplyBrowser({ replies, categories = [], removedCategories 
   categoryOrder?: string[];
   contextKey: string;
   onInsert: (reply: SettingsQuickReply) => boolean | void;
+  onSend?: (reply: SettingsQuickReply, body: string) => boolean | void | Promise<boolean | void>;
   pinnedIds?: string[];
   recentIds?: string[];
   onTogglePin?: (id: string) => void;
@@ -55,8 +56,10 @@ export function QuickReplyBrowser({ replies, categories = [], removedCategories 
     } catch {}
   };
   const [insertMode, setInsertMode] = useState<"original" | "translation">(() => {
-    try { return localStorage.getItem("wap_quick_reply_insert_mode") === "translation" ? "translation" : "original"; }
-    catch { return "original"; }
+    try {
+      const saved = localStorage.getItem("wap_quick_reply_insert_mode");
+      return saved === "original" ? "original" : saved === "translation" ? "translation" : onSend ? "translation" : "original";
+    } catch { return onSend ? "translation" : "original"; }
   });
   const changeInsertMode = (mode: "original" | "translation") => {
     setInsertMode(mode);
@@ -70,6 +73,8 @@ export function QuickReplyBrowser({ replies, categories = [], removedCategories 
     return [...expanded];
   });
   const [preview, setPreview] = useState<{ id: string; contextKey: string } | null>(null);
+  const [sendingIds, setSendingIds] = useState<Set<string>>(() => new Set());
+  const replyClickTimers = useRef(new Map<string, number>());
   const [action, setAction] = useState<"reply" | "category" | "import" | null>(null);
   const [draft, setDraft] = useState<SettingsQuickReply | null>(null);
   const [newCategory, setNewCategory] = useState("");
@@ -77,7 +82,11 @@ export function QuickReplyBrowser({ replies, categories = [], removedCategories 
   const [revealId, setRevealId] = useState<string | null>(null);
   const draggingCategory = useRef<string | null>(null);
   const [categoryDrop, setCategoryDrop] = useState<{ id: string; after: boolean } | null>(null);
-  useEffect(() => setPreview(null), [contextKey]);
+  useEffect(() => {
+    setPreview(null);
+    for (const timer of replyClickTimers.current.values()) window.clearTimeout(timer);
+    replyClickTimers.current.clear();
+  }, [contextKey]);
   const listRef = useRef<HTMLDivElement>(null);
   const menuRef = useDetailsMenu(contextKey);
   const categoryOptions = useMemo(() => getQuickReplyCategories(categories, removedCategories, categoryLabels, categoryOrder), [categories, removedCategories, categoryLabels, categoryOrder]);
@@ -190,9 +199,29 @@ export function QuickReplyBrowser({ replies, categories = [], removedCategories 
   const insert = (reply: SettingsQuickReply, body?: string) => {
     if (disabled) return;
     const latest = replies.find(item => item.id === reply.id);
-    body ??= (insertMode === "translation" ? latest?.translation : latest?.body)?.trim() || "";
+    body ??= (insertMode === "translation" ? latest?.translation || latest?.body : latest?.body || latest?.translation)?.trim() || "";
     if (!latest || !body.trim() && !latest.media) return;
     if (onInsert({ ...latest, body }) !== false) { onUsed?.(latest.id); setPreview(null); }
+  };
+  useEffect(() => () => {
+    for (const timer of replyClickTimers.current.values()) window.clearTimeout(timer);
+    replyClickTimers.current.clear();
+  }, []);
+  const sendTranslation = async (reply: SettingsQuickReply) => {
+    if (!onSend || disabled || sendingIds.has(reply.id)) return;
+    const latest = replies.find(item => item.id === reply.id);
+    if (!latest) return;
+    const body = latest.translation?.trim() || "";
+    if (!body && !latest.media) return;
+    setSendingIds(current => new Set(current).add(reply.id));
+    try {
+      const sent = await onSend(latest, body);
+      if (sent !== false) onUsed?.(latest.id);
+    } catch (error) {
+      useAppStore.getState().pushToast(error instanceof Error ? error.message : t("runtime.sendFailed"), "error");
+    } finally {
+      setSendingIds(current => { const next = new Set(current); next.delete(reply.id); return next; });
+    }
   };
   const updateReply = (id: string, patch: Partial<Pick<SettingsQuickReply, "title" | "body" | "translation" | "media">>) => {
     const store = useAppStore.getState();
@@ -216,13 +245,31 @@ export function QuickReplyBrowser({ replies, categories = [], removedCategories 
       : textMode === "original"
         ? (original || (hasOriginal ? "" : t("quickShelf.originalUnavailable")))
         : (translation || (hasTranslation ? "" : t("quickShelf.translationUnavailable")));
-    const selectedInsertText = insertMode === "translation" ? reply.translation?.trim() : reply.body.trim();
+    const selectedInsertText = insertMode === "translation"
+      ? reply.translation?.trim() || reply.body.trim()
+      : reply.body.trim() || reply.translation?.trim();
+    const sendBody = reply.translation?.trim() || "";
+    const isSending = sendingIds.has(reply.id);
 
     return <li key={reply.id}>
       <article data-quick-reply-id={reply.id} className="space-y-1.5 rounded-lg border border-zinc-800 p-2">
         <QuickReplySheetStatus reply={reply} />
         <div className="flex items-start gap-2">
-          <button type="button" className="flex min-w-0 flex-1 items-start gap-2.5 rounded text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand" aria-label={t("quickShelf.previewNamed", { title: reply.title || t("crmPanel.unnamed") })} onClick={() => setPreview({ id: reply.id, contextKey })}>
+          <button type="button" className="flex min-w-0 flex-1 items-start gap-2.5 rounded text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand" aria-label={t("quickShelf.insertNamed", { title: reply.title || t("crmPanel.unnamed") })} title={`${t("quickShelf.insertNamed", { title: reply.title || t("crmPanel.unnamed") })} · ${t("quickShelf.doubleClickToEdit")}`} onClick={event => {
+            if (event.detail === 0) { insert(reply); return; }
+            const pending = replyClickTimers.current.get(reply.id);
+            if (pending !== undefined) { window.clearTimeout(pending); replyClickTimers.current.delete(reply.id); }
+            if (event.detail > 1) return;
+            const timer = window.setTimeout(() => {
+              replyClickTimers.current.delete(reply.id);
+              insert(reply);
+            }, 320);
+            replyClickTimers.current.set(reply.id, timer);
+          }} onDoubleClick={() => {
+            const pending = replyClickTimers.current.get(reply.id);
+            if (pending !== undefined) { window.clearTimeout(pending); replyClickTimers.current.delete(reply.id); }
+            setPreview({ id: reply.id, contextKey });
+          }}>
             {reply.media && <span className="shrink-0" title={`${reply.media.fileName} · ${mediaSize(reply.media.size)}`}><QuickReplyMediaTile media={reply.media} compact={compact} /></span>}
             <span className="min-w-0 flex-1">
               <span role="heading" aria-level={4} className="block truncate text-xs font-semibold text-zinc-100" title={reply.title}>{reply.title || t("crmPanel.unnamed")}</span>
@@ -238,14 +285,14 @@ export function QuickReplyBrowser({ replies, categories = [], removedCategories 
           </button>
           <div className="flex shrink-0 items-center gap-1">
             {onTogglePin && <button type="button" aria-pressed={pinned.has(reply.id)} aria-label={t(pinned.has(reply.id) ? "quickShelf.unpin" : "quickShelf.pin", { title: reply.title || t("crmPanel.unnamed") })} onClick={() => { onTogglePin(reply.id); resetPage(); }} className={`rounded p-1 hover:bg-zinc-800 ${pinned.has(reply.id) ? "text-brand" : "text-zinc-500"}`}><Pin aria-hidden="true" className="h-3.5 w-3.5" /></button>}
-            <button type="button" aria-label={t(insertMode === "translation" ? "quickShelf.insertTranslation" : "quickShelf.insertOriginal")} title={t(insertMode === "translation" ? "quickShelf.insertTranslation" : "quickShelf.insertOriginal")} disabled={disabled || !selectedInsertText && !reply.media} onClick={() => insert(reply)} className="rounded p-1 text-brand hover:bg-zinc-800 disabled:opacity-40"><Send aria-hidden="true" className="h-4 w-4" /></button>
+            <button type="button" aria-label={t(onSend ? "quickShelf.sendNamed" : insertMode === "translation" ? "quickShelf.insertTranslation" : "quickShelf.insertOriginal", { title: reply.title || t("crmPanel.unnamed") })} title={t(onSend ? "quickShelf.sendNamed" : insertMode === "translation" ? "quickShelf.insertTranslation" : "quickShelf.insertOriginal", { title: reply.title || t("crmPanel.unnamed") })} disabled={disabled || isSending || (onSend ? !sendBody && !reply.media : !selectedInsertText && !reply.media)} onClick={() => onSend ? void sendTranslation(reply) : insert(reply)} className="rounded p-1 text-brand hover:bg-zinc-800 disabled:opacity-40">{isSending ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Send aria-hidden="true" className="h-4 w-4" />}</button>
           </div>
         </div>
       </article>
     </li>;
   };
   const renderCategoryTree = (parentId: string | undefined, depth = 0): React.ReactNode => categoryOptions
-    .filter(item => item.parentId === parentId && (categoryCount(item.id) > 0 || !query.trim() && view === "all" && categories.some(custom => custom.id === item.id)))
+    .filter(item => item.parentId === parentId && categoryCount(item.id) > 0)
     .map(item => {
       const expanded = autoExpandCategories || expandedCategories.includes(item.id);
       const directReplies = pageReplies.filter(reply => reply.category === item.id);
@@ -318,8 +365,8 @@ export function QuickReplyBrowser({ replies, categories = [], removedCategories 
           <div className="absolute right-0 top-full z-10 mt-1 min-w-max space-y-2 rounded-lg border border-zinc-700 bg-zinc-900 p-2 shadow-xl">
             <div className="flex gap-1" role="group" aria-label={t("quickShelf.views")}>{(["all", "pinned", "recent"] as const).map(item => <Button key={item} size="xs" variant={view === item ? "secondary" : "ghost"} aria-pressed={view === item} onClick={() => { setView(item); resetPage(); }}>{t(`quickShelf.view.${item}`)}</Button>)}</div>
             <div className="flex items-center justify-between gap-3 border-t border-zinc-800 pt-2">
-              <span className="text-2xs text-zinc-500">{t("quickShelf.fillLanguage")}</span>
-              <div className="flex gap-1" role="group" aria-label={t("quickShelf.fillLanguage")}>
+              <span className="text-2xs text-zinc-500">{t(onSend ? "quickShelf.clickFillLanguage" : "quickShelf.fillLanguage")}</span>
+              <div className="flex gap-1" role="group" aria-label={t(onSend ? "quickShelf.clickFillLanguage" : "quickShelf.fillLanguage")}>
                 {(["original", "translation"] as const).map(mode => <Button key={mode} size="xs" variant={insertMode === mode ? "secondary" : "ghost"} aria-pressed={insertMode === mode} onClick={() => changeInsertMode(mode)}>{t(mode === "original" ? "quickShelf.insertOriginalShort" : "quickShelf.insertTranslationShort")}</Button>)}
               </div>
             </div>
@@ -367,14 +414,15 @@ function QuickReplyMediaTile({ media, compact }: { media: NonNullable<SettingsQu
   </span>;
 }
 
-export function QuickReplyPreview({ reply, category, target, disabled, onChange, onInsert, onClose, inline = false, categories, onSave }: {
+export function QuickReplyPreview({ reply, category, target, disabled, onChange, onInsert, onClose, inline = false, categories, onSave, onDelete, dialogTitle }: {
   reply: SettingsQuickReply; category: string; target?: ReplyTarget; disabled: boolean; onChange?: (patch: Partial<Pick<SettingsQuickReply, "title" | "body" | "translation" | "media" | "category">>) => boolean | void; onInsert: (body?: string) => void; onClose: () => void;
-  inline?: boolean; categories?: { id: string; label: string }[]; onSave?: () => void;
+  inline?: boolean; categories?: { id: string; label: string }[]; onSave?: () => void; onDelete?: () => void | Promise<void>; dialogTitle?: TranslationKey;
 }) {
   const { t } = useI18n();
   const titleId = useId();
   const [mediaFailed,setMediaFailed] = useState(false);
   const [mediaBusy,setMediaBusy] = useState(false);
+  const [deleting,setDeleting] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const mediaInput = useRef<HTMLInputElement>(null);
@@ -417,10 +465,16 @@ export function QuickReplyPreview({ reply, category, target, disabled, onChange,
     } catch { if (mounted.current && request === mediaRequest.current) useAppStore.getState().pushToast(t("settingsQuickReplies.mediaReadFailed"), "error"); }
     finally { if (mounted.current && request === mediaRequest.current) setMediaBusy(false); }
   };
+  const deleteReply = async () => {
+    if (!onDelete || deleting || mediaBusy) return;
+    setDeleting(true);
+    try { await onDelete(); }
+    finally { if (mounted.current) setDeleting(false); }
+  };
   if (!inline && typeof document === "undefined") return null;
   const content = <div className={inline ? "" : "fixed inset-0 z-[10050] flex items-center justify-center bg-black/60 p-4"} onMouseDown={e => { if (!inline && e.target === e.currentTarget) onClose(); }}>
     <div ref={dialogRef} role={inline ? "region" : "dialog"} aria-modal={inline ? undefined : true} aria-labelledby={titleId} className={inline ? "overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900" : "flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl"}>
-      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-zinc-800 p-3"><div className="min-w-0 flex-1"><h3 id={titleId} className="sr-only">{t(onSave ? "settingsQuickReplies.add" : "quickLibrary.edit")}</h3><Input autoFocus={inline} placeholder={onSave ? t("quickShelf.optionalTitle") : undefined} maxLength={40} value={reply.title} aria-label={t("settingsQuickReplies.commandTitle")} readOnly={!onChange} onChange={event => onChange?.({ title: event.target.value })} />{categories ? <select aria-label={t("settingsQuickReplies.category")} className="ui-control mt-2 w-full px-2 text-xs" value={reply.category} onChange={event => onChange?.({ category: event.target.value })}>{categories.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select> : <p className="mt-1 text-xs text-zinc-500">{category}</p>}</div><button ref={closeRef} type="button" onClick={onClose} aria-label={t("common.close")} className="rounded p-1 text-zinc-400 hover:bg-zinc-800"><X aria-hidden="true" className="h-4 w-4" /></button></header>
+      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-zinc-800 p-3"><div className="min-w-0 flex-1"><h3 id={titleId} className="sr-only">{t(dialogTitle || (onSave ? "settingsQuickReplies.add" : "quickLibrary.edit"))}</h3><Input autoFocus={inline} placeholder={onSave ? t("quickShelf.optionalTitle") : undefined} maxLength={40} value={reply.title} aria-label={t("settingsQuickReplies.commandTitle")} readOnly={!onChange} onChange={event => onChange?.({ title: event.target.value })} />{categories ? <select aria-label={t("settingsQuickReplies.category")} className="ui-control mt-2 w-full px-2 text-xs" value={reply.category} onChange={event => onChange?.({ category: event.target.value })}>{categories.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select> : <p className="mt-1 text-xs text-zinc-500">{category}</p>}</div><button ref={closeRef} type="button" onClick={onClose} aria-label={t("common.close")} className="rounded p-1 text-zinc-400 hover:bg-zinc-800"><X aria-hidden="true" className="h-4 w-4" /></button></header>
       <div className="min-h-0 space-y-4 overflow-y-auto p-4">
         {target && <p className="break-words rounded-lg bg-brand/10 p-2 text-xs text-brand">{target.title} · {target.account}</p>}
         <label className="block space-y-1 text-xs text-zinc-500"><span>{t("settingsQuickReplies.originalContent")} · {reply.body.length}</span><Textarea rows={inline ? 3 : 5} value={reply.body} aria-label={t("settingsQuickReplies.content")} placeholder={t("settingsQuickReplies.contentPlaceholder")} readOnly={!onChange} onChange={event => onChange?.({ body: event.target.value })} /></label>
@@ -431,7 +485,7 @@ export function QuickReplyPreview({ reply, category, target, disabled, onChange,
           <p className="text-2xs text-zinc-500">{t(`quickShelf.kind.${reply.media.kind}`)}</p>
         </div>}
         <input ref={mediaInput} type="file" className="hidden" aria-label={t("settingsQuickReplies.addMedia")} disabled={!onChange || mediaBusy} accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip" onChange={event => { const file = event.target.files?.[0]; event.currentTarget.value = ""; if (file) void readMedia(file); }} />
-        <div className="flex items-center gap-2"><Button size="sm" disabled={!onChange || mediaBusy} onClick={() => mediaInput.current?.click()}>{t(reply.media ? "settingsQuickReplies.replaceMedia" : "settingsQuickReplies.addMedia")}</Button>{reply.media && <Button size="sm" variant="ghost" disabled={!onChange || mediaBusy} onClick={() => onChange?.({ media: undefined })}>{t("settingsQuickReplies.removeMedia")}</Button>}{mediaBusy && <span role="status" className="text-xs text-brand">{t("quickLibrary.readingMedia")}</span>}</div>
+        <div className="flex items-center gap-2"><Button size="sm" disabled={!onChange || mediaBusy || deleting} onClick={() => mediaInput.current?.click()}>{t(reply.media ? "settingsQuickReplies.replaceMedia" : "settingsQuickReplies.addMedia")}</Button>{reply.media && <Button size="sm" variant="ghost" disabled={!onChange || mediaBusy || deleting} onClick={() => onChange?.({ media: undefined })}>{t("settingsQuickReplies.removeMedia")}</Button>}{mediaBusy && <span role="status" className="text-xs text-brand">{t("quickLibrary.readingMedia")}</span>}{onDelete && <button type="button" disabled={deleting || mediaBusy} aria-label={t("quickShelf.deleteReplyNamed", { title: reply.title || t("crmPanel.unnamed") })} title={t("quickShelf.deleteReplyNamed", { title: reply.title || t("crmPanel.unnamed") })} onClick={() => void deleteReply()} className="ml-auto flex h-8 w-8 items-center justify-center rounded-lg text-rose-400 transition-colors hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-40"><Trash2 aria-hidden="true" className="h-4 w-4" /></button>}</div>
       </div>
       <footer className="shrink-0 space-y-3 border-t border-zinc-800 p-3">{!onSave && <p className="text-xs text-zinc-500">{t("quickShelf.draftHint")}</p>}<div className="flex justify-end gap-2"><Button size="sm" onClick={onClose}>{t(onSave ? "common.cancel" : "common.close")}</Button>{onSave ? <Button size="sm" variant="primary" disabled={mediaBusy || !reply.body.trim() && !reply.translation?.trim() && !reply.media} onClick={onSave}>{t("common.save")}</Button> : <>{reply.translation && <Button size="sm" variant="secondary" disabled={disabled} onClick={() => onInsert(reply.translation)}>{t("quickShelf.insertTranslation")}</Button>}<Button size="sm" variant="primary" disabled={disabled || !reply.body.trim() && !reply.media} onClick={() => onInsert(reply.body)}>{t(reply.translation ? "quickShelf.insertOriginal" : "quickShelf.insert")}</Button></>}</div></footer>
     </div>

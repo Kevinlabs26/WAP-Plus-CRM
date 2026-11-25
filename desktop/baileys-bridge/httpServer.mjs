@@ -886,6 +886,11 @@ if (req.method === "POST" && url.pathname === "/restart") {
               },
               jid
             );
+            const cachedContact = d.upsertContact?.(jid, name, phoneE164);
+            if (cachedContact) {
+              cachedContact.displayName = name;
+              cachedContact.updatedAt = Date.now();
+            }
             items.push({ status: "saved" });
           } catch (error) {
             items.push({

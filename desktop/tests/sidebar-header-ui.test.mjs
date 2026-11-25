@@ -140,3 +140,14 @@ test("sync remains disabled when unavailable and progress is exposed while the m
     assert.equal(open().find(n=>n.type==="button"&&n.props["aria-label"]==="sidebar.syncing").props.disabled,true);
   }finally{ui.close();}
 });
+
+test("chats-only filter container is omitted on manage and contacts tabs",()=>{
+  const ui=fixture({listTab:"chats"});
+  try{
+    assert.ok(ui.render().some(n=>n.type==="div"&&n.props.className==="mb-2 space-y-2"));
+    ui.props.listTab="manage";
+    assert.equal(ui.render().some(n=>n.type==="div"&&n.props.className==="mb-2 space-y-2"),false);
+    ui.props.listTab="contacts";
+    assert.equal(ui.render().some(n=>n.type==="div"&&n.props.className==="mb-2 space-y-2"),false);
+  }finally{ui.close();}
+});

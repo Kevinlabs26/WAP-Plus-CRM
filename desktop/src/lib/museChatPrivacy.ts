@@ -1,24 +1,40 @@
 import type { Message } from "../types/crm";
-import { assertAiContentAllowed } from "./aiPrivacy.ts";
+import { redactAiContent } from "./aiPrivacy.ts";
 
 type Identity = { name?: string; label?: string; userName?: string; phone?: string; phoneE164?: string; historyPhoneE164?: string };
 type MusePrivacyByAccount = Record<string, { trainingDisabledConfirmedAt?: number; memoryReviewedAt?: number }>;
-let identityProvider: (() => Identity[]) | undefined;
-let privacyProvider: (() => MusePrivacyByAccount) | undefined;
-let privacyGateMessageProvider: (() => string) | undefined;
-export function setMusePrivacyIdentityProvider(provider: () => Identity[]) { identityProvider = provider; }
-export function setMusePrivacySettingsProvider(provider: () => MusePrivacyByAccount) { privacyProvider = provider; }
-export function setMusePrivacyGateMessageProvider(provider: () => string) { privacyGateMessageProvider = provider; }
-export function musePrivacyGateMessage(): string { return privacyGateMessageProvider?.() || "此 Muse 账号未确认关闭模型训练，CRM 已阻止本次请求。"; }
-export function assertMuseContentAllowed(prompt: string, context?: unknown): void {
-  assertAiContentAllowed(prompt, context ? JSON.stringify(context) : undefined);
+type MusePrivacyProviders = {
+  identityProvider?: () => Identity[];
+  privacyProvider?: () => MusePrivacyByAccount;
+  privacyGateMessageProvider?: () => string;
+};
+const MUSE_PRIVACY_REGISTRY_KEY = Symbol.for("wapPlusCrm.museChatPrivacyProviders");
+function getMusePrivacyProviders(): MusePrivacyProviders {
+  const host = globalThis as Record<symbol, MusePrivacyProviders | undefined>;
+  if (!host[MUSE_PRIVACY_REGISTRY_KEY]) {
+    host[MUSE_PRIVACY_REGISTRY_KEY] = {};
+  }
+  return host[MUSE_PRIVACY_REGISTRY_KEY]!;
+}
+// Keep provider hooks on a global registry so Vite HMR or duplicated imports never drop them.
+export function setMusePrivacyIdentityProvider(provider: () => Identity[]) { getMusePrivacyProviders().identityProvider = provider; }
+export function setMusePrivacySettingsProvider(provider: () => MusePrivacyByAccount) { getMusePrivacyProviders().privacyProvider = provider; }
+export function setMusePrivacyGateMessageProvider(provider: () => string) { getMusePrivacyProviders().privacyGateMessageProvider = provider; }
+export function musePrivacyGateMessage(): string { return getMusePrivacyProviders().privacyGateMessageProvider?.() || "此 Muse 账号未确认关闭模型训练，CRM 已阻止本次请求。"; }
+export function musePrivacyGateError(accountId: string): Error {
+  const baseMessage = musePrivacyGateMessage();
+  if (!getMusePrivacyProviders().privacyProvider) {
+    return Error(`${baseMessage}（本机隐私状态未初始化，请刷新页面后重试）`);
+  }
+  return Error(accountId ? `${baseMessage}（账号 ID：${accountId}）` : baseMessage);
 }
 export function museTrainingDisabledConfirmed(accountId: string): boolean {
-  return !!accountId && !!privacyProvider?.()?.[accountId]?.trainingDisabledConfirmedAt;
+  return !!accountId && !!getMusePrivacyProviders().privacyProvider?.()?.[accountId]?.trainingDisabledConfirmedAt;
 }
 export function musePrivacyIdentities(): Identity[] {
-  if (!identityProvider) throw Error("本机隐私检查尚未就绪，未发送给 Muse");
-  return identityProvider();
+  const provider = getMusePrivacyProviders().identityProvider;
+  if (!provider) throw Error("本机隐私检查尚未就绪，未发送给 Muse");
+  return provider();
 }
 
 export function museChatMessages(messages: Message[], chatId?: string, accountId?: string): Message[] {
@@ -48,7 +64,7 @@ export function createMuseChatRedactor(identities: Identity[], messages: Message
     messages.flatMap(item => [item.senderPhoneE164, item.accountPhoneE164, item.phoneE164]))
     .map(phone => phone?.replace(/\D/g, "") || "").filter(phone => phone.length >= 6));
   const redact = (text: string): string => {
-    assertMuseContentAllowed(text);
+    text = redactAiContent(text) || "";
     const youtubeLinks: string[] = [];
     let result = text
       .replace(/BEGIN:VCARD[\s\S]*?(?:END:VCARD|$)/gi, "[shared contact omitted]")

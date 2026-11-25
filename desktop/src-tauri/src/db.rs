@@ -1355,6 +1355,35 @@ pub fn chats_with_inbound(conn: &Connection, chat_ids: &[String]) -> Result<Vec<
     Ok(replied)
 }
 
+pub fn latest_conversation_by_chat(conn: &Connection, chat_ids: &[String]) -> Result<Vec<(String, String)>, String> {
+    if chat_ids.len() > 50_000 || chat_ids.iter().any(|id| id.is_empty() || id.len() > 1000)
+        || chat_ids.iter().map(String::len).sum::<usize>() > 8 * 1024 * 1024 {
+        return Err("Invalid history query size".into());
+    }
+    let mut stmt = conn.prepare(r#"
+        SELECT (
+            SELECT m.sent_at FROM messages m WHERE m.chat_id = c.id
+              AND julianday(m.sent_at) IS NOT NULL AND COALESCE(json_extract(m.json, '$.mediaType'), '') != 'system'
+              AND ((json_extract(m.json, '$.direction') = 'in' AND COALESCE(json_extract(m.json, '$.systemKind'), '') = '')
+                OR (json_extract(m.json, '$.direction') = 'out'
+                  AND COALESCE(json_extract(m.json, '$.deliveryStatus'), '') IN ('','sent','server','delivered','read','played')
+                  AND COALESCE(json_extract(m.json, '$.deliveryUncertain'), 0) = 0))
+              AND (COALESCE(NULLIF(json_extract(m.json, '$.accountId'), ''), NULLIF(json_extract(m.json, '$.deviceId'), ''), '') = ''
+                OR COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''), NULLIF(json_extract(c.json, '$.phoneId'), ''), '') = ''
+                OR COALESCE(NULLIF(json_extract(m.json, '$.accountId'), ''), NULLIF(json_extract(m.json, '$.deviceId'), ''), '') =
+                   COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''), NULLIF(json_extract(c.json, '$.phoneId'), ''), ''))
+            ORDER BY julianday(m.sent_at) DESC LIMIT 1
+        ) FROM chats c WHERE c.id = ?1
+    "#).map_err(|e| e.to_string())?;
+    let mut latest = Vec::new();
+    for id in chat_ids.iter().collect::<HashSet<_>>() {
+        if let Some(at) = stmt.query_row(params![id], |row| row.get::<_, Option<String>>(0)).map_err(|e| e.to_string())? {
+            latest.push((id.clone(), at));
+        }
+    }
+    Ok(latest)
+}
+
 /// 全局消息搜索（磁盘冷历史 + 已落盘近期）。pattern 为小写子串。
 pub fn search_messages(conn: &Connection, query: &str, limit: i64) -> Result<Vec<Value>, String> {
     let q_raw = query.trim();
@@ -1669,6 +1698,16 @@ fn load_messages_boot(conn: &Connection) -> Result<Vec<Value>, String> {
                 SELECT json_extract(task.value, '$.messageId')
                 FROM settings, json_each(settings.value, '$.scheduledMessages') AS task
                 WHERE settings.key = 'app' AND json_extract(task.value, '$.status') = 'queued'
+                UNION
+                SELECT json_extract(item.value, '$.messageId')
+                FROM settings, json_each(settings.value, '$.__broadcastCampaigns') AS campaign,
+                     json_each(campaign.value, '$.items') AS item
+                WHERE settings.key = 'app' AND json_extract(item.value, '$.status') != 'sent'
+                UNION
+                SELECT json_extract(item.value, '$.messageId')
+                FROM settings, json_each(settings.value, '$.scheduledPlans') AS plan,
+                     json_each(plan.value, '$.items') AS item
+                WHERE settings.key = 'app' AND json_extract(item.value, '$.status') IN ('sending', 'failed', 'unknown')
                 UNION
                 SELECT chain.id FROM follow_up_chats AS active
                 JOIN messages AS chain ON chain.chat_id = active.chat_id
@@ -2142,6 +2181,24 @@ mod tests {
     }
 
     #[test]
+    fn latest_conversation_ignores_failed_uncertain_and_other_account_messages() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        save_snapshot(&conn, &AppSnapshot {
+            chats: vec![serde_json::json!({"id":"chat","accountId":"a"})],
+            messages: vec![
+                serde_json::json!({"id":"ok","chatId":"chat","direction":"in","accountId":"a","sentAt":"2026-11-01T00:00:00Z"}),
+                serde_json::json!({"id":"failed","chatId":"chat","direction":"out","deliveryStatus":"failed","sentAt":"2026-11-02T00:00:00Z"}),
+                serde_json::json!({"id":"unknown","chatId":"chat","direction":"out","deliveryStatus":"sent","deliveryUncertain":true,"sentAt":"2026-11-03T00:00:00Z"}),
+                serde_json::json!({"id":"other","chatId":"chat","direction":"in","accountId":"b","sentAt":"2026-11-04T00:00:00Z"}),
+            ],
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(latest_conversation_by_chat(&conn, &["chat".into()]).unwrap(),
+            vec![("chat".into(), "2026-11-01T00:00:00Z".into())]);
+    }
+
+    #[test]
     fn legacy_invalid_utf8_does_not_block_backup_or_message_reads() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
@@ -2535,6 +2592,8 @@ mod tests {
             ("old-retry", "failed", "2020-01-01"),
             ("old-hard-failure", "failed", ""),
             ("old-task-result", "sent", ""),
+            ("old-broadcast-receipt", "delivered", ""),
+            ("old-plan-receipt", "read", ""),
             ("old-history", "sent", ""),
         ] {
             messages.push(json!({"id":id, "chatId":"chat", "body":"hello",
@@ -2553,14 +2612,16 @@ mod tests {
         conn.execute(
             "INSERT INTO settings(key, value) VALUES ('app', ?1)",
             params![
-                json!({"scheduledMessages":[{"status":"queued", "messageId":"old-task-result"}]})
+                json!({"scheduledMessages":[{"status":"queued", "messageId":"old-task-result"}],
+                    "__broadcastCampaigns":[{"items":[{"status":"failed","messageId":"old-broadcast-receipt"}]}],
+                    "scheduledPlans":[{"items":[{"status":"unknown","messageId":"old-plan-receipt"}]}]})
                     .to_string()
             ],
         )
         .unwrap();
         let loaded = load_messages_boot(&conn).unwrap();
-        assert_eq!(loaded.len(), 2004);
-        for id in ["old-queued", "old-pending", "old-retry", "old-task-result"] {
+        assert_eq!(loaded.len(), 2006);
+        for id in ["old-queued", "old-pending", "old-retry", "old-task-result", "old-broadcast-receipt", "old-plan-receipt"] {
             assert!(
                 loaded.iter().any(|message| message["id"] == id),
                 "missing {id}"

@@ -3,6 +3,9 @@ import { normalizeAiDecisionDetails, type AiDecisionDetails } from "./aiDecision
 export type AiOutreachRule = {
   enabled: boolean; paused?: boolean; mode: "draft" | "auto"; allowSidebarData?: boolean;
   startMode: "scheduled" | "immediate"; time: string; timeZone: string; goal: string; runNowAt?: number; scheduleStartAt?: number;
+  firstContactQuotas?: Record<string, number>;
+  firstContactAssignments?: Record<string, string>;
+  scheduledFirstContactAssignments?: Record<string, string | null>;
 };
 export type AiOutreachRun = {
   id: string; folderId: string; chatId: string; accountId: string; day: string; at: string;
@@ -21,9 +24,31 @@ export function normalizeOutreachRule(raw: unknown): AiOutreachRule {
   const runNowAt=typeof value.runNowAt === "number" && Number.isFinite(value.runNowAt) ? value.runNowAt : undefined;
   let zone = typeof value.timeZone === "string" ? value.timeZone : "UTC";
   try {new Intl.DateTimeFormat("en",{timeZone:zone});} catch {zone="UTC";}
-  return {...(runNowAt!==undefined?{runNowAt}:{}), ...(typeof value.scheduleStartAt==="number"&&Number.isFinite(value.scheduleStartAt)?{scheduleStartAt:value.scheduleStartAt}:{}), ...(value.allowSidebarData===true?{allowSidebarData:true}:{}), enabled: value.enabled === true, ...(value.paused===true?{paused:true}:{}), mode: value.mode === "auto" ? "auto" : "draft", startMode:value.startMode==="immediate"&&runNowAt!==undefined?"immediate":"scheduled",
+  const entries = (input: unknown) => input && typeof input === "object" && !Array.isArray(input) ? Object.entries(input) : [];
+  const quotas = value.firstContactQuotas && Object.fromEntries(entries(value.firstContactQuotas)
+    .filter(([id, count]) => id.length <= 200 && Number.isInteger(count) && count >= 0 && count <= 100).slice(0, 100));
+  const counts = new Map<string, number>();
+  const acceptAssignment = ([recipient, account]: [string, unknown]) => {
+    if (!quotas) return false;
+    if (recipient.length > 200 || typeof account !== "string" || !Object.hasOwn(quotas, account)) return false;
+    const count = counts.get(account) || 0;
+    if (count >= quotas[account]) return false;
+    counts.set(account, count + 1);
+    return true;
+  };
+  const assignments = quotas && Object.fromEntries(entries(value.firstContactAssignments).filter(acceptAssignment));
+  const scheduledEntries = entries(value.scheduledFirstContactAssignments);
+  const overridden = scheduledEntries.filter(([recipient, account]) => Object.hasOwn(assignments || {}, recipient) &&
+    (account === null || typeof account === "string" && !!quotas && Object.hasOwn(quotas, account)));
+  for (const [recipient] of overridden) {
+    const account = assignments![recipient];
+    counts.set(account, (counts.get(account) || 0) - 1);
+  }
+  const scheduledAssignments = quotas && Object.fromEntries([...overridden.map(([recipient]) => [recipient,null]), ...scheduledEntries.filter(acceptAssignment)]);
+  return {...(quotas ? {firstContactQuotas:quotas,firstContactAssignments:assignments} : {}), ...(runNowAt!==undefined?{runNowAt}:{}), ...(typeof value.scheduleStartAt==="number"&&Number.isFinite(value.scheduleStartAt)?{scheduleStartAt:value.scheduleStartAt}:{}), ...(value.allowSidebarData===true?{allowSidebarData:true}:{}), enabled: value.enabled === true, ...(value.paused===true?{paused:true}:{}), mode: value.mode === "auto" ? "auto" : "draft", startMode:value.startMode==="immediate"&&runNowAt!==undefined?"immediate":"scheduled",
     time: typeof value.time === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(value.time) ? value.time : "09:00", timeZone: zone,
-    goal: typeof value.goal === "string" ? value.goal.trim().slice(0,2000) : ""};
+    goal: typeof value.goal === "string" ? value.goal.trim().slice(0,2000) : "",
+    ...(scheduledAssignments && Object.keys(scheduledAssignments).length ? {scheduledFirstContactAssignments: scheduledAssignments} : {})};
 }
 export const OUTREACH_IMMEDIATE_WINDOW_MS = 2 * 3600_000;
 export const isPendingOutreachRun = (run: AiOutreachRun) => ["waiting", "generating", "draft", "queued"].includes(run.status);

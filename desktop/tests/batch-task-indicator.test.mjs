@@ -15,7 +15,7 @@ const {BatchTaskIndicator}=await import('data:text/javascript;base64,'+Buffer.fr
 const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
 test('bulk progress opens automatically, pauses queued tasks and preserves the completion result',async()=>{
  const previousWindow=globalThis.window,previousDocument=globalThis.document;const listeners=new Map();
- globalThis.window={addEventListener:(k,f)=>listeners.set(k,f),removeEventListener:k=>listeners.delete(k),setInterval:()=>1,clearInterval(){}};
+ globalThis.window={addEventListener:(k,f)=>listeners.set(k,f),removeEventListener:k=>listeners.delete(k),setInterval:()=>1,clearInterval(){},setTimeout:()=>1,clearTimeout(){}};
  globalThis.document={addEventListener(){},removeEventListener(){}};
  const now=new Date().toISOString();const state={settings:{scheduledPlans:[],waAccounts:[{id:'a',label:'Account A'}]},broadcastCampaigns:[],pushToast(){},setSettingsOpen(...args){state.opened=args;},updateSettings(patch){Object.assign(state.settings,patch);},async requestConfirm(){return state.confirmed;}};
  globalThis.batchState=state;let slots=[],cursor=0,tree;const effects=[],cleanups=[];

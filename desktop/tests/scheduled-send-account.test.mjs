@@ -14,7 +14,7 @@ const result = await build({
     b.onLoad({ filter: /.*/, namespace: "mock" }, (a) => ({ contents:
       a.path === "react" ? "export default {};export const useRef = (current) => ({current}); export const useEffect = (effect) => { globalThis.__watcherCleanup = effect(); }; export const useCallback = (fn) => fn;" :
       a.path === "@/store/appStore" ? "export const useAppStore = {getState: () => globalThis.__watcherState};" :
-      'export const gateConfigFromRuntime=config=>config;export const sendRuntimeFromSettings=(s,messages)=>({...s,channelId:s.sendChannel,messages,rateLimits:{minIntervalSec:s.rateMinIntervalSec,perPhonePerMinute:s.ratePerMinute,perPhonePerHour:s.ratePerHour}});export const normalizeChannelId = (id) => id; export const dispatchSendText = async (request, runtime) => { await globalThis.__beforeDispatch?.(); if (runtime?.canSend && !runtime.canSend()) return {ok:false,error:"automation_cancelled"}; globalThis.__sentRequests.push(request); await globalThis.__waitSend?.(request); return {ok:true}; };'
+      'export const gateConfigFromRuntime=config=>config;export const sendRuntimeFromSettings=(s,messages)=>({...s,channelId:s.sendChannel,messages,rateLimits:{minIntervalSec:s.rateMinIntervalSec,perPhonePerMinute:s.ratePerMinute,perPhonePerHour:s.ratePerHour}});export const normalizeChannelId = (id) => id; export const dispatchSendText = async (request, runtime) => { await globalThis.__beforeDispatch?.(); if (runtime?.canSend && !runtime.canSend()) return {ok:false,error:"automation_cancelled"}; globalThis.__sentRequests.push(request); return await globalThis.__waitSend?.(request) ?? {ok:true}; };'
     }));
   } }],
 });
@@ -30,6 +30,7 @@ function setup(accountId = "wa-a") {
     settings: { scheduledMessages: [task], waAccounts: [{ id: "wa-b", status: "connected" }], liveBaileysAccountId: "wa-b", sendChannel: "baileys" },
     chats: [{ id: "chat", accountId: "wa-a" }], contacts: [{ id: "c", accountId: "wa-a" }],
     messages: [], baileysUi: { connection: "connected" }, pushToast() {},
+    bridge: { connected: true, deviceId: "phone-a" },
     updateScheduledMessage(id, patch) { Object.assign(task, patch); },
     enqueueOutgoingMessage(input) { this.messages.push({ ...input, direction: "out", id: "out", sentAt: new Date().toISOString() }); return "out"; },
     listRetryableOutgoing() { return this.messages; },
@@ -84,6 +85,66 @@ test("valid task reaches dispatch with its original account", async () => {
   assert.equal(globalThis.__sentRequests[0].accountId, "wa-b");
   assert.equal(state.messages[0].deliveryStatus, "sent");
   assert.equal(state.messages[0].systemKind, "scheduled_message");
+});
+
+test('Android scheduled messages request a phone receipt and only confirmed sends are recorded as sent',async()=>{
+ for(const confirmed of [true,false]){
+  const state=setup('wa-b'),task=state.settings.scheduledMessages[0];
+  Object.assign(task,{channelId:'android_bridge',deviceId:'phone-a'});
+  globalThis.__waitSend=request=>{
+    assert.equal(request.confirmPhoneSend,true);
+    assert.equal(request.deviceId,'phone-a');
+    return confirmed ? {ok:true,status:'sent'} : {ok:false,deliveryUncertain:true,message:'No phone receipt'};
+  };
+  ScheduledMessageWatcher();SendQueueWatcher();await new Promise(setImmediate);ScheduledMessageWatcher();
+  assert.equal(task.status,confirmed?'sent':'failed');
+  assert.equal(state.messages[0].deliveryUncertain,!confirmed || undefined);
+  assert.equal(globalThis.__sentRequests.length,1);
+ }
+});
+
+test("unbound Android schedules and already-queued orphan messages never use the selected phone", async () => {
+  for (const status of ["pending", "queued", "orphan"]) {
+    const state = setup("wa-b");
+    const task = state.settings.scheduledMessages[0];
+    state.selectedPhoneId = "phone-a";
+    Object.assign(task, { channelId: "android_bridge", deviceId: null });
+    if (status !== "pending") {
+      Object.assign(task, { status: "queued", messageId: "out" });
+      state.enqueueOutgoingMessage({ channelId: "android_bridge", systemKind: "scheduled_message", deliveryStatus: "queued", phoneE164: task.recipient, body: task.text });
+      if (status === "orphan") state.settings.scheduledMessages = [];
+    }
+    ScheduledMessageWatcher();
+    SendQueueWatcher();
+    await new Promise(setImmediate);
+    ScheduledMessageWatcher();
+    assert.deepEqual(globalThis.__sentRequests, [], status);
+    assert.equal(status === "orphan" ? state.messages[0].deliveryStatus : task.status, "failed", status);
+  }
+});
+
+test("Android schedules wait for the original phone even when the bridge switches at the send gate", async () => {
+  for (const switchAtGate of [false, true]) {
+    const state = setup("wa-b");
+    Object.assign(state.settings.scheduledMessages[0], { channelId: "android_bridge", deviceId: "phone-a" });
+    state.selectedPhoneId = "phone-b";
+    const switchPhone = () => { state.bridge.deviceId = "phone-b"; };
+    ScheduledMessageWatcher();
+    if (switchAtGate) globalThis.__beforeDispatch = switchPhone;
+    else switchPhone();
+    SendQueueWatcher();
+    await new Promise(setImmediate);
+    assert.deepEqual(globalThis.__sentRequests, []);
+    assert.equal(state.messages[0].deliveryStatus, "queued");
+    assert.equal(state.messages[0].deviceId, "phone-a");
+    assert.match(state.settings.scheduledMessages[0].error, /等待原定时发送的 Android 手机/);
+    state.bridge.deviceId = "phone-a";
+    globalThis.__beforeDispatch = undefined;
+    state.messages[0].nextAttemptAt = undefined;
+    SendQueueWatcher();
+    await new Promise(setImmediate);
+    assert.deepEqual(globalThis.__sentRequests.map(request => request.deviceId), ["phone-a"]);
+  }
 });
 
 test('overdue tasks require confirmation before enqueue or after waiting offline',async()=>{

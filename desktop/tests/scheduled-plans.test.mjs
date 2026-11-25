@@ -9,6 +9,51 @@ const origin=Date.parse('2026-10-31T10:00:00Z');
 const iso=time=>new Date(time).toISOString();
 const item=(id,accountId='a')=>({id,chatId:id,contactId:id,contactName:id,accountId,recipient:'12025'+id.replace(/\D/g,'').padStart(6,'0'),status:'pending'});
 const plan=(id,items=[item('1'),item('2')],extra={})=>({id,title:id,text:'FROZEN TEXT',dueAt:iso(origin),createdAt:iso(origin-1000),timeZone:'Europe/Paris',gapSec:30,status:'pending',items,...extra});
+
+test('a customer who has only sent an inbound message keeps the conversation account',()=>{
+ const state={settings:{waAccounts:[{id:'a'},{id:'b'}]},contacts:[{id:'c',phone:'+12025550101',accountId:'a'}],
+  chats:[{id:'chat',contactId:'c',accountId:'a',lastMessageDirection:'in',hasMessageHistory:true,updatedAt:iso(origin)}]};
+ assert.equal(scheduledPlanTargets(state,['chat'],'b')[0].accountId,'a');
+});
+
+test("scheduled plans reject unclear contact history even with a default account", () => {
+  const contact = { id: "c", phone: "+12025550101", accountId: "a" };
+  const chat = { id: "legacy-chat", contactId: "c", accountId: "a" };
+  const state = { settings: { waAccounts: [{ id: "a" }, { id: "b" }] }, contacts: [contact], chats: [chat], messages: [] };
+  assert.deepEqual(scheduledPlanTargets(state, [chat.id], "b"), []);
+  state.chats = [{ ...chat, hasMessageHistory: false }];
+  assert.equal(scheduledPlanTargets(state, [chat.id], "b")[0].accountId, "b");
+});
+
+test('a group keeps its conversation account even with a different default and successful history on that other account',()=>{
+ const state={settings:{waAccounts:[{id:'a'},{id:'b'}]},contacts:[{id:'ga',channelAddress:'12345@g.us',accountId:'a',isGroup:true},{id:'gb',channelAddress:'12345@g.us',accountId:'b',isGroup:true}],
+  chats:[{id:'chat-a',contactId:'ga',accountId:'a'},{id:'chat-b',contactId:'gb',accountId:'b',lastSuccessfulOutgoing:{accountId:'b',at:iso(origin)}}],messages:[]};
+ assert.equal(scheduledPlanTargets(state,['chat-a'],'b')[0].accountId,'a');
+ state.settings.waAccounts=[{id:'b'}];
+ assert.deepEqual(scheduledPlanTargets(state,['chat-a'],'b'),[]);
+});
+
+test('a scheduled task resumes the same recipient when locked at the final gate',async()=>{
+ let locked=false, blocked=false;
+ const h=harness([plan('task',[item('1')])],{
+  ready:()=>!locked,isLocked:()=>locked,
+  send:async(p,i,canSend)=>{
+   if (!blocked) { blocked=true;locked=true;assert.equal(canSend(),false);return {ok:false,error:'automation_cancelled'}; }
+   assert.equal(canSend(),true);assert.equal(i.messageId,'out-1');return {ok:true};
+  },
+ });
+ await h.runner.tick();
+ assert.equal(h.plans[0].status,'running');assert.equal(h.plans[0].items[0].status,'pending');
+ assert.deepEqual(h.finishes[0],['out-1',{ok:false,deferredForLock:true}]);
+ locked=false;await h.runner.tick();assert.equal(h.plans[0].items[0].status,'sent');
+});
+
+test('a broadcast waiting on its only online account yields to a due scheduled plan',()=>{
+ const campaign={id:'campaign',status:'running',accountId:'a',priority:100,createdAt:iso(origin-1000),
+  items:[{...item('1'),retryAt:iso(origin+10_000)},item('2','b')]};
+ assert.equal(nextBatchTask([plan('plan')],[campaign],origin,id=>id==='a'),'plan');
+ assert.equal(nextBatchTask([plan('plan')],[campaign],origin+10_001,id=>id==='a'),'campaign');
+});
 function harness(plans,extra={}) {
  let time=origin,calls=[],persisted=[],finishes=[];
  const h={plans,advance(ms){time+=ms;},calls,persisted,finishes,
@@ -47,6 +92,40 @@ test('an unknown middle step pauses without replaying already completed steps af
  assert.equal(h.plans[0].status,'paused');assert.equal(h.plans[0].items[0].stepIndex,1);assert.equal(h.plans[0].items[0].status,'unknown');
  const restored=normalizeScheduledPlans(h.plans);assert.equal(restored[0].items[0].stepIndex,1);assert.equal(restored[0].steps.length,2);
  h.advance(60000);await h.runner.tick();assert.equal(attempts,2);
+});
+
+test("late receipts advance one matching step without resuming the paused plan or replaying that step", async () => {
+  const first = { ...item("1"), status: "unknown", messageId: "first-out" };
+  const receipt = { id: "first-out", accountId: "b", direction: "out", deliveryStatus: "delivered", sentAt: iso(origin) };
+  let receipts = [receipt];
+  const sent = [];
+  const h = harness([plan("sequence", [first], { status: "paused", steps: [{ text: "next" }] })], {
+    messages: () => receipts,
+    send: async (p, i) => { sent.push(activePlanStep(p, i).text); return { ok: true }; },
+  });
+  await h.runner.tick();
+  assert.equal(h.plans[0].items[0].status, "unknown");
+  receipts = [{ ...receipt, accountId: "a" }];
+  await h.runner.tick();
+  await h.runner.tick();
+  assert.equal(h.plans[0].status, "paused");
+  assert.equal(h.plans[0].items[0].stepIndex, 1);
+  assert.deepEqual(h.plans[0].items[0].messageIds, ["first-out"]);
+  assert.deepEqual(sent, []);
+  h.plans[0] = { ...h.plans[0], status: "running" };
+  await h.runner.tick();
+  assert.deepEqual(sent, ["next"]);
+  assert.equal(h.plans[0].status, "done");
+});
+
+test("a final late receipt completes a paused plan without contacting the recipient again", async () => {
+  const target = { ...item("1"), status: "failed", messageId: "out-1" };
+  const receipt = { id: "out-1", accountId: "a", direction: "out", deliveryStatus: "read", sentAt: iso(origin) };
+  const h = harness([plan("paused", [target], { status: "paused", error: "timeout" })], { messages: () => [receipt] });
+  await h.runner.tick();
+  assert.equal(h.plans[0].status, "done");
+  assert.equal(h.plans[0].items[0].sentAt, receipt.sentAt);
+  assert.deepEqual(h.calls, []);
 });
 
 test('cancelling a sequence during its second request keeps the truthful result and cancels remaining steps',async()=>{
@@ -92,7 +171,8 @@ test('reconnection does not steal the turn from a sequence started during the of
 
 test('a partially sent sequence in quiet hours allows another plan to run',async()=>{
  const h=harness([plan('a',[{...item('1'),stepIndex:1,sequenceActivityAt:iso(origin-60000)}],{status:'running',steps:[{text:'second'}],timeZone:'UTC',quietHours:{start:'09:00',end:'11:00'}}),plan('b',[item('2')])]);
- await h.runner.tick();await h.runner.tick();assert.equal(h.calls.length,1);assert.equal(h.calls[0][0],'b');assert.equal(h.plans[0].items[0].stepIndex,1);
+ assert.equal(nextBatchTask(h.plans,[],origin),'b');
+ await h.runner.tick();assert.equal(h.calls.length,1);assert.equal(h.calls[0][0],'b');assert.equal(h.plans[0].items[0].stepIndex,1);
 });
 
 for(const throwing of [false,true])test(`cancellation preserves an unknown in-flight result (${throwing?'exception':'response'})`,async()=>{
@@ -244,7 +324,7 @@ test('group and folder targets deduplicate by recipient across accounts and resp
  {id:'child',parentId:'root',chatIds:['chat2'],scope:{type:'account',accountId:'a'}},
  {id:'other',parentId:'root',chatIds:['chat3'],scope:{type:'account',accountId:'b'}}],chatFolderClones:[{id:'x',folderId:'root',sourceChatId:'chat1'}]},
  contacts:[{id:'c1',accountId:'a',channelAddress:'12345@g.us',isGroup:true},{id:'c2',accountId:'a',phone:'+12025550123'},{id:'c3',accountId:'b',channelAddress:'12345@g.us',isGroup:true}],
- chats:[{id:'chat1',contactId:'c1',accountId:'a'},{id:'clone',contactId:'c1',accountId:'a'},{id:'chat2',contactId:'c2',accountId:'a'},{id:'chat3',contactId:'c3',accountId:'b'}]};
+ chats:[{id:'chat1',contactId:'c1',accountId:'a'},{id:'clone',contactId:'c1',accountId:'a'},{id:'chat2',contactId:'c2',accountId:'a',hasMessageHistory:false},{id:'chat3',contactId:'c3',accountId:'b'}]};
  assert.deepEqual(scheduledFolderChatIds(state.settings,'root',false),['chat1','clone']);
  assert.deepEqual(scheduledFolderChatIds(state.settings,'root',true),['chat1','clone','chat2']);
  const targets=scheduledPlanTargets(state);assert.equal(targets.length,2);assert.equal(targets[0].recipient,'12345@g.us');assert.equal(targets[0].accountId,'a');

@@ -73,6 +73,7 @@ export function MuseWebFields(){
     if(value)entry.trainingDisabledConfirmedAt=value;else delete entry.trainingDisabledConfirmedAt;
     if(entry.trainingDisabledConfirmedAt||entry.memoryReviewedAt)next[accountId]=entry;else delete next[accountId];
     useAppStore.getState().updateSettings({musePrivacyByAccountId:next});
+    void flushPersist(()=>useAppStore.getState());
   };
   const confirmTrainingDisabled=async(account:MuseWebAccountPool['accounts'][number])=>{
     if(busy)return;setBusy(true);

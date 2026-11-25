@@ -73,6 +73,9 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
   const [bulkCategory, setBulkCategory] = useState("");
   const [importOpen, setImportOpen] = useState(importOnly);
   const [importText, setImportText] = useState("");
+  const [importFileError, setImportFileError] = useState(false);
+  const importFileInput = useRef<HTMLInputElement>(null);
+  const importDetails = useRef<HTMLDetailsElement>(null);
   const [sheetUrl, setSheetUrl] = useState("");
   const [sheetBusy, setSheetBusy] = useState(false);
   const [sheetError, setSheetError] = useState("");
@@ -118,7 +121,9 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
   const menuDescendants = menuCategory ? quickReplyCategoryDescendants(menuCategory.id, categoryOptions) : new Set<string>();
   const menuCustom = menuCategory && customCategories.some(item => item.id === menuCategory.id);
   const renderCategoryTree = (parentId: string | undefined, depth = 0): React.ReactNode => categoryOptions
-    .filter(category => category.parentId === parentId && (category.id === "other" || categoryCount(category.id) > 0 || quickReplyCategoryDescendants(category.id, categoryOptions).has(listCategory)))
+    .filter(category => category.parentId === parentId && (category.id === "other"
+      ? categoryCount(category.id) > 0
+      : categoryCount(category.id) > 0 || quickReplyCategoryDescendants(category.id, categoryOptions).has(listCategory)))
     .map(category => {
       const children = categoryOptions.some(item => item.parentId === category.id);
       const expanded = expandedCategories.includes(category.id);
@@ -133,9 +138,10 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
       </div>;
     });
   const importPreview = useMemo(() => {
+    if (importFileError) return { rows: [], invalidRows: [], error: true };
     try { return { ...parseQuickReplyTable(importText), error: false }; }
     catch { return { rows: [], invalidRows: [], error: true }; }
-  }, [importText]);
+  }, [importFileError, importText]);
   useEffect(() => { setSelectedIds(new Set()); }, [listCategory, listQuery]);
   useEffect(() => { void initializeSheets(); }, []);
   useEffect(() => { setMoveCategoryMenu(false); }, [categoryMenu?.id]);
@@ -144,6 +150,12 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
   useEffect(() => {
     if (listCategory !== "all" && !categoryOptions.some(item => item.id === listCategory)) setListCategory("all");
   }, [listCategory, settings.quickReplyCustomCategories, settings.quickReplyRemovedCategories]);
+  useEffect(() => {
+    if (listCategory === "other" && !replies.some(reply => reply.category === "other")) {
+      setListCategory("all");
+      setPage(0);
+    }
+  }, [listCategory, replies]);
   const accountId =
     settings.liveBaileysAccountId || settings.activeAccountId || null;
   const connected = isWaAccountConnected(
@@ -221,6 +233,17 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
         <section className={`space-y-3 ${importOnly ? "border-b border-zinc-800 pb-3" : "rounded-lg border border-zinc-800 p-4"}`}>
           {!importOnly && <SectionLabel>{t("quickLibrary.import")}</SectionLabel>}
           <p className="text-2xs text-zinc-500">{t("quickLibrary.sheetSyncHint")}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <input ref={importFileInput} type="file" className="hidden" accept=".json,.txt,application/json,text/plain" aria-label={t("quickLibrary.importFile")} onChange={event => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = "";
+              if (!file) return;
+              importDetails.current?.setAttribute("open", "");
+              if (file.size > 3_000_000) { setImportText(""); setImportFileError(true); return; }
+              void file.text().then(text => { setImportText(text); setImportFileError(false); }).catch(() => setImportFileError(true));
+            }} />
+            <Button size="sm" variant="primary" onClick={() => importFileInput.current?.click()}>{t("quickLibrary.importFile")}</Button>
+          </div>
           <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
             <label className="text-xs text-zinc-500">{t("quickLibrary.sheetUrl")}
               <Input
@@ -351,11 +374,11 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
           )}
           {sheetError && <p role="alert" className="text-xs text-red-400">{sheetError}</p>}
           {sheets.error && <p role="alert" className="text-xs text-red-400">{t(sheetErrorHint(sheets.error))}</p>}
-          <details className="border-t border-zinc-800 pt-3">
+          <details ref={importDetails} className="border-t border-zinc-800 pt-3">
           <summary className="cursor-pointer text-xs text-zinc-500">{t("quickLibrary.pasteInstead")}</summary>
           <p className="my-2 text-xs text-zinc-500">{t("quickLibrary.importHint")}</p>
           <Textarea rows={5} maxLength={3_000_000} value={importText} aria-label={t("quickLibrary.import")}
-            onChange={event => setImportText(event.target.value)} />
+            onChange={event => { setImportText(event.target.value); setImportFileError(false); }} />
           <p role="status" className="text-xs text-zinc-500">
             {importPreview.error ? t("quickLibrary.importError") : importPreview.invalidRows.length
               ? t("quickLibrary.invalidRows", { rows: importPreview.invalidRows.slice(0, 10).join(", ") })
@@ -892,7 +915,7 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
     linkedUpdates.forEach(({ reply }) => cancelQuickReplySheetSync(reply.id));
     updateSettings({ quickReplies: [...nextReplies, ...additions], quickReplyCustomCategories: categories });
     syncIds.forEach(id => scheduleQuickReplySheetSync(id, t));
-    markSavedSoon(); setImportOpen(false); setImportText(""); setListQuery(""); setListCategory("all");
+            markSavedSoon(); setImportOpen(false); setImportText(""); setImportFileError(false); setListQuery(""); setListCategory("all");
     const firstImported = additions[0] || linkedUpdates[0]?.reply;
     if (firstImported) {
       setSelectedId(null); setListCategory(firstImported.category); setPage(0);

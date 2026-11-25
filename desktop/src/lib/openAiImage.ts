@@ -1,13 +1,14 @@
 import { readAiJson } from "./aiResponse.ts";
 import { trackAiRequest } from "./aiUsage.ts";
-import { assertAiContentAllowed } from "./aiPrivacy.ts";
+import { redactAiContent } from "./aiPrivacy.ts";
 
 export const OPENAI_IMAGE_MODEL = "gpt-image-2.5-flare";
 
 export async function openAiGenerateImage(apiKey: string, prompt: string, aspectRatio: "1:1" | "2:3" | "3:2" = "1:1", referenceImage?: string | string[]): Promise<{ mimeType: string; data: string }> {
   if (!apiKey.trim()) throw Error("请先配置 OpenAI API Key");
   if (!prompt.trim() || prompt.length > 6000) throw Error("图片描述超出长度限制");
-  assertAiContentAllowed(prompt);
+  prompt = redactAiContent(prompt) || "";
+  if (!prompt.trim() || prompt.length > 6000) throw Error("图片描述超出长度限制");
   const references = Array.isArray(referenceImage) ? referenceImage : referenceImage ? [referenceImage] : [];
   if (references.length > 2 || references.some(image => !/^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(image) || image.length > 4_000_000)) throw Error("参考图片格式无效或过大");
   return trackAiRequest({ provider: "openai", model: OPENAI_IMAGE_MODEL, feature: "image" }, async observe => {

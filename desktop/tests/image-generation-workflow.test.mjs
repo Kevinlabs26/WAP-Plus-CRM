@@ -10,16 +10,21 @@ const bundle=await build({stdin:{contents:`export * from './src/lib/imageGenerat
  b.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:'export const useAppStore=f=>f(globalThis.imageWorkflowStore);useAppStore.getState=()=>globalThis.imageWorkflowStore;'}));
 }}]});
 const api=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].text).toString('base64'));
-test('OpenAI image creation and editing block private prompt text before any request', async () => {
+test('OpenAI image creation and editing redact private prompt text before sending', async () => {
  const original = globalThis.fetch;
- let requests = 0;
- globalThis.fetch = async () => { requests++; throw Error('Unexpected request'); };
- api.setAiPrivacyPolicyProvider(() => ({ terms: 'internal project', blockedMessage: 'Blocked locally' }));
+ const requests = [];
+ globalThis.fetch = async (url, options) => {
+  requests.push({ url: String(url), body: JSON.parse(options.body) });
+  return new Response(JSON.stringify({ data: [{ b64_json: 'aW1hZ2U=' }] }), { headers: { 'Content-Type': 'application/json' } });
+ };
+ api.setAiPrivacyPolicyProvider(() => ({ terms: 'internal project', redaction: '[redacted locally]' }));
  try {
   for (const reference of [undefined, 'data:image/png;base64,aW1hZ2U=']) {
-   await assert.rejects(api.openAiGenerateImage('test-key', 'Draw INTERNAL PROJECT', '1:1', reference), /Blocked locally/);
+   await api.openAiGenerateImage('test-key', 'Draw INTERNAL PROJECT', '1:1', reference);
   }
-  assert.equal(requests, 0);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests.map(request => request.body.prompt), ['Draw [redacted locally]', 'Draw [redacted locally]']);
+  assert.doesNotMatch(JSON.stringify(requests), /INTERNAL PROJECT/i);
  } finally {
   api.setAiPrivacyPolicyProvider(undefined);
   globalThis.fetch = original;

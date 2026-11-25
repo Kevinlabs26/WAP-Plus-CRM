@@ -13,7 +13,8 @@ import {
   TableProperties,
   X,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent } from "react";
 import { useAppStore } from "@/store/appStore";
 import { cn, contactTagColorClass, displayContactLabel, displayPhone, resolveSendTarget } from "@/lib/utils";
 import {
@@ -29,6 +30,7 @@ import { PlaybookBinding } from "./PlaybookBinding";
 import { ChatPromptPlan } from "./ChatPromptPlan";
 import { usesPromptPlans } from "@/lib/promptPlans";
 import type { Message, WhatsAppLabel } from "@/types/crm";
+import type { ComposerQuickAccessTab } from "@/store/settingsDefaults";
 import { ContactAvatar } from "./ContactAvatar";
 import { GoogleSheetInfo } from "./GoogleSheetInfo";
 import { ContactLocalTime } from "./ContactLocalTime";
@@ -44,6 +46,7 @@ import { formatAccountDisplay } from "@/lib/accountLabels";
 import { QuickReplyBrowser } from "@/components/chat/QuickReplyBrowser";
 import { useI18n } from "@/i18n";
 import { emitQuickReplyMedia } from "@/lib/quickReplyMedia";
+import { requestQuickReplySend } from "@/lib/quickReplySend";
 import { ImageLibraryPanel } from "@/components/chat/ImageLibraryPanel";
 import { AiSuggestionCard } from "./AiSuggestionCard";
 import { AiSuggestionReadingControl } from "./AiSuggestionReadingControl";
@@ -91,6 +94,7 @@ export function CrmAiPanel() {
   const setSelectedChat = useAppStore((state) => state.setSelectedChat);
   const aiSuggestions = useAppStore((state) => state.aiSuggestions);
   const settings = useAppStore((state) => state.settings);
+  const composerQuickAccessTabs = settings.composerQuickAccessTabs || [];
   const baileysUi = useAppStore((state) => state.baileysUi);
   const applyAiSuggestion = useAppStore((state) => state.applyAiSuggestion);
   const toggleFollowUp = useAppStore((state) => state.toggleFollowUp);
@@ -132,6 +136,29 @@ export function CrmAiPanel() {
   const generation = useRef(0);
   const [suggestionCache] = useState(createSuggestionCache);
   const visibleSuggestionExpiry = useRef<{ key: string; expiresAt: number } | null>(null);
+  const [composerTabMenu, setComposerTabMenu] = useState<{ tab: ComposerQuickAccessTab; x: number; y: number } | null>(null);
+  const composerTabMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!composerTabMenu) return;
+    const outside = (event: PointerEvent) => {
+      if (event.target instanceof Node && !composerTabMenuRef.current?.contains(event.target)) setComposerTabMenu(null);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setComposerTabMenu(null); }
+    };
+    const blur = () => setComposerTabMenu(null);
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("keydown", escape, true);
+    window.addEventListener("blur", blur);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("keydown", escape, true);
+      window.removeEventListener("blur", blur);
+    };
+  }, [composerTabMenu]);
+  useEffect(() => {
+    if (composerTabMenu) composerTabMenuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+  }, [composerTabMenu]);
 
   const contact = contacts.find((item) => item.id === selectedContactId);
   const savedAiChatInstructions = contact?.aiChatInstructions ?? "";
@@ -154,6 +181,15 @@ export function CrmAiPanel() {
   const quickReplyIdentity = settings.sendChannel === "android_bridge"
     ? t("quickShelf.device", { device: phones?.find(phone => phone.id === quickReplyChat?.phoneId)?.name || quickReplyChat?.phoneId || t("quickShelf.unknownAccount") })
     : quickReplyAccount ? formatAccountDisplay(quickReplyAccount) : quickReplyAccountId;
+  const openComposerTabMenu = (event: MouseEvent<HTMLButtonElement>, tab: ComposerQuickAccessTab) => {
+    event.preventDefault(); event.stopPropagation();
+    setComposerTabMenu({ tab, x: event.type === "contextmenu" ? event.clientX : event.currentTarget.getBoundingClientRect().left, y: event.type === "contextmenu" ? event.clientY : event.currentTarget.getBoundingClientRect().bottom });
+  };
+  const toggleComposerQuickAccessTab = (tab: ComposerQuickAccessTab) => {
+    const tabs = useAppStore.getState().settings.composerQuickAccessTabs || [];
+    useAppStore.getState().updateSettings({ composerQuickAccessTabs: tabs.includes(tab) ? tabs.filter(item => item !== tab) : [...tabs, tab] });
+    setComposerTabMenu(null);
+  };
   const thread = useMemo(() => {
     // 用 messagesByChatId 索引桶（已按 chatId 分组 + sentAt 排序），避免全量扫 messages
     if (!threadBucket?.length) return [];
@@ -533,6 +569,7 @@ export function CrmAiPanel() {
           type="button"
           role="tab"
           aria-selected={panelTab === "quick-replies"}
+          title={t(composerQuickAccessTabs.includes("quick-replies") ? "composerShelf.hidePanel" : "composerShelf.showPanel", { panel: t("crmPanel.quickReplies") })}
           className={cn(
             "rounded-lg px-2 py-1.5 text-[11px] transition-colors",
             panelTab === "quick-replies"
@@ -540,10 +577,17 @@ export function CrmAiPanel() {
               : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300"
           )}
           onClick={() => setPanelTab("quick-replies")}
+          onContextMenu={event => openComposerTabMenu(event, "quick-replies")}
+          onKeyDown={event => {
+            if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+            event.preventDefault();
+            const rect = event.currentTarget.getBoundingClientRect();
+            setComposerTabMenu({ tab: "quick-replies", x: rect.left, y: rect.bottom });
+          }}
         >
           {t("crmPanel.quickReplies")}
         </button>
-        <button type="button" role="tab" aria-selected={panelTab === "images"} className={cn("rounded-lg px-2 py-1.5 text-[11px] transition-colors", panelTab === "images" ? "bg-zinc-800 text-brand" : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300")} onClick={() => setPanelTab("images")}>{t("gallery.title")}</button>
+        <button type="button" role="tab" aria-selected={panelTab === "images"} title={t(composerQuickAccessTabs.includes("images") ? "composerShelf.hidePanel" : "composerShelf.showPanel", { panel: t("gallery.title") })} className={cn("rounded-lg px-2 py-1.5 text-[11px] transition-colors", panelTab === "images" ? "bg-zinc-800 text-brand" : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300")} onClick={() => setPanelTab("images")} onContextMenu={event => openComposerTabMenu(event, "images")} onKeyDown={event => { if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return; event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setComposerTabMenu({ tab: "images", x: rect.left, y: rect.bottom }); }}>{t("gallery.title")}</button>
         <button type="button" role="tab" aria-selected={panelTab === "agent"} className={cn("rounded-lg px-2 py-1.5 text-[11px] transition-colors", panelTab === "agent" ? "bg-zinc-800 text-brand" : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300")} onClick={() => setPanelTab("agent")}>{t("crmPanel.agent")}</button>
       </div>
 
@@ -994,6 +1038,10 @@ export function CrmAiPanel() {
             onTogglePin={toggleQuickReplyPin}
             onUsed={recordQuickReplyUsage}
             disabled={!quickReplyChat}
+            onSend={(reply, body) => {
+              if (!selectedChatId || useAppStore.getState().selectedChatId !== selectedChatId) return false;
+              return requestQuickReplySend(selectedChatId, reply, body);
+            }}
             onInsert={reply => {
               if (!selectedChatId || useAppStore.getState().selectedChatId !== selectedChatId) return false;
               if (reply.media) {
@@ -1007,6 +1055,9 @@ export function CrmAiPanel() {
         </section>
       )}
       {sheetExtractOpen&&contact&&<AiSheetExtractDialog contact={contact} messages={thread} accountId={aiAccountId} settings={settings} onClose={()=>setSheetExtractOpen(false)} onWritten={()=>pushToast("已写入 Google 表格","success")} />}
+      {composerTabMenu && createPortal(<div ref={composerTabMenuRef} role="menu" aria-label={t("composerShelf.menuLabel")} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); }} className="fixed z-50 w-64 rounded-lg border border-zinc-700 bg-zinc-900 p-1.5 text-xs shadow-xl" style={{ left: Math.max(4, Math.min(composerTabMenu.x, (window.innerWidth || 320) - 260)), top: Math.max(4, Math.min(composerTabMenu.y, (window.innerHeight || 768) - 64)) }}>
+        <button type="button" role="menuitem" className="w-full rounded px-2.5 py-2 text-left text-zinc-200 hover:bg-zinc-800" onClick={() => toggleComposerQuickAccessTab(composerTabMenu.tab)}>{t(composerQuickAccessTabs.includes(composerTabMenu.tab) ? "composerShelf.hidePanel" : "composerShelf.showPanel", { panel: t(composerTabMenu.tab === "quick-replies" ? "crmPanel.quickReplies" : "gallery.title") })}</button>
+      </div>, document.body)}
     </aside>
   );
 }

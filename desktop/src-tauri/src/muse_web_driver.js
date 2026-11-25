@@ -1,20 +1,50 @@
 (() => {
-  if (window.__wapMuse?.version === 7) return;
+  if (window.__wapMuse?.version === 10) return;
   let job = null;
   const originOK = () => location.origin === 'https://muse.ai';
+  const classText = node => typeof node?.className === 'string' ? node.className : node?.getAttribute?.('class') || '';
+  const isAgent = node => /hatch-agent-bubble-bg/.test(classText(node));
+  const isUser = node => /hatch-user-bubble-bg/.test(classText(node));
+  const hasAgentDescendant = node => Boolean(node?.querySelector?.('[class*="hatch-agent-bubble-bg"]'));
+  const isUserCandidate = node => isUser(node) || (!isAgent(node) && !hasAgentDescendant(node));
+  const hasBubbleContent = node => messageText(node).trim().length > 0 || Boolean(mediaCandidate(node));
   const bubbles = () => {
-    const selector = 'div[class*="hatch-chat-groupable-bubble"]';
+    const selector = 'div[class*="hatch-chat-groupable-bubble"],[class*="hatch-user-bubble-bg"],[class*="hatch-agent-bubble-bg"]';
     const nodes = [...document.querySelectorAll(selector)], all = new Set(nodes);
-    return nodes.filter(node => { let parent = node.parentElement; while (parent) { if (all.has(parent)) return false; parent = parent.parentElement; } return true; });
+    const roles = new Set(nodes.filter(node => isUser(node) || isAgent(node)));
+    const roleCountByParent = new Map();
+    const hasContentRoleParent = new Set();
+    for (const node of roles) {
+      const active = hasBubbleContent(node);
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        if (all.has(parent) && !roles.has(parent)) {
+          roleCountByParent.set(parent, (roleCountByParent.get(parent) || 0) + 1);
+          if (active) hasContentRoleParent.add(parent);
+        }
+      }
+    }
+    // Only unwrap outer containers when a role child carries content or multiple roles share one wrapper.
+    const wrappers = new Set();
+    for (const [parent, count] of roleCountByParent) {
+      if (hasContentRoleParent.has(parent) || count > 1) wrappers.add(parent);
+    }
+    return nodes.filter(node => {
+      if (wrappers.has(node)) return false;
+      for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+        if (roles.has(parent)) return false;
+        if (all.has(parent) && !wrappers.has(parent) && (!roles.has(node) || !hasBubbleContent(node))) return false;
+      }
+      return true;
+    });
   };
-  const isAgent = node => /hatch-agent-bubble-bg/.test(node.className || '');
-  const isUser = node => /hatch-user-bubble-bg/.test(node.className || '');
   const threadPath = path => /^\/thread\/[A-Za-z0-9_-]{1,200}$/.test(path) && path !== '/thread/new';
   const ownerMarker = owner => `WAP conversation ID: ${owner}`;
   const messageText = node => node.innerText || node.textContent || '';
+  const hasMarker = (node, marker) => [node.innerText, node.textContent].some(text =>
+    typeof text === 'string' && text.replace(/[\s\u200B\uFEFF]+/g, ' ').includes(marker));
   const matches = (id, path, owner) => originOK() && (path
     ? threadPath(path) && location.pathname === path && typeof owner === 'string' && /^[a-f0-9]{64}$/.test(owner)
-      && bubbles().some(node => !isAgent(node) && messageText(node).includes(ownerMarker(owner)))
+      && bubbles().some(node => isUserCandidate(node) && hasMarker(node, ownerMarker(owner)))
     : location.pathname === '/thread/new' && new URLSearchParams(location.search).get('wapRequest') === id && !bubbles().length);
   const stop = () => [...document.querySelectorAll('[data-testid="hatch-composer-stop-button"],button[aria-label*="Stop" i],button[aria-label*="停止"]')].find(node => node.offsetParent !== null && !node.hidden && node.getAttribute?.('aria-hidden') !== 'true');
   const input = () => {
@@ -104,8 +134,8 @@
   }
   const result = () => ({ state: job.state, requestId: job.id, diagnostic: { phase: job.phase || job.state, responseNodes: job.responseNodes || 0, mediaLocated: !!job.mediaSrc, mediaPending: !!job.mediaPending, stopVisible: !!stop() }, ...(job.sent ? { sent: true } : {}), ...(job.seenUser && job.path ? { path: job.path } : {}), ...(job.state === 'done' ? { text: job.text, ...(job.mediaData ? { media: job.mediaData } : {}) } : {}), ...(job.error ? { error: job.error } : {}) });
   const fail = error => { if (job) { if (!job.sent) clearReference(); job.state = 'error'; job.error = error; delete job.prompt; return result(); } return { state: 'error', error }; };
-  const ourUser = node => !isAgent(node) && messageText(node).includes(`WAP request ID: ${job.id}`)
-    && (!job.owner || messageText(node).includes(ownerMarker(job.owner)));
+  const ourUser = node => isUserCandidate(node) && hasMarker(node, `WAP request ID: ${job.id}`)
+    && (!job.owner || hasMarker(node, ownerMarker(job.owner)));
   const mediaCandidate = node => {
     for (const video of node.tagName === 'VIDEO' ? [node] : node.querySelectorAll('video')) {
       const src = video.currentSrc || video.src || video.querySelector('source')?.src;
@@ -289,15 +319,24 @@
     const entries = bubbles(), index = entries.findLastIndex(ourUser);
     if (index < 0) {
       job.phase = 'locating-request';
+      if (status.state === 'busy' || status.state === 'loading') {
+        delete job.missingSince;
+        return result();
+      }
       job.missingSince ??= Date.now();
-      if (Date.now()-job.missingSince > 15_000) return fail('Muse 暂时无法定位本次请求，请打开原对话后取回图片；未重复生成');
+      if (Date.now()-job.missingSince > 15_000) {
+        const diag = ` [诊断: path=${location.pathname}, bubbles=${entries.length}, users=${entries.filter(isUser).length}, agents=${entries.filter(isAgent).length}, bodyMarker=${hasMarker(document.body || {}, `WAP request ID: ${job.id}`)}, draftLeft=${Boolean(input()?.value.trim())}]`;
+        return fail((job.expectMedia
+          ? 'Muse 暂时无法定位本次请求，请打开原对话查看并取回图片或视频；为避免重复，未再次生成'
+          : 'Muse 暂时无法定位本次请求，请打开原对话查看本次回复；为避免重复，未再次生成') + diag);
+      }
       return result();
     }
     delete job.missingSince;
     job.seenUser = true;
     if (!job.path && threadPath(location.pathname)) job.path = location.pathname;
     const following = entries.slice(index+1);
-    const nextUser = following.findIndex(isUser);
+    const nextUser = following.findIndex(node => isUser(node) || (isUserCandidate(node) && /WAP (?:request|conversation) ID:/i.test(messageText(node))));
     const response = nextUser < 0 ? following : following.slice(0, nextUser);
     job.responseNodes = response.length;
     const replies = response.filter(isAgent);
@@ -323,12 +362,24 @@
     else if (job.expectMedia && !job.mediaData && !job.mediaPending && Date.now() >= job.mediaDeadline) return fail(job.collecting ? '取回超时：已定位原对话，但未在本次回复范围内识别到可读取的图片；原图保留在 Muse，未重新生成' : text ? 'Muse 已回复文字，但等待图片或视频超时；请在 Muse 窗口查看原结果，未重复生成' : 'Muse 尚未返回图片或视频；请在 Muse 窗口查看原结果，未重复生成');
     return result();
   }
-  function recover(id, allowActive = false) {
-    if (!job || job.id !== id || !job.sent || (!allowActive && (!job.seenUser || job.state !== 'error'))) return { state: 'error', error: '没有可恢复的 Muse 生成结果' };
+  function recover(id, allowActive = false, context = null) {
+    if (originOK() && !job && allowActive && context && threadPath(location.pathname)
+        && (!context.path || context.path === location.pathname)) {
+      const { owner, expectMedia } = context;
+      const anchors = bubbles().filter(node => isUserCandidate(node)
+        && hasMarker(node, `WAP request ID: ${id}`)
+        && (!owner || hasMarker(node, ownerMarker(owner))));
+      if (anchors.length === 1) {
+        job = { id, owner, path: location.pathname, expectMedia, sent: true, seenUser: true,
+          state: 'generating', mediaDeadline: Date.now() + 30_000, text: '', changed: Date.now() };
+      }
+    }
+    if (!originOK() || !job || job.id !== id || !job.sent || (!allowActive && job.state !== 'error')) return { state: 'error', error: '没有可恢复的 Muse 生成结果' };
     if (job.state !== 'error') return poll(id);
-    if (!job.seenUser) return { state: 'error', error: '没有可恢复的 Muse 生成结果' };
+    if ((job.path && location.pathname !== job.path) || !bubbles().some(ourUser)) return result();
     job.state = 'generating';
     delete job.error;
+    delete job.missingSince;
     job.mediaError = null;
     job.mediaPending = false;
     return poll(id);
@@ -336,7 +387,7 @@
   function collect() {
     if (!originOK() || !threadPath(location.pathname)) return { state: 'error', error: '请在 Muse 窗口打开刚才已生成图片的对话，再点“取回 Muse 图片”' };
     if (job && !['done','error'].includes(job.state)) return { state: 'error', error: 'Muse 当前请求尚未结束，请稍后取回' };
-    const entry = [...bubbles()].reverse().find(node => isUser(node) && /WAP request ID:\s*[a-f0-9-]{36}/i.test(messageText(node)));
+    const entry = [...bubbles()].reverse().find(node => isUserCandidate(node) && /WAP request ID:\s*[a-f0-9-]{36}/i.test(messageText(node)));
     const id = entry && /WAP request ID:\s*([a-f0-9-]{36})/i.exec(messageText(entry))?.[1];
     if (!id) return { state: 'error', error: '当前 Muse 对话没有本软件的生成记录，请打开刚才的原对话；不会重新生成' };
     job = { id, path: location.pathname, owner: null, reference: false, expectMedia: true, collecting: true, sent: true, seenUser: true, state: 'generating', mediaDeadline: Date.now()+30_000, text: '', changed: Date.now() };
@@ -348,5 +399,5 @@
       fail('已取消 Muse 生成');
     }
   }
-  window.__wapMuse = { version: 7, inspect, start, poll, recover, collect, cancel };
+  window.__wapMuse = { version: 10, inspect, start, poll, recover, collect, cancel };
 })();

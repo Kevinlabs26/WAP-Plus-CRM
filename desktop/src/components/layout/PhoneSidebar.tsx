@@ -10,13 +10,14 @@ import {
   type ScrollSeekPlaceholderProps,
 } from "react-virtuoso";
 import { useAppStore, flushPersist } from "@/store/appStore";
-import { copyNeverRepliedFolderNumbers } from "@/lib/folderUnreplied";
-import { findChatsWithInbound } from "@/lib/storage";
+import { pendingBroadcastThread } from "@/lib/broadcastCampaign";
+import { copyInactiveFolderNumbers, copyNeverRepliedFolderNumbers } from "@/lib/folderUnreplied";
+import { findChatsWithInbound, findLatestChatActivity } from "@/lib/storage";
 import { isAndroidBridgePhone } from "@/store/deviceIngest";
 import { isDataRestoreActive } from "@/store/restoreGuard";
 import { useShallow } from "zustand/react/shallow";
 import { CreateGroupModal } from "@/components/chat/CreateGroupModal";
-import { BatchSaveContactsModal } from "@/components/settings/BatchSaveContactsModal";
+import { ContactImportModal } from "@/components/settings/ContactImportModal";
 import { openJoinedGroup } from "@/components/chat/openJoinedGroup";
 import {
   getAccountBlocklist,
@@ -56,16 +57,16 @@ import { ContactSidebarList } from "./ContactSidebarList";
 import { ContactManagementPanel } from "./ContactManagementPanel";
 import { FolderHeaderRow } from "./FolderHeaderRow";
 import { FolderCallDialog } from "./FolderCallDialog";
+import { FolderInactiveCopyDialog } from "./FolderInactiveCopyDialog";
 import { FolderAiPromptDialog } from "./FolderAiPromptDialog";
 import { MuseFolderRoutingDialog } from "./MuseFolderRoutingDialog";
 import { ScheduledPlanDialog } from "@/components/chat/ScheduledPlanDialog";
-import { FolderGroupImportDialog } from "./FolderGroupImportDialog";
 import { SidebarSpecialItem } from "./SidebarSpecialItem";
-import {
-  FolderDialog,
-  type FolderDialogState,
-  type PendingFolderAction,
-} from "./FolderDialog";
+import type { FolderDialogState, PendingFolderAction } from "./FolderDialog";
+import { SidebarFolderBatchBar } from "./SidebarFolderBatchBar";
+import { SidebarLeadDateMenu } from "./SidebarLeadDateMenu";
+import { SidebarFolderGroupImportHost } from "./SidebarFolderGroupImportHost";
+import { SidebarFolderActionDialogs } from "./SidebarFolderActionDialogs";
 import {
   CHAT_SORT_OPTIONS,
   chatTarget,
@@ -82,7 +83,6 @@ import { useSidebarData } from "./useSidebarData";
 import { LEAD_INBOX_FOLDER_ID } from "@/store/settingsDefaults";
 import { useI18n } from "@/i18n";
 import type { PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent } from "react";
-import { CornerDownRight, EyeOff, FolderInput, FolderPlus } from "lucide-react";
 
 const EMPTY_WA: WaAccount[] = [];
 const GROUP_CHAT_FILTERS: GroupChatFilter[] = [
@@ -119,6 +119,7 @@ const EMPTY_CLONES: NonNullable<
 export function PhoneSidebar() {
   const { t } = useI18n();
   const [callFolder, setCallFolder] = useState<{ id: string; name: string } | null>(null);
+  const [inactiveCopyFolder, setInactiveCopyFolder] = useState<{ id: string; name: string } | null>(null);
   const copyingFolderNumbers = useRef(false);
   const copyFolderUnreplied = async (folderId: string) => {
     if (copyingFolderNumbers.current) return;
@@ -138,6 +139,30 @@ export function PhoneSidebar() {
       state.pushToast(t(count ? "folder.copyUnrepliedDone" : "folder.copyUnrepliedEmpty", { count }), count ? "success" : "info");
     } catch {
       state.pushToast(t("folder.copyUnrepliedFailed"), "error");
+    } finally {
+      copyingFolderNumbers.current = false;
+    }
+  };
+  const copyFolderInactive = async (folderId: string, cutoffMs: number, includeNeverContacted: boolean): Promise<number | null> => {
+    if (copyingFolderNumbers.current) return null;
+    copyingFolderNumbers.current = true;
+    const state = useAppStore.getState();
+    state.pushToast(t("folder.copyInactiveWorking"), "info");
+    try {
+      const count = await copyInactiveFolderNumbers(folderId, cutoffMs, includeNeverContacted, {
+        getState: () => {
+          if (isDataRestoreActive()) throw new Error("Restoring");
+          return useAppStore.getState();
+        },
+        flush: () => flushPersist(() => useAppStore.getState()),
+        findLatestActivity: findLatestChatActivity,
+        writeText: text => navigator.clipboard.writeText(text),
+      });
+      state.pushToast(t(count ? "folder.copyInactiveDone" : "folder.copyInactiveEmpty", { count }), count ? "success" : "info");
+      return count;
+    } catch {
+      state.pushToast(t("folder.copyInactiveFailed"), "error");
+      return null;
     } finally {
       copyingFolderNumbers.current = false;
     }
@@ -546,6 +571,21 @@ export function PhoneSidebar() {
     });
     const contact = contacts.find((c) => c.id === contactId);
     if (!contact) return;
+    if (preferredChatId && sendChannel === "baileys" && isAllAccountsView) {
+      const state = useAppStore.getState();
+      const target = pendingBroadcastThread(state.broadcastCampaigns, contact);
+      if (target && state.settings.waAccounts.some(account => account.id === target.accountId)) {
+        const chatId = state.ensureChatForContact(target.contactId, target.accountId);
+        const chat = chatId && useAppStore.getState().chats.find(item => item.id === chatId);
+        const recipient = state.contacts.find(item => item.id === target.contactId);
+        if (chat && recipient) {
+          setSelectedChat(chat.id, target.accountId);
+          void markChatRead(chat, recipient);
+          trace("state updated", { mode: "broadcast-thread" });
+          return;
+        }
+      }
+    }
     // 优先打开指定会话（侧栏点会话行），避免同联系人跨号串到另一账号 chat
     if (preferredChatId) {
       const chat = useAppStore
@@ -1549,7 +1589,7 @@ export function PhoneSidebar() {
         />
       )}
 
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden p-2.5">
+      <section className="flex min-h-0 flex-[1_1_0px] flex-col overflow-hidden p-2.5">
         <SidebarListHeader
           folderCount={useAppStore.getState().settings.chatFolders?.length || 0}
           onClearAllFolders={async () => {
@@ -1624,13 +1664,13 @@ export function PhoneSidebar() {
         {leadSettingsOpen && (
           <LeadInboxSettingsPopover onClose={() => setLeadSettingsOpen(false)} />
         )}
-        {visitedListTabs.has("manage") && <div className={listTab === "manage" ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "hidden"} hidden={listTab !== "manage"} aria-hidden={listTab !== "manage"}>
+        {visitedListTabs.has("manage") && <div className={listTab === "manage" ? "flex min-h-0 flex-[1_1_0px] flex-col overflow-hidden" : "hidden"} hidden={listTab !== "manage"} aria-hidden={listTab !== "manage"}>
           <ContactManagementPanel contacts={filteredContacts} accounts={waAccounts} accountId={syncAccountId || ""}
             connectedAccountIds={connectedAccountIds} isBaileys={isBaileys} onPaste={accountId => {setBatchSaveAccountId(accountId); setBatchSaveOpen(true);}} />
         </div>}
         {visitedListTabs.has("contacts") && (
           <div
-            className={listTab === "contacts" ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}
+            className={listTab === "contacts" ? "flex min-h-0 flex-[1_1_0px] flex-col overflow-hidden" : "hidden"}
             hidden={listTab !== "contacts"}
             aria-hidden={listTab !== "contacts"}
             onContextMenu={(e) => e.preventDefault()}
@@ -1646,7 +1686,7 @@ export function PhoneSidebar() {
         )}
         {visitedListTabs.has("chats") && (
           <div
-            className="flex min-h-0 flex-1 flex-col"
+            className={listTab === "chats" ? "flex min-h-0 flex-1 flex-col" : "hidden"}
             hidden={listTab !== "chats"}
             aria-hidden={listTab !== "chats"}
             onContextMenu={(e) => {
@@ -1776,6 +1816,7 @@ export function PhoneSidebar() {
                       }}
                       onOpenMultiWindow={() => openFolderMultiWindow(folder.id)}
                       onCopyUnreplied={() => void copyFolderUnreplied(folder.id)}
+                      onCopyInactive={() => setInactiveCopyFolder({ id: folder.id, name: folder.name })}
                       onImport={() => {
                         setFolderImportText("");
                         setFolderDialog({
@@ -1880,75 +1921,21 @@ export function PhoneSidebar() {
               }}
             />
             {folderBatchAction && (
-              <div className="mt-2 shrink-0 rounded-lg border border-zinc-800 bg-zinc-900/90 p-2.5">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <span className="text-[11px] text-zinc-400">
-                    {t("folder.batchSelectedCount", { count: folderBatchSelected.size })}
-                  </span>
-                  <button
-                    type="button"
-                    className="rounded px-2 py-1 text-[11px] text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-50"
-                    disabled={folderBatchBusy}
-                    onClick={clearFolderBatchAction}
-                  >
-                    {t("common.cancel")}
-                  </button>
-                </div>
-                {folderBatchAction.mode === "move" ? (
-                  <div className="flex gap-2">
-                    <select
-                      aria-label={t("folder.batchTarget")}
-                      className="ui-control h-8 min-w-0 flex-1 px-2 text-[11px]"
-                      value={folderBatchTargetFolderId}
-                      onChange={event => setFolderBatchTargetFolderId(event.target.value)}
-                    >
-                      <option value="">{t("folder.ungrouped")}</option>
-                      {chatFolders.filter(folder => folder.id !== folderBatchAction.folderId).map(folder => (
-                        <option key={folder.id} value={folder.id}>{folderOptionLabel(folder)}</option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      className="shrink-0 rounded-lg bg-brand px-2.5 py-1.5 text-[11px] font-medium text-[var(--brand-foreground)] disabled:opacity-40"
-                      disabled={!folderBatchSelected.size}
-                      onClick={moveSelectedFolderChats}
-                    >
-                      {t("folder.batchMoveConfirm", { count: folderBatchSelected.size })}
-                    </button>
-                  </div>
-                ) : folderBatchDeleteConfirm ? (
-                  <div className="space-y-2">
-                    <p role="alert" className="text-[11px] leading-4 text-rose-200">{t("folder.batchDeleteWarning")}</p>
-                    <div className="flex justify-end gap-2">
-                      <button
-                        type="button"
-                        className="rounded-lg px-2.5 py-1.5 text-[11px] text-zinc-400 hover:bg-zinc-800"
-                        disabled={folderBatchBusy}
-                        onClick={() => setFolderBatchDeleteConfirm(false)}
-                      >
-                        {t("common.cancel")}
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-lg border border-rose-500/40 bg-rose-500/15 px-2.5 py-1.5 text-[11px] font-medium text-rose-200 disabled:opacity-40"
-                        disabled={folderBatchBusy}
-                        onClick={() => void deleteSelectedFolderChats()}
-                      >
-                        {t("common.confirm")}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    className="w-full rounded-lg border border-rose-500/40 bg-rose-500/15 px-2.5 py-1.5 text-[11px] font-medium text-rose-200 disabled:opacity-40"
-                    disabled={!folderBatchSelected.size}
-                    onClick={() => setFolderBatchDeleteConfirm(true)}
-                  >
-                    {t("folder.batchDeleteConfirm", { count: folderBatchSelected.size })}
-                  </button>
-                )}
-              </div>
+              <SidebarFolderBatchBar
+                batchAction={folderBatchAction}
+                selectedCount={folderBatchSelected.size}
+                busy={folderBatchBusy}
+                targetFolderId={folderBatchTargetFolderId}
+                deleteConfirmVisible={folderBatchDeleteConfirm}
+                chatFolders={chatFolders}
+                formatFolderOptionLabel={folderOptionLabel}
+                onTargetFolderChange={setFolderBatchTargetFolderId}
+                onCancel={clearFolderBatchAction}
+                onConfirmMove={moveSelectedFolderChats}
+                onRequestDeleteConfirm={() => setFolderBatchDeleteConfirm(true)}
+                onCancelDeleteConfirm={() => setFolderBatchDeleteConfirm(false)}
+                onConfirmDelete={() => void deleteSelectedFolderChats()}
+              />
             )}
           </div>
         )}
@@ -1964,256 +1951,86 @@ export function PhoneSidebar() {
       {museFolderRoutingOpen && <MuseFolderRoutingDialog onClose={() => setMuseFolderRoutingOpen(false)} />}
       {scheduleTarget && <ScheduledPlanDialog {...scheduleTarget} onClose={() => setScheduleTarget(null)} />}
       {callFolder && <FolderCallDialog folderId={callFolder.id} folderName={callFolder.name} onClose={() => setCallFolder(null)} />}
-      {groupFolderDialog && (() => {
-        const folder = chatFolders.find((item) => item.id === groupFolderDialog.folderId);
-        if (!folder) return null;
-        const scopedAccountId =
-          folder.scope?.type === "account"
-            ? folder.scope.accountId
-            : folder.scope?.type === "all"
-              ? null
-              : dataAccountId;
-        const folderMembers = new Set(folder.chatIds);
-        const folderGroups = chats.filter((chat) => {
-          const accountId = chat.accountId || chat.phoneId;
-          return (
-            chat.isGroup === true &&
-            !chat.localOnly &&
-            !folderMembers.has(chat.id) &&
-            (!scopedAccountId || accountId === scopedAccountId)
-          );
-        });
-        const contactsById = new Map(contacts.map((contact) => [contact.id, contact]));
-        const existingGroupChatIds: Record<string, string> = {};
-        for (const chat of chats) {
-          if (chat.isGroup !== true) continue;
-          const contact = contactsById.get(chat.contactId);
-          const jid = contact?.channelAddress;
-          if (!jid) continue;
-          const accountId = chat.accountId || chat.phoneId;
-          const key = `${accountId}|${jid}`;
-          if (!existingGroupChatIds[key] || chat.id === `bridge-chat-${chat.contactId}` || chat.id === `chat-${chat.contactId}`) {
-            existingGroupChatIds[key] = chat.id;
-          }
-        }
-        const initialAccountId =
-          scopedAccountId ||
-          (connectedAccountIds.includes(syncAccountId)
-            ? syncAccountId
-            : connectedAccountIds[0] || "");
-        return (
-          <FolderGroupImportDialog
-            mode={groupFolderDialog.mode}
-            folderName={folder.name}
-            groups={folderGroups}
-            accounts={waAccounts}
-            connectedAccountIds={connectedAccountIds}
-            existingGroupChatIds={existingGroupChatIds}
-            accountLabelOf={accountLabelOf}
-            initialAccountId={initialAccountId}
-            fixedAccountId={scopedAccountId || undefined}
-            onClose={() => setGroupFolderDialog(null)}
-            onMoveGroups={(chatIds) => {
-              chatIds.forEach((chatId) => moveChatToFolder(chatId, folder.id));
-              pushToast(
-                t("folderGroups.moved", { count: chatIds.length, name: folder.name }),
-                "success"
-              );
-              setGroupFolderDialog(null);
-            }}
-            onJoined={(groupJid, group, accountId) =>
-              addJoinedGroupToFolder(folder.id, groupJid, group, accountId)
-            }
-            onAlreadyJoined={(chatId) => fileImportedGroup(folder.id,chatId)}
-          />
-        );
-      })()}
+      {inactiveCopyFolder && <FolderInactiveCopyDialog
+        folderId={inactiveCopyFolder.id}
+        folderName={inactiveCopyFolder.name}
+        onClose={() => setInactiveCopyFolder(null)}
+        onCopy={(cutoffMs, includeNeverContacted) => copyFolderInactive(inactiveCopyFolder.id, cutoffMs, includeNeverContacted)}
+      />}
+      {groupFolderDialog && (
+        <SidebarFolderGroupImportHost
+          dialog={groupFolderDialog}
+          chatFolders={chatFolders}
+          chats={chats}
+          contacts={contacts}
+          waAccounts={waAccounts}
+          connectedAccountIds={connectedAccountIds}
+          dataAccountId={dataAccountId}
+          syncAccountId={syncAccountId}
+          accountLabelOf={accountLabelOf}
+          onClose={() => setGroupFolderDialog(null)}
+          onMoveChatToFolder={moveChatToFolder}
+          onAddJoinedGroup={addJoinedGroupToFolder}
+          onFileImportedGroup={fileImportedGroup}
+          onNotifyMoved={(message) => pushToast(message, "success")}
+        />
+      )}
 
       {folderDialog && (
-        <FolderDialog
+        <SidebarFolderActionDialogs
           dialog={folderDialog}
           pendingAction={pendingFolderAction}
           nameDraft={folderNameDraft}
           importText={folderImportText}
-          importFolderName={
-            folderDialog.type === "import"
-              ? chatFolders.find(
-                  (folder) => folder.id === folderDialog.folderId
-                )?.name
-              : undefined
-          }
+          chatFolders={chatFolders}
           nameInputRef={folderNameInputRef}
+          isAllAccountsView={isAllAccountsView}
           onNameDraftChange={setFolderNameDraft}
           onImportTextChange={setFolderImportText}
-          onClose={() => {
-            setFolderDialog(null);
-            setPendingFolderAction(null);
-          }}
-          onSubmitName={(name) => {
-            if (folderDialog.type === "create") {
-              const id = createChatFolder(name, folderDialog.parentId);
-              if (id && pendingFolderAction) {
-                const targetChatIds = pendingFolderAction.chatIds?.length
-                  ? pendingFolderAction.chatIds
-                  : [pendingFolderAction.chatId];
-                if (pendingFolderAction.mode === "move") {
-                  if (pendingFolderAction.dismissFromLead && isAllAccountsView) {
-                    const currentSettings = useAppStore.getState().settings;
-                    updateSettings({
-                      chatFolders: currentSettings.chatFolders.map((folder) =>
-                        folder.id === id
-                          ? { ...folder, scope: { type: "all" as const } }
-                          : folder
-                      ),
-                    });
-                  }
-                  targetChatIds.forEach((chatId) => moveChatToFolder(chatId, id));
-                  if (pendingFolderAction.dismissFromLead) {
-                    dismissLeadChats(targetChatIds);
-                  }
-                  pushToast(
-                    pendingFolderAction.dismissFromLead
-                      ? t("leadInbox.movedDate", {
-                          count: targetChatIds.length,
-                          name,
-                        })
-                      : `已移到「${name}」`,
-                    "success"
-                  );
-                } else {
-                  targetChatIds.forEach((chatId) => cloneChatToFolder(chatId, id));
-                }
-                setPendingFolderAction(null);
-              }
-            } else if (folderDialog.type === "rename") {
-              renameChatFolder(folderDialog.folderId, name);
-            }
-            setFolderDialog(null);
-          }}
-          onSubmitImport={() => {
-            if (folderDialog.type !== "import") return;
-            importPhonesToFolder(folderDialog.folderId, folderImportText);
-            setFolderImportText("");
-            setFolderDialog(null);
-          }}
-          onConfirmClear={() => {
-            if (folderDialog.type !== "clear") return;
-            clearChatFolder(folderDialog.folderId);
-            setFolderDialog(null);
-          }}
-          onConfirmDelete={() => {
-            if (folderDialog.type !== "delete") return;
-            deleteChatFolder(folderDialog.folderId);
-            setFolderDialog(null);
-          }}
+          onClose={() => setFolderDialog(null)}
+          onClearPendingAction={() => setPendingFolderAction(null)}
+          onCreateFolder={createChatFolder}
+          onRenameFolder={renameChatFolder}
+          onMoveChatToFolder={moveChatToFolder}
+          onCloneChatToFolder={cloneChatToFolder}
+          onDismissLeadChats={dismissLeadChats}
+          onImportPhonesToFolder={importPhonesToFolder}
+          onClearFolder={clearChatFolder}
+          onDeleteFolder={deleteChatFolder}
+          onNotifySuccess={(message) => pushToast(message, "success")}
         />
       )}
 
       {leadDateMenu && (
-        <div
-          data-lead-date-menu
-          className="fixed z-[10020] w-60 overflow-hidden rounded-xl border border-zinc-700/90 bg-zinc-900 p-1.5 shadow-2xl shadow-black/50"
-          style={{ left: leadDateMenu.x, top: leadDateMenu.y }}
-        >
-          <div className="border-b border-zinc-800 px-2 py-1.5">
-            <p className="truncate text-[11px] font-medium text-zinc-200">
-              {leadDateMenu.label}
-            </p>
-            <p className="mt-0.5 text-[10px] text-zinc-500">
-              {t("leadInbox.dateConversationCount", {
-                count: leadDateMenu.chatIds.length,
-              })}
-            </p>
-          </div>
-          <button
-            type="button"
-            className="mt-1 flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] text-zinc-300 hover:bg-zinc-800"
-            onClick={() => {
-              setFolderNameDraft("");
-              setPendingFolderAction({
-                chatId: leadDateMenu.chatIds[0] || "",
-                chatIds: leadDateMenu.chatIds,
-                mode: "move",
-                dismissFromLead: true,
-              });
-              setFolderDialog({ type: "create" });
-              setLeadDateMenu(null);
-            }}
-          >
-            <FolderPlus className="h-3.5 w-3.5 text-zinc-500" />
-            {t("leadInbox.moveDateToNewFolder")}
-          </button>
-          {chatFolders.length > 0 && (
-            <>
-              <p className="px-2 pb-1 pt-2 text-[9px] font-semibold uppercase tracking-wide text-zinc-600">
-                {t("leadInbox.moveDateToFolder")}
-              </p>
-              <div className="max-h-44 overflow-y-auto">
-                {folderTreeRows(chatFolders)
-                  .filter(({ folder }) => {
-                    if (folder.id === LEAD_INBOX_FOLDER_ID) return false;
-                    const accountIds = new Set(
-                      leadDateMenu.chatIds
-                        .map((chatId) => {
-                          const chat = chats.find((item) => item.id === chatId);
-                          const contact = chat
-                            ? contacts.find((item) => item.id === chat.contactId)
-                            : undefined;
-                          return (
-                            chat?.accountId ||
-                            contact?.accountId ||
-                            chat?.phoneId ||
-                            dataAccountId
-                          );
-                        })
-                        .filter(Boolean)
-                    );
-                    if (accountIds.size > 1) return folder.scope?.type === "all";
-                    if (folder.scope?.type === "all") return true;
-                    const onlyAccount = [...accountIds][0] || dataAccountId;
-                    return !folder.scope || folder.scope.accountId === onlyAccount;
-                  })
-                  .map(({ folder, depth }) => (
-                  <button
-                    key={folder.id}
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] text-zinc-300 hover:bg-zinc-800"
-                    style={{ paddingLeft: 8 + Math.min(depth, 5) * 12 }}
-                    onClick={() =>
-                      moveLeadDateToFolder(
-                        leadDateMenu.chatIds,
-                        folder.id,
-                        folderDisplayName(folder)
-                      )
-                    }
-                  >
-                    {depth ? <CornerDownRight className="h-3.5 w-3.5 shrink-0 text-zinc-600" /> : <FolderInput className="h-3.5 w-3.5 shrink-0 text-zinc-500" />}
-                    <span className="truncate">{folderDisplayName(folder)}</span>
-                  </button>
-                  ))}
-              </div>
-            </>
-          )}
-          <div className="mt-1 border-t border-zinc-800 pt-1">
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[11px] text-amber-300 hover:bg-amber-500/10"
-              onClick={() => {
-                dismissLeadChats(leadDateMenu.chatIds);
-                pushToast(
-                  t("leadInbox.removedDate", {
-                    count: leadDateMenu.chatIds.length,
-                  }),
-                  "info"
-                );
-                setLeadDateMenu(null);
-              }}
-            >
-              <EyeOff className="h-3.5 w-3.5" />
-              {t("leadInbox.removeDate")}
-            </button>
-          </div>
-        </div>
+        <SidebarLeadDateMenu
+          menu={leadDateMenu}
+          chatFolders={chatFolders}
+          chats={chats}
+          contacts={contacts}
+          dataAccountId={dataAccountId}
+          buildFolderTreeRows={folderTreeRows}
+          formatFolderDisplayName={folderDisplayName}
+          onMoveToNewFolder={(chatIds) => {
+            setFolderNameDraft("");
+            setPendingFolderAction({
+              chatId: chatIds[0] || "",
+              chatIds,
+              mode: "move",
+              dismissFromLead: true,
+            });
+            setFolderDialog({ type: "create" });
+            setLeadDateMenu(null);
+          }}
+          onMoveToFolder={moveLeadDateToFolder}
+          onDismissDate={(chatIds) => {
+            dismissLeadChats(chatIds);
+            pushToast(
+              t("leadInbox.removedDate", { count: chatIds.length }),
+              "info"
+            );
+            setLeadDateMenu(null);
+          }}
+        />
       )}
 
       {chatMenu &&
@@ -2256,13 +2073,11 @@ export function PhoneSidebar() {
           );
         })()}
 
-      <BatchSaveContactsModal
+      <ContactImportModal
         open={batchSaveOpen}
         onClose={() => setBatchSaveOpen(false)}
-        accounts={waAccounts}
-        accountId={batchSaveAccountId || syncAccountId}
-        connectedAccountIds={connectedAccountIds}
-        cloudAvailable={isBaileys}
+        accountId={isBaileys ? batchSaveAccountId || syncAccountId || undefined : undefined}
+        initialTab="paste"
       />
 
       <CreateGroupModal

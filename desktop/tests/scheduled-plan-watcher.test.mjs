@@ -52,11 +52,24 @@ test('cancellation after waiting for the gate prevents transport, and uncertain 
 test('new-contact plans retain the explicitly selected account during availability checks',()=>{
  const h=setup();try{
   h.state.contacts[0]={id:'contact',name:'New contact',phone:'+12025550123',accountId:'owner'};
+  h.state.chats[0]={...h.state.chats[0],hasMessageHistory:false};
   const selected={...target,recipient:'+12025550123',accountId:'other'};
   assert.equal(h.deps.availability(selected),'ready');
   h.state.settings.waAccounts=h.state.settings.waAccounts.filter(account=>account.id!=='other');
   assert.equal(h.deps.availability(selected),'missing','deleted accounts cannot be replaced with another sender');
  }finally{h.cleanup();}
+});
+
+test("a confirmed receipt arriving during send is preserved if the local request later times out", () => {
+  const h = setup();
+  try {
+    const id = h.deps.enqueue({ text: "Body" }, target);
+    Object.assign(h.state.messages[0], { deliveryStatus: "delivered", waMessageId: "confirmed" });
+    h.deps.finish(id, { ok: false, uncertain: true, message: "request timeout" });
+    assert.equal(h.state.messages[0].deliveryStatus, "delivered");
+    assert.equal(h.state.messages[0].waMessageId, "confirmed");
+    assert.notEqual(h.state.messages[0].deliveryUncertain, true);
+  } finally { h.cleanup(); }
 });
 
 for(const kind of ['audio','video'])test(`native ${kind} uses the correct route and step-specific content`,async()=>{

@@ -34,6 +34,44 @@ export default defineConfig({
         main: path.resolve(__dirname, "index.html"),
         museWorkspace: path.resolve(__dirname, "muse-workspace.html"),
       },
+      output: {
+        manualChunks(id) {
+          const normalized = id.replace(/\\/g, "/");
+          if (normalized.includes("/node_modules/")) {
+            if (
+              normalized.includes("/react/") ||
+              normalized.includes("/react-dom/") ||
+              normalized.includes("/scheduler/") ||
+              normalized.includes("/zustand/")
+            ) {
+              return "vendor-react";
+            }
+            if (normalized.includes("/@tauri-apps/")) {
+              return "vendor-tauri";
+            }
+            if (normalized.includes("/lucide-react/")) {
+              return "vendor-icons";
+            }
+            if (normalized.includes("/react-virtuoso/")) {
+              return "vendor-virtuoso";
+            }
+            if (normalized.includes("/xlsx/")) {
+              return "vendor-xlsx";
+            }
+            return undefined;
+          }
+          if (normalized.includes("/src/i18n/locales/zh-CN")) {
+            return "locale-zh-CN";
+          }
+          if (normalized.includes("/src/i18n/locales/en")) {
+            return "locale-en";
+          }
+          if (normalized.includes("/src/i18n/locales/fr")) {
+            return "locale-fr";
+          }
+          return undefined;
+        },
+      },
     },
   },
 });

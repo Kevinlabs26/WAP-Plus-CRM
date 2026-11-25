@@ -5,8 +5,8 @@ import makeWASocket, {
   Browsers,
   DisconnectReason,
   proto,
-  useMultiFileAuthState,
 } from "baileys";
+import { useEncryptedMultiFileAuthState } from "./encryptedAuthState.mjs";
 import pino from "pino";
 import QRCode from "qrcode";
 import { json, requestBody } from "./httpUtil.mjs";
@@ -86,7 +86,8 @@ try {
   if(exists)throw Error("发现两份同步缓存，已保留原文件；请先排查缓存目录冲突");
   await rename(`${authDir}/sync-events`,syncDirectory);
 }catch(error){if(error.code!=="ENOENT")throw error;}
-const eventSpool = await createEventSpool(syncDirectory,Buffer.from(spoolKeyHex,"hex"),{onPause:pauseForStorage});
+const masterKeyBuffer = Buffer.from(spoolKeyHex, "hex");
+const eventSpool = await createEventSpool(syncDirectory, masterKeyBuffer, {onPause:pauseForStorage});
 delete process.env.WAP_SYNC_KEY_HEX;
 const deletionJournal = createDeletionJournal(authDir);
 
@@ -760,7 +761,10 @@ async function connectInternal(opts = {}) {
       qrDataUrl = "";
     }
 
-    const { state, saveCreds } = await useMultiFileAuthState(authDir);
+    const { state, saveCreds } = await useEncryptedMultiFileAuthState(
+      authDir,
+      masterKeyBuffer
+    );
     if (myGen !== connectGeneration) return;
     // Baileys uses creds.me to choose login over registration.
     if (hasPendingPhonePairing(state.creds)) {

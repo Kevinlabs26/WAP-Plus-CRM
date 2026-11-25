@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Ensure HTML hidden attribute always overrides Tailwind display utilities like .flex */
+[hidden]:not([hidden="until-found"]) {
+  display: none !important;
+}
+
 :root {
   color-scheme: dark;
   --app-bg: #090a0b;

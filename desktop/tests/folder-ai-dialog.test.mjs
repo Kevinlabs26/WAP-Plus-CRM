@@ -14,6 +14,7 @@ const mocks = {
   '@/components/settings/AiOutreachControls':'export const AiOutreachControls="outreach-controls";',
   '@/components/settings/AiOutreachPreview':'export const AiOutreachPreview="outreach-preview";',
   '@/lib/aiOutreach':'export const tickAiOutreach=async()=>{};export const outreachFolderDismissal=id=>`outreach-folder:${id}`;',
+  '@/lib/aiOutreachContext':'export const outreachFolderChatIds=()=>[];',
   '@/store/appStore': 'export const flushPersist=async()=>{};export const useAppStore=selector=>selector(globalThis.folderAiState);useAppStore.getState=()=>globalThis.folderAiState;',
 };
 const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/layout/FolderAiPromptDialog.tsx',import.meta.url))],
@@ -43,12 +44,13 @@ function harness(prompt,initialise=()=>{}) {
 
 test('folder dialog previews inheritance and saves an independent identity without enabling automation',()=>{
  const h=harness();assert.ok(JSON.stringify(h.render()).includes('PARENT'));
- h.select('custom');assert.equal(h.nodes().find(n=>n.type==='textarea').props.maxLength,6000);
+ h.select('custom');assert.equal(h.nodes().find(n=>n.type==='textarea').props.maxLength,undefined);
  assert.equal(h.nodes().find(n=>n.props.children==='dialog.save').props.disabled,true);
- h.type('  NEW FOLDER ROLE  ');
+ const longPrompt = 'NEW FOLDER ROLE '.repeat(1800).trim();
+ h.type('  ' + longPrompt + '  ');
  h.state.settings={...h.state.settings,chatFolders:h.state.settings.chatFolders.map(f=>f.id==='parent'?{...f,name:'Renamed elsewhere'}:f)};
  h.click('dialog.save');
- assert.equal(h.state.settings.chatFolders.find(f=>f.id==='f').aiSystemPrompt,'NEW FOLDER ROLE');
+ assert.equal(h.state.settings.chatFolders.find(f=>f.id==='f').aiSystemPrompt,longPrompt);
  assert.equal(h.state.settings.chatFolders[0].name,'Renamed elsewhere');
  assert.equal(h.state.settings.aiReplyMode,'semi');
  assert.equal(h.state.settings.chatFolders.find(f=>f.id==='f').autoReplyMode,undefined);
@@ -74,16 +76,18 @@ test('folder prompt plan is saved for non-Muse providers alongside its existing 
  h.state.settings.aiOutreachMuseAccountId = 'muse-account';
  h.state.settings.aiPlaybookPlans = [{ id: 'muse-daily', name: 'Muse daily', days: ['old-muse-playbook'] }];
  h.render();
+ assert.equal(h.nodes().find(node => node.type?.name === 'PlaybookScheduleFields'), undefined);
+ assert.ok(h.nodes().some(node => node.type === 'select' && node.props['aria-label'] === 'aiLibrary.choose'));
+ h.state.settings.aiProvider = 'muse';
+ h.render();
+ assert.equal(fields(), undefined);
+ assert.ok(!h.nodes().some(node => node.type === 'select' && node.props['aria-label'] === 'aiLibrary.choose'));
  const schedule = { planId: 'muse-daily', startDate: plan.startDate, switchTime: plan.switchTime, timeZone: plan.timeZone };
  h.nodes().find(node => node.type?.name === 'PlaybookScheduleFields').props.onChange(schedule);
  h.render();
  h.click('dialog.save');
  assert.deepEqual(h.state.settings.chatFolders[1].aiPlaybookSchedule, schedule);
  assert.deepEqual(h.state.settings.chatFolders[1].aiPromptPlan, plan);
- h.state.settings.aiProvider = 'muse';
- h.render();
- assert.equal(fields(), undefined);
- assert.ok(h.nodes().some(node => node.type?.name === 'PlaybookScheduleFields'));
 });
 
 test('chat entry hides folder reply-mode controls and saving cannot overwrite the folder mode',()=>{

@@ -132,7 +132,7 @@ setAiPrivacyPolicyProvider(() => {
   const { settings } = useAppStore.getState();
   return {
     terms: settings.museBlockedTerms,
-    blockedMessage: translate(normalizeLocale(settings.uiLanguage), "aiPrivacy.blocked"),
+    redaction: translate(normalizeLocale(settings.uiLanguage), "aiPrivacy.redaction"),
   };
 });
 

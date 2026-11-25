@@ -17,7 +17,7 @@ const nodes=tree=>Array.isArray(tree)?tree.flatMap(nodes):tree?.props?[tree,...n
 const media={dataUrl:'data:image/png;base64,AA==',mimeType:'image/png',fileName:'template.png',kind:'image',size:1};
 const future=()=>new Date(Date.now()+3600000).toISOString();
 function fixture(){
- const state={hydrated:true,uiReady:true,persisted:0,messages:[],chats:[{id:'one',contactId:'c1',accountId:'a'},{id:'two',contactId:'c2',accountId:'a'}],contacts:[{id:'c1',name:'One',phone:'',channelAddress:'12345@g.us',accountId:'a'},{id:'c2',name:'Two',phone:'+12025550123',accountId:'a'}],settings:{waAccounts:[{id:'a',label:'Account A'}],quickReplies:[{id:'template',title:'Welcome',body:'Original template',category:'other',media:{...media}}],scheduledPlans:[],chatFolderClones:[],chatFolders:[{id:'root',chatIds:['one'],scope:{type:'account',accountId:'a'}},{id:'child',parentId:'root',chatIds:['two'],scope:{type:'account',accountId:'a'}}]},
+ const state={hydrated:true,uiReady:true,persisted:0,messages:[],chats:[{id:'one',contactId:'c1',accountId:'a'},{id:'two',contactId:'c2',accountId:'a',hasMessageHistory:false}],contacts:[{id:'c1',name:'One',phone:'',channelAddress:'12345@g.us',accountId:'a'},{id:'c2',name:'Two',phone:'+12025550123',accountId:'a'}],settings:{waAccounts:[{id:'a',label:'Account A'}],quickReplies:[{id:'template',title:'Welcome',body:'Original template',category:'other',media:{...media}}],scheduledPlans:[],chatFolderClones:[],chatFolders:[{id:'root',chatIds:['one'],scope:{type:'account',accountId:'a'}},{id:'child',parentId:'root',chatIds:['two'],scope:{type:'account',accountId:'a'}}]},
   updateSettings(patch){state.settings={...state.settings,...patch};},pushToast(){},requestConfirm:async()=>true};
  state.broadcastCampaigns=[];globalThis.planState=state;return state;
 }
@@ -56,6 +56,14 @@ test('history-only legacy records show one empty state and remain reachable, wit
  await h.click('planQueue.create');assert.equal(h.find('settingsScheduled.filter.active').props['aria-pressed'],true);
  assert.equal(h.nodes().filter(n=>n.type===ScheduledPlanDialog).length,1);
  assert.ok(h.find('planQueue.create').props.className.includes('whitespace-nowrap'));
+});
+
+test('a scheduled Android message without a receipt is shown as needing review',async()=>{
+ const h=harness(SettingsScheduledMessagesPanel);
+ h.state.settings.scheduledMessages=[{id:'task',status:'failed',channelId:'android_bridge',messageId:'out',text:'test',contactName:'Contact',dueAt:future()}];
+ h.state.messages=[{id:'out',direction:'out',deliveryStatus:'failed',deliveryUncertain:true}];
+ h.render();await h.click('settingsScheduled.filter.failed');
+ assert.ok(h.find('broadcast.run.item.uncertain'));
 });
 
 test('shared legacy list still cancels, replans, opens the original account and deletes only after confirmation',async()=>{
@@ -214,6 +222,15 @@ test('a duplicate requires an additional visible confirmation and newly added co
  await h.submit();assert.equal(h.closed,1);assert.equal(h.state.settings.scheduledPlans.length,3);
 });
 
+test('duplicate confirmation compares the recipient account rather than the broadcast default',async()=>{
+ const h=harness(ScheduledPlanDialog,{chatIds:['two']});
+ h.state.broadcastCampaigns=[{id:'broadcast',status:'paused',accountId:'b',items:[{accountId:'a',phoneE164:'+12025550123',bodyRendered:'same',status:'pending'}]}];
+ h.nodes().find(n=>n.type==='textarea').props.onChange({target:{value:'same'}});h.render();
+ await h.submit();await h.submit();
+ assert.equal(h.state.settings.scheduledPlans.length,0);assert.ok(h.find('planQueue.confirmDuplicate'));
+ await h.submit();assert.equal(h.state.settings.scheduledPlans.length,1);
+});
+
 test('native audio with text is previewed and saved as separate ordered messages',async()=>{
  const h=harness(ScheduledPlanDialog,{chatIds:['one']});
  h.state.settings.quickReplies[0].media={...media,kind:'audio',mimeType:'audio/mpeg',dataUrl:'data:audio/mpeg;base64,AA=='};
@@ -291,7 +308,7 @@ test('reusing an existing sequence copies content without copying its recipient 
 });
 
 test('a late confirmed receipt advances a reviewed unknown step instead of re-sending it',async()=>{
- const h=harness(SettingsScheduledMessagesPanel);h.state.messages=[{id:'late-receipt',accountId:'a',deliveryStatus:'delivered'}];
+ const h=harness(SettingsScheduledMessagesPanel);h.state.messages=[{id:'late-receipt',accountId:'a',direction:'out',deliveryStatus:'delivered'}];
  h.state.settings.scheduledPlans=[{id:'plan',title:'Plan',text:'first',steps:[{text:'second'}],dueAt:future(),createdAt:future(),gapSec:30,status:'paused',items:[{id:'one',accountId:'a',contactName:'One',status:'unknown',messageId:'late-receipt',stepIndex:0}]}];h.render();
  await h.click('planQueue.details');await h.click('planQueue.reviewRetry');const i=h.state.settings.scheduledPlans[0].items[0];assert.equal(i.stepIndex,1);assert.equal(i.status,'pending');assert.deepEqual(i.messageIds,['late-receipt']);assert.equal(i.messageId,undefined);assert.equal(h.state.settings.scheduledPlans[0].status,'paused');
 });

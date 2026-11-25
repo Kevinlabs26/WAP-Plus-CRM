@@ -255,6 +255,7 @@ pub fn run() {
             commands::db_load_messages_page,
             commands::db_latest_outgoing_message,
             commands::db_chats_with_inbound,
+            commands::db_latest_conversation_by_chat,
             commands::db_search_messages,
             commands::db_get_message,
             commands::secure_load_secrets,

@@ -37,6 +37,7 @@ async function fixture(draftIds=[]) {
     useAppStore:Object.assign(selector=>selector(state), { getState:()=>state }),useShallow:fn=>fn,useI18n:()=>({t:(key,params)=>key+(params?JSON.stringify(params):'')}),
     cn:(...parts)=>parts.filter(Boolean).join(' '),Button:'button',Input:'input',Textarea:'textarea',SectionLabel:'h4',SettingsNumberInput:'number-input',BroadcastPickStep:'picker',BroadcastMediaPicker:'media-picker',CampaignRunPanel:'run-panel',
     DEFAULT_RATE_LIMITS:{},applyAccountWarmup:()=>({active:flags.warmup,hoursLeft:24}),isWaAccountConnected:()=>flags.connected,lastContactedAccounts:()=>new Map(),recipientKey:(_account,phone)=>phone,salesStagesWithLabels:()=>[],formatAccountDisplay:account=>account.label,
+    routeBroadcastAccounts:(_state,phones,accountId)=>({accountByPhone:Object.fromEntries(phones.map(phone=>[phone,accountId])),contacted:0,unclear:0,unassigned:0}),
     buildContactLookup:()=>{metrics.indexes++;return new Map();},contactSendablePhone:contact=>{metrics.phones++;return template.contactSendablePhone(contact);},
   };
   const {BroadcastView}=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text+'\n//# sourceURL=broadcast-setup.js').toString('base64')+'#'+Math.random());
@@ -81,6 +82,15 @@ test('ordinary entry defaults to number paste and never builds the 20,000-contac
     h.picker().onSourceChange('numbers');h.render();const calls=h.metrics.phones;
     h.picker().onPhoneTextChange('+12025550103');h.render();assert.equal(h.metrics.indexes,1);assert.equal(h.metrics.phones,calls);
   }finally{h.close();}
+});
+
+test('ordinary broadcast passes the account mapping that the user reviewed', async()=>{
+ const h=await fixture();try{
+  h.picker().onPhoneTextChange('+12025550101');h.flags.confirm=true;h.render();
+  h.launch().props.onClick();await new Promise(setImmediate);
+  assert.deepEqual(h.metrics.input.expectedAccountByPhone,{'+12025550101':'a'});
+  assert.equal(h.metrics.input.firstContactQuotas,undefined);
+ }finally{h.close();}
 });
 
 test('source switching preserves pasted numbers, filters and selections; changing the new-contact default preserves recipients',async()=>{

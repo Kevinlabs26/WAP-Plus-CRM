@@ -1,6 +1,6 @@
 import { AI_OUTPUT_TRUNCATED, readAiJson } from "./aiResponse.ts";
 import { trackAiRequest, type AiUsageFeature } from "./aiUsage.ts";
-import { assertAiContentAllowed } from "./aiPrivacy.ts";
+import { redactAiContent } from "./aiPrivacy.ts";
 import { VERTEX_DEFAULT_MODEL, vertexRequest } from "./vertexAi.ts";
 /**
  * Gemini API 调用（Google 官方 generateContent 接口，非 OpenAI 兼容）。
@@ -124,7 +124,8 @@ export async function geminiGenerate(opts: GeminiCredentials & {
   onText?: (text: string) => void;
   feature?:AiUsageFeature;
 }): Promise<string> {
-  assertAiContentAllowed(opts.system, opts.user);
+  const system = redactAiContent(opts.system);
+  const user = redactAiContent(opts.user) || "";
   const model = opts.model || (opts.vertexCredential !== undefined ? VERTEX_DEFAULT_MODEL : GEMINI_DEFAULT_MODEL);
   const generationConfig: Record<string, unknown> = {
     temperature: opts.temperature ?? 0.7,
@@ -134,11 +135,11 @@ export async function geminiGenerate(opts: GeminiCredentials & {
     generationConfig.maxOutputTokens = opts.maxOutputTokens;
   }
   const body: Record<string, unknown> = {
-    contents: [{ role: "user", parts: [{ text: opts.user }] }],
+    contents: [{ role: "user", parts: [{ text: user }] }],
     generationConfig,
   };
-  if (opts.system?.trim()) {
-    body.systemInstruction = { parts: [{ text: opts.system }] };
+  if (system?.trim()) {
+    body.systemInstruction = { parts: [{ text: system }] };
   }
   return geminiPost(opts, model, body, opts.signal, opts.onText,opts.feature);
 }
@@ -178,8 +179,7 @@ export async function geminiGenerateImage(opts: GeminiCredentials & {
 }): Promise<{ mimeType: string; data: string }> {
   const model = opts.model || GEMINI_IMAGE_MODEL;
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,159}$/.test(model)) throw Error("无效的 Gemini 图片模型 ID");
-  const prompt = opts.prompt.trim();
-  assertAiContentAllowed(prompt);
+  const prompt = redactAiContent(opts.prompt.trim())?.trim() || "";
   if (!prompt || prompt.length > 6000) throw Error("图片描述超出长度限制");
   const references = opts.referenceImages || (opts.referenceImage ? [opts.referenceImage] : []);
   if (references.length > 2 || references.some(image => !/^image\/(?:jpeg|png|webp)$/.test(image.mimeType) || !/^[A-Za-z0-9+/]+={0,2}$/.test(image.data) || image.data.length > 4_000_000)) throw Error("参考图片格式无效或过大");

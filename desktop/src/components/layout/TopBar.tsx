@@ -20,6 +20,7 @@ import { isAwaitingReply } from "@/lib/replyStatus";
 const NAV: { id: NavId; labelKey: TranslationKey }[] = [
   { id: "today", labelKey: "nav.today" },
   { id: "chats", labelKey: "nav.chats" },
+  { id: "contacts", labelKey: "nav.crm" },
   { id: "broadcast", labelKey: "nav.broadcast" },
   { id: "ai-outreach", labelKey: "nav.aiOutreach" },
 ];

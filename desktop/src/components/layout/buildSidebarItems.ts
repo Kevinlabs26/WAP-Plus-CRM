@@ -66,6 +66,7 @@ type BuildSidebarItemsArgs = {
   chatFolders: ChatFolder[];
   chatFolderClones: ChatFolderClone[];
   contactById: ReadonlyMap<string, Contact>;
+  lastMsgAtByChat?: ReadonlyMap<string, string>;
   ungroupedCollapsed: boolean;
   query: string;
   folderDisplayName: (folder: ChatFolder) => string;
@@ -110,6 +111,7 @@ export function buildSidebarItems({
   chatFolders,
   chatFolderClones,
   contactById,
+  lastMsgAtByChat,
   ungroupedCollapsed,
   query,
   folderDisplayName,
@@ -126,7 +128,7 @@ export function buildSidebarItems({
   if (leadView) {
     const displayChats =
       isAllAccountsView && leadMergeAccounts
-        ? collapseAllAccountFolderChats(filteredChats, contactById)
+        ? collapseAllAccountFolderChats(filteredChats, contactById, lastMsgAtByChat)
         : filteredChats.map((chat) => ({
             chat,
             accountCount: 1,
@@ -229,7 +231,7 @@ export function buildSidebarItems({
       children.sort((a, b) => (b.sort || 0) - (a.sort || 0));
     }
     const allAccountDisplayChats = isAllAccountsView
-      ? collapseAllAccountFolderChats(filteredChats, contactById)
+      ? collapseAllAccountFolderChats(filteredChats, contactById, lastMsgAtByChat)
       : [];
     const allAccountDisplayByChatId = new Map<string, FolderDisplayChat>();
     for (const item of allAccountDisplayChats) {
@@ -239,7 +241,7 @@ export function buildSidebarItems({
     }
     const leadDateChats = filteredChats.filter((chat) => leadDateGroupByChatId?.has(chat.id));
     const leadDateDisplayChats = isAllAccountsView && leadMergeAccounts
-      ? collapseAllAccountFolderChats(leadDateChats, contactById)
+      ? collapseAllAccountFolderChats(leadDateChats, contactById, lastMsgAtByChat)
       : leadDateChats.map((chat) => ({ chat, accountCount: 1, memberChatIds: [chat.id] }));
     const leadDateBlocks = new Map<string, { label: string; chats: FolderDisplayChat[] }>();
     for (const item of leadDateDisplayChats) {

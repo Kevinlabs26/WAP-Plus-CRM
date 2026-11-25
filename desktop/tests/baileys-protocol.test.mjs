@@ -79,7 +79,7 @@ assert.match(bridgeIndex, /sock\.ev\.on\("labels\.association"/);
 assert.match(bridgeIndex, /eventsDroppedThrough = removed\[removed\.length - 1\]\?\.seq/);
 assert.match(bridgeIndex, /shouldSyncHistoryMessage: \(\) => true/);
 assert.match(bridgeIndex, /FULL_HISTORY_SYNC_ON_DEMAND/);
-assert.match(bridgeIndex, /useMultiFileAuthState\(authDir\)/);
+assert.match(bridgeIndex, /useEncryptedMultiFileAuthState\(\s*authDir,\s*masterKeyBuffer\s*\)/);
 assert.doesNotMatch(bridgeIndex, /auth-state\.json|useAtomicAuthState/);
 assert.match(bridgeIndex, /browser: Browsers\.ubuntu\("Chrome"\)/);
 assert.doesNotMatch(bridgeIndex, /Browsers\.macOS\("Desktop"\)/);

@@ -31,6 +31,17 @@ function page({fetchMedia=async()=>new Response('image',{headers:{'Content-Type'
 }
 
 const referenceImage={mimeType:'image/jpeg',dataUrl:'data:image/jpeg;base64,aW1hZ2U='};
+test('a submitted reply is recovered after page reload only in its original conversation',()=>{
+ const p=page(),owner='a'.repeat(64);
+ p.api.start('job-1','Hello',null,owner);
+ p.api.poll('job-1');p.reply('Recovered reply');p.finish();p.reload();
+ assert.equal(p.api.recover('job-1',true,{owner,path:'/thread/another'}).state,'error');
+ assert.equal(p.api.recover('job-1',true,{owner:'b'.repeat(64),path:p.location.pathname}).state,'error');
+ assert.equal(p.api.recover('job-1',true,{owner,path:p.location.pathname}).state,'generating');
+ p.tick(2000);
+ assert.equal(p.api.poll('job-1').text,'Recovered reply');
+ assert.equal(p.clicks,1);
+});
 test('two input photos are confirmed in order with batch and sequential file inputs',()=>{
  for(const multiple of [true,false]){
   const p=page({fileInput:true,attachmentMode:'multi',multiple});
@@ -491,4 +502,69 @@ test('account creation and selection refuse an active generation',async()=>{
  const commands=[];globalThis.museNative=async(cmd,args)=>{commands.push([cmd,args]);return{accounts:[],selectedId:args?.accountId||'new'};};
  await client.addMuseWebAccount();await client.selectMuseWebAccount('new');
  assert.deepEqual(commands.map(([cmd])=>cmd),['muse_web_account_add','muse_web_account_select']);
+});
+
+test('driver locates groupable user bubbles without hatch-user-bubble-bg and ignores empty decorative role children',()=>{
+  const createCustomDom = (makeEntries) => {
+    let now = 1000, running = false, clicks = 0, entries = [];
+    const location = { origin: 'https://muse.ai', hostname: 'muse.ai', href: 'https://muse.ai/thread/new?wapRequest=21b90bdd-6442-420b-97ad-e6ffc25f3e07', pathname: '/thread/new', search: '?wapRequest=21b90bdd-6442-420b-97ad-e6ffc25f3e07' };
+    class Textarea { get value() { return this.text || ''; } set value(v) { this.text = v; } dispatchEvent() {} offsetParent = {}; }
+    const field = new Textarea();
+    const send = { offsetParent: {}, disabled: false, getAttribute: k => k === 'aria-label' ? 'Send' : null, click() { clicks++; entries.push(...makeEntries(field.value)); field.value = ''; running = true; if (location.pathname === '/thread/new') location.pathname = '/thread/custom-1'; } };
+    const stop = { get offsetParent() { return running ? {} : null; }, click() { running = false; } };
+    const document = {
+      body: { get innerText() { return entries.map(n => n.innerText || '').join('\n'); } },
+      querySelector(sel) { if (sel.includes('hydration')) return { getAttribute: () => 'hydrated' }; if (sel.includes('stop-button')) return running ? stop : null; return null; },
+      querySelectorAll(sel) { if (sel.includes('stop-button')) return running ? [stop] : []; if (sel === 'textarea') return [field]; if (sel.startsWith('button')) return [send]; if (sel.includes('groupable-bubble')) return entries; return []; },
+    };
+    const context = vm.createContext({ window: {}, document, location, HTMLTextAreaElement: Textarea, Event: class { constructor(type) { this.type = type; } }, URLSearchParams, URL, AbortSignal, Date: { now: () => now } });
+    vm.runInContext(driver, context);
+    return { api: context.window.__wapMuse, entries, location, tick: ms => { now += ms; }, finish: () => { running = false; }, get clicks() { return clicks; }, reload: () => { delete context.window.__wapMuse; vm.runInContext(driver, context); } };
+  };
+  const makeNode = (text, className, children = [], parentElement = null) => ({
+    innerText: text, textContent: text, className, parentElement,
+    querySelector: sel => sel.includes('hatch-agent-bubble-bg') ? children.find(c => (c.className || '').includes('hatch-agent-bubble-bg')) || null : null,
+    querySelectorAll: sel => sel === '.prose' && className.includes('hatch-agent-bubble-bg') && text ? [{ innerText: text }] : [],
+  });
+  // Case 1 & 3: user bubble without hatch-user-bubble-bg + non-agent tool card before agent reply.
+  const id = '21b90bdd-6442-420b-97ad-e6ffc25f3e07', owner = 'a'.repeat(64);
+  const dom1 = createCustomDom(prompt => [makeNode(prompt, 'hatch-chat-groupable-bubble')]);
+  assert.equal(dom1.api.start(id, 'Hello', null, owner).state, 'preparing');
+  assert.equal(dom1.api.poll(id).state, 'generating');
+  dom1.entries.push(makeNode('Searching knowledge base...', 'hatch-chat-groupable-bubble hatch-tool-card'));
+  dom1.entries.push(makeNode('Reply after tool card', 'hatch-chat-groupable-bubble hatch-agent-bubble-bg'));
+  dom1.finish(); dom1.api.poll(id); dom1.tick(2000);
+  const done1 = dom1.api.poll(id);
+  assert.equal(done1.state, 'done');
+  assert.equal(done1.text, 'Reply after tool card');
+  assert.equal(dom1.api.inspect('job-next', '/thread/custom-1', owner).matched, true);
+  dom1.reload();
+  assert.equal(dom1.api.collect().requestId, id);
+
+  // Case 2: outer bubble with empty decorative hatch-user-bubble-bg child is not dropped as wrapper.
+  const dom2 = createCustomDom(prompt => {
+    const outer = makeNode(prompt, 'hatch-chat-groupable-bubble');
+    const deco = makeNode('', 'hatch-user-bubble-bg', [], outer);
+    return [outer, deco];
+  });
+  assert.equal(dom2.api.start(id, 'Hello deco', null, owner).state, 'preparing');
+  dom2.api.poll(id);
+  dom2.entries.push(makeNode('Reply with deco', 'hatch-chat-groupable-bubble hatch-agent-bubble-bg'));
+  dom2.finish(); dom2.api.poll(id); dom2.tick(2000);
+  const done2 = dom2.api.poll(id);
+  assert.equal(done2.state, 'done');
+  assert.equal(done2.text, 'Reply with deco');
+});
+
+test('locate timeout error appends non-PII diagnostics while preserving Chinese message',()=>{
+  const p = page();
+  p.api.start('job-1', 'Customer message');
+  p.api.poll('job-1');
+  p.replaceThread();
+  p.finish();
+  p.api.poll('job-1');
+  p.tick(15_001);
+  const failed = p.api.poll('job-1');
+  assert.equal(failed.state, 'error');
+  assert.match(failed.error, /^Muse 暂时无法定位本次请求，请打开原对话查看本次回复；为避免重复，未再次生成 \[诊断: path=\/thread\/new-id, bubbles=2, users=1, agents=1, bodyMarker=false, draftLeft=false\]$/);
 });

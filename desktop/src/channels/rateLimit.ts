@@ -140,6 +140,11 @@ export function clearRateLimitState() {
   }
 }
 
+export function globalSendReadyAt(globalMinGapSec = 0): number {
+  hydrateFromStorage();
+  return Math.max(globalNextAllowedAt, globalLastActivityAt ? globalLastActivityAt + globalMinGapSec * 1000 : 0);
+}
+
 export function checkRateLimit(
   phoneE164: string,
   deviceId: string | null | undefined,
@@ -149,7 +154,6 @@ export function checkRateLimit(
     globalMinGapSec?: number;
   }
 ): { ok: true } | { ok: false; reason: string; retryAfterMs?: number } {
-  hydrateFromStorage();
   const key = keyOf({
     accountId: opts?.accountId,
     phoneE164,
@@ -158,7 +162,7 @@ export function checkRateLimit(
   const now = Date.now();
 
   // Apply the current policy even when the preceding send used a shorter gap.
-  const globalNext = Math.max(globalNextAllowedAt, globalLastActivityAt ? globalLastActivityAt + (opts?.globalMinGapSec || 0) * 1000 : 0);
+  const globalNext = globalSendReadyAt(opts?.globalMinGapSec);
   if (globalNext > now) {
     const retryAfterMs = globalNext - now;
     const wait = Math.ceil(retryAfterMs / 1000);

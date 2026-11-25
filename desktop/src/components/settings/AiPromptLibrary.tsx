@@ -116,7 +116,7 @@ export function AiPromptLibrary({ initiallyOpen = false, fill = false }: { initi
     if (id && !library.some(item => item.id === id)) return;
     const currentFolders=current.settings.aiPromptFolders||[];
     const folderId=templateFolderId&&currentFolders.some(folder=>folder.id===templateFolderId)?templateFolderId:undefined;
-    const template={id:id||crypto.randomUUID(),name:name.trim().slice(0,80),prompt:prompt.trim().slice(0,6000),...(folderId?{folderId}:{})};
+    const template={id:id||crypto.randomUUID(),name:name.trim().slice(0,80),prompt:prompt.trim(),...(folderId?{folderId}:{})};
     current.updateSettings({aiPromptTemplates:id?library.map(item=>item.id===id?template:item):[...library,template]});
     setId(template.id);setName(template.name);setPrompt(template.prompt);setTemplateFolderId(folderId||"");
     expandFolderPath(folderId);
@@ -228,7 +228,8 @@ export function AiPromptLibrary({ initiallyOpen = false, fill = false }: { initi
             {flatFolders.map(({folder,depth})=><option key={folder.id} value={folder.id}>{`${"　".repeat(depth)}${folder.name}`}</option>)}
           </select>
         </label>
-        <Textarea className={fill ? "min-h-64 flex-1" : "min-h-64"} maxLength={6000} rows={12} value={prompt} aria-label={t("folderAi.prompt")} onChange={event=>setPrompt(event.target.value)} />
+        <Textarea className={fill ? "min-h-64 flex-1" : "min-h-64"} rows={12} value={prompt} aria-label={t("folderAi.prompt")} onChange={event=>setPrompt(event.target.value)} />
+        <p className="text-2xs text-zinc-500">{t("settingsAutoReply.promptLength", { count: prompt.trim().length })}</p>
         <p className="text-2xs text-zinc-500">{t("aiLibrary.used",{count:affected.length})}{affected.length?` · ${affected.map(item=>item.name).join("、")}`:""}</p>
         {dirty && <p role="status" className="text-2xs text-amber-500">{t("aiLibrary.unsavedDraft")}</p>}
         <div className="flex flex-wrap gap-2"><Button variant="primary" disabled={!name.trim()||!prompt.trim()||!!id&&!selected} onClick={save}>{t(id ? "dialog.save" : "aiLibrary.createAndSave")}</Button>

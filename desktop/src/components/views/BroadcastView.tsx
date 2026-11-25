@@ -46,7 +46,7 @@ import type {
 } from "@/types/broadcast";
 import { cacheMediaUrl, readMediaCache } from "@/lib/mediaCache";
 import { isWaAccountConnected } from "@/lib/accountConnection";
-import { lastContactedAccounts, recipientKey } from "@/lib/scheduledPlans";
+import { routeBroadcastAccounts } from "@/lib/broadcastAccountRouting";
 import { useI18n } from "@/i18n";
 
 type Step = "setup" | "run";
@@ -285,8 +285,7 @@ export function BroadcastView() {
     [salesStageLabels, salesStageOrder]
   );
 
-  const account = accounts.find((a) => a.id === accountId);
-  const lastContacted = useMemo(() => lastContactedAccounts(chats, contacts, messages), [chats, contacts, messages]);
+  const [firstContactQuotas, setFirstContactQuotas] = useState<Record<string, number>>();
 
   const pool = useMemo(() => {
     if (recipientSource !== "contacts") return [];
@@ -339,18 +338,30 @@ export function BroadcastView() {
     ...selectedList.map(contactSendablePhone).filter((phone): phone is string => !!phone),
     ...directPhones,
   ])], [directPhones, selectedList]);
-  const destinationAccountIds = useMemo(() => [...new Set(destinationPhones.map(phone => lastContacted.get(recipientKey("", phone)) || accountId).filter((id): id is string => !!id))], [destinationPhones, lastContacted, accountId]);
+  const routing = useMemo(() => routeBroadcastAccounts({chats,contacts,messages}, destinationPhones, accountId, android ? undefined : firstContactQuotas),
+    [chats,contacts,messages,destinationPhones,accountId,android,firstContactQuotas]);
+  const destinationAccountIds = [...new Set(Object.values(routing.accountByPhone).filter(Boolean))];
+  const campaignAccountId = firstContactQuotas ? destinationAccountIds[0] || accountId : accountId;
+  const routingError = !android && routing.unclear ? t("broadcast.routingUnclear",{count:routing.unclear})
+    : !android && routing.unassigned ? t("broadcast.routingUnassigned",{count:routing.unassigned}) : "";
+  const accountForPhone = (phone: string) => {
+    const id = routing.accountByPhone[phone];
+    const index = accounts.findIndex(item => item.id === id);
+    const target = accounts[index];
+    return target ? formatAccountDisplay({label:target.label,userName:target.userName,index1:index+1}) : id || "—";
+  };
   const disconnectedAccount = accounts.find(item => destinationAccountIds.includes(item.id) && !isWaAccountConnected(accounts, item.id, liveBaileysAccountId, baileysUi.connection));
   const destinationWarmup = destinationAccountIds.map(id => {
     const target = accounts.find(item => item.id === id);
     return target ? { account: target, warmup: applyAccountWarmup(baseLimits, target.warmupExempt ? undefined : target.createdAt) } : null;
   }).find(item => item?.warmup.active) || null;
-  const contactedCount = destinationPhones.filter(phone => lastContacted.has(recipientKey("", phone))).length;
-  const newContactCount = destinationPhones.length - contactedCount;
+  const contactedCount = routing.contacted;
+  const newContactCount = destinationPhones.length - contactedCount - routing.unclear;
 
   const previewRecipients = useMemo(() => {
     const rows: Array<{
       key: string;
+      phone: string;
       label: string;
       contact: { name: string; company?: string };
     }> = [];
@@ -361,6 +372,7 @@ export function BroadcastView() {
       seen.add(phone);
       rows.push({
         key: contact.id,
+        phone,
         label: contact.name.trim() || phone,
         contact,
       });
@@ -370,6 +382,7 @@ export function BroadcastView() {
       seen.add(phone);
       rows.push({
         key: phone,
+        phone,
         label: phone,
         contact: { name: "", company: "" },
       });
@@ -412,7 +425,7 @@ export function BroadcastView() {
     ? `${t("broadcast.variant", { number: invalidVersion + 1 })}：${versionErrors[invalidVersion]}` : versionErrors[invalidVersion];
   const bridgeBlocked = !bridge.connected || !bridge.deviceId ? t("broadcast.connectBridge")
     : activeVersions.some(version => version.media.length > 0) ? t("broadcast.bridgeUnsupported") : "";
-  const launchBlockedReason = mediaBusy || themeBusy ? t("broadcast.mediaBusy") : !android && !accountId
+  const launchBlockedReason = mediaBusy || themeBusy ? t("broadcast.mediaBusy") : routingError || (!android && !campaignAccountId
     ? t("broadcast.selectAccountRequired")
     : !recipientCount
       ? t("broadcast.addRecipientsRequired")
@@ -426,7 +439,7 @@ export function BroadcastView() {
                 ? t("broadcast.whatsappDisconnected")
                 : running
                   ? t("broadcast.broadcastRunning")
-                  : "";
+                  : "");
 
   const toggle = (id: string) => {
     setSelected((prev) => {
@@ -458,7 +471,8 @@ export function BroadcastView() {
 
   const validateSetup = () => {
     if (mediaBusy) { pushToast(t("broadcast.mediaBusy"), "error"); return false; }
-    if (!android && !accountId) {
+    if (routingError) { pushToast(routingError,"error"); return false; }
+    if (!android && !campaignAccountId) {
       pushToast(t("broadcast.selectAccountRequired"), "error");
       return false;
     }
@@ -519,10 +533,13 @@ export function BroadcastView() {
     const ok = await requestConfirm({
       title: t("broadcast.confirmStart"),
       description: [
-        t("broadcast.confirmAccount", {
-          account: android ? bridge.deviceName || bridge.deviceId || "Android" : formatAccountDisplay({ label: account?.label, userName: account?.userName, index1: 1 }),
-        }),
-        ...(!android ? [t("planQueue.accountRoutingSummary", { contacted: contactedCount, new: newContactCount })] : []),
+        ...(!android ? destinationAccountIds.map(id=>{
+          const phones=destinationPhones.filter(phone=>routing.accountByPhone[phone]===id);
+          return `${accountForPhone(phones[0])} · ${t("broadcast.confirmRecipients",{count:phones.length,cap:BROADCAST_HARD_CAP})}`;
+        }) : [t("broadcast.confirmAccount", {
+          account: bridge.deviceName || bridge.deviceId || "Android",
+        })]),
+        ...(!android ? [t(firstContactQuotas?"broadcast.firstContactRoutingSummary":"planQueue.accountRoutingSummary", { contacted: contactedCount, new: newContactCount })] : []),
         t("broadcast.confirmRecipients", { count: recipientCount, cap: BROADCAST_HARD_CAP }),
         mediaSummary,
         t("broadcast.confirmGap", { min: extraGapSec, max: extraGapMaxSec }),
@@ -550,8 +567,9 @@ export function BroadcastView() {
     }
 
     const input = {
-      accountId: android ? bridge.deviceId! : accountId,
+      accountId: android ? bridge.deviceId! : campaignAccountId,
       ...(android ? { channelId: "android_bridge" as const } : {}),
+      ...(!android ? { firstContactQuotas, expectedAccountByPhone:routing.accountByPhone } : {}),
       template: versions[0].template,
       contactIds: [...selected],
       phoneNumbers: directPhones,
@@ -631,7 +649,7 @@ export function BroadcastView() {
         </Button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div className={cn("min-h-0 flex-1 p-4", step === "run" ? "flex flex-col overflow-hidden" : "overflow-y-auto")}>
         {step === "setup" && (
           <div className="mx-auto flex min-h-full w-full max-w-[1440px] flex-col gap-4">
             <div className={cn(
@@ -699,7 +717,7 @@ export function BroadcastView() {
                     <SectionLabel className="!mb-0">{t("broadcast.copy")}</SectionLabel>
                     <Button size="xs" variant="ghost" disabled={themeBusy || themeLocked} title={t("broadcast.copyHint")} aria-label={t("broadcast.copyHint")} onClick={() => insertTemplateVariable("{name}")}>{t("broadcast.name")}</Button>
                   </div>
-                  {android ? <span className="text-2xs text-zinc-400">{bridge.deviceName || t("broadcast.connectBridge")}</span> : <label className="flex min-w-0 items-center gap-2 text-2xs text-zinc-500">
+                  {android ? <span className="text-2xs text-zinc-400">{bridge.deviceName || t("broadcast.connectBridge")}</span> : !firstContactQuotas && <label className="flex min-w-0 items-center gap-2 text-2xs text-zinc-500">
                     <span className="shrink-0">{t("broadcast.newContactAccount")}</span>
                     <select
                       value={accountId}
@@ -721,6 +739,35 @@ export function BroadcastView() {
                     </select>
                   </label>}
                 </div>
+                {!android&&<fieldset className="mt-2 space-y-2">
+                  <label className="inline-flex items-center gap-2 text-xs">
+                    <input type="checkbox" checked={!!firstContactQuotas} onChange={event=>setFirstContactQuotas(event.target.checked?{}:undefined)}/>
+                    {t("allocation.title")}
+                  </label>
+                  {firstContactQuotas&&<>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {accounts.map((item,index)=>{
+                        const selected=Object.hasOwn(firstContactQuotas,item.id);
+                        const name=formatAccountDisplay({label:item.label,userName:item.userName,index1:index+1});
+                        return <div key={item.id} className="flex min-w-0 items-center gap-2 text-xs">
+                          <label className="flex min-w-0 flex-1 items-center gap-2">
+                            <input type="checkbox" checked={selected} onChange={event=>{
+                              const next={...firstContactQuotas};
+                              if(event.target.checked)next[item.id]=0;else delete next[item.id];
+                              setFirstContactQuotas(next);
+                            }}/>
+                            <span className="truncate">{name}</span>
+                          </label>
+                          <input type="number" className="ui-control w-16 px-2 py-1" min={0} max={BROADCAST_HARD_CAP} disabled={!selected}
+                            aria-label={t("allocation.quota",{name})} value={selected?firstContactQuotas[item.id]:""}
+                            onChange={event=>setFirstContactQuotas({...firstContactQuotas,[item.id]:Math.max(0,Math.min(BROADCAST_HARD_CAP,Math.trunc(Number(event.target.value)||0)))})}/>
+                        </div>;
+                      })}
+                    </div>
+                    <p className="text-2xs text-zinc-500">{t("broadcast.firstContactRoutingHint")}</p>
+                    {routingError&&<p role="status" className="text-xs text-amber-500">{routingError}</p>}
+                  </>}
+                </fieldset>}
                 <div className="mt-3 flex flex-wrap items-center gap-1.5" role="group" aria-label={t("broadcast.contentMode")}>
                   <Button size="sm" variant={!randomVersions ? "primary" : "secondary"} disabled={mediaBusy || themeBusy} aria-pressed={!randomVersions}
                     onClick={() => setRandomVersions(false)}>{t("broadcast.fixedContent")}</Button>
@@ -744,8 +791,8 @@ export function BroadcastView() {
                     }}>{t("broadcast.removeVariant")}</Button>
                 </div>}
                 <div className="mt-1 flex items-center gap-1.5 text-2xs text-zinc-500">
-                  <span>{t("planQueue.accountRoutingSummary", { contacted: contactedCount, new: newContactCount })}</span>
-                  <span role="note" tabIndex={0} className="inline-flex cursor-help rounded p-1" title={[randomVersions ? t("broadcast.variantHint") : "", t("planQueue.accountRoutingHint")].filter(Boolean).join("\n")} aria-label={[randomVersions ? t("broadcast.variantHint") : "", t("planQueue.accountRoutingHint")].filter(Boolean).join(". ")}><Info className="h-3.5 w-3.5" /></span>
+                  <span>{t(firstContactQuotas?"broadcast.firstContactRoutingSummary":"planQueue.accountRoutingSummary", { contacted: contactedCount, new: newContactCount })}</span>
+                  <span role="note" tabIndex={0} className="inline-flex cursor-help rounded p-1" title={[randomVersions ? t("broadcast.variantHint") : "", t(firstContactQuotas?"broadcast.firstContactRoutingHint":"planQueue.accountRoutingHint")].filter(Boolean).join("\n")} aria-label={[randomVersions ? t("broadcast.variantHint") : "", t(firstContactQuotas?"broadcast.firstContactRoutingHint":"planQueue.accountRoutingHint")].filter(Boolean).join(". ")}><Info className="h-3.5 w-3.5" /></span>
                 </div>
                 <fieldset disabled={themeBusy || themeLocked} className="flex min-h-0 flex-1 flex-col border-0 p-0">
                   <Textarea
@@ -794,6 +841,7 @@ export function BroadcastView() {
                       </button>
                       <span className="max-w-40 truncate" title={previewRecipient.label}>
                         {previewRecipient.label} · {activePreviewIndex + 1}/{previewRecipients.length}
+                        {!android && ` · ${accountForPhone(previewRecipient.phone)}`}
                       </span>
                       <button
                         type="button"
@@ -928,24 +976,31 @@ export function BroadcastView() {
             <ul className="mt-2 space-y-1.5">
               {campaigns.slice(0, 8).map((c) => {
                 const p = campaignProgress(c);
+                const needsAttention = c.items.filter(item => item.status === "pending" && Boolean(item.error || item.errorCode)).length;
+                const pending = Math.max(0, p.pending - needsAttention);
                 return (
                   <li key={c.id}>
                     <button
                       type="button"
-                      className="flex w-full items-center justify-between rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-left text-[12px] hover:border-zinc-700"
+                      title={t("broadcast.run.openRecord")}
+                      className="flex w-full flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-left text-[12px] hover:border-zinc-700"
                       onClick={() => {
                         setActiveId(c.id);
                         setStep("run");
                       }}
                     >
-                      <span className="truncate text-zinc-200">
+                      <span className="min-w-0 flex-1 truncate text-zinc-200">
                         {c.title || c.template.slice(0, 28)}
                         <span className="ml-2 text-2xs text-zinc-500">
-                          {c.status}
+                          {t(c.status === "done" ? "broadcast.run.item.sent" : c.status === "running" ? "broadcast.run.item.sending" : c.status === "paused" ? "broadcast.run.pause" : c.status === "cancelled" ? "broadcast.run.item.skipped" : "broadcast.run.item.pending")}
                         </span>
                       </span>
-                      <span className="tabular-nums text-2xs text-zinc-500">
-                        {p.sent}/{p.total}
+                      <span className="flex shrink-0 flex-wrap gap-x-2.5 tabular-nums text-2xs">
+                        <span className="text-emerald-400">{t("broadcast.run.sent", { count: p.sent })}</span>
+                        <span className={p.failed ? "text-rose-400" : "text-zinc-500"}>{t("broadcast.run.failed", { count: p.failed })}</span>
+                        {needsAttention > 0 && <span className="text-amber-300">{t("broadcast.run.needsAttention", { count: needsAttention })}</span>}
+                        <span className={pending ? "text-amber-300" : "text-zinc-500"}>{t("broadcast.run.pending", { count: pending })}</span>
+                        <span className="text-zinc-500">{t("broadcast.run.skipped", { count: p.skipped })}</span>
                       </span>
                     </button>
                   </li>

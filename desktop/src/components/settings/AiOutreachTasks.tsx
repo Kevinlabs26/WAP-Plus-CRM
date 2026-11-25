@@ -97,7 +97,7 @@ function OutreachTasks() {
     const state=useAppStore.getState(),selected=new Set(selectedIds);
     const rule=bulkRule.startMode==="immediate"?{...bulkRule,paused:false,runNowAt:Date.now(),scheduleStartAt:undefined}:{...bulkRule,paused:false,runNowAt:undefined,scheduleStartAt:nextScheduledOutreachAt(bulkRule)??undefined};
     const archiveKeys=new Set(selectedIds.map(outreachFolderDismissal));
-    state.updateSettings({chatFolders:state.settings.chatFolders.map(folder=>selected.has(folder.id)?{...folder,aiOutreach:normalizeOutreachRule(rule)}:folder),
+    state.updateSettings({chatFolders:state.settings.chatFolders.map(folder=>selected.has(folder.id)?{...folder,aiOutreach:normalizeOutreachRule({...rule,firstContactQuotas:folder.aiOutreach?.firstContactQuotas,firstContactAssignments:folder.aiOutreach?.firstContactAssignments,scheduledFirstContactAssignments:folder.aiOutreach?.scheduledFirstContactAssignments})}:folder),
       aiTaskDismissedIds:state.settings.aiTaskDismissedIds.filter(id=>!archiveKeys.has(id))});
     await flushPersist(useAppStore.getState);
     setBulkOpen(false);setSelectedIds([]);
@@ -148,7 +148,7 @@ function OutreachTasks() {
         {run.decisionDetails && <div className="my-2"><AiDecisionDetailsView details={run.decisionDetails}/></div>}
         <div className="flex flex-wrap gap-2">
           {run.status==="draft"&&<Button size="xs" variant="primary" disabled={!!busy||paused||excluded} onClick={()=>void act(run.id,async()=>{if(!await queueOutreachDraft(run.id,true))useAppStore.getState().pushToast(t("aiOutreach.stale"),"info");})}>{t("aiOutreach.confirm")}</Button>}
-          {run.status==="failed"&&!run.archived&&<Button size="xs" disabled={!!busy||paused||excluded||!!(run.messageId&&deliveryById.get(run.messageId)?.deliveryUncertain)} onClick={()=>void act(run.id,async()=>{if(!await retryAiOutreach(run.id))useAppStore.getState().pushToast(t("aiOutreach.stale"),"info");})}>{t(run.messageId?"aiTasks.retrySend":"aiOutreach.retry")}</Button>}
+          {(run.status==="failed"||run.status==="draft"&&!run.messageId)&&!run.archived&&<Button size="xs" disabled={!!busy||paused||excluded||!!(run.messageId&&deliveryById.get(run.messageId)?.deliveryUncertain)} onClick={()=>void act(run.id,async()=>{if(!await retryAiOutreach(run.id))useAppStore.getState().pushToast(t("aiOutreach.stale"),"info");})}>{t(run.status==="draft"?"aiOutreach.recheckDraft":run.messageId?"aiTasks.retrySend":"aiOutreach.retry")}</Button>}
           {pending(run)&&<Button size="xs" disabled={!!busy} onClick={()=>void act(run.id,()=>stopOutreachTask(run.id))}>{t("aiOutreach.stop")}</Button>}
           {run.recipient&&!excluded&&<Button size="xs" disabled={!!busy} onClick={()=>void act(run.id,async()=>{
             const state=useAppStore.getState(),key=recipientKey("",run.recipient!);
@@ -181,7 +181,7 @@ function OutreachTasks() {
       <div className="flex items-center justify-between gap-2 text-sm"><strong>{t("aiOutreach.bulk")} · {selectedIds.length}</strong><Button size="xs" onClick={()=>setSelectedIds(selectedIds.length===folders.length?[]:folders.map(folder=>folder.id))}>{t(selectedIds.length===folders.length?"aiOutreach.clearSelection":"aiOutreach.selectAll")}</Button></div>
       <div className="mt-2 grid max-h-48 grid-cols-1 gap-1 overflow-auto sm:grid-cols-2">{folders.map(folder=><label key={folder.id} className="flex min-w-0 items-center gap-2 rounded px-2 py-1 text-xs"><input type="checkbox" checked={selectedIds.includes(folder.id)} onChange={event=>setSelectedIds(event.target.checked?[...selectedIds,folder.id]:selectedIds.filter(id=>id!==folder.id))}/><span className="truncate">{folder.name}</span></label>)}</div>
       <AiOutreachControls value={bulkRule} onChange={setBulkRule}/>
-      {bulkRule.enabled&&selectedIds.length>0&&<AiOutreachPreview settings={{...settings,chatFolders:folders.map(folder=>selectedIds.includes(folder.id)?{...folder,aiOutreach:{...bulkRule,paused:false}}:folder)}} folderIds={selectedIds} assumeRunning={settings.aiOutreachPaused}/>}
+      {bulkRule.enabled&&selectedIds.length>0&&<AiOutreachPreview settings={{...settings,chatFolders:folders.map(folder=>selectedIds.includes(folder.id)?{...folder,aiOutreach:{...bulkRule,paused:false,firstContactQuotas:folder.aiOutreach?.firstContactQuotas,firstContactAssignments:folder.aiOutreach?.firstContactAssignments,scheduledFirstContactAssignments:folder.aiOutreach?.scheduledFirstContactAssignments}}:folder)}} folderIds={selectedIds} assumeRunning={settings.aiOutreachPaused}/>}
       <p className="mt-2 text-xs text-zinc-500">{t("aiOutreach.bulkHint")}</p>
       <Button size="sm" className="mt-3" variant="primary" disabled={!!busy||!selectedIds.length||bulkRule.startMode==="immediate"&&globalPause} onClick={()=>void applyBulk()}>{t(bulkRule.startMode==="immediate"?"aiOutreach.applyBulkNow":"aiOutreach.applyBulk")}</Button>
     </section>}

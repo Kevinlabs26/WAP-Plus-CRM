@@ -16,7 +16,8 @@ const mocks = {
 };
 const result = await build({
   stdin: { contents: `export {CampaignRunner} from './src/components/bridge/CampaignRunner.tsx';
-    export {withSendGate} from './src/channels/sendGate.ts';export {clearRateLimitState} from './src/channels/rateLimit.ts';`, resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
+    export {setAppLockActive} from './src/lib/appLockRuntime.ts';
+    export {withSendGate} from './src/channels/sendGate.ts';export {clearRateLimitState,recordSend} from './src/channels/rateLimit.ts';`, resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
   bundle: true, format: "esm", platform: "browser", write: false,
   alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) },
   plugins: [{ name: "campaign-io", setup(b) {
@@ -24,8 +25,134 @@ const result = await build({
     b.onLoad({ filter: /.*/, namespace: "mock" }, a => ({ contents: mocks[a.path] }));
   } }],
 });
-const { CampaignRunner, withSendGate, clearRateLimitState } = await import("data:text/javascript;base64," + Buffer.from(result.outputFiles[0].text+'\n//# sourceURL=campaign-safety-test.js').toString("base64"));
+const { CampaignRunner, setAppLockActive, withSendGate, clearRateLimitState, recordSend } = await import("data:text/javascript;base64," + Buffer.from(result.outputFiles[0].text+'\n//# sourceURL=campaign-safety-test.js').toString("base64"));
 const settle = () => new Promise(setImmediate);
+
+test('a matching late receipt updates broadcast history without resending or adopting another account receipt',async()=>{
+  const env=setup();try{
+    const campaign=env.get().broadcastCampaigns[0];campaign.status='paused';
+    Object.assign(campaign.items[0],{status:'failed',messageId:'late',error:'unknown',deliveryUncertain:true});
+    const late={id:'late',direction:'out',accountId:'wa-b',deliveryStatus:'delivered',sentAt:new Date().toISOString()};
+    env.set({messages:[late]});
+    CampaignRunner();await settle();assert.equal(env.get().broadcastCampaigns[0].items[0].status,'failed');
+    env.set({messages:[{...late,accountId:'wa-a'}]});await env.tick();await settle();
+    const item=env.get().broadcastCampaigns[0].items[0];
+    assert.equal(item.status,'sent');assert.equal(item.error,undefined);assert.equal(item.deliveryUncertain,false);
+    assert.equal(env.sends.length,0);
+  }finally{env.cleanup();}
+});
+
+test('a broadcast leaves recipients pending while locked and continues after unlock', async () => {
+  const env = setup();
+  try {
+    setAppLockActive(true);
+    CampaignRunner(); await settle();
+    assert.equal(env.sends.length,0);
+    assert.equal(env.get().messages.length,0);
+    setAppLockActive(false);
+    await env.tick(); await settle();
+    assert.equal(env.sends.length,1);
+  } finally { setAppLockActive(false); env.cleanup(); }
+});
+
+for (const kind of ['text','image']) test(`${kind}: locking during preparation keeps the recipient pending and resends only after unlock`, async () => {
+  const env = setup(kind);
+  const actualNow = Date.now;
+  let now = actualNow(), writes = 0;
+  Date.now = () => now;
+  try {
+    globalThis.campaignPersist = () => { if (++writes === (kind === 'text' ? 1 : 2)) setAppLockActive(true); };
+    CampaignRunner(); await settle();
+    assert.equal(env.sends.length,0);
+    assert.equal(env.get().broadcastCampaigns[0].status,'running');
+    assert.equal(env.get().broadcastCampaigns[0].items[0].status,'pending');
+    assert.equal(env.get().messages[0].deliveryStatus,'pending');
+    setAppLockActive(false);
+    now += 60_000;
+    await env.tick(); await settle();
+    assert.equal(env.sends.length,1);
+    assert.equal(env.get().messages.length,1);
+  } finally { Date.now = actualNow; setAppLockActive(false); env.cleanup(); }
+});
+
+test('a queued broadcast does not send from a stale account after the recipient starts a conversation elsewhere', async () => {
+  const env = setup();
+  try {
+    const contact = {id:'customer',phone:'+12025550100',accountId:'wa-b'};
+    env.set({contacts:[contact],chats:[{id:'chat-on-b',contactId:contact.id,accountId:'wa-b',hasMessageHistory:true,lastMessageDirection:'in',updatedAt:new Date().toISOString()}]});
+    CampaignRunner(); await settle();
+    assert.equal(env.sends.length,0);
+    assert.equal(env.get().broadcastCampaigns[0].items[0].errorCode,'account_changed');
+  } finally { env.cleanup(); }
+});
+
+test("a saved broadcast blocks a default-account send when history becomes unclear at the final gate", async () => {
+  const env = setup();
+  try {
+    globalThis.campaignPersist = () => {
+      env.set({ contacts: [{ id: "orphan", phone: "+12025550100", lastMessageAt: new Date().toISOString() }] });
+    };
+    CampaignRunner();
+    await settle();
+    assert.equal(env.sends.length, 0);
+    assert.equal(env.get().broadcastCampaigns[0].items[0].errorCode, "account_changed");
+  } finally { env.cleanup(); }
+});
+
+test("creating an empty chat for a confirmed first contact does not block the final send gate", async () => {
+  const env = setup();
+  try {
+    const contact = { id: "customer", phone: "+12025550100" };
+    env.set({ contacts: [contact] });
+    env.get().ensureChatForContact = () => {
+      env.set({ chats: [{ id: "bridge-chat-customer-wa-a", contactId: contact.id, accountId: "wa-a", hasMessageHistory: false }] });
+      return "bridge-chat-customer-wa-a";
+    };
+    CampaignRunner();
+    await settle();
+    assert.equal(env.sends.length, 1);
+    assert.equal(env.get().broadcastCampaigns[0].items[0].status, "sent");
+  } finally { env.cleanup(); }
+});
+
+test('campaign waits for shared cooldown, then skips only the account with its own cooldown', async () => {
+  const env = setup('image');
+  const actualNow = Date.now;
+  let now = actualNow();
+  Date.now = () => now;
+  try {
+    const state = env.get();
+    Object.assign(state.settings, {rateLimitEnabled:true,globalMinGapSec:2,rateMinIntervalSec:60});
+    state.settings.waAccounts.push({id:'wa-b',status:'connected'});
+    state.broadcastCampaigns[0].items.push({id:'second',status:'pending',contactId:'other',accountId:'wa-b',phoneE164:'+12025550101',bodyRendered:'other'});
+    recordSend('+12025550100',undefined,'wa-a',{minIntervalSec:60});
+    CampaignRunner(); await settle();
+    assert.equal(env.sends.length,0);
+    now += 21_000;
+    await env.tick(); await settle();
+    const blocked = env.get().broadcastCampaigns[0].items[0];
+    assert.equal(blocked.errorCode,'rate_limited',JSON.stringify(blocked));
+    await env.tick(); await settle();
+    assert.equal(env.sends.length,1,JSON.stringify(env.get().broadcastCampaigns[0].items));
+    assert.deepEqual(env.get().broadcastCampaigns[0].items.map(item=>item.status),['pending','sent']);
+  } finally { Date.now = actualNow; env.cleanup(); }
+});
+
+test("an offline account keeps its recipient pending while another account sends its own item", async () => {
+  const env = setup();
+  try {
+    const state = env.get();
+    state.settings.waAccounts.push({id:"wa-b",status:"disconnected"});
+    const campaign = state.broadcastCampaigns[0];
+    campaign.items.unshift({id:"offline",status:"pending",contactId:"other",accountId:"wa-b",phoneE164:"+12025550101",bodyRendered:"offline"});
+    CampaignRunner();
+    await settle();
+    assert.equal(env.sends.length,1);
+    assert.equal(env.get().broadcastCampaigns[0].items[0].status,"pending");
+    assert.equal(env.get().broadcastCampaigns[0].items[1].status,"sent");
+    assert.equal(env.get().broadcastCampaigns[0].status,"running");
+  } finally { env.cleanup(); }
+});
 
 test('a random version sends its frozen media and caption', async () => {
   const env = setup('image');
@@ -69,7 +196,7 @@ function setup(kind = "text") {
   };
   globalThis.campaignMedia = `data:${kind === "image" ? "image/png" : kind === "voice" ? "audio/ogg" : "application/pdf"};base64,Zml4dHVyZQ==`;
   globalThis.campaignSend = async (...args) => { sends.push(args); return { ok: true, id: "protocol", jid: "12025550100@s.whatsapp.net" }; };
-  let state = { hydrated: true, uiReady: true, messages: [], baileysUi: { connection: "connected" },
+  let state = { hydrated: true, uiReady: true, chats: [], contacts: [], messages: [], baileysUi: { connection: "connected" },
     settings: { sendChannel: "baileys", waAccounts: [{ id: "wa-a", status: "connected" }], liveBaileysAccountId: "wa-a", rateLimitEnabled: false, blockSendWhenOverheated: false },
     broadcastCampaigns: [{ id: "campaign", accountId: "wa-a", status: "running", extraGapSec: 5,
       media: kind === "text" ? undefined : [{ id: "media", kind: kind === "voice" ? "audio" : kind, mime: kind === "image" ? "image/png" : kind === "voice" ? "audio/ogg" : "application/pdf", ...(kind === "voice" ? { voiceNote: true } : {}) }],
@@ -276,7 +403,8 @@ for (const kind of ["text", "image", "document", "voice"]) {
   if (kind !== "text") test(`${kind}: resuming after a cooldown reuses the original outgoing record`,async()=>{
     const env=setup(kind);const realNow=Date.now;let now=realNow();Date.now=()=>now;
     try{
-      await withSendGate({accountId:'manual'}, {rateLimitEnabled:false,blockSendWhenOverheated:false},async()=>({ok:true}));
+      recordSend('+12025550100',undefined,'wa-a',{minIntervalSec:60});
+      now+=21_000;
       CampaignRunner();await settle();assert.equal(env.sends.length,0);assert.equal(env.get().messages.length,1);
       now+=60000;await env.tick();await settle();assert.equal(env.sends.length,1);assert.equal(env.get().messages.length,1);assert.equal(env.get().broadcastCampaigns[0].items[0].status,'sent');
     }finally{Date.now=realNow;env.cleanup();}

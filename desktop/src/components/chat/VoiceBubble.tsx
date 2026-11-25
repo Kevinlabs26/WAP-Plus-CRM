@@ -12,7 +12,6 @@ function formatClock(sec: number): string {
   return `${m}:${String(r).padStart(2, "0")}`;
 }
 
-const MAX_WHATSAPP_AUDIO_SECONDS = 600;
 let sharedAudio: HTMLAudioElement | null = null;
 let sharedAudioSrc = "";
 type PlaybackMeta = {
@@ -182,12 +181,8 @@ export function VoiceBubble({
   const { t } = useI18n();
   const [playing, setPlaying] = useState(false);
   const [cur, setCur] = useState(0);
-  const knownSeconds = Math.max(0, Number(seconds) || 0);
-  const displaySeconds =
-    ptt === false
-      ? knownSeconds
-      : Math.min(MAX_WHATSAPP_AUDIO_SECONDS, knownSeconds);
-  const [dur, setDur] = useState(displaySeconds);
+  const displaySeconds = Math.max(0, Number(seconds) || 0);
+  const [loadedDuration, setLoadedDuration] = useState<{ source: string; seconds: number }>();
   const [showTranscript, setShowTranscript] = useState(false);
 
   useEffect(() => {
@@ -200,11 +195,9 @@ export function VoiceBubble({
       }
       setPlaying(!a.paused);
       setCur(a.ended ? 0 : a.currentTime || 0);
-      // WhatsApp's protocol duration is authoritative. The optimistic local
-      // data URL can contain the original file (for example 26 minutes),
-      // while WhatsApp accepts/truncates voice messages to 10 minutes.
       if (!displaySeconds && Number.isFinite(a.duration) && a.duration > 0) {
-        setDur(a.duration);
+        const seconds = a.duration;
+        setLoadedDuration(previous => previous?.source === src && previous.seconds === seconds ? previous : { source: src, seconds });
       }
     };
     playbackListeners.add(syncPlayback);
@@ -214,7 +207,7 @@ export function VoiceBubble({
     };
   }, [src, displaySeconds]);
 
-  const total = dur > 0 ? dur : displaySeconds;
+  const total = displaySeconds || (loadedDuration?.source === src ? loadedDuration.seconds : 0);
   const progress = total > 0 ? Math.min(1, cur / total) : 0;
   const labelLeft = playing || cur > 0 ? formatClock(cur) : formatClock(total);
 

@@ -5,10 +5,11 @@ import { Avatar } from "@/components/ui/Avatar";
 import { useAppStore } from "@/store/appStore";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { cancelScheduledPlan, prioritizeBatchTask, updateScheduledPlan } from "@/lib/scheduledPlanActions";
-import { batchTaskOrder, nextBatchTask, planSteps, scheduledPlanOrder, scheduledPlanMatchesFilter, type ScheduledPlan, type ScheduledPlanFilter } from "@/lib/scheduledPlans";
+import { batchTaskOrder, nextBatchTask, planSteps, reconcileScheduledPlanReceipt, scheduledPlanOrder, scheduledPlanMatchesFilter, type ScheduledPlan, type ScheduledPlanFilter } from "@/lib/scheduledPlans";
 import { estimatePlanMinutes, planItemReceipt } from "@/lib/scheduledPlanProgress";
 import { sendRuntimeFromSettings } from "@/channels";
 import { flushPersist } from "@/store/appStore";
+import { canBatchSendWithAccount } from "@/lib/accountConnection";
 
 export function ScheduledPlansPanel({ filter, onFilterChange: setFilter }: { filter: ScheduledPlanFilter; onFilterChange: (filter: ScheduledPlanFilter) => void }) {
   const { t, locale } = useI18n();
@@ -31,7 +32,8 @@ export function ScheduledPlansPanel({ filter, onFilterChange: setFilter }: { fil
   const visible = plans.filter(plan => scheduledPlanMatchesFilter(plan, filter)).sort(scheduledPlanOrder);
   const waitUntil = Math.max(0, ...plans.map(plan => Date.parse(plan.cooldownUntil || "") || 0));
   const queue = [...plans.filter(p=>["pending","running","paused"].includes(p.status)),...campaigns.filter(c=>["draft","running","paused"].includes(c.status))].sort(batchTaskOrder);
-  const nextId = nextBatchTask(plans,campaigns,now);
+  const batchState = useAppStore.getState();
+  const nextId = nextBatchTask(plans,campaigns,now,id => canBatchSendWithAccount(batchState,id));
 
   return <div className="space-y-4">
     {!!queue.length&&<section className="space-y-2 rounded-lg border border-zinc-700 p-3">
@@ -146,10 +148,9 @@ export function ScheduledPlansPanel({ filter, onFilterChange: setFilter }: { fil
     await run(async () => {
       await updateScheduledPlan(plan.id, p => !["paused", "done"].includes(p.status) ? p : { ...p, status: "paused", items: p.items.map(item => {
         if(item.id!==itemId||item.retired||!["unknown","failed"].includes(item.status))return item;
-        const message=useAppStore.getState().messages?.find(m=>m.id===item.messageId&&m.accountId===item.accountId);
-        if(message&&["sent","server","delivered","read","played"].includes(message.deliveryStatus||"")) {
-          const stepIndex=(item.stepIndex||0)+1;return {...item,stepIndex,status:stepIndex>=planSteps(p).length?"sent":"pending",messageId:undefined,messageIds:[...new Set([...(item.messageIds||[]),message.id])],error:undefined};
-        }
+        const message=useAppStore.getState().messages?.find(m=>m.id===item.messageId);
+        const confirmed = reconcileScheduledPlanReceipt(p, item, message);
+        if (confirmed !== item) return confirmed;
         return {...item,status:"pending",messageId:undefined,error:undefined};
       }) });
       setFilter("active");

@@ -5,10 +5,55 @@ import type { QuickReplySheetLink } from "./quickReplies.ts";
 const ORIGINAL_HEADER = /^(?:\p{Script=Han}{0,6}\s*)?(?:原文|原始|original|source|texte\s*original)$/iu;
 const TRANSLATION_HEADER = /^(?:\p{Script=Han}{0,6}\s*)?(?:翻译|译文|translation|translated|traduction|target)$/iu;
 
+function parseTabbedWorkspaceJson(text: string) {
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); }
+  catch { throw new Error("format"); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("format");
+  const tabs = (parsed as { tabs?: unknown }).tabs;
+  if (!tabs || typeof tabs !== "object" || Array.isArray(tabs)) throw new Error("format");
+
+  const rows: { title: string; body: string; category: string; translation?: string; parent?: string }[] = [];
+  const invalidRows: number[] = [];
+  let sourceRow = 0;
+  let foundData = false;
+  const textCell = (value: unknown) => typeof value === "string" || typeof value === "number"
+    ? String(value).replace(/\u0000/g, "").trim()
+    : "";
+
+  for (const tab of Object.values(tabs)) {
+    if (!tab || typeof tab !== "object" || Array.isArray(tab)) continue;
+    const record = tab as { workname?: unknown; data?: unknown };
+    if (!Array.isArray(record.data)) continue;
+    foundData = true;
+    const category = typeof record.workname === "string"
+      ? Array.from(record.workname.trim()).slice(0, 32).join("")
+      : "";
+    for (const source of record.data) {
+      sourceRow++;
+      if (sourceRow > MAX_QUICK_REPLIES + 1) throw new Error("limit");
+      if (!Array.isArray(source)) { invalidRows.push(sourceRow); continue; }
+      // These exports store the original and translation in the first two cells;
+      // remaining language slots are often empty and are intentionally ignored.
+      const body = textCell(source[0]);
+      const translation = textCell(source[1]);
+      if (!body && !translation) continue;
+      const titleLine = (body || translation).split(/\r?\n/).find(line => line.trim()) || "";
+      const title = Array.from(titleLine.trim()).slice(0, 40).join("");
+      if (!title) continue;
+      rows.push({ title, body, category, ...(translation ? { translation } : {}) });
+      if (rows.length > MAX_QUICK_REPLIES) throw new Error("limit");
+    }
+  }
+  if (!foundData) throw new Error("format");
+  return { rows, invalidRows };
+}
+
 /** Excel/CSV records, including quoted multiline bodies. No files or formulas are executed. */
 export function parseQuickReplyTable(input: string) {
   if (input.length > 3_000_000) throw new Error("limit");
   const text = input.replace(/^\uFEFF/, "");
+  if (text.trimStart().startsWith("{")) return parseTabbedWorkspaceJson(text);
   const records: string[] = [];
   let quoted = false, start = 0;
   for (let i = 0; i < text.length; i++) {

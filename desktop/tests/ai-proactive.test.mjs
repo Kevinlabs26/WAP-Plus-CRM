@@ -15,7 +15,7 @@ const mocks={
  '@/store/restoreGuard':'export const isDataRestoreActive=()=>false;export const getDataRestoreGeneration=()=>globalThis.outreachRestoreEpoch||0;',
  './appLockRuntime':'export const isAppLockActive=()=>false;',
 };
-const result=await build({stdin:{contents:`export * from './src/lib/aiOutreach.ts';export * from './src/lib/aiOutreachContext.ts';export * from './src/lib/aiOutreachRules.ts';export * from './src/lib/aiOutreachPreview.ts';export * from './src/lib/aiReplyStatus.ts';export {tickAiAutoFollowUps} from './src/lib/aiAutoReply.ts';export {SendQueueWatcher} from './src/components/bridge/SendQueueWatcher.tsx';export {normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {buildSettingsSafe,parseBackupJson} from './src/lib/exportData.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',alias:{'@':root+'src'},plugins:[{name:'outreach-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
+const result=await build({stdin:{contents:`export * from './src/lib/aiOutreach.ts';export * from './src/lib/aiOutreachContext.ts';export * from './src/lib/aiOutreachRules.ts';export * from './src/lib/aiOutreachPreview.ts';export * from './src/lib/aiReplyStatus.ts';export {tickAiAutoFollowUps} from './src/lib/aiAutoReply.ts';export {SendQueueWatcher} from './src/components/bridge/SendQueueWatcher.tsx';export {normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {buildSettingsSafe,parseBackupJson} from './src/lib/exportData.ts';export {setAppLockActive} from './src/lib/appLockRuntime.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',alias:{'@':root+'src'},plugins:[{name:'outreach-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
 let sequence=0;
 async function fixture(mode='auto',trigger='new'){
  const api=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].text+'\n//# sourceURL=ai-proactive-fixture-'+sequence+++'.js').toString('base64'));
@@ -54,6 +54,39 @@ function addQueuePeople(h,count=3){
   h.state.settings.chatFolders.find(f=>f.id==='folder').chatIds.push(`chat-${i}`);
  }
 }
+
+test('scheduled outreach fills unused first-contact slots without invalidating an existing draft',async()=>{
+ const h=await fixture('draft');try{
+  const folder=h.state.settings.chatFolders.find(item=>item.id==='folder');
+  folder.scope={type:'all'};
+  Object.assign(folder.aiOutreach,{firstContactQuotas:{a:2},firstContactAssignments:{':12025550101':'a'}});
+  await h.api.tickAiOutreach();
+  const original=h.state.settings.aiOutreachRuns[0];
+  assert.equal(original.status,'draft');
+  addQueuePeople(h,3);
+  globalThis.outreachPatch({chats:[...h.state.chats],contacts:[...h.state.contacts]});
+  h.advance(30_000);await h.api.tickAiOutreach();
+  const added=h.state.settings.aiOutreachRuns.find(run=>run.chatId==='chat-1');
+  assert.equal(added?.accountId,'a');
+  assert.equal(h.state.settings.aiOutreachRuns.length,2);
+  assert.equal(h.api.normalizeLoadedSettings(h.state.settings).chatFolders.find(item=>item.id==='folder').aiOutreach.scheduledFirstContactAssignments[':12025550102'],'a');
+  assert.equal(await h.api.queueOutreachDraft(original.id),true);
+ }finally{h.close();}
+});
+
+test('scheduled outreach releases a removed unsent allocation and saves the replacement across reload',async()=>{
+ const h=await fixture('draft');try{
+  addQueuePeople(h,2);
+  const folder=h.state.settings.chatFolders.find(item=>item.id==='folder');
+  folder.scope={type:'all'};
+  folder.chatIds=['chat-1'];
+  Object.assign(folder.aiOutreach,{firstContactQuotas:{a:1},firstContactAssignments:{':12025550101':'a'}});
+  await h.api.tickAiOutreach();
+  assert.equal(h.state.settings.aiOutreachRuns[0]?.chatId,'chat-1');
+  const saved=h.api.normalizeLoadedSettings(h.state.settings).chatFolders.find(item=>item.id==='folder').aiOutreach;
+  assert.deepEqual(saved.scheduledFirstContactAssignments,{':12025550101':null,':12025550102':'a'});
+ }finally{h.close();}
+});
 
 test('eligible people are durably listed before generation, preserving FIFO while batching generation on later ticks',async()=>{
  const h=await fixture();try{
@@ -449,6 +482,24 @@ test('the real send queue sends to the original account with spacing and blocks 
  }finally{h.close();}}
 });
 
+test('locking at the outgoing transport gate preserves the queued message and its retry count',async()=>{
+ const h=await fixture();try{
+  await h.api.tickAiOutreach();
+  const original=h.state.messages[0];
+  let tick, lockedAtGate=false;
+  window.setInterval=callback=>{tick=callback;return 1;};
+  globalThis.outreachBeforeTransport=()=>{lockedAtGate=true;h.api.setAppLockActive(true);};
+  h.api.SendQueueWatcher();
+  for(let i=0;i<50&&(!lockedAtGate||h.state.messages[0].deliveryStatus==='pending');i++)await new Promise(resolve=>setTimeout(resolve,1));
+  assert.equal(lockedAtGate,true);assert.equal(outreachSent.length,0);
+  assert.equal(h.state.messages[0].deliveryStatus,'queued');
+  assert.equal(h.state.messages[0].retryCount,original.retryCount ?? 0);
+  h.api.setAppLockActive(false);globalThis.outreachBeforeTransport=undefined;tick();
+  for(let i=0;i<50&&!outreachSent.length;i++)await new Promise(resolve=>setTimeout(resolve,1));
+  assert.equal(outreachSent.length,1);assert.equal(h.state.messages[0].id,original.id);
+ }finally{h.api.setAppLockActive(false);h.close();}
+});
+
 test('temporary disconnection keeps queued outreach on its original account without another AI call',async()=>{
  const h=await fixture();try{
   await h.api.tickAiOutreach();h.state.settings.waAccounts[0].status='disconnected';h.api.SendQueueWatcher();for(let i=0;i<20;i++)await new Promise(resolve=>setImmediate(resolve));
@@ -593,6 +644,83 @@ test('automatic mode keeps a draft when Muse returns a send decision without aut
   assert.equal(h.calls,1);
   assert.equal(h.state.settings.aiOutreachRuns[0].status,'draft');
   assert.equal(h.state.messages.length,0);
+ }finally{h.close();}
+});
+
+test('rechecking a draft queues a verified first contact on its assigned account without a model evidence quote',async()=>{
+ const h=await fixture();try{
+  const folder=h.state.settings.chatFolders.find(folder=>folder.id==='folder');
+  folder.scope={type:'all'};
+  Object.assign(folder.aiOutreach,{allowSidebarData:false,firstContactQuotas:{b:1},firstContactAssignments:{':12025550101':'b'}});
+  h.state.ensureChatForContact=(contactId,accountId)=>{
+   const id='assigned-chat';
+   if(!h.state.chats.some(chat=>chat.id===id))globalThis.outreachPatch({chats:[...h.state.chats,{...h.state.chats[0],id,contactId,accountId,phoneId:accountId,hasMessageHistory:undefined}]});
+   return id;
+  };
+  h.state.patchChat=(chatId,patch)=>globalThis.outreachPatch({chats:h.state.chats.map(chat=>chat.id===chatId?{...chat,...patch}:chat)});
+  globalThis.outreachMuse=async()=>JSON.stringify({action:'draft',text:'Bonjour !',reason:'Human review requested.'});
+  await h.api.tickAiOutreach();
+  const draft=h.state.settings.aiOutreachRuns[0];
+  assert.equal(draft.status,'draft');
+  assert.equal(h.state.messages.length,0);
+  globalThis.outreachMuse=async()=>JSON.stringify({action:'send',text:'Bonjour !',reason:'The folder permits a neutral first greeting.'});
+  assert.equal(await h.api.retryAiOutreach(draft.id),true);
+  const run=h.state.settings.aiOutreachRuns[0],message=h.state.messages[0];
+  assert.equal(run.id,draft.id);
+  assert.equal(run.status,'queued');
+  assert.equal(run.accountId,'b');
+  assert.equal(message.deliveryStatus,'queued');
+  assert.equal(message.accountId,'b');
+  assert.equal(message.chatId,'assigned-chat');
+  assert.equal(h.state.messages.length,1);
+  assert.ok(h.api.currentOutreachContext(h.state,message));
+  assert.equal(outreachSent.length,0);
+ }finally{h.close();}
+});
+
+test('rechecking unclear history keeps a draft even if Muse proposes sending',async()=>{
+ const h=await fixture();try{
+  const folder=h.state.settings.chatFolders.find(folder=>folder.id==='folder');
+  folder.scope={type:'all'};
+  Object.assign(folder.aiOutreach,{firstContactQuotas:{b:1},firstContactAssignments:{':12025550101':'b'}});
+  delete h.state.chats[0].hasMessageHistory;
+  await h.api.tickAiOutreach();
+  const draft=h.state.settings.aiOutreachRuns[0];
+  assert.equal(draft.status,'draft');
+  assert.equal(await h.api.retryAiOutreach(draft.id),true);
+  assert.equal(h.state.settings.aiOutreachRuns[0].status,'draft');
+  assert.equal(h.state.settings.aiOutreachRuns[0].decisionDetails.reason,'outreachReason.historyReview');
+  assert.equal(h.state.messages.length,0);
+ }finally{h.close();}
+});
+
+test('a folder contact can use the original WhatsApp conversation under a different saved contact ID',async()=>{
+ const h=await fixture();try{
+  const folder=h.state.settings.chatFolders.find(folder=>folder.id==='folder');
+  folder.scope={type:'all'};
+  folder.aiOutreach.firstContactQuotas={a:1};
+  h.state.contacts=[...h.state.contacts,{...h.state.contacts[0],id:'original-person',accountId:'b'}];
+  const at='2026-11-05T13:00:00.000Z';
+  h.state.chats=[...h.state.chats,{...h.state.chats[0],id:'original-chat',contactId:'original-person',accountId:'b',phoneId:'b',updatedAt:at,hasMessageHistory:true,lastSuccessfulOutgoing:{at,accountId:'b'}}];
+  await h.api.tickAiOutreach();
+  const message=h.state.messages[0];
+  assert.equal(h.state.settings.aiOutreachRuns[0].status,'queued');
+  assert.equal(message.accountId,'b');
+  assert.equal(message.contactId,'original-person');
+  assert.equal(message.chatId,'original-chat');
+  assert.ok(h.api.currentOutreachContext(h.state,message));
+  assert.deepEqual(folder.chatIds,['chat']);
+ }finally{h.close();}
+});
+
+test('welcome backup retains versions and images but restores with automation disabled',async()=>{
+ const h=await fixture();try{
+  const key=JSON.stringify(['a','123456@g.us']);
+  const templates=['Welcome!',{text:'With image',imageDataUrl:'data:image/png;base64,iVBORw0KGgo='}];
+  h.state.settings.groupWelcomeRules={[key]:{enabled:true,templates}};
+  const settingsSafe=h.api.buildSettingsSafe(h.state.settings);
+  const restored=h.api.parseBackupJson(JSON.parse(JSON.stringify({version:2,contacts:h.state.contacts,settingsSafe})));
+  assert.deepEqual(h.api.normalizeLoadedSettings(restored.settingsSafe).groupWelcomeRules[key],{enabled:false,templates});
  }finally{h.close();}
 });
 

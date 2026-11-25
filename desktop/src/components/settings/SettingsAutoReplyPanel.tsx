@@ -11,7 +11,6 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 import { AiPromptLibrary } from "./AiPromptLibrary";
 import { SettingsNumberInput } from "./SettingsNumberInput";
-import { MAX_EFFECTIVE_PROMPT_CHARS } from "@/lib/aiPromptScope";
 
 /**
  * AI 自动回复设置：回复模式、自动回复行为、聊天身份与偏好。
@@ -293,7 +292,6 @@ export function SettingsAutoReplyPanel() {
         <Textarea
           value={accountPrompt}
           onChange={(event) => updateAccountPrompt(event.target.value)}
-          aria-invalid={accountPrompt.trim().length > MAX_EFFECTIVE_PROMPT_CHARS}
           className="mt-2 min-h-24 w-full"
           placeholder={
             profileAccountId && settings.aiSystemPrompt
@@ -301,8 +299,8 @@ export function SettingsAutoReplyPanel() {
               : t("settingsAutoReply.identityPlaceholder")
           }
         />
-        <p role={accountPrompt.trim().length > MAX_EFFECTIVE_PROMPT_CHARS ? "alert" : undefined} className="mt-2 text-xs text-zinc-500">
-          {t("settingsAutoReply.promptLength", { count: accountPrompt.trim().length, max: MAX_EFFECTIVE_PROMPT_CHARS })}
+        <p className="mt-2 text-xs text-zinc-500">
+          {t("settingsAutoReply.promptLength", { count: accountPrompt.trim().length })}
         </p>
       </section>
 

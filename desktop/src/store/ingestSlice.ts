@@ -789,7 +789,8 @@ export function createIngestSlice({
         try { if (writes.length) await Promise.all(writes); }
         catch (error) { get().pushToast(error instanceof Error ? error.message : "同步落盘失败", "error"); throw error; }
         const welcome = buildGroupWelcomeQueue(get(), events);
-        if (welcome) {
+        if (welcome?.capacitySkipped) get().pushToast(`入群欢迎队列已满，${welcome.capacitySkipped} 次入群未安排发送`, "error");
+        if (welcome?.added.length) {
           const ids = new Set(welcome.added.map(task => task.id));
           ids.forEach(id => groupWelcomePendingWrites.add(id));
           set(state => ({
