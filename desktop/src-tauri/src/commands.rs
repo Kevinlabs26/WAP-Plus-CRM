@@ -223,7 +223,7 @@ pub struct DroppedFile {
     pub bytes: Vec<u8>,
 }
 
-const MAX_CHAT_MEDIA_SAVE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_CHAT_MEDIA_SAVE_BYTES: usize = 100 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -305,13 +305,7 @@ fn chat_media_candidate(folder: &std::path::Path, name: &str, suffix: usize) -> 
     folder.join(format!("{} ({suffix}){}", &name[..split], &name[split..]))
 }
 
-#[tauri::command]
-pub async fn save_chat_media(
-    app: AppHandle,
-    data_url: String,
-    filename: String,
-    request_id: String,
-) -> Result<SavedChatMedia, String> {
+fn decode_chat_media(mut data_url: String) -> Result<Vec<u8>, String> {
     use base64::Engine;
 
     let (header, encoded) = data_url
@@ -323,9 +317,37 @@ pub async fn save_chat_media(
         || encoded.is_empty()
         || encoded.len() > max_encoded
     {
-        return Err("媒体数据格式无效或超过 16 MB".into());
+        return Err("媒体数据格式无效或超过 100 MiB".into());
     }
-    let encoded = encoded.to_string();
+    let prefix_len = header.len() + 1;
+    data_url.drain(..prefix_len);
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_url)
+        .map_err(|error| format!("媒体解码失败：{error}"))?;
+    if bytes.is_empty() || bytes.len() > MAX_CHAT_MEDIA_SAVE_BYTES {
+        return Err("媒体为空或超过 100 MiB".into());
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+#[test]
+fn chat_media_save_accepts_a_thirty_mib_video() {
+    use base64::Engine;
+    let video = vec![0x5a; 30 * 1024 * 1024];
+    let mut url = String::from("data:video/mp4;base64,");
+    base64::engine::general_purpose::STANDARD.encode_string(&video, &mut url);
+    assert_eq!(decode_chat_media(url).unwrap(), video);
+    assert!(decode_chat_media("data:video/mp4;base64,invalid".into()).is_err());
+}
+
+#[tauri::command]
+pub async fn save_chat_media(
+    app: AppHandle,
+    data_url: String,
+    filename: String,
+    request_id: String,
+) -> Result<SavedChatMedia, String> {
     let filename = safe_chat_media_filename(&filename);
     let request_id: String = request_id
         .chars()
@@ -343,12 +365,7 @@ pub async fn save_chat_media(
     let worker_app = app.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(encoded)
-            .map_err(|error| format!("媒体解码失败：{error}"))?;
-        if bytes.is_empty() || bytes.len() > MAX_CHAT_MEDIA_SAVE_BYTES {
-            return Err("媒体为空或超过 16 MB".into());
-        }
+        let bytes = decode_chat_media(data_url)?;
         std::fs::create_dir_all(&folder).map_err(|error| format!("无法创建下载文件夹：{error}"))?;
         let temporary = folder.join(format!(".media-{request_id}.part"));
         let mut file = std::fs::OpenOptions::new()

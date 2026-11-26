@@ -101,7 +101,6 @@ export function FolderDialog({
                   nameInputRef.current = element;
                 }}
                 defaultValue={nameDraft}
-                maxLength={40}
                 onChange={(event) => onNameDraftChange(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {

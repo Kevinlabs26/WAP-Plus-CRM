@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {fileURLToPath} from 'node:url';
 const mocks = {
-  react: 'export const useEffect=()=>{};export const useState=value=>globalThis.playbookHooks.state(value);export const useRef=value=>globalThis.playbookHooks.ref(value);',
+  react: 'export const useEffect=()=>{};export const useCallback=callback=>callback;export const useState=value=>globalThis.playbookHooks.state(value);export const useRef=value=>globalThis.playbookHooks.ref(value);',
   'react/jsx-runtime':'export const Fragment="fragment";export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
   '@/store/appStore':'export const useAppStore=selector=>{const value=selector(globalThis.playbookState);if(!Object.is(value,selector(globalThis.playbookState)))throw Error("Unstable store snapshot");return value;};useAppStore.getState=()=>globalThis.playbookState;',
   '@/i18n':'export const useI18n=()=>({t:(key,params)=>key+(params?JSON.stringify(params):"")});',

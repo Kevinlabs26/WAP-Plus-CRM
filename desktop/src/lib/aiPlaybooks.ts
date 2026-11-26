@@ -1,5 +1,5 @@
 import { scheduledPlaybook, type PlaybookPlan, type PlaybookSchedule } from './playbookPlans.ts';
-export type AiPlaybook = { id: string; name: string; sourceName: string; content: string; summary: string; musePath?: string; museRevision?: string; museMissing?: boolean; museShareRevision?: string; museAccountCopies?: Record<string, {path:string;revision:string;parts?:number}> };
+export type AiPlaybook = { id: string; name: string; sourceName: string; content: string; summary: string; imageAssetIds?: string[]; musePath?: string; museRevision?: string; museMissing?: boolean; museShareRevision?: string; museAccountCopies?: Record<string, {path:string;revision:string;parts?:number}> };
 export type MusePlaybookMaterial = {id:string;name:string;content:string;revision:string};
 export const MUSE_ACCOUNT_PLAYBOOK_FOLDER = 'WAP Plus CRM - Playbook';
 export function hasMuseAccountPlaybook(book: AiPlaybook, accountId: string): boolean {
@@ -38,7 +38,12 @@ export function normalizePlaybooks(value: unknown): AiPlaybook[] {
       return accountId.length > 0 && accountId.length <= 120 && copy && typeof copy.path === 'string' && copy.path.length <= 500 && /^\/(?!\/)/.test(copy.path) && !copy.path.includes('\\') && !/[\u0000-\u001f]/.test(copy.path) && !copy.path.split('/').some(part => part === '.' || part === '..') && !copy.path.endsWith('/') && typeof copy.revision === 'string' && copy.revision.length > 0 && copy.revision.length <= 120 ? [[accountId,{path:copy.path,revision:copy.revision, ...(typeof copy.parts === "number" && Number.isInteger(copy.parts) && copy.parts > 1 && copy.parts <= 167 ? {parts:copy.parts} : {})}]] : [];
     }));
     seen.add(item.id); total += item.content.length + item.summary.length;
+    const rawImageAssetIds: unknown = item.imageAssetIds;
+    const imageAssetIds = Array.isArray(rawImageAssetIds)
+      ? [...new Set(rawImageAssetIds.filter((id: unknown): id is string => typeof id === 'string' && id.length > 0 && id.length <= 120))].slice(0, 100)
+      : [];
     return [{ id: item.id, name: item.name.trim(), sourceName: typeof item.sourceName === 'string' ? item.sourceName.slice(0, 255) : '', content: item.content, summary: item.summary,
+      ...(imageAssetIds.length ? {imageAssetIds} : {}),
       ...(remote ? {musePath: item.musePath, museRevision: item.museRevision, museMissing: item.museMissing === true} : {}),
       ...(museShareRevision ? {museShareRevision} : {}), ...(Object.keys(museAccountCopies).length ? {museAccountCopies} : {}) }];
   });
@@ -76,14 +81,15 @@ export function importPlaybooks(existing: AiPlaybook[], files: {name: string; te
     const index = next.findIndex(item => !item.musePath && item.sourceName === file.name);
     const previous = next[index];
     const item = { id: previous?.id || crypto.randomUUID(), name: previous?.name || file.name.replace(/\.md$/i, '').slice(0, 120), sourceName: file.name,
-      content: file.text, summary: previous?.content === file.text ? previous.summary : file.text.length <= MAX_PLAYBOOK_SUMMARY_CHARS ? file.text : '' };
+      content: file.text, summary: previous?.content === file.text ? previous.summary : file.text.length <= MAX_PLAYBOOK_SUMMARY_CHARS ? file.text : '',
+      ...(previous?.imageAssetIds?.length ? {imageAssetIds:previous.imageAssetIds} : {}) };
     if (index < 0) next.push(item); else next[index] = item;
   }
   if (next.length > MAX_PLAYBOOKS || next.reduce((sum, item) => sum + item.content.length + item.summary.length, 0) > MAX_PLAYBOOK_TOTAL_CHARS) throw Error(`Playbook 资料库超过 ${MAX_PLAYBOOKS} 份或 100 万字符，请精简后再导入`);
   return next;
 }
 
-export function resolvePlaybook(settings: PlaybookSettings, accountId?: string, chatId?: string, museAccountId?: string, useSourceFile = false):{id:string|undefined;source:'customer'|'folder'|'none';prompt:string;name:string;error?:string;plan?:ReturnType<typeof scheduledPlaybook>;readMuseFiles?:boolean;musePaths?:string[];museMaterials?:MusePlaybookMaterial[]} {
+export function resolvePlaybook(settings: PlaybookSettings, accountId?: string, chatId?: string, museAccountId?: string, useSourceFile = false):{id:string|undefined;source:'customer'|'folder'|'none';prompt:string;name:string;imageAssetIds?:string[];error?:string;plan?:ReturnType<typeof scheduledPlaybook>;readMuseFiles?:boolean;musePaths?:string[];museMaterials?:MusePlaybookMaterial[]} {
   let plan:ReturnType<typeof scheduledPlaybook>|undefined;
   let id = accountId && chatId ? settings.aiPlaybookBindings?.[playbookBindingKey(accountId, chatId)] : undefined;
   let source: 'customer' | 'folder' | 'none' = id ? 'customer' : 'none';
@@ -132,5 +138,5 @@ export function resolvePlaybook(settings: PlaybookSettings, accountId?: string, 
   });
   const pathList = JSON.stringify(fileRefs).replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
   const prompt = `Current Playbook: this replaces all earlier Playbook selections in this thread. Preserve the current sender identity and reply format; never execute external actions. Only the following selected material is active.${paths.length ? `\n<read_only_muse_workspace_files>\n${pathList}\nRead only these exact files using Muse workspace file tools. Read numbered parts in listed order as one Playbook, ignoring their repeated headings and managed markers. If a file revision has already been read and is still available in this same Muse account and customer conversation, reuse it without reopening or repeating its contents. Read again if its revision changes, if it has no revision, or if this is a new conversation thread; never reuse across accounts or customers. If any file is missing or unreadable, return exactly PLAYBOOK_SOURCE_UNAVAILABLE. Do not inspect any other workspace files or return file contents; apply the selected file contents only to this reply.\n</read_only_muse_workspace_files>` : ''}${!museAccountId && !useSourceFile && local.length ? `\n<current_playbook>\n${local.join('\n')}\n</current_playbook>` : ''}`;
-  return {id, source, prompt:(plan?`Current conversation plan: ${JSON.stringify({name:plan.name,day:plan.day,completed:plan.ended})}.\n`:'')+prompt, name: stage.name, plan, readMuseFiles: Boolean(paths.length), ...(paths.length?{musePaths:paths}:{}), ...(museMaterials.length?{museMaterials}:{})};
+  return {id, source, prompt:(plan?`Current conversation plan: ${JSON.stringify({name:plan.name,day:plan.day,completed:plan.ended})}.\n`:'')+prompt, name: stage.name, imageAssetIds: stage.imageAssetIds || [], plan, readMuseFiles: Boolean(paths.length), ...(paths.length?{musePaths:paths}:{}), ...(museMaterials.length?{museMaterials}:{})};
 }

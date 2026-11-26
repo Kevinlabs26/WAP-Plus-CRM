@@ -21,6 +21,7 @@ export interface AutoReplySafetyMessage {
   sentAt: string;
   systemKind?: string;
   transcript?: string;
+  isGroup?: boolean;
 }
 
 export type AutoReplyDecision =
@@ -225,11 +226,11 @@ export function getAutoReplySendError(
   reply: { id: string; chatId: string; body: string; sentAt: string; accountId?: string },
   inboundId?: string
 ): string | null {
-  if (resolveAutoReplyScope(settings, reply.chatId).mode !== "auto") return "此会话已暂停自动回复或切换为人工模式";
   const thread = messages.filter((item) => item.chatId === reply.chatId)
     .sort((a, b) => a.sentAt.localeCompare(b.sentAt));
   const inbound = thread.filter((item) => item.direction === "in").at(-1);
   if (!inbound) return "待回复的入站消息尚未载入，请重新打开会话后生成";
+  if (resolveAutoReplyScope(settings, reply.chatId, inbound.isGroup).mode !== "auto") return "此会话已暂停自动回复或切换为人工模式";
   if (settings.aiTaskDismissedIds?.some(id=>id===`reply:${reply.id}`||id===`runtime:${reply.chatId}:${inbound.id}`)) return "本次自动回复已停止";
   if (inboundId && inbound.id !== inboundId) return "对方又发来了新消息，请根据最新聊天重新生成";
   if (thread.some((item) => item.id !== reply.id && item.sentAt >= reply.sentAt &&

@@ -8,12 +8,42 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const bundled = await build({ entryPoints: [root + 'src/lib/imageLibrary.ts'], bundle: true, write: false, platform: 'node', format: 'esm', plugins: [{ name: 'library-services', setup(b) {
   b.onResolve({filter:/^@tauri-apps\/api\/core$/}, () => ({path:'ipc',namespace:'mock'}));
   b.onResolve({filter:/^\.\/exportData$/}, () => ({path:'download',namespace:'mock'}));
-  b.onLoad({filter:/.*/,namespace:'mock'}, a => ({contents:a.path==='ipc' ? 'export const invoke=(cmd,args)=>globalThis.libraryInvoke(cmd,args);' : 'export const downloadJson=(name,value)=>{globalThis.libraryDownload=value;};'}));
+  b.onLoad({filter:/.*/,namespace:'mock'}, a => ({contents:a.path==='ipc' ? 'export const invoke=(cmd,args)=>globalThis.libraryInvoke(cmd,args);' : 'export const downloadJson=(name,value)=>{globalThis.libraryDownload=value;globalThis.libraryDownloads?.push({name,value});};'}));
 } }] });
 const api = await import('data:text/javascript;base64,' + Buffer.from(bundled.outputFiles[0].text).toString('base64'));
 const data = 'data:image/png;base64,' + Buffer.from('\x89PNG\r\n\x1a\nfixture','latin1').toString('base64');
 const item = {title:'Invitation',category:'Events',caption:'On commence déjà la réunion ? 🎉\nRejoins-nous !',data,pinned:true,usedAt:10};
 const backup = items => ({app:'WAP Plus CRM Image Library',version:1,items});
+
+test('shelf and gallery share an in-flight metadata refresh and cache only requested thumbnails', async () => {
+  const calls = [];
+  globalThis.libraryInvoke = async (_, { request }) => {
+    calls.push(request);
+    if (request.action === 'listMetadata') return Array.from({ length: 1000 }, (_, id) => ({ id: String(id), thumbnail: '' }));
+    if (request.action === 'listCategories') return ['Events'];
+    return data;
+  };
+  const event = new Event('wap:image-library');
+  const [shelf, gallery] = await Promise.all([api.listLibraryImages(true, event), api.listLibraryImages(true, event), api.listLibraryCategories(event), api.listLibraryCategories(event)]);
+  assert.equal(shelf, gallery);
+  assert.equal(shelf.length, 1000);
+  assert.deepEqual(calls.map(call => call.action), ['listMetadata', 'listCategories']);
+  assert.deepEqual(await Promise.all([api.readLibraryThumbnail('0'), api.readLibraryThumbnail('0'), api.readLibraryThumbnail('999')]), [data, data, data]);
+  assert.equal(await api.readLibraryThumbnail('0'), data);
+  assert.deepEqual(calls.slice(2).map(call => call.id), ['0', '999']);
+});
+
+test('large image libraries export all originals across independently readable numbered parts', async () => {
+  globalThis.libraryDownloads=[];
+  globalThis.libraryInvoke=async()=>data;
+  try {
+    const images=Array.from({length:25},(_,index)=>({...item,id:String(index),title:`Photo ${index}`,size:8*1024*1024}));
+    const count=await api.exportImageLibrary(images,['Events','Empty']);
+    assert.equal(count,3);
+    assert.deepEqual(globalThis.libraryDownloads.flatMap(part=>api.parseImageLibraryBackup(part.value).map(image=>image.title)),images.map(image=>image.title));
+    assert.match(globalThis.libraryDownloads[2].name,/-part-3-of-3\.json$/);
+  } finally {delete globalThis.libraryDownloads;delete globalThis.libraryInvoke;}
+});
 
 test('empty custom categories round trip in backups and invalid categories never start restoration', async () => {
   const calls=[];globalThis.libraryInvoke=async(cmd,{request})=>{calls.push(request);};
@@ -77,7 +107,20 @@ test('export includes original image data; merge restore preserves duplicate met
     assert.equal(calls.find(c=>c.action==='edit').caption,item.caption);
     calls.length=0;added=false;
     assert.equal(await api.restoreImageLibrary(makeFile(),()=>{}),0);
-    assert.equal(calls.some(c=>c.action==='edit'||c.action==='delete'),false);
+    assert.equal(calls.find(c=>c.action==='edit').caption,item.caption);
+    assert.equal(calls.some(c=>c.action==='delete'),false);
+    let failures;
+    globalThis.libraryInvoke=async(cmd,{request})=>{
+      if(request.action==='import')return {id:'a'.repeat(64),added:false};
+      if(request.action==='edit')throw Error('temporary write failure');
+    };
+    assert.equal(await api.restoreImageLibrary(makeFile(),()=>{},errors=>{failures=errors;}),0);
+    assert.match(failures[0],/temporary write failure/);
+    calls.length=0;
+    globalThis.libraryInvoke=async(cmd,{request})=>{calls.push(request);if(request.action==='import')return {id:'a'.repeat(64),added:false};};
+    assert.equal(await api.restoreImageLibrary(makeFile(),()=>{}),0);
+    assert.equal(calls.find(c=>c.action==='edit').caption,item.caption);
+    assert.ok(calls.some(c=>c.action==='move'));
     calls.length=0;
     await assert.rejects(api.restoreImageLibrary(new File([JSON.stringify(backup([item,{...item,data:'bad'}]))],'bad.json'),()=>{}));
     assert.equal(calls.length,0);
@@ -121,7 +164,7 @@ const mocks={
   '@/lib/bridge':'export const isTauri=()=>true;',
   '@tauri-apps/api/core':'export const invoke=async()=>{};',
   '@/lib/quickReplyMedia':'export const emitQuickReplyMedia=value=>{globalThis.libraryEmitted.push(value);return true;};export const quickReplyMediaToFile=()=>null;',
-  '@/lib/imageLibrary':'export const renameLibraryCategory=async(name,next)=>{globalThis.libraryCategories=(globalThis.libraryCategories||[]).map(value=>value===name?next:value);globalThis.libraryRows=globalThis.libraryRows.map(image=>image.category===name?{...image,category:next}:image);};export const orderLibraryCategories=async names=>{globalThis.libraryCategories=names;};export const moveLibraryImages=async(ids,category)=>{globalThis.libraryRows=globalThis.libraryRows.map(image=>ids.includes(image.id)?{...image,category}:image);};export const replaceLibraryImage=async()=>{};export const scanLibraryImport=async()=>({files:[],skipped:0});export const libraryFolderCategory=path=>path.split("/").slice(0,-1).join("/");export const moveLibraryCategory=(names,source,target,after)=>{const next=names.filter(name=>name!==source);next.splice(next.indexOf(target)+Number(after),0,source);return next;};export const listLibraryImages=async()=>globalThis.libraryRows;export const listLibraryCategories=async()=>globalThis.libraryCategories||[];export const deleteLibraryCategory=async name=>globalThis.libraryDeleteCategory?.(name);export const createLibraryCategory=async name=>{globalThis.libraryCategories=[...(globalThis.libraryCategories||[]),name];};export const filterLibraryImages=(...a)=>globalThis.libraryFilter(...a);export const readLibraryImage=id=>globalThis.libraryRead(id);export const editLibraryImage=async image=>globalThis.libraryEdit?.(image);export const addLibraryImage=async(file,category)=>{globalThis.libraryImportCategory=category;return globalThis.libraryAdd?globalThis.libraryAdd(file,category):{added:true};};export const deleteLibraryImages=async()=>{};export const exportImageLibrary=async()=>{};export const restoreImageLibrary=async()=>0;',
+  '@/lib/imageLibrary':'export const renameLibraryCategory=async(name,next)=>{globalThis.libraryCategories=(globalThis.libraryCategories||[]).map(value=>value===name?next:value);globalThis.libraryRows=globalThis.libraryRows.map(image=>image.category===name?{...image,category:next}:image);};export const orderLibraryCategories=async names=>{globalThis.libraryCategories=names;};export const moveLibraryImages=async(ids,category)=>{globalThis.libraryRows=globalThis.libraryRows.map(image=>ids.includes(image.id)?{...image,category}:image);};export const replaceLibraryImage=async()=>{};export const scanLibraryImport=async()=>({files:[],skipped:0});export const libraryFolderCategory=path=>path.split("/").slice(0,-1).join("/");export const moveLibraryCategory=(names,source,target,after)=>{const next=names.filter(name=>name!==source);next.splice(next.indexOf(target)+Number(after),0,source);return next;};export const readLibraryThumbnail=async()=>"";export const listLibraryImages=async()=>globalThis.libraryRows;export const listLibraryCategories=async()=>globalThis.libraryCategories||[];export const deleteLibraryCategory=async name=>globalThis.libraryDeleteCategory?.(name);export const createLibraryCategory=async name=>{globalThis.libraryCategories=[...(globalThis.libraryCategories||[]),name];};export const filterLibraryImages=(...a)=>globalThis.libraryFilter(...a);export const readLibraryImage=id=>globalThis.libraryRead(id);export const editLibraryImage=async image=>globalThis.libraryEdit?.(image);export const addLibraryImage=async(file,category)=>{globalThis.libraryImportCategory=category;return globalThis.libraryAdd?globalThis.libraryAdd(file,category):{added:true};};export const deleteLibraryImages=async()=>{};export const exportImageLibrary=async()=>{};export const restoreImageLibrary=async()=>0;',
 };
 const uiBuild=await build({entryPoints:[root+'src/components/chat/ImageLibraryPanel.tsx'],bundle:true,write:false,format:'esm',platform:'node',jsx:'automatic',plugins:[{name:'gallery-ui',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
 const {ImageLibraryPanel}=await import('data:text/javascript;base64,'+Buffer.from(uiBuild.outputFiles[0].text).toString('base64'));
@@ -251,7 +294,7 @@ test('saved image captions reopen, insert by default, clear, and remain editable
   let preview;
   const open=()=>{
     panel.render().find(n=>n.props['aria-label']==='quickShelf.previewNamed').props.onClick();
-    return panel.render().find(n=>typeof n.type==='function'&&n.props.image);
+    return panel.render().find(n=>typeof n.type==='function'&&n.props.image&&n.props.onSave);
   };
   try {
     panel.render();await settle();
@@ -271,7 +314,7 @@ test('saved image captions reopen, insert by default, clear, and remain editable
     fail=true;const before=globalThis.libraryEmitted.length;
     preview.render().find(n=>n.props.children==='gallery.saveInsert').props.onClick();await settle();await settle();
     assert.equal(globalThis.libraryEmitted.length,before);
-    const failed=panel.render().find(n=>typeof n.type==='function'&&n.props.image);
+    const failed=panel.render().find(n=>typeof n.type==='function'&&n.props.image&&n.props.onSave);
     assert.match(failed.props.saveError,/disk full/);
     assert.ok(preview.render(failed.props).some(n=>n.props.role==='alert'&&/disk full/.test(n.props.children)));
     assert.equal(preview.render().find(n=>n.type==='textarea').props.value,'');
@@ -301,7 +344,7 @@ test('gallery virtualizes, orders insertion, blocks account changes and deletes 
   };
   const select=id=>{const nodes=allNodes(tree);nodes.filter(n=>n.type==='input'&&n.props.type==='checkbox')[id].props.onChange({target:{checked:true}});render();};
   try {
-    render();await settle();let nodes=render();assert.equal(nodes.filter(n=>n.type==='article').length,40);
+    render();await settle();let nodes=render();assert.equal(nodes.filter(n=>n.type==='article').length,60);
     assert.equal(nodes.filter(n=>n.type==='input'&&n.props.type==='checkbox').length,0);
     assert.equal(nodes.some(n=>n.type==='form'),false);
     nodes.find(n=>n.props.children==='gallery.multiSelect').props.onClick();render();
@@ -319,7 +362,7 @@ test('gallery virtualizes, orders insertion, blocks account changes and deletes 
     render();allNodes(tree).find(n=>n.type==='form').props.onSubmit({preventDefault(){}});
     await settle();await settle();render();
     assert.ok(allNodes(tree).some(n=>n.type==='button'&&n.props.title==='我的自定义分类'&&n.props['aria-pressed']));
-    const moved=allNodes(tree).find(n=>n.props['data-library-category']==='我的自定义分类'&&String(n.props.className).includes('grid'));
+    const moved=allNodes(tree).find(n=>n.props['data-library-category']==='我的自定义分类'&&allNodes(n).some(child=>child.type==='article'));
     assert.equal(allNodes(moved).filter(n=>n.type==='article').length,1);
     assert.ok(allNodes(tree).filter(n=>n.type==='article').length>1,'other expanded categories remain visible');
     allNodes(tree).find(n=>n.type==='input'&&n.props.type==='file'&&n.props.multiple).props.onChange({currentTarget:{files:[new File(['image'],'photo.png',{type:'image/png'})],value:'file'}});

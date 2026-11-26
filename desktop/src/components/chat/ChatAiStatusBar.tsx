@@ -10,7 +10,7 @@ import type { Message } from "@/types/crm";
 import { Switch } from "@/components/ui/primitives";
 import { recipientKey } from "@/lib/scheduledPlans";
 
-export function ChatAiStatusBar({chatId,accountId,connected,thread,recipient}:{chatId:string;accountId:string;connected:boolean;thread:readonly Message[];recipient?:string}) {
+export function ChatAiStatusBar({chatId,accountId,connected,thread,recipient,isGroup=false}:{chatId:string;accountId:string;connected:boolean;thread:readonly Message[];recipient?:string;isGroup?:boolean}) {
   const {t}=useI18n();
   const settings=useAppStore(state=>state.settings);
   const runtime=useAutoReplyRuntime(state=>state.byChat[chatId]);
@@ -18,32 +18,36 @@ export function ChatAiStatusBar({chatId,accountId,connected,thread,recipient}:{c
   const [now,setNow]=useState(Date.now);
   useEffect(()=>{const timer=window.setInterval(()=>setNow(Date.now()),30_000);return()=>window.clearInterval(timer);},[]);
   const profile=resolveAiReplyProfile(settings,accountId,chatId);
-  const scope=resolveAutoReplyScope(settings,chatId);
+  const scope=resolveAutoReplyScope(settings,chatId,isGroup);
   const override=settings.aiAutoReplyManualChatIds?.includes(chatId)?"manual":settings.aiAutoReplyModeByChatId?.[chatId]||"inherit";
   const followsSettings=!settings.aiAutoReplyManualChatIds?.includes(chatId)&&!settings.aiAutoReplyModeByChatId?.[chatId];
-  const inheritedLabel=followsSettings&&(scope.source==="folder"||scope.source==="default")
+  const inheritedLabel=followsSettings&&isGroup&&scope.source==="group"
+    ? t("autoReplyScope.groupDefaultManual")
+    : followsSettings&&(scope.source==="folder"||scope.source==="default")
     ? t(scope.source==="folder"?(scope.mode==="auto"?"aiChat.followFolderAuto":"aiChat.followFolderManual"):(scope.mode==="auto"?"aiChat.followGlobalAuto":"aiChat.followGlobalManual"))
     : t("crmPanel.inheritShort");
-  const status=getChatAiStatus({settings,chatId,accountId,connected,thread,runtime,now});
+  const status=getChatAiStatus({settings,chatId,accountId,connected,thread,runtime,isGroup,now});
+  const statusTitle=[status.reason,isGroup&&scope.mode==="auto"?t("autoReplyScope.groupJudges"):""].filter(Boolean).join(" · ");
   const templates=profile.templateIds?.map(id=>settings.aiPromptTemplates.find(template=>template.id===id)?.name).filter(Boolean).join(" + ");
   const source=templates||profile.folderName||t(`folderAi.source.${profile.source}`,{name:profile.folderName||""});
-  const personKey=recipient?recipientKey("",recipient):"";
+  const personKey=!isGroup&&recipient?recipientKey("",recipient):"";
+  const groupChannelUnsupported=isGroup&&settings.sendChannel!=="baileys";
   const configure=()=>{
     const folderId=profile.folderId||profile.primaryFolderIds?.find(id=>settings.chatFolders.find(folder=>folder.id===id)?.scope?.type==="account")||profile.primaryFolderIds?.[0];
     if(folderId)setEditing(folderId);else useAppStore.getState().setSettingsOpen(true,"auto-reply");
   };
   const setMode=(mode:"inherit"|"auto"|"manual")=>{
     const state=useAppStore.getState();
-    if(resolveAutoReplyScope(state.settings,chatId).source==="paused")return;
+    if(resolveAutoReplyScope(state.settings,chatId,isGroup).source==="paused")return;
     const modes={...state.settings.aiAutoReplyModeByChatId};
     if(mode==="inherit")delete modes[chatId];else modes[chatId]=mode;
     state.updateSettings({aiAutoReplyModeByChatId:modes,aiAutoReplyManualChatIds:(state.settings.aiAutoReplyManualChatIds||[]).filter(id=>id!==chatId)});
   };
   return <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-zinc-800 px-3 py-1.5 text-[11px]">
     <button type="button" onClick={configure} title={source} className="max-w-[45%] truncate text-left text-brand">AI · {source}</button>
-    <span role="status" className="min-w-0 flex-1 truncate text-zinc-500" title={status.reason}>{t(`aiChat.${status.key}`)}{status.reason&&<> · {status.reason}</>}{status.retryAt&&<> · {new Date(status.retryAt).toLocaleTimeString()}</>}</span>
+    <span role="status" className="min-w-0 flex-1 truncate text-zinc-500" title={statusTitle}>{t(`aiChat.${status.key}`)}{status.reason&&<> · {status.reason}</>}{status.retryAt&&<> · {new Date(status.retryAt).toLocaleTimeString()}</>}</span>
     <div role="group" aria-label={t("aiFolder.reply")} className="ml-auto flex shrink-0 items-center gap-0.5 rounded-full bg-zinc-800 p-0.5">
-      {(["inherit","auto","manual"] as const).map(mode=><button key={mode} type="button" disabled={scope.source==="paused"} aria-pressed={override===mode} onClick={()=>setMode(mode)}
+      {(["inherit","auto","manual"] as const).map(mode=><button key={mode} type="button" disabled={scope.source==="paused"||mode==="auto"&&groupChannelUnsupported} title={mode==="auto"&&groupChannelUnsupported?t("autoReplyScope.groupNeedsBaileys"):mode==="auto"&&isGroup?t("autoReplyScope.groupJudges"):undefined} aria-pressed={override===mode} onClick={()=>setMode(mode)}
         className={`rounded-full px-2.5 py-1 transition-colors disabled:opacity-40 ${override===mode?"bg-brand/15 font-medium text-brand":"text-zinc-500 hover:text-zinc-200"}`}>
         {mode==="inherit"?inheritedLabel:t(mode==="auto"?"multi.replyMode.auto":"multi.replyMode.manual")}
       </button>)}

@@ -72,18 +72,22 @@ const mediaInFlight = new Set<string>();
 const followUpInFlight = new Map<string, AbortController>();
 const FOLLOW_UP_RETRY_MS = 60_000;
 const isVoiceMessage = (message: Message) => ["audio", "ptt"].includes(message.mediaType || "") || message.mediaPtt === true || Boolean(message.mediaMime?.toLowerCase().startsWith("audio/"));
+const isGroupMessage = (message: Message, chat?: ChatPreview, contact?: Contact) =>
+  !!(message.isGroup || chat?.isGroup || contact?.isGroup || contact?.channelAddress?.endsWith("@g.us"));
 
 function canScheduleAutoReply(message: Message,ignorePause=false): boolean {
   const state=useAppStore.getState();
   const chat=state.chats.find(chat=>chat.id===message.chatId);
   const contact=state.contacts.find(contact=>contact.id===chat?.contactId);
-  if(message.direction!=="in"||message.isGroup||!chat||chat.isGroup||chat.localOnly||!contact||contact.isGroup||contact.channelAddress?.endsWith("@g.us"))return false;
+  if(message.direction!=="in"||message.systemKind||message.mediaType==="system"||!chat||chat.localOnly||!contact)return false;
+  const isGroup = isGroupMessage(message, chat, contact);
+  if(isGroup&&state.settings.sendChannel!=="baileys")return false;
   const inbox=state.settings.leadInbox;
-  if(chat&&inbox.enabled&&!inbox.collectedChatIds.includes(chat.id)&&!inbox.dismissedChatIds.includes(chat.id)){
+  if(!isGroup&&inbox.enabled&&!inbox.collectedChatIds.includes(chat.id)&&!inbox.dismissedChatIds.includes(chat.id)){
     const candidates=leadCandidatesForChats(state.chats,new Map(state.contacts.map(item=>[item.id,item])),state.messagesByChatId,{...inbox,enabled:true},chat.accountId||contact?.accountId||chat.phoneId||state.settings.liveBaileysAccountId||state.settings.activeAccountId||"wa-default");
     if(candidates.has(chat.id))state.updateSettings({leadInbox:{...inbox,collectedChatIds:[...new Set([...inbox.collectedChatIds,chat.id])].slice(-20_000)}});
   }
-  return resolveAutoReplyScope(ignorePause?{...state.settings,aiAutoReplyPaused:false,aiAutoReplyDisabled:false}:state.settings,message.chatId).mode==="auto";
+  return resolveAutoReplyScope(ignorePause?{...state.settings,aiAutoReplyPaused:false,aiAutoReplyDisabled:false}:state.settings,message.chatId,isGroup).mode==="auto";
 }
 
 function markAutoReplyReceived(message: Message): Message {
@@ -287,7 +291,7 @@ export async function autoReplyInbound(m: Message): Promise<void> {
       }
       const wait = (lastReplyAt.get(m.chatId) || 0) +
         Math.max(5000, Number(settings.aiAutoReplyIntervalMs) || 30000) - Date.now();
-      if (resolveAutoReplyScope(settings, m.chatId).mode === "auto" && wait > 0) {
+      if (resolveAutoReplyScope(settings, next.chatId, next.isGroup).mode === "auto" && wait > 0) {
         setAutoReplyRuntime(m.chatId,{phase:"waiting",inboundId:next.id,accountId:next.accountId,reason:"等待发送间隔",retryAt:Date.now()+wait});
         pendingByChat.set(m.chatId, next);
         cooldownTimers.set(m.chatId, setTimeout(() => autoReplyInbound(next), wait));
@@ -334,14 +338,16 @@ export async function autoReplyInbound(m: Message): Promise<void> {
 }
 
 /**
- * 自动回复一条实时入站私聊消息。
- * 非适用场景（未开启、群聊）保持安静；可诊断的跳过原因写入联系人活动记录。
+ * 自动回复一条实时入站消息；群聊由模型决定是否值得回应。
  */
 async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"retry" | void> {
   const autoReplyReceivedAt = m.aiAutoReplyReceivedAt;
   let state = useAppStore.getState();
   const settings = state.settings;
-  const scope = resolveAutoReplyScope(settings, m.chatId);
+  const chat = state.chats.find((c) => c.id === m.chatId);
+  const contact = state.contacts.find((c) => c.id === (m.contactId || chat?.contactId));
+  const isGroup = isGroupMessage(m, chat, contact);
+  const scope = resolveAutoReplyScope(settings, m.chatId, isGroup);
   if (scope.mode !== "auto") {
     if (m.contactId) {
       const detail = scope.source === "folder"
@@ -355,8 +361,8 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
     }
     return;
   }
-  if (m.isGroup) return; // 仅私聊
   if (!m.chatId || !m.contactId) return;
+  if (isGroup && settings.sendChannel !== "baileys") return;
   let conversation = state.messagesByChatId?.[m.chatId] || state.messages.filter(x => x.chatId === m.chatId).sort((a, b) => a.sentAt.localeCompare(b.sentAt));
   if (conversation.filter(x => x.direction === "in").at(-1)?.id !== m.id ||
       conversation.some(x => x.direction === "out" && !x.systemKind && x.sentAt >= m.sentAt) ||
@@ -384,9 +390,7 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
     return;
   }
 
-  const contact = state.contacts.find((c) => c.id === m.contactId);
-  const chat = state.chats.find((c) => c.id === m.chatId);
-  if (!contact || !chat || contact.isGroup || chat.isGroup) return;
+  if (!contact || !chat) return;
   const accountId =
     m.accountId ||
     chat.accountId ||
@@ -482,7 +486,7 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
   state = useAppStore.getState();
   conversation = state.messagesByChatId?.[m.chatId] || state.messages.filter(x => x.chatId === m.chatId).sort((a, b) => a.sentAt.localeCompare(b.sentAt));
   m = { ...(conversation.find(x => x.id === m.id) || m), aiAutoReplyReceivedAt: autoReplyReceivedAt };
-  if (resolveAutoReplyScope(state.settings, m.chatId).mode !== "auto") return;
+  if (resolveAutoReplyScope(state.settings, m.chatId, isGroup).mode !== "auto") return;
   const pendingVoiceIds = new Set(unansweredVoices.map(x => x.id));
   const decision = conversation.filter(x => x.id === m.id || pendingVoiceIds.has(x.id))
     .map(inbound => evaluateAutoReplyDecision(conversation, inbound, Date.now(), policy)).find(item => !item.allow)
@@ -509,7 +513,7 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
     else runtime("human",decision.reason);
     return;
   }
-  const contextKey = getSuggestionContextKey(contact, conversation, settings, accountId, { auto: true });
+  const contextKey = getSuggestionContextKey(contact, conversation, settings, accountId, { auto: true, groupReplyDecision: isGroup });
   if (isManualSuggestionContext(getSuggestionContextKey(contact, conversation, settings, accountId))) {runtime("human","当前消息需要人工处理");return;}
   runtime("generating");
   const generationStartedAt = Date.now();
@@ -517,6 +521,7 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
     auto: true,
     accountId,
     signal,
+    groupReplyDecision: isGroup,
     onMuseQueue:running=>{if(!signal.aborted)runtime(running?"generating":"waiting",running?"Muse 正在生成":"等待 Muse 排队");},
   });
   if (signal.aborted) return;
@@ -539,7 +544,18 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
     runtime(result.retryable ? "waiting" : "human", result.error || "AI 不可用");
     return result.retryable ? "retry" : undefined;
   }
-  const reply = result.suggestions[0]?.text?.trim();
+  if (isGroup && result.groupReplyDecision?.action === "skip") {
+    const reason = result.groupReplyDecision.reason || "模型判断当前无需回复";
+    logAutoDecision(contact.id, "群聊自动回复：本轮跳过", reason);
+    runtime("waiting", `${reason}；等待群内新消息`);
+    return;
+  }
+  const reply = isGroup
+    ? result.groupReplyDecision?.action === "reply" ? result.groupReplyDecision.text.trim() : ""
+    : result.suggestions[0]?.text?.trim();
+  const imageAssetId = isGroup
+    ? result.groupReplyDecision?.action === "reply" ? result.groupReplyDecision.imageAssetId : undefined
+    : result.suggestions[0]?.imageAssetId;
   if (!reply) {
     logAutoDecision(contact.id, "自动回复：未发送", "AI 没有返回有效内容");
     runtime("human", "AI 没有返回有效内容");
@@ -553,10 +569,10 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
   const freshContact = fresh.contacts.find((x) => x.id === contact.id);
   const freshChat = fresh.chats.find((x) => x.id === chat.id);
   const originalIds = new Set(conversation.map((x) => x.id));
-  if (resolveAutoReplyScope(fresh.settings, m.chatId).mode !== "auto" ||
+  if (resolveAutoReplyScope(fresh.settings, m.chatId, isGroup).mode !== "auto" ||
       pendingByChat.has(m.chatId) || latestInbound?.id !== m.id ||
       !freshContact || !freshChat || freshChat.localOnly ||
-      getSuggestionContextKey(freshContact, freshThread, fresh.settings, accountId, { auto: true }) !== contextKey ||
+      getSuggestionContextKey(freshContact, freshThread, fresh.settings, accountId, { auto: true, groupReplyDecision: isGroup }) !== contextKey ||
       isManualSuggestionContext(getSuggestionContextKey(freshContact, freshThread, fresh.settings, accountId)) ||
       freshThread.some((x) => x.direction === "out" && !x.systemKind && !originalIds.has(x.id)) ||
       fresh.settings.sendChannel !== settings.sendChannel ||
@@ -585,6 +601,7 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
 
   const queued = await sendAutoReplyText({
     text: reply,
+    imageAssetId,
     contact: freshContact,
     chat: freshChat,
     accountId,
@@ -609,6 +626,7 @@ async function autoReplyInboundOnce(m: Message, signal: AbortSignal): Promise<"r
 /** 自动回复发送：入队 + 走标准发送管线（保留限速/过热拦截），无成功打扰 */
 export async function sendAutoReplyText(opts: {
   text: string;
+  imageAssetId?: string;
   validUntil?: number;
   inboundId?: string;
   contextKey: string;
@@ -624,7 +642,8 @@ export async function sendAutoReplyText(opts: {
   decisionDetails?: AiDecisionDetails;
 }): Promise<boolean> {
   let state = useAppStore.getState();
-  if (!opts.chat || resolveAutoReplyScope(state.settings, opts.chat.id).mode !== "auto") return false;
+  const isGroup = !!(opts.chat?.isGroup || opts.contact.isGroup || opts.contact.channelAddress?.endsWith("@g.us"));
+  if (!opts.chat || resolveAutoReplyScope(state.settings, opts.chat.id, isGroup).mode !== "auto" || isGroup && opts.channelId !== "baileys") return false;
   const isBaileys = opts.channelId === "baileys";
   const recipient = resolveSendTarget({
     phone: opts.contact.phone,
@@ -633,6 +652,14 @@ export async function sendAutoReplyText(opts: {
     entityId: isBaileys ? opts.contact.id : undefined,
   });
   if (!recipient || !opts.chat) return false;
+  let imageAsset: {id:string;thumbnail:string} | undefined;
+  const imageAssetId = opts.imageAssetId;
+  if (imageAssetId && isBaileys && (state.settings.aiPlaybooks || []).some(book => book.imageAssetIds?.includes(imageAssetId))) {
+    try {
+      const {readLibraryThumbnail} = await import("./imageLibrary.ts");
+      imageAsset = { id: imageAssetId, thumbnail: await readLibraryThumbnail(imageAssetId) };
+    } catch { /* The reply can still be sent as text if an optional asset is unavailable. */ }
+  }
   const pendingContext = { id: "", chatId: opts.chat.id, contactId: opts.contact.id,
     accountId: opts.accountId, channelId: opts.channelId, aiReplyMuseAccountId: opts.museAccountId, aiAutoFollowUpStep: opts.followUpStep };
   const contextKey = currentAutoReplyContext(state, pendingContext);
@@ -640,7 +667,7 @@ export async function sendAutoReplyText(opts: {
   const aiReplyContextHash = await hashAiReplyContext(contextKey);
   if (opts.validUntil && Date.now() >= opts.validUntil) return false;
   state = useAppStore.getState();
-  if (resolveAutoReplyScope(state.settings, opts.chat.id).mode !== "auto" || currentAutoReplyContext(state, pendingContext) !== contextKey) return false;
+  if (resolveAutoReplyScope(state.settings, opts.chat.id, isGroup).mode !== "auto" || currentAutoReplyContext(state, pendingContext) !== contextKey) return false;
 
   const aiReplyReceivedAt = !opts.followUpStep && typeof opts.replyReceivedAt === "number" && Number.isFinite(opts.replyReceivedAt)
     ? opts.replyReceivedAt : undefined;
@@ -653,9 +680,10 @@ export async function sendAutoReplyText(opts: {
     channelId: opts.channelId,
     deviceId: opts.phoneId ?? null,
     accountId: opts.accountId,
-    deliveryStatus: "pending",
+    deliveryStatus: imageAsset ? "queued" : "pending",
     systemKind: "ai_auto_reply",
     aiReplyContextHash,
+    aiReplyImageAssetId: imageAsset?.id,
     aiReplyInboundId: opts.inboundId,
     aiReplyReceivedAt,
     aiReplyMuseAccountId: opts.museAccountId,
@@ -663,6 +691,7 @@ export async function sendAutoReplyText(opts: {
     aiDecisionDetails: opts.decisionDetails,
     aiAutoFollowUpRootId: opts.inboundId,
     aiAutoFollowUpStep: opts.followUpStep || 0,
+    ...(imageAsset ? {mediaType:"image" as const,mediaThumbUrl:imageAsset.thumbnail} : {}),
   });
   if (!msgId) return false;
   // enqueueOutgoingMessage 会清空 draftReply，恢复用户在其它会话正在打的草稿
@@ -670,6 +699,8 @@ export async function sendAutoReplyText(opts: {
   if (st2.draftReply !== draftBefore) {
     st2.setDraftReply(draftBefore);
   }
+  // 图片回复由统一发送队列在校验上下文后读取原图并发送。
+  if (imageAsset) return true;
 
   await sendTextMessage({
     msgId,
@@ -740,6 +771,7 @@ function activeFollowUpContext(settings: AutoFollowUpSettings, messages: readonl
   const rootId = followUpRoot(message);
   const enabledAt = settings.aiAutoFollowUpEnabledAt;
   const thread = followUpThread(messages, message.chatId);
+  if (thread.some(item => item.isGroup)) return false;
   const chain = thread.filter(item => item.systemKind === "ai_auto_reply" && followUpRoot(item) === rootId);
   const first = chain.find(item => (item.aiAutoFollowUpStep || 0) === 0);
   const delays = settings.aiAutoFollowUpDelaysMinutes;

@@ -10,7 +10,7 @@ import { createAutoReplyBacklogScheduler } from "@/lib/aiAutoReplyBacklog";
 import { retainMessageChats } from "@/store/messageMemory";
 
 /**
- * AI 全自动回复：处理实时入站私聊消息，并在开启自动时补扫待回复会话。
+ * AI 全自动回复：处理实时入站消息，并在开启自动时补扫待回复私聊会话。
  * 判定/限流/连接检查都在 lib/aiAutoReply 里，组件只做挂载。
  */
 export function AiAutoReplier() {

@@ -6,7 +6,7 @@ import {
 } from "@/channels";
 import { useAppStore } from "@/store/appStore";
 import type { Message } from "@/types/crm";
-import { isQueuedWelcomeImage, isRetryableOutgoing } from "@/store/outgoingRetry";
+import { isQueuedAiReplyImage, isQueuedWelcomeImage, isRetryableOutgoing } from "@/store/outgoingRetry";
 import {
   isWaAccountConnected,
   resolveWaSendAccountId,
@@ -90,7 +90,7 @@ export function SendQueueWatcher() {
       if (inflight.current.has(msg.id)) return;
       if (!msg.phoneE164) return;
       // 媒体由聊天面板按原 data URL 重试，不能退化成占位文本发送。
-      if (msg.mediaType && !isQueuedWelcomeImage(msg)) return;
+      if (msg.mediaType && !isQueuedWelcomeImage(msg) && !isQueuedAiReplyImage(msg)) return;
 
       let settings = state.settings;
       if(msg.systemKind==="ai_auto_reply"&&(settings.aiAutoReplyPaused||settings.aiAutoReplyDisabled))return;
@@ -138,6 +138,7 @@ export function SendQueueWatcher() {
         // 摘要校验会让出执行权；不能复活期间取消、删除或推迟的消息。
         if (!current || !isRetryableOutgoing(current) || current.body !== msg.body ||
             current.phoneE164 !== msg.phoneE164 || current.accountId !== msg.accountId || current.channelId !== msg.channelId ||
+            current.aiReplyImageAssetId !== msg.aiReplyImageAssetId ||
             current.aiReplyContextHash !== msg.aiReplyContextHash ||
             latest.settings.scheduledMessages?.some(task => task.messageId === current.id && task.status === "cancelled")) return;
         if(expireOutreachMessage(latest,current)||proactive&&isOutreachPaused(latest.settings,queued.id))return;
@@ -211,10 +212,24 @@ export function SendQueueWatcher() {
       }
 
       if (!msg.phoneE164) return;
-      const imageDataUrl = isQueuedWelcomeImage(msg) ? normalizeWelcomeImage(scheduled?.imageDataUrl) : undefined;
+      let imageDataUrl = isQueuedWelcomeImage(msg) ? normalizeWelcomeImage(scheduled?.imageDataUrl) : undefined;
       if (isQueuedWelcomeImage(msg) && (!imageDataUrl || channelId !== "baileys")) {
         state.updateMessageDelivery(msg.id, { deliveryStatus: "failed", retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined });
         return;
+      }
+      if (isQueuedAiReplyImage(msg)) {
+        if (channelId !== "baileys" || !msg.aiReplyImageAssetId) {
+          state.updateMessageDelivery(msg.id, { deliveryStatus: "failed", retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined, lastError: "自动回复图片只能通过 Baileys 发送" });
+          return;
+        }
+        try {
+          const {readLibraryImage} = await import("@/lib/imageLibrary");
+          imageDataUrl = await readLibraryImage(msg.aiReplyImageAssetId);
+          if (!/^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+=*$/.test(imageDataUrl)) throw new Error("图片素材格式无效");
+        } catch (error) {
+          state.updateMessageDelivery(msg.id, { deliveryStatus: "failed", retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined, lastError: error instanceof Error ? `自动回复图片素材不可用：${error.message}` : "自动回复图片素材不可用，请重新生成" });
+          return;
+        }
       }
       if (cancelled || isAppLockActive()) return;
       inflight.current.add(msg.id);
@@ -259,6 +274,7 @@ export function SendQueueWatcher() {
                 (!proactive||currentOutreachContext(latest,message)===aiContextKey) &&
                 (msg.systemKind !== "ai_auto_reply" || (currentAutoReplyContext(latest, message) === aiContextKey &&
                   canSendAutoReply(latest.settings, latest.messages, message,message.aiReplyInboundId) &&
+                  message.aiReplyImageAssetId === msg.aiReplyImageAssetId &&
                   canSendAiAutoFollowUp(latest.settings, latest.messages, message)));
             },
             rateLimitEnabled: settings.rateLimitEnabled !== false,
@@ -376,7 +392,7 @@ export function SendQueueWatcher() {
       if (cancelled || isAppLockActive()) return;
       const state = useAppStore.getState();
       const due = state.listRetryableOutgoing().filter(msg =>
-        (!msg.mediaType || isQueuedWelcomeImage(msg)) && isRetryableOutgoing(msg) &&
+        (!msg.mediaType || isQueuedWelcomeImage(msg) || isQueuedAiReplyImage(msg)) && isRetryableOutgoing(msg) &&
         !state.settings.scheduledMessages?.some(task => task.messageId === msg.id && task.status === "cancelled")
       ).sort((a, b) => a.sentAt.localeCompare(b.sentAt));
       const accountKey = (msg: Message) => accountFor(msg, state) || msg.deviceId || "legacy";

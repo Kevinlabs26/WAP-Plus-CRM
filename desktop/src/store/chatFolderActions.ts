@@ -58,7 +58,7 @@ export function createChatFolderActions({
 
   return {
     createChatFolder(name: string, parentId?: string | null): string | null {
-      const title = name.trim().slice(0, 40);
+      const title = name.trim();
       if (!title) {
         pushToast(t("folder.toastNameRequired"), "error");
         return null;
@@ -101,7 +101,7 @@ export function createChatFolderActions({
     },
 
     renameChatFolder(folderId: string, name: string) {
-      const title = name.trim().slice(0, 40);
+      const title = name.trim();
       if (!title) return;
       updateSettings({
         chatFolders: getSettings().chatFolders.map((folder) =>

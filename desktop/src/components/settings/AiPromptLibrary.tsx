@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Check, ChevronDown, ChevronRight, Copy, FileText, Folder, FolderPlus, Pencil, Trash2, X } from "lucide-react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { Check, ChevronDown, ChevronRight, Copy, FileText, Folder, FolderPlus, GripVertical, Pencil, Trash2, X } from "lucide-react";
 import { useAppStore } from "@/store/appStore";
 import { useI18n } from "@/i18n";
 import { Button, Input, Textarea } from "@/components/ui/primitives";
@@ -49,6 +49,9 @@ export function AiPromptLibrary({ initiallyOpen = false, fill = false }: { initi
   const [query,setQuery]=useState(""),[folderFilter,setFolderFilter]=useState(ALL_FOLDERS);
   const [folderDraft,setFolderDraft]=useState<{id?:string;parentId?:string}|null>(null),[folderName,setFolderName]=useState("");
   const [collapsedFolderIds,setCollapsedFolderIds]=useState<Set<string>>(()=>new Set());
+  const drag = useRef<{ pointerId: number; startX: number; startY: number } | null>(null);
+  const scrollFrame = useRef<number | undefined>(undefined);
+  const [dropTarget, setDropTarget] = useState<{ kind: "template" | "folder"; id: string; after: boolean } | null>(null);
   const selected = templates.find(item => item.id === id);
   const dirty = name !== (selected?.name || "") || prompt !== (selected?.prompt || "") || templateFolderId !== (selected?.folderId || "");
   const used=!!id && templateInUse(settings,id);
@@ -162,6 +165,109 @@ export function AiPromptLibrary({ initiallyOpen = false, fill = false }: { initi
   for(const template of templates)if(template.folderId)folderCounts.set(template.folderId,(folderCounts.get(template.folderId)||0)+1);
   const flatFolders=flattenPromptFolders(promptFolders);
   const searchTerm=query.trim().toLocaleLowerCase();
+  const canReorder = !searchTerm;
+  const stopDragScroll = () => {
+    if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current);
+    scrollFrame.current = undefined;
+  };
+  useEffect(() => stopDragScroll, []);
+  const finishDrag = () => { stopDragScroll(); drag.current = null; setDropTarget(null); };
+  const moveTemplate = (sourceId: string, targetId: string, after: boolean) => {
+    if (!canReorder || sourceId === targetId) return;
+    const store = useAppStore.getState();
+    const library = store.settings.aiPromptTemplates;
+    const source = library.find(template => template.id === sourceId);
+    const target = library.find(template => template.id === targetId);
+    if (!source || !target || (source.folderId || "") !== (target.folderId || "")) return;
+    const inFolder = (template: AiPromptTemplate) => (template.folderId || "") === (source.folderId || "");
+    const siblings = library.filter(inFolder).filter(template => template.id !== sourceId);
+    siblings.splice(siblings.indexOf(target) + Number(after), 0, source);
+    let index = 0;
+    const ordered = library.map(template => inFolder(template) ? siblings[index++]! : template);
+    if (ordered.some((template, position) => template !== library[position])) store.updateSettings({ aiPromptTemplates: ordered });
+  };
+  const moveTemplateToFolder = (sourceId: string, targetId: string) => {
+    const store = useAppStore.getState();
+    const library = store.settings.aiPromptTemplates;
+    const source = library.find(template => template.id === sourceId);
+    if (!source || (source.folderId || UNFILED) === targetId) return;
+    if (targetId !== UNFILED && !store.settings.aiPromptFolders?.some(folder => folder.id === targetId)) return;
+    const folderId = targetId === UNFILED ? undefined : targetId;
+    store.updateSettings({ aiPromptTemplates: [...library.filter(template => template.id !== sourceId), { ...source, folderId }] });
+    if (sourceId === id && templateFolderId === (source.folderId || "")) setTemplateFolderId(folderId || "");
+    expandFolderPath(folderId);
+  };
+  const folderDropClass = (folderId: string) => dropTarget?.kind === "folder" && dropTarget.id === folderId ? "ring-1 ring-inset ring-brand bg-brand/10" : "";
+  const templateRow = (template: AiPromptTemplate, level: number, indent: number) => {
+    const inFolder = (item: AiPromptTemplate) => (item.folderId || "") === (template.folderId || "");
+    const targetAtPointer = (event: Pick<PointerEvent<HTMLButtonElement>, "pointerId" | "clientX" | "clientY" | "currentTarget">) => {
+      const start = drag.current;
+      if (!canReorder || start?.pointerId !== event.pointerId || Math.hypot(event.clientX - start.startX, event.clientY - start.startY) < 5) return null;
+      const row = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-prompt-template-row], [data-prompt-folder-row]");
+      if (!row || !event.currentTarget.closest('[role="tree"]')?.contains(row)) return null;
+      const folderId = row.dataset.promptFolderRow;
+      if (folderId !== undefined) return folderId === (template.folderId || UNFILED) ? null : { kind: "folder" as const, id: folderId, after: true };
+      const target = templates.find(item => item.id === row.dataset.promptTemplateRow);
+      if (!target || target.id === template.id || !inFolder(target)) return null;
+      const rect = row.getBoundingClientRect();
+      return { kind: "template" as const, id: target.id, after: event.clientY >= rect.top + rect.height / 2 };
+    };
+    const edge = dropTarget?.kind === "template" && dropTarget.id === template.id
+      ? dropTarget.after ? "border-t-transparent border-b-brand" : "border-t-brand border-b-transparent"
+      : "border-transparent";
+    return <div key={`template:${template.id}`} role="treeitem" data-prompt-template-row={template.id}
+      aria-level={level} aria-selected={id===template.id} style={{ marginLeft: indent }} className={`group relative flex min-w-0 items-center rounded border-y before:absolute before:inset-y-0 before:right-full before:w-6 ${edge}`}>
+      {canReorder && (promptFolders.length > 0 || unfiledCount > 1) && <button type="button"
+        aria-label={`${t("aiLibrary.reorder")}: ${template.name}`} title={t("aiLibrary.reorder")}
+        className="absolute right-full top-1/2 -translate-y-1/2 touch-none select-none cursor-grab rounded p-1 text-zinc-500 opacity-0 group-hover:opacity-100 hover:text-brand focus-visible:text-brand focus-visible:opacity-100 active:cursor-grabbing active:opacity-100"
+        onPointerDown={event => {
+          if (event.button !== 0 || event.isPrimary === false || drag.current) return;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          drag.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY };
+        }} onPointerMove={event => {
+          if (drag.current?.pointerId !== event.pointerId) return;
+          stopDragScroll();
+          const pointer = { pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY, currentTarget: event.currentTarget };
+          const updateTarget = () => {
+            const target = targetAtPointer(pointer);
+            setDropTarget(current => current?.kind === target?.kind && current?.id === target?.id && current?.after === target?.after ? current : target);
+          };
+          updateTarget();
+          const tree = pointer.currentTarget.closest<HTMLElement>('[role="tree"]');
+          if (!tree || Math.hypot(pointer.clientX - drag.current.startX, pointer.clientY - drag.current.startY) < 5) return;
+          const scroll = () => {
+            scrollFrame.current = undefined;
+            if (drag.current?.pointerId !== pointer.pointerId || !tree.isConnected) return;
+            const rect = tree.getBoundingClientRect();
+            if (pointer.clientX < rect.left || pointer.clientX >= rect.right || pointer.clientY < rect.top - 24 || pointer.clientY > rect.bottom + 24) return;
+            const step = pointer.clientY < rect.top + 32 ? -12 : pointer.clientY > rect.bottom - 32 ? 12 : 0;
+            if (!step) return;
+            const previous = tree.scrollTop;
+            tree.scrollTop += step;
+            if (previous === tree.scrollTop) return;
+            updateTarget();
+            scrollFrame.current = requestAnimationFrame(scroll);
+          };
+          if (tree.scrollHeight > tree.clientHeight) scrollFrame.current = requestAnimationFrame(scroll);
+        }} onPointerUp={event => {
+          if (drag.current?.pointerId !== event.pointerId) return;
+          const target = targetAtPointer(event);
+          finishDrag();
+          if (target?.kind === "folder") moveTemplateToFolder(template.id, target.id);
+          if (target?.kind === "template") moveTemplate(template.id, target.id, target.after);
+        }} onLostPointerCapture={event => {
+          if (drag.current?.pointerId === event.pointerId) finishDrag();
+        }} onKeyDown={event => {
+          if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+          event.preventDefault();
+          const siblings = templates.filter(inFolder);
+          const after = event.key === "ArrowDown";
+          const neighbor = siblings[siblings.indexOf(template) + (after ? 1 : -1)];
+          if (neighbor) moveTemplate(template.id, neighbor.id, after);
+        }}><GripVertical className="h-3.5 w-3.5" /></button>}
+      <Button size="sm" data-prompt-template={template.id} aria-label={`${t("aiLibrary.choose")}: ${template.name}`} aria-pressed={id===template.id} variant={id===template.id?"primary":"ghost"} className="h-auto min-w-0 flex-1 justify-start gap-1.5 px-2 text-left" onClick={()=>void chooseTemplate(template)}><FileText className="h-3.5 w-3.5 shrink-0"/><span className="truncate font-medium">{template.name}</span></Button>
+    </div>;
+  };
   const unfiledTemplates=templates.filter(template=>!template.folderId&&template.name.toLocaleLowerCase().includes(searchTerm));
   const unfiledCount=templates.filter(template=>!template.folderId).length;
   const visibleFolderRows=flattenPromptTree(promptFolders,templates,undefined,1,collapsedFolderIds,searchTerm);
@@ -193,22 +299,18 @@ export function AiPromptLibrary({ initiallyOpen = false, fill = false }: { initi
               <Button size="sm" variant={folderFilter===ALL_FOLDERS?"primary":"ghost"} className="min-w-0 flex-1 justify-start" aria-pressed={folderFilter===ALL_FOLDERS} onClick={()=>void selectFolder(ALL_FOLDERS)}><Folder className="mr-1.5 h-3.5 w-3.5" />{t("aiLibrary.all")}<span className="ml-auto">{templates.length}</span></Button>
             </div>
             {!collapsedFolderIds.has(ALL_FOLDERS)&&<>
-              <div role="treeitem" aria-level={2} aria-expanded={unfiledCount>0? !collapsedFolderIds.has(UNFILED):undefined} className="flex min-w-0 items-center gap-1" style={{marginLeft:TREE_INDENT}}>
+              <div role="treeitem" data-prompt-folder-row={UNFILED} aria-level={2} aria-expanded={unfiledCount>0? !collapsedFolderIds.has(UNFILED):undefined} className={`flex min-w-0 items-center gap-1 rounded ${folderDropClass(UNFILED)}`} style={{marginLeft:TREE_INDENT}}>
                 {unfiledCount>0?<Button size="xs" variant="ghost" className="!min-h-0 h-5 w-5 shrink-0 p-0" aria-label={t(collapsedFolderIds.has(UNFILED)?"aiLibrary.folder.expand":"aiLibrary.folder.collapse",{name:t("aiLibrary.unfiled")})} onClick={()=>setCollapsedFolderIds(current=>{const next=new Set(current);if(next.has(UNFILED))next.delete(UNFILED);else next.add(UNFILED);return next;})}>{collapsedFolderIds.has(UNFILED)?<ChevronRight className="h-3.5 w-3.5"/>:<ChevronDown className="h-3.5 w-3.5"/>}</Button>:<span className="h-5 w-5 shrink-0"/>}
                 <Button size="sm" variant={folderFilter===UNFILED?"primary":"ghost"} className="min-w-0 flex-1 justify-start" aria-pressed={folderFilter===UNFILED} onClick={()=>void selectFolder(UNFILED)}><Folder className="mr-1.5 h-3.5 w-3.5" />{t("aiLibrary.unfiled")}<span className="ml-auto">{unfiledCount}</span></Button>
               </div>
-              {!collapsedFolderIds.has(UNFILED)&&unfiledTemplates.map(template=><div key={template.id} role="treeitem" aria-level={3} aria-selected={id===template.id} style={{marginLeft:TREE_INDENT+TREE_CHILD_INDENT*2}}>
-                <Button size="sm" data-prompt-template={template.id} aria-label={`${t("aiLibrary.choose")}: ${template.name}`} aria-pressed={id===template.id} variant={id===template.id?"primary":"ghost"} className="h-auto w-full min-w-0 justify-start gap-1.5 px-2 text-left" onClick={()=>void chooseTemplate(template)}><FileText className="h-3.5 w-3.5 shrink-0"/><span className="truncate font-medium">{template.name}</span></Button>
-              </div>)}
+              {!collapsedFolderIds.has(UNFILED)&&unfiledTemplates.map(template=>templateRow(template, 3, TREE_INDENT+TREE_CHILD_INDENT*2))}
               {visibleFolderRows.map(row=>{
-                if(row.kind==="template")return <div key={`template:${row.template.id}`} role="treeitem" aria-level={row.depth+1} aria-selected={id===row.template.id} style={{marginLeft:TREE_INDENT+row.depth*TREE_CHILD_INDENT}}>
-                  <Button size="sm" data-prompt-template={row.template.id} aria-label={`${t("aiLibrary.choose")}: ${row.template.name}`} aria-pressed={id===row.template.id} variant={id===row.template.id?"primary":"ghost"} className="h-auto w-full min-w-0 justify-start gap-1.5 px-2 text-left" onClick={()=>void chooseTemplate(row.template)}><FileText className="h-3.5 w-3.5 shrink-0"/><span className="truncate font-medium">{row.template.name}</span></Button>
-                </div>;
+                if(row.kind==="template")return templateRow(row.template, row.depth+1, TREE_INDENT+row.depth*TREE_CHILD_INDENT);
                 const folder=row.folder;
                 const hasChildren=promptFolders.some(item=>item.parentId===folder.id)||templates.some(item=>item.folderId===folder.id);
                 const isCollapsed=collapsedFolderIds.has(folder.id);
                 const isSelected=folderFilter===folder.id;
-                return <div key={`folder:${folder.id}`} role="treeitem" aria-level={row.depth+1} aria-expanded={hasChildren?!isCollapsed:undefined} className="flex min-w-0 items-center gap-1" style={{marginLeft:TREE_INDENT+(row.depth-1)*TREE_CHILD_INDENT}}>
+                return <div key={`folder:${folder.id}`} role="treeitem" data-prompt-folder-row={folder.id} aria-level={row.depth+1} aria-expanded={hasChildren?!isCollapsed:undefined} className={`flex min-w-0 items-center gap-1 rounded ${folderDropClass(folder.id)}`} style={{marginLeft:TREE_INDENT+(row.depth-1)*TREE_CHILD_INDENT}}>
                   {hasChildren?<Button size="xs" variant="ghost" className="!min-h-0 h-5 w-5 shrink-0 p-0" aria-label={t(isCollapsed?"aiLibrary.folder.expand":"aiLibrary.folder.collapse",{name:folder.name})} onClick={()=>setCollapsedFolderIds(current=>{const next=new Set(current);if(next.has(folder.id))next.delete(folder.id);else next.add(folder.id);return next;})}>{isCollapsed?<ChevronRight className="h-3.5 w-3.5"/>:<ChevronDown className="h-3.5 w-3.5"/>}</Button>:<span className="h-5 w-5 shrink-0"/>}
                   <Button size="sm" variant={isSelected?"primary":"ghost"} className="min-w-0 flex-1 justify-start truncate px-2" aria-pressed={isSelected} onClick={()=>void selectFolder(folder.id)}><Folder className="mr-1.5 h-3.5 w-3.5 shrink-0" /><span className="truncate">{folder.name}</span><span className="ml-auto pl-1">{folderCounts.get(folder.id)||0}</span></Button>
                   {isSelected&&<><Button size="xs" variant="ghost" disabled={!!folderDraft} aria-label={t("aiLibrary.folder.rename",{name:folder.name})} title={t("aiLibrary.folder.rename",{name:folder.name})} onClick={()=>beginFolderRename(folder)}><Pencil className="h-3.5 w-3.5" /></Button><Button size="xs" variant="ghost" disabled={!!folderDraft} aria-label={t("aiLibrary.folder.deleteTitle",{name:folder.name})} title={t("aiLibrary.folder.deleteTitle",{name:folder.name})} onClick={()=>void deleteFolder(folder)}><Trash2 className="h-3.5 w-3.5" /></Button></>}

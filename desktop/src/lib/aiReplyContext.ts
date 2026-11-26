@@ -24,15 +24,16 @@ export function inspectAutoReplyContext(
     if (!Number.isFinite(queuedAt) || Date.now() < queuedAt) return {key:null,error:"消息时间无效或系统时间已回退，请重新生成"};
     if (!reply.aiAutoFollowUpStep && Date.now() - queuedAt >= SUGGESTION_MAX_AGE_MS) return {key:null,error:"自动回复已排队超过 5 分钟，请根据最新聊天重新生成"};
   }
-  if (resolveAutoReplyScope(state.settings, reply.chatId).mode !== "auto") return {key:null,error:"此会话已暂停自动回复或切换为人工模式"};
+  const contact = state.contacts.find(item => item.id === reply.contactId);
+  const chat = state.chats.find(item => item.id === reply.chatId);
+  const isGroup = !!(chat?.isGroup || contact?.isGroup || contact?.channelAddress?.endsWith("@g.us"));
+  if (resolveAutoReplyScope(state.settings, reply.chatId, isGroup).mode !== "auto") return {key:null,error:"此会话已暂停自动回复或切换为人工模式"};
   const museAccountId = reply.aiReplyMuseAccountId;
   if (museAccountId && (!state.settings.musePrivacyByAccountId?.[museAccountId]?.trainingDisabledConfirmedAt ||
       state.settings.museAutoReplyAccountIds && !state.settings.museAutoReplyAccountIds.includes(museAccountId))) {
     return {key:null,error:"生成回复的 Muse 账号已不再获准自动回复，请重新生成"};
   }
-  const contact = state.contacts.find(item => item.id === reply.contactId);
-  const chat = state.chats.find(item => item.id === reply.chatId);
-  if (!contact || !chat || contact.isGroup || chat.isGroup || chat.localOnly || !reply.accountId ||
+  if (!contact || !chat || chat.localOnly || reply.aiAutoFollowUpStep && isGroup || isGroup && reply.channelId !== "baileys" || !reply.accountId ||
       state.settings.sendChannel !== reply.channelId || !hasRealAiKey(state.settings) ||
       (chat.accountId || contact.accountId || state.settings.liveBaileysAccountId || state.settings.activeAccountId) !== reply.accountId) return {key:null,error:"发送账号、渠道、联系人或 AI 配置已变化或不可用，请检查设置后重新生成"};
   const context = (state.messagesByChatId?.[reply.chatId] || state.messages)
@@ -41,7 +42,7 @@ export function inspectAutoReplyContext(
   const options = reply.aiAutoFollowUpStep
     ? { auto: true, count: 1 as const, chatId: reply.chatId, outreach: autoFollowUpPrompt, allowSidebarData: false }
     : { auto: true };
-  return {key:getSuggestionContextKey(contact, context, state.settings, reply.accountId, options),error:""};
+  return {key:getSuggestionContextKey(contact, context, state.settings, reply.accountId, {...options, groupReplyDecision:isGroup}),error:""};
 }
 
 export function currentAutoReplyContext(...args:Parameters<typeof inspectAutoReplyContext>):string|null {

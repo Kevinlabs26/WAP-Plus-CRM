@@ -70,11 +70,13 @@ export async function idbSet(key: string, value: unknown, related: {key: string;
   });
 }
 
-export async function idbDel(key: string): Promise<void> {
+export async function idbDel(key: string, related: string[] = []): Promise<void> {
   const db = await openDb();
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE, "readwrite");
-    tx.objectStore(STORE).delete(key);
+    const store = tx.objectStore(STORE);
+    store.delete(key);
+    for (const item of related) store.delete(item);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });

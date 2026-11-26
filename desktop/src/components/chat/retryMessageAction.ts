@@ -70,7 +70,7 @@ export async function retryMessage({
       || message.mediaUrl !== original.mediaUrl) return;
   }
   const sendAccountId = message.accountId || chatAccountId;
-  if (message?.mediaType) {
+  if (message?.mediaType && !(message.systemKind === "ai_auto_reply" && message.aiReplyImageAssetId)) {
     if (
       !isBaileys ||
       !chatConnected ||

@@ -488,7 +488,7 @@ pub async fn google_sheets_read(
     if ranges.is_empty() {
         url.query_pairs_mut().append_pair(
             "fields",
-            "properties.title,sheets.properties(sheetId,title)",
+            "properties.title,sheets.properties(sheetId,title,gridProperties(rowCount))",
         );
     } else {
         for range in ranges {

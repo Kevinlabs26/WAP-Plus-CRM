@@ -15,7 +15,7 @@ import { persist } from "./persist";
 import type { ScheduledMessage } from "@/types/crm";
 import { isGroupWelcomeTask } from "@/lib/groupWelcome";
 import { removeSalesStage, resolveSalesStageLabel } from "@/lib/contactWorkflow";
-import { MAX_QUICK_REPLIES, MAX_RECENT_QUICK_REPLIES, normalizeQuickReplyIds } from "@/lib/quickReplies";
+import { MAX_RECENT_QUICK_REPLIES, normalizeQuickReplyIds } from "@/lib/quickReplies";
 
 let lastSecretSaveErrorAt = 0;
 
@@ -124,7 +124,7 @@ export function createSettingsActionsSlice({
         if (!changed) return state;
         stripRetiredAiSettings(next);
         if (patch.quickReplies !== undefined || patch.quickReplyPinnedIds !== undefined) {
-          next.quickReplyPinnedIds = normalizeQuickReplyIds(next.quickReplyPinnedIds, next.quickReplies, MAX_QUICK_REPLIES);
+          next.quickReplyPinnedIds = normalizeQuickReplyIds(next.quickReplyPinnedIds, next.quickReplies);
         }
         if (patch.quickReplies !== undefined || patch.quickReplyRecentIds !== undefined) {
           next.quickReplyRecentIds = normalizeQuickReplyIds(next.quickReplyRecentIds, next.quickReplies, MAX_RECENT_QUICK_REPLIES);

@@ -77,6 +77,7 @@ import {
 import type { WaAccount } from "@/types/account";
 import { PhoneListSection } from "./PhoneListSection";
 import { SidebarListHeader } from "./SidebarListHeader";
+import { FolderTransferDialog } from "./FolderTransferDialog";
 import { LeadInboxSettingsPopover } from "./LeadInboxSettingsPopover";
 import { useChatFolderDrag } from "./useChatFolderDrag";
 import { useSidebarData } from "./useSidebarData";
@@ -413,6 +414,7 @@ export function PhoneSidebar() {
   const [folderNameDraft, setFolderNameDraft] = useState("");
   const [aiPromptFolderId, setAiPromptFolderId] = useState<string | null>(null);
   const [museFolderRoutingOpen, setMuseFolderRoutingOpen] = useState(false);
+  const [folderTransferMode, setFolderTransferMode] = useState<"import" | "export" | null>(null);
   const [scheduleTarget, setScheduleTarget] = useState<{ folderId?: string; chatIds?: string[]; initialStartNow?: boolean } | null>(null);
   const folderNameInputRef = useRef<HTMLInputElement | null>(null);
   const [folderImportText, setFolderImportText] = useState("");
@@ -1591,6 +1593,7 @@ export function PhoneSidebar() {
 
       <section className="flex min-h-0 flex-[1_1_0px] flex-col overflow-hidden p-2.5">
         <SidebarListHeader
+          onFolderTransfer={setFolderTransferMode}
           folderCount={useAppStore.getState().settings.chatFolders?.length || 0}
           onClearAllFolders={async () => {
             const folders = useAppStore.getState().settings.chatFolders || [];
@@ -1949,6 +1952,8 @@ export function PhoneSidebar() {
 
       {aiPromptFolderId && <FolderAiPromptDialog key={aiPromptFolderId} folderId={aiPromptFolderId} onClose={() => setAiPromptFolderId(null)} />}
       {museFolderRoutingOpen && <MuseFolderRoutingDialog onClose={() => setMuseFolderRoutingOpen(false)} />}
+      {folderTransferMode && <FolderTransferDialog mode={folderTransferMode} initialAccountId={syncAccountId}
+        initiallyMerged={accountViewMode?.type !== "account"} onClose={() => setFolderTransferMode(null)} />}
       {scheduleTarget && <ScheduledPlanDialog {...scheduleTarget} onClose={() => setScheduleTarget(null)} />}
       {callFolder && <FolderCallDialog folderId={callFolder.id} folderName={callFolder.name} onClose={() => setCallFolder(null)} />}
       {inactiveCopyFolder && <FolderInactiveCopyDialog

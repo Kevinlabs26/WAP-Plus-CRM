@@ -182,6 +182,7 @@ export interface AppState extends PersistSlice {
     accountId?: string;
     systemKind?: string;
     aiReplyContextHash?: string;
+    aiReplyImageAssetId?: string;
     aiReplyInboundId?: string;
     aiReplyReceivedAt?: number;
     aiReplyDurationMs?: number;
@@ -199,6 +200,7 @@ export interface AppState extends PersistSlice {
     mediaMime?: Message["mediaMime"];
     mediaFileName?: Message["mediaFileName"];
     mediaCaption?: Message["mediaCaption"];
+    mediaThumbUrl?: Message["mediaThumbUrl"];
     lastError?: string;
     nextAttemptAt?: string;
   }) => string | null;
@@ -229,6 +231,7 @@ export interface AppState extends PersistSlice {
         | "mediaCaption"
         | "mediaUpload"
         | "mediaThumbUrl"
+        | "aiReplyImageAssetId"
         | "mediaPending"
         | "mediaError"
         | "mediaSeconds"

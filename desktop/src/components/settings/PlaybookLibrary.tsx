@@ -1,11 +1,13 @@
 import {PlaybookPlans} from './PlaybookPlans';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '@/store/appStore';
 import { useI18n } from '@/i18n';
 import { Button } from '@/components/ui/primitives';
 import { importPlaybooks, MAX_PLAYBOOK_CHARS, MAX_PLAYBOOK_TOTAL_CHARS } from '@/lib/aiPlaybooks';
 import { inferredMuseFolder, normalizeMuseFolder, syncMusePlaybooks } from '@/lib/musePlaybookSync';
 import { museWebAccounts, openMuseWeb } from '@/lib/museWeb';
+import { listLibraryImages, type LibraryImage } from '@/lib/imageLibrary';
+import { LibraryThumbnail } from '../chat/LibraryThumbnail';
 
 export function PlaybookLibrary() {
   const {t} = useI18n();
@@ -15,11 +17,25 @@ export function PlaybookLibrary() {
   const museBooks = available.filter(book => book.musePath);
   const sharedMuseBooks = museBooks.filter(book => book.content.trim() || book.summary.trim()).length;
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [images, setImages] = useState<LibraryImage[]>([]);
+  const [imageBookId, setImageBookId] = useState('');
   const workspaceLinked = settings.aiPlaybookMuseWorkspaceLinked === true;
   const inferredFolder = inferredMuseFolder({aiPlaybooks: books, aiPlaybookMuseRoot: settings.aiPlaybookMuseRoot});
+  const imageBook = available.find(book=>book.id===imageBookId) || available[0];
   const [folderPath, setFolderPath] = useState(settings.aiPlaybookMuseFolder || inferredFolder);
   useEffect(() => setFolderPath(settings.aiPlaybookMuseFolder || inferredFolder), [settings.aiPlaybookMuseAccountId, settings.aiPlaybookMuseFolder, settings.aiPlaybookMuseRoot, inferredFolder]);
   const input = useRef<HTMLInputElement>(null);
+  const refreshImages = useCallback(() => { void listLibraryImages(true).then(setImages).catch(err => setError(err instanceof Error ? err.message : String(err))); }, []);
+  useEffect(() => { refreshImages(); }, [refreshImages]);
+  const togglePlaybookImage = (bookId: string, imageId: string, checked: boolean) => {
+    const current = useAppStore.getState();
+    current.updateSettings({aiPlaybooks:(current.settings.aiPlaybooks||[]).map(book => {
+      if (book.id !== bookId) return book;
+      const ids = new Set(book.imageAssetIds || []);
+      if (checked) ids.add(imageId); else ids.delete(imageId);
+      return {...book,imageAssetIds:[...ids].slice(0,100)};
+    })});
+  };
   const sync = async (folder: string) => {
     const count = await syncMusePlaybooks(true, folder);
     const current = useAppStore.getState();
@@ -73,6 +89,20 @@ export function PlaybookLibrary() {
     }}/>
     <Button disabled={busy} onClick={() => input.current?.click()}>{t(busy ? 'cloud.stage.reading' : 'playbook.import')}</Button>
     </details>
+    {!!available.length&&<details className="space-y-2 text-xs"><summary className="cursor-pointer text-zinc-500">{t('playbook.replyImages')}</summary>
+      <p className="text-xs text-zinc-500">{t('playbook.replyImagesHint')}</p>
+      <Button size="xs" disabled={busy} onClick={refreshImages}>{t('playbook.refreshImages')}</Button>
+      {!images.length ? <p className="text-2xs text-zinc-500">{t('playbook.noImages')}</p> : imageBook&&<>
+        <label className="block text-xs">{t('playbook.chooseImagesFor')}
+          <select className="ui-control mt-1 w-full px-2 py-2" value={imageBook.id} onChange={event=>setImageBookId(event.target.value)}>{available.map(book=><option key={book.id} value={book.id}>{book.name}</option>)}</select>
+        </label>
+        <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">{images.map(image=><label key={image.id} className="flex min-w-0 items-center gap-2 rounded-md px-1 py-1 hover:bg-zinc-800/50">
+          <input type="checkbox" checked={(imageBook.imageAssetIds||[]).includes(image.id)} onChange={event=>togglePlaybookImage(imageBook.id,image.id,event.target.checked)}/>
+          <LibraryThumbnail image={image} alt="" className="h-9 w-9 shrink-0 rounded object-cover" placeholderClassName="h-9 w-9 shrink-0 rounded" />
+          <span className="min-w-0 truncate" title={`${image.title}${image.caption?` — ${image.caption}`:''}`}>{image.title}</span>
+        </label>)}</div>
+      </>}
+    </details>}
     {!books.length && <p className="text-xs text-zinc-500">{t('playbook.empty')}</p>}
     <PlaybookPlans/>
     {(error || settings.aiPlaybookMuseError) && <p role="alert" className="text-xs text-amber-500">{error || settings.aiPlaybookMuseError}</p>}

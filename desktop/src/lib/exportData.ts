@@ -507,6 +507,7 @@ function sanitizeMessage(raw: unknown): Message | null {
     senderAvatarUrl: sanitizeMediaUrl(m.senderAvatarUrl) || undefined,
     systemKind: str(m.systemKind, 80) || undefined,
     aiReplyInboundId: str(m.aiReplyInboundId, 200) || undefined,
+    aiReplyImageAssetId: str(m.aiReplyImageAssetId, 120) || undefined,
     aiAutoReplyReceivedAt: typeof m.aiAutoReplyReceivedAt === "number" && Number.isFinite(m.aiAutoReplyReceivedAt) && m.aiAutoReplyReceivedAt > 0 ? m.aiAutoReplyReceivedAt : undefined,
     aiReplyStartedAt: typeof m.aiReplyStartedAt === "number" && Number.isFinite(m.aiReplyStartedAt) && m.aiReplyStartedAt > 0 ? m.aiReplyStartedAt : undefined,
     aiReplyReceivedAt: typeof m.aiReplyReceivedAt === "number" && Number.isFinite(m.aiReplyReceivedAt) && m.aiReplyReceivedAt > 0 ? m.aiReplyReceivedAt : undefined,

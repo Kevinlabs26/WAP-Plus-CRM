@@ -142,7 +142,7 @@ export async function removeSheetConnection(id:string){
   configWrite=(async()=>{await idbSet(KEY,{email:next.email,config:next.config,data:next.data,connections:next.connections,defaultName:next.defaultName});useGoogleSheets.setState(patch);})();
   try{await configWrite;}finally{configWrite=null;}
 }
-interface SheetResponse { properties?: { title?: string }; sheets?: { properties: { sheetId: number; title: string } }[]; valueRanges?: { values?: string[][] }[] }
+interface SheetResponse { properties?: { title?: string }; sheets?: { properties: { sheetId: number; title: string; gridProperties?: { rowCount?: number } } }[]; valueRanges?: { values?: string[][] }[] }
 interface GridCell { hyperlink?: string; userEnteredValue?: { formulaValue?: string }; textFormatRuns?: { format?: { link?: { uri?: string } } }[] }
 interface GridColumn { startRow?: number; startColumn?: number; rowData?: { values?: GridCell[] }[] }
 interface GridResponse { sheets?: { data?: GridColumn[] }[] }

@@ -72,6 +72,26 @@ test('loads cold history before scheduling and retains newer in-memory replies',
   await scheduler.schedule(manual);assert.equal(globalThis.backlog.scheduled.length,0);
 });
 
+test('walks several cold history pages past system messages and schedules the latest real inbound',async t=>{
+  const {scheduler,state,inbound,manual}=setup(t);
+  state.messages=[];
+  state.chats[0].hasMessageHistory=true;
+  const pages=Array.from({length:3},(_,page)=>Array.from({length:80},(_,i)=>({
+    ...inbound,id:`system-${page}-${i}`,mediaType:'system',direction:'out',
+    sentAt:new Date(Date.parse(inbound.sentAt)+(240-page*80+i)*1000).toISOString(),
+  })));
+  const calls=[];
+  globalThis.backlog.loadPage=async opts=>{
+    if(calls.length) assert.equal(opts.beforeId,pages[calls.length-1][0].id);
+    const items=pages[calls.length]||[inbound];
+    calls.push(opts);
+    return {items,limit:80};
+  };
+  await scheduler.schedule(manual);
+  assert.equal(calls.length,4);
+  assert.deepEqual(globalThis.backlog.scheduled.map(message=>message.id),['in']);
+});
+
 for(const change of ['manual reply','handled','disabled','paused','deleted','account changed','contact changed','restore','locked','stopped','live task'])test(`revalidates after reading cold history when ${change}`,async t=>{
   const {scheduler,state,inbound,manual}=setup(t);state.messages=[];state.chats[0].hasMessageHistory=true;
   let release;globalThis.backlog.loadPage=()=>new Promise(resolve=>{release=resolve;});

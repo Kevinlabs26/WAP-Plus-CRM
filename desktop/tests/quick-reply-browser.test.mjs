@@ -64,10 +64,11 @@ test('a category can be added while drafting; empty categories are visible and t
  assert.equal(store.settings.quickReplyCustomCategories.length,1);assert.ok(store.toasts.some(([key])=>key==='settingsQuickReplies.categoryExists'));
 });
 
-test('quick creation respects current limits, handles a removed category and keeps Google Sheet linkage for new rows',()=>{
+test('quick creation works above 1000 replies, respects media limits and keeps Google Sheet linkage',()=>{
  const store=shelfStore(),h=harness(QuickReplyBrowser,{replies:[]});
  h.click('settingsQuickReplies.add');h.preview().props.onChange({body:'Saved later',category:'removed-category',media:{...media,size:2*1024*1024}});h.render();
- store.updateSettings({quickReplies:Array.from({length:1000},(_,i)=>reply(String(i)))});h.preview().props.onSave();h.render();assert.equal(store.settings.quickReplies.length,1000);assert.ok(h.preview());
+ store.updateSettings({quickReplies:Array.from({length:1000},(_,i)=>reply(String(i)))});h.preview().props.onSave();h.render();assert.equal(store.settings.quickReplies.length,1001);
+ h.click('settingsQuickReplies.add');h.preview().props.onChange({body:'Saved later',category:'removed-category',media:{...media,size:2*1024*1024}});h.render();
  store.updateSettings({quickReplies:[reply('large',{media:{...media,size:63*1024*1024}})]});h.preview().props.onSave();h.render();assert.equal(store.settings.quickReplies.length,1);assert.ok(h.preview());
  const link={spreadsheetId:'book',tab:'Tab',row:2,originalColumn:1,translationColumn:0,originalSnapshot:'Old',translationSnapshot:'Ancien'};
  store.updateSettings({quickReplies:[reply('linked',{sheetLink:link})]});globalThis.shelfSynced=[];

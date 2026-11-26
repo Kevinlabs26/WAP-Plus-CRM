@@ -11,10 +11,11 @@ export function multiWindowReplyStatus(
   settings: AppSettings, chat: ChatPreview, contact: Contact | undefined,
   messages: readonly Message[], accountId: string, connected: boolean, now = Date.now(), runtime?: AutoReplyRuntime
 ) {
-  const scope = resolveAutoReplyScope(settings, chat.id);
+  const isGroup = !!(chat.isGroup || contact?.isGroup);
+  const scope = resolveAutoReplyScope(settings, chat.id, isGroup);
   let status: MultiWindowReplyStatus;
   if (scope.source === "paused") status = "paused";
-  else if (chat.isGroup || contact?.isGroup || chat.localOnly || scope.mode === "manual") status = "manual";
+  else if (chat.localOnly || isGroup && settings.sendChannel !== "baileys" || scope.mode === "manual") status = "manual";
   else if (!contact) status = "unavailable";
   else if (!connected) status = "offline";
   else if (!hasAiCredentials(settings)) status = "ai";

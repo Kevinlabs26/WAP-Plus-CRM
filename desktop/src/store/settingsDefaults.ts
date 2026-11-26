@@ -10,10 +10,8 @@ import { normalizeScheduledPlans, type ScheduledPlan } from "@/lib/scheduledPlan
 import {
   normalizeQuickReplyCategory,
   QUICK_REPLY_CATEGORIES,
-  MAX_QUICK_REPLIES,
   MAX_RECENT_QUICK_REPLIES,
   normalizeQuickReplyIds,
-  MAX_QUICK_REPLY_CATEGORIES,
   MAX_QUICK_REPLY_MEDIA_TOTAL_BYTES,
   type QuickReplyCategory,
   type QuickReplyCategoryOption,
@@ -621,7 +619,7 @@ export function normalizeLoadedSettings(
     ? merged.quickReplyCustomCategories
         .map((item, index) => ({
           id: String(item?.id || `custom-${index}`).trim().slice(0, 48),
-          label: String(item?.label || "").trim().slice(0, 32),
+          label: String(item?.label || "").trim(),
           ...(typeof item?.parentId === "string" ? { parentId: item.parentId.trim().slice(0, 48) } : {}),
         }))
         .filter((item, index, items) =>
@@ -630,12 +628,11 @@ export function normalizeLoadedSettings(
           !QUICK_REPLY_CATEGORIES.some((category) => category.id === item.id) &&
           items.findIndex((candidate) => candidate.id === item.id) === index
         )
-        .slice(0, MAX_QUICK_REPLY_CATEGORIES)
     : [];
   const quickReplyCategoryIds = new Set(merged.quickReplyCustomCategories.map(category => category.id));
   const validCategoryIds = new Set<string>([...QUICK_REPLY_CATEGORIES.filter(category => !merged.quickReplyRemovedCategories.includes(category.id)).map(category => category.id), ...quickReplyCategoryIds]);
   merged.quickReplyCategoryOrder = Array.isArray(merged.quickReplyCategoryOrder)
-    ? [...new Set(merged.quickReplyCategoryOrder.filter(id => typeof id === "string" && validCategoryIds.has(id)))].slice(0, MAX_QUICK_REPLY_CATEGORIES + QUICK_REPLY_CATEGORIES.length)
+    ? [...new Set(merged.quickReplyCategoryOrder.filter(id => typeof id === "string" && validCategoryIds.has(id)))]
     : [];
   for (const category of merged.quickReplyCustomCategories) {
     if (!category.parentId || !validCategoryIds.has(category.parentId) || category.parentId === "other" || category.parentId === category.id) delete category.parentId;
@@ -659,7 +656,7 @@ export function normalizeLoadedSettings(
     let quickReplyMediaBytes = 0;
     merged.quickReplies = merged.quickReplies
       .map((r, i) => {
-        const title = String(r?.title || "").slice(0, 40);
+        const title = String(r?.title || "");
         const body = String(r?.body || "");
         const translation = String(r?.translation || "");
         const rawMedia =
@@ -703,7 +700,7 @@ export function normalizeLoadedSettings(
         const originalColumn = Number(rawLink?.originalColumn);
         const translationColumn = Number(rawLink?.translationColumn);
         const sheetLink = rawLink && /^[a-zA-Z0-9_-]{1,200}$/.test(spreadsheetId) && tab.trim() && tab.length <= 200 && !/[\u0000-\u001f]/.test(tab) && Number.isInteger(row) && row >= 0 && row <= 10_000_000 && Number.isInteger(originalColumn) && originalColumn >= 0 && originalColumn <= 18_277 && Number.isInteger(translationColumn) && translationColumn >= 0 && translationColumn <= 18_277 && originalColumn !== translationColumn
-          ? { spreadsheetId, tab, row, originalColumn, translationColumn, titleSnapshot: String(rawLink.titleSnapshot ?? title).slice(0, 40), originalSnapshot: String(rawLink.originalSnapshot || ""), translationSnapshot: String(rawLink.translationSnapshot || ""), syncPending: rawLink.syncPending === true || undefined, syncError: String(rawLink.syncError || "").slice(0, 200) || undefined }
+          ? { spreadsheetId, tab, row, originalColumn, translationColumn, titleSnapshot: String(rawLink.titleSnapshot ?? title), originalSnapshot: String(rawLink.originalSnapshot || ""), translationSnapshot: String(rawLink.translationSnapshot || ""), syncPending: rawLink.syncPending === true || undefined, syncError: String(rawLink.syncError || "").slice(0, 200) || undefined }
           : undefined;
         return {
           id: String(r?.id || `qr-${i}`),
@@ -721,10 +718,9 @@ export function normalizeLoadedSettings(
           ),
         };
       })
-      .filter((r) => r.title || r.body || r.media)
-      .slice(0, MAX_QUICK_REPLIES);
+      .filter((r) => r.title || r.body || r.media);
   }
-  merged.quickReplyPinnedIds = normalizeQuickReplyIds(merged.quickReplyPinnedIds, merged.quickReplies, MAX_QUICK_REPLIES);
+  merged.quickReplyPinnedIds = normalizeQuickReplyIds(merged.quickReplyPinnedIds, merged.quickReplies);
   merged.quickReplyRecentIds = normalizeQuickReplyIds(merged.quickReplyRecentIds, merged.quickReplies, MAX_RECENT_QUICK_REPLIES);
   merged.composerQuickAccessTabs = Array.isArray(merged.composerQuickAccessTabs)
     ? [...new Set(merged.composerQuickAccessTabs.filter(tab => tab === "quick-replies" || tab === "images"))]
@@ -1203,7 +1199,7 @@ export function normalizeLoadedSettings(
     .map((f, i) => {
       const id = String(f?.id || `folder-${i}`);
       const isLeadFolder = id === LEAD_INBOX_FOLDER_ID;
-      const name = String(f?.name || (isLeadFolder ? "主动联系" : "未命名分组")).slice(0, 40);
+      const name = String(f?.name || (isLeadFolder ? "主动联系" : "未命名分组"));
       const sort = Number.isFinite(Number(f?.sort)) ? Number(f.sort) : i;
       const scope: FolderScope =
         isLeadFolder || f?.scope?.type === "all"

@@ -164,7 +164,7 @@ test('folder bulk send and scheduled send are separate actions and each closes t
 });
 
 const item=(ui,label)=>ui.tree.find(n=>n.props.role==='menuitem'&&nodes(n).some(child=>child.props.children===label||Array.isArray(child.props.children)&&child.props.children.includes(label)));
-for(const [kind,label,first,last] of [['import','导入与添加','导入号码','选择已加入的群组'],['organize','整理文件夹','新建子分组','清空此文件夹及子文件夹']]){
+for(const [kind,label,first,last] of [['import','导入与添加','导入号码','选择已加入的群组'],['organize','整理文件夹','新建子分组','删除分组']]){
  test(`${kind} opens a side submenu on hover and stays open while crossing the pointer gap`,()=>{
   const ui=fixture();try{
    ui.open();const trigger=item(ui,label);trigger.props.onMouseEnter(ui.event(trigger));ui.render();

@@ -10,7 +10,6 @@ import {
   RefreshCw,
   ShoppingCart,
   Sparkles,
-  TableProperties,
   X,
 } from "lucide-react";
 import { createPortal } from "react-dom";
@@ -48,10 +47,10 @@ import { useI18n } from "@/i18n";
 import { emitQuickReplyMedia } from "@/lib/quickReplyMedia";
 import { requestQuickReplySend } from "@/lib/quickReplySend";
 import { ImageLibraryPanel } from "@/components/chat/ImageLibraryPanel";
+import { QuickMediaManager } from "@/components/chat/QuickMediaManager";
 import { AiSuggestionCard } from "./AiSuggestionCard";
 import { AiSuggestionReadingControl } from "./AiSuggestionReadingControl";
 import { resolveMyLang } from "@/lib/translateDraft";
-import { AiSheetExtractDialog } from "./AiSheetExtractDialog";
 import { AiLocalAgentPanel } from "./AiLocalAgentPanel";
 import {MuseQueueStatus} from "@/components/settings/MuseQueueStatus";
 
@@ -119,6 +118,7 @@ export function CrmAiPanel() {
     if (!selectedChatId && !selectedContactId) setCrmPanelCollapsed(true);
   }, [selectedChatId, selectedContactId, setCrmPanelCollapsed]);
   const [tagsOpen, setTagsOpen] = useState(false);
+  const [mediaLibraryTab, setMediaLibraryTab] = useState<"images" | "clips">("images");
   const [sheetInfoOpen, setSheetInfoOpen] = useState(false);
   const [moreDetailsOpen, setMoreDetailsOpen] = useState(false);
   const [followSchedulerOpen, setFollowSchedulerOpen] = useState(false);
@@ -129,7 +129,6 @@ export function CrmAiPanel() {
   const [loading, setLoading] = useState(false);
   const [aiSource, setAiSource] = useState<string>(settings.aiProvider);
   const [aiError, setAiError] = useState("");
-  const [sheetExtractOpen, setSheetExtractOpen] = useState(false);
   const [readingLanguage, setReadingLanguage] = useState("");
   const [readingTarget, setReadingTarget] = useState<string | null>(null);
   const [suggestionExpansion,setSuggestionExpansion]=useState<{key:string;open:boolean}|null>(null);
@@ -587,11 +586,18 @@ export function CrmAiPanel() {
         >
           {t("crmPanel.quickReplies")}
         </button>
-        <button type="button" role="tab" aria-selected={panelTab === "images"} title={t(composerQuickAccessTabs.includes("images") ? "composerShelf.hidePanel" : "composerShelf.showPanel", { panel: t("gallery.title") })} className={cn("rounded-lg px-2 py-1.5 text-[11px] transition-colors", panelTab === "images" ? "bg-zinc-800 text-brand" : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300")} onClick={() => setPanelTab("images")} onContextMenu={event => openComposerTabMenu(event, "images")} onKeyDown={event => { if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return; event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setComposerTabMenu({ tab: "images", x: rect.left, y: rect.bottom }); }}>{t("gallery.title")}</button>
+        <button type="button" role="tab" aria-selected={panelTab === "images"} title={t(composerQuickAccessTabs.includes("images") ? "composerShelf.hidePanel" : "composerShelf.showPanel", { panel: t("quickMedia.title") })} className={cn("rounded-lg px-2 py-1.5 text-[11px] transition-colors", panelTab === "images" ? "bg-zinc-800 text-brand" : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300")} onClick={() => setPanelTab("images")} onContextMenu={event => openComposerTabMenu(event, "images")} onKeyDown={event => { if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return; event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setComposerTabMenu({ tab: "images", x: rect.left, y: rect.bottom }); }}>{t("quickMedia.title")}</button>
         <button type="button" role="tab" aria-selected={panelTab === "agent"} className={cn("rounded-lg px-2 py-1.5 text-[11px] transition-colors", panelTab === "agent" ? "bg-zinc-800 text-brand" : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300")} onClick={() => setPanelTab("agent")}>{t("crmPanel.agent")}</button>
       </div>
 
-      {panelTab === "images" ? <ImageLibraryPanel chatId={selectedChatId} contextKey={[selectedChatId, quickReplyAccountId, settings.sendChannel, quickReplyChat?.phoneId].join(":")} /> : panelTab === "agent" ? <AiLocalAgentPanel selectedChatId={selectedChatId} /> : panelTab === "customer" ? (
+      {panelTab === "images" ? <>
+        <div className="flex shrink-0 gap-1 border-b border-zinc-800 px-2 py-1" role="group" aria-label={t("quickMedia.title")}>
+          {(["images", "clips"] as const).map(tab => <button key={tab} type="button" aria-pressed={mediaLibraryTab === tab}
+            className={cn("rounded px-2 py-1 text-xs", mediaLibraryTab === tab ? "bg-zinc-800 text-brand" : "text-zinc-500 hover:text-zinc-200")}
+            onClick={() => setMediaLibraryTab(tab)}>{t(tab === "images" ? "quickMedia.image" : "quickMedia.audioVideo")}</button>)}
+        </div>
+        {mediaLibraryTab === "images" ? <ImageLibraryPanel chatId={selectedChatId} contextKey={[selectedChatId, quickReplyAccountId, settings.sendChannel, quickReplyChat?.phoneId].join(":")} /> : <QuickMediaManager />}
+      </> : panelTab === "agent" ? <AiLocalAgentPanel selectedChatId={selectedChatId} /> : panelTab === "customer" ? (
         <>
       <section className="min-h-0 flex-1 overflow-y-auto p-3">
         {!contact ? (
@@ -976,7 +982,6 @@ export function CrmAiPanel() {
           {aiReady?<Button variant="ghost" size="xs" className="shrink-0 gap-1 !px-1.5" aria-label={loading?t("crmPanel.generating"):aiSuggestions.length?t("crmPanel.regenerate"):t("crmPanel.generateReply")} disabled={loading} onClick={()=>void refreshAi()}>
             {!loading&&<RefreshCw className="h-3 w-3" />}{t(aiSuggestions.length?"crmPanel.regenerate":"crmPanel.generateReply")}
           </Button>:<Button variant="ghost" size="xs" onClick={()=>setSettingsOpen(true,"ai")}>{t("crmPanel.configureApi")}</Button>}
-          {contact&&selectedChatId&&<Button variant="ghost" size="xs" className="shrink-0 !px-1.5" title="整理聊天到 Google 表格" aria-label="整理聊天到 Google 表格" onClick={()=>setSheetExtractOpen(true)}><TableProperties className="h-3.5 w-3.5" /></Button>}
         </div>
         {suggestionsOpen&&<div id="crm-reply-suggestion" className="min-h-0 overflow-y-auto">
           {!aiReady?<p className="mt-1 text-[11px] text-zinc-500">{t("crmPanel.noAi")}</p>:<>
@@ -1054,9 +1059,8 @@ export function CrmAiPanel() {
           />
         </section>
       )}
-      {sheetExtractOpen&&contact&&<AiSheetExtractDialog contact={contact} messages={thread} accountId={aiAccountId} settings={settings} onClose={()=>setSheetExtractOpen(false)} onWritten={()=>pushToast("已写入 Google 表格","success")} />}
       {composerTabMenu && createPortal(<div ref={composerTabMenuRef} role="menu" aria-label={t("composerShelf.menuLabel")} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); }} className="fixed z-50 w-64 rounded-lg border border-zinc-700 bg-zinc-900 p-1.5 text-xs shadow-xl" style={{ left: Math.max(4, Math.min(composerTabMenu.x, (window.innerWidth || 320) - 260)), top: Math.max(4, Math.min(composerTabMenu.y, (window.innerHeight || 768) - 64)) }}>
-        <button type="button" role="menuitem" className="w-full rounded px-2.5 py-2 text-left text-zinc-200 hover:bg-zinc-800" onClick={() => toggleComposerQuickAccessTab(composerTabMenu.tab)}>{t(composerQuickAccessTabs.includes(composerTabMenu.tab) ? "composerShelf.hidePanel" : "composerShelf.showPanel", { panel: t(composerTabMenu.tab === "quick-replies" ? "crmPanel.quickReplies" : "gallery.title") })}</button>
+        <button type="button" role="menuitem" className="w-full rounded px-2.5 py-2 text-left text-zinc-200 hover:bg-zinc-800" onClick={() => toggleComposerQuickAccessTab(composerTabMenu.tab)}>{t(composerQuickAccessTabs.includes(composerTabMenu.tab) ? "composerShelf.hidePanel" : "composerShelf.showPanel", { panel: t(composerTabMenu.tab === "quick-replies" ? "crmPanel.quickReplies" : "quickMedia.title") })}</button>
       </div>, document.body)}
     </aside>
   );

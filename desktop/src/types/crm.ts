@@ -251,6 +251,8 @@ export interface Message {
   systemKind?: string;
   /** 自动回复生成上下文的 SHA-256；排队/重启后复核，不含聊天正文或密钥。 */
   aiReplyContextHash?: string;
+  /** 本地图片库引用；出队时才读取原图，不把 Base64 存入消息。 */
+  aiReplyImageAssetId?: string;
   aiReplyInboundId?: string;
   /** 本机收到自动回复任务的 Unix 毫秒时间戳。 */
   aiAutoReplyReceivedAt?: number;

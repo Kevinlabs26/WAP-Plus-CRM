@@ -11,11 +11,13 @@ export interface AutoReplyScopeSettings {
   leadInbox?: { collectedChatIds?: string[]; dismissedChatIds?: string[] };
 }
 
-export function resolveAutoReplyScope(settings: AutoReplyScopeSettings, chatId: string) {
+export function resolveAutoReplyScope(settings: AutoReplyScopeSettings, chatId: string, isGroup = false) {
   if (settings.aiAutoReplyPaused || settings.aiAutoReplyDisabled) return { mode: "manual" as const, source: "paused" as const };
   const override = settings.aiAutoReplyManualChatIds?.includes(chatId)
     ? "manual" : settings.aiAutoReplyModeByChatId?.[chatId];
   if (override === "auto" || override === "manual") return { mode: override, source: "chat" as const };
+  // Group automation must be enabled per chat; inheriting global/folder auto would surprise existing users.
+  if (isGroup) return { mode: "manual" as const, source: "group" as const };
   const cloneFolders = new Set(settings.chatFolderClones?.filter(item => item.sourceChatId === chatId).map(item => item.folderId));
   const all = settings.chatFolders || [];
   const byId = new Map(all.map(folder => [folder.id, folder]));

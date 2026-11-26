@@ -85,7 +85,7 @@ export function mergeMusePlaybooks(existing: AiPlaybook[], manifest: Manifest, r
     const previous = next[index];
     const revision = source.revision ?? previous?.museRevision;
     const invalidate = refreshSummaries || (source.revision !== undefined && source.revision !== previous?.museRevision);
-    const book: AiPlaybook = {id: previous?.id || crypto.randomUUID(), name: previous?.name || source.name, sourceName: source.path.split('/').at(-1)!, content: invalidate ? '' : previous?.content || '', summary: invalidate ? '' : previous?.summary || '', musePath: source.path, museRevision: revision, museMissing: false,
+    const book: AiPlaybook = {id: previous?.id || crypto.randomUUID(), name: previous?.name || source.name, sourceName: source.path.split('/').at(-1)!, content: invalidate ? '' : previous?.content || '', summary: invalidate ? '' : previous?.summary || '', ...(previous?.imageAssetIds?.length ? {imageAssetIds:previous.imageAssetIds} : {}), musePath: source.path, museRevision: revision, museMissing: false,
       ...(!invalidate && previous?.museShareRevision ? {museShareRevision:previous.museShareRevision} : {}),
       ...(!invalidate && previous?.museAccountCopies ? {museAccountCopies:previous.museAccountCopies} : {})};
     if (index < 0) next.push(book); else next[index] = book;

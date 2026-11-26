@@ -1656,7 +1656,7 @@ export function ChatPanel() {
           onToggleScreen={() => setShowScreen((v) => !v)}
         />
 
-        {!activeChat.localOnly&&!activeChat.isGroup&&!activeContact?.isGroup&&<ChatAiStatusBar key={`${activeChat.id}:${requestedChatAccountId||chatAccountId}`} chatId={activeChat.id} accountId={requestedChatAccountId||chatAccountId} thread={chatMessages} recipient={resolveSendTarget({phone:activeContact?.phone,channelAddress:activeContact?.channelAddress,entityId:activeContact?.id})} connected={isBaileys?isWaAccountConnected(settings.waAccounts,requestedChatAccountId||chatAccountId,settings.liveBaileysAccountId,baileysUi.connection):bridgeConnected}/>}
+        {!activeChat.localOnly&&<ChatAiStatusBar key={`${activeChat.id}:${requestedChatAccountId||chatAccountId}`} chatId={activeChat.id} accountId={requestedChatAccountId||chatAccountId} thread={chatMessages} isGroup={!!(activeChat.isGroup||activeContact?.isGroup)} recipient={resolveSendTarget({phone:activeContact?.phone,channelAddress:activeContact?.channelAddress,entityId:activeContact?.id})} connected={isBaileys?isWaAccountConnected(settings.waAccounts,requestedChatAccountId||chatAccountId,settings.liveBaileysAccountId,baileysUi.connection):bridgeConnected}/>}
         <div className="flex min-h-0 flex-1">
         {showScreen && (
           <aside className="flex w-72 shrink-0 items-center justify-center overflow-hidden border-r border-zinc-800/90 bg-black">

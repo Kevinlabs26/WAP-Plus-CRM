@@ -23,7 +23,7 @@ type Props = {
 
 const ITEM_CLASS =
   "flex w-full items-center gap-2 px-3 py-2 text-left text-[12px] text-zinc-200 hover:bg-zinc-800";
-const MAX_MEDIA_SAVE_BYTES = 16 * 1024 * 1024;
+const MAX_MEDIA_SAVE_BYTES = 100 * 1024 * 1024;
 
 async function mediaUrlToDataUrl(url: string): Promise<string> {
   if (url.startsWith("data:")) return url;
@@ -31,7 +31,7 @@ async function mediaUrlToDataUrl(url: string): Promise<string> {
   if (!response.ok) throw new Error(`媒体下载失败：${response.status}`);
   const contentLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > MAX_MEDIA_SAVE_BYTES) {
-    throw new Error("媒体超过 16 MB 限制");
+    throw new Error("媒体超过 100 MiB 限制");
   }
   const reader = response.body?.getReader();
   if (!reader) throw new Error("无法读取媒体数据");
@@ -43,7 +43,7 @@ async function mediaUrlToDataUrl(url: string): Promise<string> {
     size += value.byteLength;
     if (size > MAX_MEDIA_SAVE_BYTES) {
       await reader.cancel();
-      throw new Error("媒体超过 16 MB 限制");
+      throw new Error("媒体超过 100 MiB 限制");
     }
     const chunk = new Uint8Array(value.byteLength);
     chunk.set(value);

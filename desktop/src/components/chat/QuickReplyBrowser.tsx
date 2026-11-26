@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { Button, Input, Textarea } from "@/components/ui/primitives";
 import { useDetailsMenu } from "@/components/ui/useDetailsMenu";
 import { useI18n, type TranslationKey } from "@/i18n";
-import { filterQuickReplies, flattenQuickReplyCategories, getQuickReplyCategories, quickReplyCategoryDescendants, quickReplyPreviewText, QUICK_REPLY_CATEGORIES, MAX_QUICK_REPLIES, MAX_QUICK_REPLY_CATEGORIES, MAX_QUICK_REPLY_MEDIA_BYTES, MAX_QUICK_REPLY_MEDIA_TOTAL_BYTES, type QuickReplyCategoryOption } from "@/lib/quickReplies";
+import { filterQuickReplies, flattenQuickReplyCategories, getQuickReplyCategories, quickReplyCategoryDescendants, quickReplyPreviewText, QUICK_REPLY_CATEGORIES, MAX_QUICK_REPLY_MEDIA_BYTES, MAX_QUICK_REPLY_MEDIA_TOTAL_BYTES, type QuickReplyCategoryOption } from "@/lib/quickReplies";
 import { scheduleQuickReplySheetSync } from "@/lib/quickReplySheetSync";
 import { QuickReplySheetStatus } from "./QuickReplySheetStatus";
 import { useAppStore } from "@/store/appStore";
@@ -165,12 +165,10 @@ export function QuickReplyBrowser({ replies, categories = [], removedCategories 
     if (!draft || !draft.body.trim() && !draft.translation?.trim() && !draft.media) return;
     const store = useAppStore.getState(), current = store.settings.quickReplies || [];
     if (current.some(reply => reply.id === draft.id)) return;
-    if (current.length >= MAX_QUICK_REPLIES) { store.pushToast(t("settingsQuickReplies.limit"), "info"); return; }
     if (current.reduce((bytes, reply) => bytes + (reply.media?.size || 0), draft.media?.size || 0) > MAX_QUICK_REPLY_MEDIA_TOTAL_BYTES) { store.pushToast(t("quickLibrary.mediaCapacity"), "error"); return; }
     const options = getQuickReplyCategories(store.settings.quickReplyCustomCategories, store.settings.quickReplyRemovedCategories);
     const category = options.some(item => item.id === draft.category) ? draft.category : "other";
-    const title = draft.title.trim() || (draft.body || draft.translation || draft.media?.fileName || t("quickLibrary.newReply")).trim().split("\n")[0].slice(0, 40);
-    if (title.length > 40) return;
+    const title = draft.title.trim() || (draft.body || draft.translation || draft.media?.fileName || t("quickLibrary.newReply")).trim().split("\n")[0];
     const link = current.find(reply => reply.category === category && reply.sheetLink)?.sheetLink;
     const item = { ...draft, title, category, ...(link ? { sheetLink: { ...link, row: 0, titleSnapshot: title, originalSnapshot: "", translationSnapshot: "" } } : {}) };
     store.updateSettings({ quickReplies: [...current, item] });
@@ -178,9 +176,8 @@ export function QuickReplyBrowser({ replies, categories = [], removedCategories 
     showCategories([category]); setRevealId(item.id); setDraft(null); setAction(null);
   };
   const addCategory = () => {
-    const label = newCategory.trim(); if (!label || label.length > 32) return;
+    const label = newCategory.trim(); if (!label) return;
     const store = useAppStore.getState(), latest = store.settings;
-    if ((latest.quickReplyCustomCategories?.length || 0) >= MAX_QUICK_REPLY_CATEGORIES) { store.pushToast(t("quickLibrary.categoryLimit"), "info"); return; }
     const options = getQuickReplyCategories(latest.quickReplyCustomCategories, latest.quickReplyRemovedCategories, latest.quickReplyCategoryLabels);
     if (options.some(item => (latest.quickReplyCategoryLabels?.[item.id] || (QUICK_REPLY_CATEGORIES.some(base => base.id === item.id) ? t(`quickReply.category.${item.id}` as TranslationKey) : item.label)).toLocaleLowerCase() === label.toLocaleLowerCase())) { store.pushToast(t("settingsQuickReplies.categoryExists"), "info"); return; }
     const id = "custom-" + crypto.randomUUID();
@@ -375,7 +372,7 @@ export function QuickReplyBrowser({ replies, categories = [], removedCategories 
         </details>
       </div>
       <div className="flex flex-wrap items-center gap-1.5" aria-label={t("quickShelf.actions")}>
-        <Button size="xs" variant="secondary" aria-label={t("settingsQuickReplies.add")} aria-expanded={action === "reply"} disabled={action === "import" || replies.length >= MAX_QUICK_REPLIES} onClick={beginReply}>＋ {t("settingsQuickReplies.add")}</Button>
+        <Button size="xs" variant="secondary" aria-label={t("settingsQuickReplies.add")} aria-expanded={action === "reply"} disabled={action === "import"} onClick={beginReply}>＋ {t("settingsQuickReplies.add")}</Button>
         <Button size="xs" aria-label={t("settingsQuickReplies.addCategory")} aria-expanded={action === "category"} disabled={action === "import"} onClick={() => { setAction("category"); setPreview(null); }}>＋ {t("settingsQuickReplies.addCategory")}</Button>
         <Button size="xs" disabled={action === "import"} onClick={() => { setAction("import"); setPreview(null); }}>{t("quickShelf.import")}</Button>
       </div>
@@ -386,7 +383,7 @@ export function QuickReplyBrowser({ replies, categories = [], removedCategories 
         onChange={patch => { setDraft(current => current?.id === draft.id ? { ...current, ...patch } : current); }}
         onSave={saveDraft} onInsert={() => {}} onClose={() => { setDraft(null); setAction(null); }} />}
       {action === "category" && <form aria-label={t("settingsQuickReplies.addCategory")} className="space-y-2 rounded-lg border border-zinc-700 p-2" onSubmit={event => { event.preventDefault(); addCategory(); }}>
-        <Input autoFocus maxLength={32} value={newCategory} aria-label={t("settingsQuickReplies.categoryPlaceholder")} placeholder={t("settingsQuickReplies.categoryPlaceholder")} onChange={event => setNewCategory(event.target.value)} />
+        <Input autoFocus value={newCategory} aria-label={t("settingsQuickReplies.categoryPlaceholder")} placeholder={t("settingsQuickReplies.categoryPlaceholder")} onChange={event => setNewCategory(event.target.value)} />
         <div className="flex justify-end gap-1"><Button size="xs" onClick={() => setAction(draft ? "reply" : null)}>{t("common.cancel")}</Button><Button size="xs" type="submit" variant="primary" disabled={!newCategory.trim()}>{t("common.save")}</Button></div>
       </form>}
       {action === "import" && <Suspense fallback={<p role="status" className="p-2 text-xs text-zinc-500">{t("quickLibrary.sheetLoading")}</p>}><QuickReplyImport importOnly defaultCategory={activeCategory} onClose={() => setAction(draft ? "reply" : null)} onImported={finishImport} /></Suspense>}
@@ -474,7 +471,7 @@ export function QuickReplyPreview({ reply, category, target, disabled, onChange,
   if (!inline && typeof document === "undefined") return null;
   const content = <div className={inline ? "" : "fixed inset-0 z-[10050] flex items-center justify-center bg-black/60 p-4"} onMouseDown={e => { if (!inline && e.target === e.currentTarget) onClose(); }}>
     <div ref={dialogRef} role={inline ? "region" : "dialog"} aria-modal={inline ? undefined : true} aria-labelledby={titleId} className={inline ? "overflow-hidden rounded-lg border border-zinc-700 bg-zinc-900" : "flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl"}>
-      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-zinc-800 p-3"><div className="min-w-0 flex-1"><h3 id={titleId} className="sr-only">{t(dialogTitle || (onSave ? "settingsQuickReplies.add" : "quickLibrary.edit"))}</h3><Input autoFocus={inline} placeholder={onSave ? t("quickShelf.optionalTitle") : undefined} maxLength={40} value={reply.title} aria-label={t("settingsQuickReplies.commandTitle")} readOnly={!onChange} onChange={event => onChange?.({ title: event.target.value })} />{categories ? <select aria-label={t("settingsQuickReplies.category")} className="ui-control mt-2 w-full px-2 text-xs" value={reply.category} onChange={event => onChange?.({ category: event.target.value })}>{categories.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select> : <p className="mt-1 text-xs text-zinc-500">{category}</p>}</div><button ref={closeRef} type="button" onClick={onClose} aria-label={t("common.close")} className="rounded p-1 text-zinc-400 hover:bg-zinc-800"><X aria-hidden="true" className="h-4 w-4" /></button></header>
+      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-zinc-800 p-3"><div className="min-w-0 flex-1"><h3 id={titleId} className="sr-only">{t(dialogTitle || (onSave ? "settingsQuickReplies.add" : "quickLibrary.edit"))}</h3><Input autoFocus={inline} placeholder={onSave ? t("quickShelf.optionalTitle") : undefined} value={reply.title} aria-label={t("settingsQuickReplies.commandTitle")} readOnly={!onChange} onChange={event => onChange?.({ title: event.target.value })} />{categories ? <select aria-label={t("settingsQuickReplies.category")} className="ui-control mt-2 w-full px-2 text-xs" value={reply.category} onChange={event => onChange?.({ category: event.target.value })}>{categories.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select> : <p className="mt-1 text-xs text-zinc-500">{category}</p>}</div><button ref={closeRef} type="button" onClick={onClose} aria-label={t("common.close")} className="rounded p-1 text-zinc-400 hover:bg-zinc-800"><X aria-hidden="true" className="h-4 w-4" /></button></header>
       <div className="min-h-0 space-y-4 overflow-y-auto p-4">
         {target && <p className="break-words rounded-lg bg-brand/10 p-2 text-xs text-brand">{target.title} · {target.account}</p>}
         <label className="block space-y-1 text-xs text-zinc-500"><span>{t("settingsQuickReplies.originalContent")} · {reply.body.length}</span><Textarea rows={inline ? 3 : 5} value={reply.body} aria-label={t("settingsQuickReplies.content")} placeholder={t("settingsQuickReplies.contentPlaceholder")} readOnly={!onChange} onChange={event => onChange?.({ body: event.target.value })} /></label>

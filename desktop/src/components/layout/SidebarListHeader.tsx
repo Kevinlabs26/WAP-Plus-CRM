@@ -1,6 +1,8 @@
 import {
   ArrowUpDown,
   Bookmark,
+  Download,
+  Upload,
   Check,
   ChevronDown,
   MoreHorizontal,
@@ -85,6 +87,7 @@ type Props = {
   folderCount: number;
   onClearAllFolders: () => void;
   onMuseFolderRouting?: () => void;
+  onFolderTransfer?: (mode: "import" | "export") => void;
 };
 
 export function SidebarListHeader({
@@ -119,6 +122,7 @@ export function SidebarListHeader({
   folderCount,
   onClearAllFolders,
   onMuseFolderRouting,
+  onFolderTransfer,
 }: Props) {
   const { t, locale } = useI18n();
   const currentCount = (listTab === "chats" ? chatsCount : contactsCount).toLocaleString(locale);
@@ -144,6 +148,10 @@ export function SidebarListHeader({
     { label: t("sidebar.batchSaveContacts"), Icon: UserPlus, run: onBatchSaveContacts },
     ...(listTab === "chats" ? [{ label: t("leadInbox.settings"), Icon: Settings2, run: onOpenLeadSettings }] : []),
     ...(listTab === "chats" && onMuseFolderRouting ? [{ label: t("museRouting.action"), Icon: Sparkles, run: onMuseFolderRouting }] : []),
+    ...(listTab === "chats" && onFolderTransfer ? [
+      { label: t("folderTransfer.import"), Icon: Upload, run: () => onFolderTransfer("import") },
+      { label: t("folderTransfer.export"), Icon: Download, run: () => onFolderTransfer("export") },
+    ] : []),
     ...(listTab === "chats" && folderCount > 0 ? [{ label: t("folder.clearAll"), Icon: Trash2, run: onClearAllFolders }] : []),
   ];
 

@@ -46,7 +46,7 @@ export function normalizePromptTemplates(value: unknown, folderIds?: ReadonlySet
   });
 }
 type PromptSettings = Pick<SettingsShape, "aiSystemPrompt" | "aiSystemPromptByAccountId" | "chatFolders" | "liveBaileysAccountId" | "activeAccountId" | "leadInbox"> & Omit<PlaybookSettings, 'chatFolders'> & {aiPromptTemplates?: AiPromptTemplate[]; aiPromptPlans?: SavedPromptPlan[]; aiPromptPlanByChat?: Record<string, PromptPlan>};
-export type AiReplyProfile = { prompt: string; source: "folder" | "account" | "global" | "default"; folderId?: string; folderName?: string; primaryFolderIds?: string[]; error?: string; templateIds?: string[]; readMuseFiles?: boolean; musePlaybookPaths?: string[]; museMaterials?: MusePlaybookMaterial[]; playbookName?: string; playbookVersion?: string; workspacePlaybook?: boolean };
+export type AiReplyProfile = { prompt: string; source: "folder" | "account" | "global" | "default"; folderId?: string; folderName?: string; primaryFolderIds?: string[]; error?: string; templateIds?: string[]; readMuseFiles?: boolean; musePlaybookPaths?: string[]; museMaterials?: MusePlaybookMaterial[]; playbookName?: string; playbookVersion?: string; playbookImageAssetIds?: string[]; workspacePlaybook?: boolean };
 
 function scopeKey(settings: PromptSettings, folder: SettingsChatFolder): string {
   return folder.scope?.type === "all" ? "all"
@@ -176,5 +176,5 @@ export function resolveAiReplyProfile(
     .filter(Boolean)
     .join("\n\n");
   const book = playbook && settings.aiPlaybooks?.find(item => item.id === playbook.id);
-  return {...profile, prompt, readMuseFiles: playbook?.readMuseFiles, musePlaybookPaths:playbook?.musePaths, museMaterials:playbook?.museMaterials, playbookName: book?.name, playbookVersion: book?.museRevision, workspacePlaybook:!!book?.musePath};
+  return {...profile, prompt, readMuseFiles: playbook?.readMuseFiles, musePlaybookPaths:playbook?.musePaths, museMaterials:playbook?.museMaterials, playbookName: book?.name, playbookVersion: book?.museRevision, playbookImageAssetIds:playbook?.imageAssetIds, workspacePlaybook:!!book?.musePath};
 }

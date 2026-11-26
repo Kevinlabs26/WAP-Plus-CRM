@@ -158,10 +158,11 @@ export function FolderHeaderRow({
   const replyTrigger = useRef<HTMLButtonElement>(null);
   const importTrigger = useRef<HTMLButtonElement>(null);
   const organizeTrigger = useRef<HTMLButtonElement>(null);
+  const appearanceTrigger = useRef<HTMLButtonElement>(null);
   const moveFolderTrigger = useRef<HTMLButtonElement>(null);
   const moveFolderBackTrigger = useRef<HTMLButtonElement>(null);
   const sheetTrigger = useRef<HTMLButtonElement>(null);
-  const submenuTriggers = { reply: replyTrigger, import: importTrigger, organize: organizeTrigger, appearance: organizeTrigger, sheet:sheetTrigger };
+  const submenuTriggers = { reply: replyTrigger, import: importTrigger, organize: organizeTrigger, appearance: appearanceTrigger, sheet:sheetTrigger };
   const submenuPopup = useRef<HTMLDivElement>(null);
   const menuPopup = useRef<HTMLDivElement>(null);
   const actionsTrigger = useRef<HTMLButtonElement>(null);
@@ -417,22 +418,11 @@ export function FolderHeaderRow({
             }}>
             <span className="flex-1">{t(kind === "import" ? "folder.importMenu" : "folder.organizeMenu")}</span><ChevronRight className="h-3.5 w-3.5" />
           </button>)}
-          {onAppearanceChange && <button ref={organizeTrigger} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={submenu?.kind === "appearance"}
+          {onAppearanceChange && <button ref={appearanceTrigger} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={submenu?.kind === "appearance"}
             className={itemClass} onMouseEnter={event => openSubmenu("appearance", event.currentTarget)} onClick={event => openSubmenu("appearance", event.currentTarget, true)}>
             <span className="flex-1">文件夹图标和颜色</span><ChevronRight className="h-3.5 w-3.5" />
           </button>}
 
-          {!fixedPosition && <div className="mt-1 border-t border-zinc-800 pt-1">
-          <button
-            type="button"
-            role="menuitem"
-            className={`${itemClass} text-rose-300 hover:bg-rose-500/10`}
-            onClick={() => run(onDelete)}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            {t("folder.delete")}
-          </button>
-          </div>}
         </div>, document.body
       )}
       {menu && submenu && createPortal(
@@ -553,6 +543,9 @@ export function FolderHeaderRow({
           <button type="button" role="menuitem" className={`${itemClass} text-rose-300 hover:bg-rose-500/10`} onClick={() => run(onClearTree)}>
             <Trash2 className="h-3.5 w-3.5" />{t("folder.clearTree")}
           </button>
+          {!fixedPosition && <button type="button" role="menuitem" className={`${itemClass} border-t border-zinc-800 text-rose-300 hover:bg-rose-500/10`} onClick={() => run(onDelete)}>
+            <Trash2 className="h-3.5 w-3.5" />{t("folder.delete")}
+          </button>}
           </div>}
           {submenu.kind === "appearance" && <div className="p-2" onMouseEnter={cancelClose}>
             <div className="mb-2 flex items-center justify-between">

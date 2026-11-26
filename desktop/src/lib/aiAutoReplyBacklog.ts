@@ -61,17 +61,30 @@ export function createAutoReplyBacklogScheduler() {
         loading.add(chat.id);
         retainMessageChats("ai-auto-reply-loading", [...loading]);
         try {
-          // shortcut: Scan the latest 80 messages; paginate if status-only histories can hide the last conversation message.
-          const page = chat.hasMessageHistory ? await loadMessagesPage({ chatId: chat.id, limit: 80 }) : null;
-          const fresh = useAppStore.getState();
-          const target = fresh.chats.find(item => item.id === chat.id);
-          if (stopped || isDataRestoreActive() || getDataRestoreGeneration() !== epoch || isAppLockActive()
-              || !target || target.contactId !== chat.contactId || target.accountId !== chat.accountId
-              || accountFor(fresh, target) !== accountId || resolveAutoReplyScope(fresh.settings, chat.id).mode !== "auto") continue;
-          if (page?.items.length) {
-            const items = filterMessagesForAccount((page.items as Message[]).filter(message => message.chatId === chat.id), accountId, fresh.settings.liveBaileysAccountId);
-            useAppStore.setState(state => ({ messages: mergeMessagesByTime(state.messages, items) }));
+          const history: Message[] = [];
+          let cursor: { beforeSentAt: string; beforeId: string } | undefined;
+          let valid = true;
+          while (chat.hasMessageHistory) {
+            const page = await loadMessagesPage({ chatId: chat.id, ...cursor, limit: 80 });
+            const fresh = useAppStore.getState();
+            const target = fresh.chats.find(item => item.id === chat.id);
+            if (stopped || isDataRestoreActive() || getDataRestoreGeneration() !== epoch || isAppLockActive()
+                || !target || target.contactId !== chat.contactId || target.accountId !== chat.accountId
+                || accountFor(fresh, target) !== accountId || resolveAutoReplyScope(fresh.settings, chat.id).mode !== "auto") {
+              valid = false;
+              break;
+            }
+            const rows = (page?.items || []) as Message[];
+            if (!rows.length) break;
+            const items = filterMessagesForAccount(rows.filter(message => message.chatId === chat.id), accountId, fresh.settings.liveBaileysAccountId);
+            history.push(...items.filter(message => message.mediaType !== "system" && (message.direction === "out" || !message.systemKind)));
+            if (items.some(message => message.direction === "in" && !message.systemKind && message.mediaType !== "system") || rows.length < (page?.limit || 80)) break;
+            const oldest = rows[0];
+            if (!oldest.id || !oldest.sentAt || (cursor?.beforeId === oldest.id && cursor?.beforeSentAt === oldest.sentAt)) throw new Error("聊天历史分页游标未前进，请重试");
+            cursor = { beforeId: oldest.id, beforeSentAt: oldest.sentAt };
           }
+          if (!valid) continue;
+          if (history.length) useAppStore.setState(state => ({ messages: mergeMessagesByTime(state.messages, history) }));
           const latest = useAppStore.getState();
           const latestChat = latest.chats.find(item => item.id === chat.id);
           if (!latestChat || latestChat.contactId !== chat.contactId || latestChat.accountId !== chat.accountId

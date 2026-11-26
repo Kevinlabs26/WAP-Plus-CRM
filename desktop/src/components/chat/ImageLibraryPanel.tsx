@@ -1,3 +1,4 @@
+import { LibraryThumbnail } from "./LibraryThumbnail";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ImagePlus, Plus, Sparkles, Star } from "lucide-react";
 import { Virtuoso } from "react-virtuoso";
@@ -82,6 +83,8 @@ export function ImageLibraryPanel({ chatId, contextKey }: {
     const [creatingCategory, setCreatingCategory] = useState(false), [selecting, setSelecting] = useState(false), [view, setView] = useState<"all" | "pinned" | "recent">("all");
     const [selected, setSelected] = useState<string[]>([]), [collapsed, setCollapsed] = useState<Set<string>>(initialCollapsed);
     const [busy, setBusy] = useState(false), [loading, setLoading] = useState(true), [importing, setImporting] = useState(false), [error, setError] = useState(""), [progress, setProgress] = useState("");
+    const [restoreFailures, setRestoreFailures] = useState<string[]>([]);
+    const restoreFiles = useRef<File[]>([]);
     const [preview, setPreview] = useState<LibraryImage | null>(null), [menu, setMenu] = useState<Menu | null>(null), [rename, setRename] = useState<Rename | null>(null);
     const [generateOpen, setGenerateOpen] = useState(false), [generationReference, setGenerationReference] = useState<ImageReference | null>(null), [imageProvider, setImageProvider] = useState<ImageProvider>("follow");
     const [referenceMode, setReferenceMode] = useState<"style" | "portrait">("style");
@@ -113,8 +116,8 @@ export function ImageLibraryPanel({ chatId, contextKey }: {
                 continue;
             output.push({ key: "category:" + name, category: name, count: group.length });
             if (!collapsed.has(name) || query.trim())
-                for (let i = 0; i < group.length; i += 2)
-                    output.push({ key: "images:" + group[i]!.id, category: name, images: group.slice(i, i + 2), count: group.length });
+                for (let i = 0; i < group.length; i += 3)
+                    output.push({ key: "images:" + group[i]!.id, category: name, images: group.slice(i, i + 3), count: group.length });
         }
         return output;
     }, [filtered, categories, collapsed, query, view, images]);
@@ -126,20 +129,24 @@ export function ImageLibraryPanel({ chatId, contextKey }: {
     catch { /* UI preference only. */ } }, [collapsed]);
     useEffect(() => {
         let stopped = false, generation = 0;
-        const load = async () => { const request = ++generation; try {
-            const [items, names] = await Promise.all([listLibraryImages(), listLibraryCategories()]);
+        const load = async (event?: Event) => { const request = ++generation; try {
+            const [items, names] = await Promise.all([listLibraryImages(true, event), listLibraryCategories(event)]);
             if (!stopped && request === generation) {
                 setImages(items);
                 setCustomCategories(names);
-                setSelected(ids => ids.filter(id => items.some(image => image.id === id)));
+                setSelected(ids => {
+                    if (!ids.length) return ids;
+                    const currentIds = new Set(items.map(image => image.id));
+                    return ids.filter(id => currentIds.has(id));
+                });
             }
         }
         catch (error) {
-            if (!stopped)
+            if (!stopped && request === generation)
                 setError(String(error));
         }
         finally {
-            if (!stopped)
+            if (!stopped && request === generation)
                 setLoading(false);
         } };
         if (isTauri())
@@ -169,6 +176,23 @@ export function ImageLibraryPanel({ chatId, contextKey }: {
         }
         window.dispatchEvent(new Event("wap:image-library"));
     } };
+    function retryRestore(files: File[]) {
+        void run(async () => {
+            restoreFiles.current = files;
+            setRestoreFailures([]);
+            const failures: string[] = [];
+            let added = 0;
+            for (const [index, file] of files.entries()) {
+                try {
+                    added += await restoreImageLibrary(file, (done, total) => setProgress(`${index + 1}/${files.length} · ${done}/${total}`),
+                        errors => failures.push(...errors.map(error => `${file.name} · ${error}`)));
+                } catch (error) { failures.push(`${file.name} · ${String(error)}`); }
+            }
+            setRestoreFailures(failures);
+            if (!failures.length) restoreFiles.current = [];
+            setProgress(t("gallery.restored", { count: added }));
+        });
+    }
     useEffect(() => {
         let active = true;
         const receive = () => {
@@ -451,19 +475,21 @@ export function ImageLibraryPanel({ chatId, contextKey }: {
     };
     const menuImage = menu?.kind === "image" ? byId.get(menu.id) : undefined, menuIds = menuImage ? (selected.includes(menuImage.id) ? selected : [menuImage.id]) : [];
     const menuAction = (work: () => void) => () => { setMenu(null); work(); };
-    const card = (image: LibraryImage) => <article key={image.id} data-library-image={image.id} onContextMenu={event => showMenu(event, "image", image.id)} className={"group relative min-w-0 rounded-lg p-1 " + (selected.includes(image.id) ? "ring-1 ring-brand bg-brand/10 " : "") + (drag.target?.imageId === image.id ? "ring-2 ring-brand " : "")}>
-    <div className="absolute inset-x-2 top-2 z-[1] flex justify-between gap-1">{selecting ? <input type="checkbox" disabled={busy} aria-label={t("gallery.selectNamed", { title: image.title })} checked={selected.includes(image.id)} onChange={event => setSelected(ids => event.target.checked ? [...ids, image.id] : ids.filter(id => id !== image.id))}/> : <button {...(!busy && view !== "recent" ? drag.handle({ kind: "image", id: image.id }) : {})} type="button" onKeyDown={event => reorderKey(event, { kind: "image", id: image.id })} disabled={busy || view === "recent"} aria-label={t("gallery.dragImage")} title={t("gallery.dragImage")} className="touch-none select-none cursor-grab rounded bg-zinc-900/80 px-1 text-zinc-500 opacity-0 group-hover:opacity-100 focus:opacity-100">⠿</button>}
+    const card = (image: LibraryImage) => <article key={image.id} data-library-image={image.id} onContextMenu={event => showMenu(event, "image", image.id)} className={"group w-fit min-w-0 max-w-[calc((100%_-_1rem)/3)] rounded-lg p-0.5 " + (selected.includes(image.id) ? "ring-1 ring-brand bg-brand/10 " : "") + (drag.target?.imageId === image.id ? "ring-2 ring-brand " : "")}>
+    <div className="relative min-w-7">
+    <div className="absolute inset-x-0.5 top-0.5 z-[1] flex justify-between gap-1">{selecting ? <input type="checkbox" disabled={busy} aria-label={t("gallery.selectNamed", { title: image.title })} checked={selected.includes(image.id)} onChange={event => setSelected(ids => event.target.checked ? [...ids, image.id] : ids.filter(id => id !== image.id))}/> : <button {...(!busy && view !== "recent" ? drag.handle({ kind: "image", id: image.id }) : {})} type="button" onKeyDown={event => reorderKey(event, { kind: "image", id: image.id })} disabled={busy || view === "recent"} aria-label={t("gallery.dragImage")} title={t("gallery.dragImage")} className="touch-none select-none cursor-grab rounded bg-zinc-900/80 px-1 text-zinc-500 opacity-0 group-hover:opacity-100 focus:opacity-100">⠿</button>}
     <button type="button" className="ml-auto rounded-full bg-zinc-900 p-1 shadow-sm" disabled={busy} aria-label={t(image.pinned ? "quickShelf.unpin" : "quickShelf.pin", { title: image.title })} aria-pressed={image.pinned} onClick={() => void run(async () => editLibraryImage({ ...image, pinned: !image.pinned }))}><Star className={"h-3.5 w-3.5 " + (image.pinned ? "fill-amber-400 text-amber-400" : "text-zinc-500")}/></button></div>
-    <button {...(!busy && view !== "recent" && !selecting ? drag.handle({ kind: "image", id: image.id }) : {})} type="button" disabled={busy} className="block w-full rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand" onClick={() => { if (selecting) {
+    <button {...(!busy && view !== "recent" && !selecting ? drag.handle({ kind: "image", id: image.id }) : {})} type="button" disabled={busy} className="block max-w-full rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand" onClick={() => { if (selecting) {
         setSelected(ids => ids.includes(image.id) ? ids.filter(id => id !== image.id) : [...ids, image.id]);
     }
     else {
         setError("");
         setPreview(image);
-    } }} aria-pressed={selecting ? selected.includes(image.id) : undefined} aria-label={t(selecting ? "gallery.selectNamed" : "quickShelf.previewNamed", { title: image.title })}><img src={image.thumbnail} draggable={false} alt={image.title} loading="lazy" decoding="async" className="aspect-square w-full rounded-lg bg-zinc-800 object-contain"/></button>
-    {rename?.kind === "image" && rename.id === image.id ? renameInput() : <span className="mt-1 block truncate text-left text-2xs" title={image.title} onDoubleClick={() => { if (!busy)
+    } }} aria-pressed={selecting ? selected.includes(image.id) : undefined} aria-label={t(selecting ? "gallery.selectNamed" : "quickShelf.previewNamed", { title: image.title })}><LibraryThumbnail image={image} alt={image.title} className="block h-auto w-auto max-h-20 max-w-full rounded-md object-contain" /></button>
+    {!selecting && <button type="button" className="absolute bottom-0.5 right-0.5 flex h-6 w-6 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 p-0 text-brand shadow-sm" aria-label={t("quickShelf.insert")} title={t("quickShelf.insert")} disabled={busy || !chatId} onClick={() => void insert([image])}><Plus aria-hidden="true" className="h-4 w-4 shrink-0"/></button>}
+    </div>
+    {rename?.kind === "image" && rename.id === image.id ? renameInput() : <span className="mt-1 block w-0 min-w-full truncate text-left text-2xs" title={image.title} onDoubleClick={() => { if (!busy)
         beginRename("image", image.id); }}>{image.title}</span>}
-    {!selecting && <button type="button" className="absolute bottom-8 right-2 flex h-7 w-7 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 p-0 text-brand shadow-sm" aria-label={t("quickShelf.insert")} title={t("quickShelf.insert")} disabled={busy || !chatId} onClick={() => void insert([image])}><Plus aria-hidden="true" className="h-4 w-4 shrink-0"/></button>}
   </article>;
     if (!isTauri())
         return <p className="p-4 text-xs text-zinc-500">{t("gallery.desktopOnly")}</p>;
@@ -472,8 +498,11 @@ export function ImageLibraryPanel({ chatId, contextKey }: {
     <header className="shrink-0 space-y-2 border-b border-zinc-800 p-2"><h3 className="truncate text-xs font-semibold">{t("gallery.title")} <span className="font-normal text-zinc-500">{images.length}</span></h3><div className="flex flex-wrap gap-1"><Button size="xs" disabled={busy} onClick={() => { setError(""); setGenerationReference(null); setGenerationTarget(chatId || null); setGenerateOpen(true); }}><Sparkles className="mr-1 h-3.5 w-3.5"/>{t("gallery.generate")}</Button><Button size="xs" disabled={busy || loading} onClick={() => upload.current?.click()}><ImagePlus className="mr-1 h-3.5 w-3.5"/>{t("gallery.importImages")}</Button><Button size="xs" disabled={busy || loading} onClick={() => folderUpload.current?.click()}>{t("gallery.importFolder")}</Button><Button size="xs" disabled={busy} onClick={() => { setSelecting(value => !value); setSelected([]); }}>{t(selecting ? "common.close" : "gallery.multiSelect")}</Button></div>
       <input ref={upload} type="file" hidden multiple accept="image/png,image/jpeg,image/gif,image/webp" onChange={event => { const files = Array.from(event.currentTarget.files || []); event.currentTarget.value = ""; void importFiles(files); }}/>
       <input ref={folderUpload} type="file" hidden multiple {...{ webkitdirectory: "", directory: "" }} aria-label={t("gallery.importFolder")} onChange={event => { const files = Array.from(event.currentTarget.files || []); event.currentTarget.value = ""; void importFiles(files, true); }}/>
-      <input ref={restore} type="file" hidden accept="application/json,.json" onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file)
-        void run(async () => { const added = await restoreImageLibrary(file, (done, total) => setProgress(done + "/" + total)); setProgress(t("gallery.restored", { count: added })); }); }}/>
+      <input ref={restore} type="file" hidden multiple accept="application/json,.json" onChange={event => {
+        const files = Array.from(event.currentTarget.files || []).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+        event.currentTarget.value = "";
+        if (files.length) retryRestore(files);
+      }}/>
       <input ref={replacement} type="file" hidden accept="image/png,image/jpeg,image/gif,image/webp" aria-label={t("gallery.replaceImage")} onChange={event => { const file = event.currentTarget.files?.[0], id = replaceId.current; event.currentTarget.value = ""; if (file && id)
         void run(async () => { await replaceLibraryImage(id, file); setPreview(null); }); }}/>
       <input className="ui-control h-8 w-full px-2 text-xs" aria-label={t("gallery.search")} placeholder={t("gallery.search")} value={query} onChange={event => setQuery(event.target.value)}/>
@@ -486,9 +515,16 @@ export function ImageLibraryPanel({ chatId, contextKey }: {
     } setCreatingCategory(false); openCategory(name); setDestination(""); setQuery(""); setView("all"); }); }}><input autoFocus aria-label={t("gallery.categoryName")} placeholder={t("gallery.categoryName")} list="image-library-categories" value={destination} maxLength={60} onChange={event => setDestination(event.target.value)} className="ui-control h-8 min-w-0 flex-1 px-2 text-xs"/><Button type="submit" size="xs" disabled={busy || loading || !destination.trim() || !chosen.length && categories.includes(destination.trim())}>{t(chosen.length ? "gallery.move" : "gallery.createCategory")}</Button></form>}
       <datalist id="image-library-categories">{categories.map(value => <option key={value} value={value}/>)}</datalist>
     </header>
-    {(error || progress || loading || importing) && <div aria-live="polite" className="shrink-0 break-words p-2 text-2xs">{loading && <p>{t("gallery.loading")}</p>}{progress && <p>{progress}</p>}{error && <p role="alert" className="text-rose-400">{error}</p>}{importing && <Button size="xs" onClick={() => { cancelImport.current = true; }}>{t("gallery.cancelImport")}</Button>}</div>}
+    {(error || progress || loading || importing || restoreFailures.length > 0) && <div aria-live="polite" className="shrink-0 break-words p-2 text-2xs">{loading && <p>{t("gallery.loading")}</p>}{progress && <p>{progress}</p>}{error && <p role="alert" className="text-rose-400">{error}</p>}{importing && <Button size="xs" onClick={() => { cancelImport.current = true; }}>{t("gallery.cancelImport")}</Button>}
+      {restoreFailures.length > 0 && <div className="space-y-1">
+        <details><summary>{t("gallery.restoreFailures", { count: restoreFailures.length })}</summary>
+          <ul className="max-h-28 overflow-y-auto">{restoreFailures.map((detail, index) => <li key={index}>{detail}</li>)}</ul>
+        </details>
+        <Button size="xs" disabled={busy} onClick={() => { if (restoreFiles.current.length) retryRestore(restoreFiles.current); }}>{t("gallery.retryRestore")}</Button>
+      </div>}
+    </div>}
     <Virtuoso className="min-h-0 flex-1" style={{ minHeight: 100 }} data={rows} computeItemKey={(_index, row) => row.key} increaseViewportBy={120} scrollerRef={element => { if (element instanceof HTMLElement)
-        drag.scroller.current = element; }} rangeChanged={value => { range.current = value; }} itemContent={(_index, row) => row.images ? <div data-library-category={row.category} className="grid grid-cols-2 gap-2 px-2 pb-2">{row.images.map(card)}</div> : <div data-library-category={row.category} className={"mx-2 my-2 rounded-lg " + (drag.target?.category === row.category && !drag.target.imageId ? "ring-2 ring-brand " : "") + (category === row.category ? "bg-brand/10" : "bg-zinc-800/50")} onContextMenu={event => showMenu(event, "category", row.category)}><div className="flex items-center gap-1 px-1">{row.category && <button {...(!busy ? drag.handle({ kind: "category", id: row.category }) : {})} type="button" onKeyDown={event => reorderKey(event, { kind: "category", id: row.category })} disabled={busy} aria-label={t("gallery.dragCategory")} title={t("gallery.dragCategory")} className="touch-none select-none cursor-grab p-1 text-xs text-zinc-500">⠿</button>}{rename?.kind === "category" && rename.id === row.category ? renameInput() : <button {...(!busy && row.category ? drag.handle({ kind: "category", id: row.category }) : {})} type="button" onKeyDown={event => reorderKey(event, { kind: "category", id: row.category })} onContextMenu={event => showMenu(event, "category", row.category)} title={row.category || t("gallery.uncategorized")} aria-expanded={!!query.trim() || !collapsed.has(row.category)} aria-pressed={category === row.category} disabled={busy} className="flex min-w-0 flex-1 items-center gap-2 px-1 py-2 text-xs" onClick={() => { setCategory(row.category); setCollapsed(values => { const next = new Set(values); if (next.has(row.category))
+        drag.scroller.current = element; }} rangeChanged={value => { range.current = value; }} itemContent={(_index, row) => row.images ? <div data-library-category={row.category} className="flex items-start gap-2 px-2 pb-2">{row.images.map(card)}</div> : <div data-library-category={row.category} className={"mx-2 my-2 rounded-lg " + (drag.target?.category === row.category && !drag.target.imageId ? "ring-2 ring-brand " : "") + (category === row.category ? "bg-brand/10" : "bg-zinc-800/50")} onContextMenu={event => showMenu(event, "category", row.category)}><div className="flex items-center gap-1 px-1">{row.category && <button {...(!busy ? drag.handle({ kind: "category", id: row.category }) : {})} type="button" onKeyDown={event => reorderKey(event, { kind: "category", id: row.category })} disabled={busy} aria-label={t("gallery.dragCategory")} title={t("gallery.dragCategory")} className="touch-none select-none cursor-grab p-1 text-xs text-zinc-500">⠿</button>}{rename?.kind === "category" && rename.id === row.category ? renameInput() : <button {...(!busy && row.category ? drag.handle({ kind: "category", id: row.category }) : {})} type="button" onKeyDown={event => reorderKey(event, { kind: "category", id: row.category })} onContextMenu={event => showMenu(event, "category", row.category)} title={row.category || t("gallery.uncategorized")} aria-expanded={!!query.trim() || !collapsed.has(row.category)} aria-pressed={category === row.category} disabled={busy} className="flex min-w-0 flex-1 items-center gap-2 px-1 py-2 text-xs" onClick={() => { setCategory(row.category); setCollapsed(values => { const next = new Set(values); if (next.has(row.category))
         next.delete(row.category);
     else
         next.add(row.category); return next; }); }}><span aria-hidden="true">{!query.trim() && collapsed.has(row.category) ? "+" : "−"}</span><span className="min-w-0 flex-1 truncate text-left">{row.category || t("gallery.uncategorized")}</span><span className="text-zinc-500">{row.count}</span></button>}</div></div>}/>
@@ -498,7 +534,7 @@ export function ImageLibraryPanel({ chatId, contextKey }: {
             return; const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")); const index = buttons.indexOf(document.activeElement as HTMLButtonElement); event.preventDefault(); buttons[(index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length]?.focus(); }}>
       {menuImage && <><Button size="xs" role="menuitem" onClick={menuAction(() => void generateFromReference(menuImage))}>{t("gallery.createInStyle")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => setPreview(menuImage))}>{t("quickShelf.preview")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => beginRename("image", menuImage.id))}>{t("gallery.rename")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => { replaceId.current = menuImage.id; replacement.current?.click(); })}>{t("gallery.replaceImage")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => void run(async () => editLibraryImage({ ...menuImage, pinned: !menuImage.pinned })))}>{t(menuImage.pinned ? "gallery.unfavorite" : "gallery.favorite")}</Button><label className="px-2 py-1">{t("gallery.move")}<select className="ui-control mt-1 w-full px-1 text-xs" value="__choose" onChange={event => { const name = event.target.value; setMenu(null); void moveImages(menuIds, name); }}><option value="__choose" disabled>{t("gallery.categoryName")}</option><option value="">{t("gallery.uncategorized")}</option>{categories.map(name => <option key={name} value={name}>{name}</option>)}</select></label><Button size="xs" role="menuitem" className="text-rose-400" onClick={menuAction(() => void removeImages(menuIds))}>{t("common.delete")}</Button></>}
       {menu.kind === "category" && <><Button size="xs" role="menuitem" onClick={menuAction(() => { openCategory(menu.id); upload.current?.click(); })}>{t("gallery.importImages")}</Button>{!!menu.id && <><Button size="xs" role="menuitem" onClick={menuAction(() => beginRename("category", menu.id))}>{t("gallery.rename")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => { setSelecting(true); setSelected(images.filter(image => image.category === menu.id).map(image => image.id)); })}>{t("gallery.selectCategory")}</Button><Button size="xs" role="menuitem" className="text-rose-400" onClick={menuAction(() => void removeCategory(menu.id))}>{t("gallery.deleteCategory")}</Button></>}</>}
-      {menu.kind === "root" && <><Button size="xs" role="menuitem" onClick={menuAction(() => upload.current?.click())}>{t("gallery.importImages")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => folderUpload.current?.click())}>{t("gallery.importFolder")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => { setCreatingCategory(true); setDestination(""); })}>{t("gallery.createCategory")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => setCollapsed(new Set()))}>{t("gallery.expandAll")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => setCollapsed(new Set(["", ...categories])))}>{t("gallery.collapseAll")}</Button><Button size="xs" role="menuitem" disabled={!images.length && !categories.length} onClick={menuAction(() => void run(async () => { await exportImageLibrary(chosen.length ? chosen : images, chosen.length ? [...new Set(chosen.map(image => image.category).filter(Boolean))] : categories); setProgress(t("gallery.exported")); }))}>{t("gallery.backup")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => restore.current?.click())}>{t("gallery.restore")}</Button></>}
+      {menu.kind === "root" && <><Button size="xs" role="menuitem" onClick={menuAction(() => upload.current?.click())}>{t("gallery.importImages")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => folderUpload.current?.click())}>{t("gallery.importFolder")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => { setCreatingCategory(true); setDestination(""); })}>{t("gallery.createCategory")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => setCollapsed(new Set()))}>{t("gallery.expandAll")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => setCollapsed(new Set(["", ...categories])))}>{t("gallery.collapseAll")}</Button><Button size="xs" role="menuitem" disabled={!images.length && !categories.length} onClick={menuAction(() => void run(async () => { const count = await exportImageLibrary(chosen.length ? chosen : images, chosen.length ? [...new Set(chosen.map(image => image.category).filter(Boolean))] : categories); setProgress(count > 1 ? t("gallery.exportedParts", { count }) : t("gallery.exported")); }))}>{t("gallery.backup")}</Button><Button size="xs" role="menuitem" onClick={menuAction(() => restore.current?.click())}>{t("gallery.restore")}</Button></>}
     </div>}
     {preview && <ImageLibraryPreview key={contextKey + ":" + preview.id} image={preview} busy={busy} saveError={error} canInsert={!!chatId} categories={categories} onClose={() => setPreview(null)} onInsert={image => void insert([image], image.caption, true)} onSave={image => void run(async () => { await editLibraryImage(image); setPreview(null); })}/>}
     {generateOpen && <ImageGenerationDialog busy={busy} error={error} canGenerate={!!imageAuth} referenceImage={generationReference} referenceMode={referenceMode} libraryImages={images} onClearReference={() => setGenerationReference(null)} provider={imageProvider} onProviderChange={setImageProvider} providerOptions={[{ value: "follow", label: t("gallery.followAI"), disabled: false }, { value: "muse", label: t("gallery.muse"), disabled: false }, { value: "gemini", label: t("gallery.gemini"), disabled: !settings.geminiKey.trim() }, { value: "vertex", label: "Gemini Vertex AI", disabled: !settings.vertexCredential?.trim() }, { value: "openai", label: t("gallery.openai"), disabled: !settings.openaiKey.trim() }]} costHint={imageAuth?.provider === "muse" ? t("gallery.museMediaCost") : imageAuth?.provider === "openai" ? t("gallery.openAiCost") : imageAuth?.provider === "vertex" ? t("gallery.vertexCost") : imageAuth ? t("gallery.geminiCost") : t("gallery.aiSetup")} onClose={() => { setGenerateOpen(false); setGenerationReference(null); setError(""); }} onGenerate={generateImage} canCollect={imageAuth?.provider === "muse"} onCollect={collectGenerated}/>}
