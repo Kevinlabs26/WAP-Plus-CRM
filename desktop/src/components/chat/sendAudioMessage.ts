@@ -1,4 +1,4 @@
-import { MAX_AUDIO_BYTES } from "@/lib/mediaBlob";
+import { MAX_AUDIO_BYTES, MAX_VOICE_NOTE_BYTES, MAX_VOICE_NOTE_SECONDS } from "@/lib/mediaBlob";
 import { baileysSendVoice } from "@/lib/baileys";
 import { gatedMediaSend } from "@/channels/mediaGate";
 import type { ChannelId } from "@/channels";
@@ -78,8 +78,8 @@ export async function sendAudioMessage(
       reader.readAsDataURL(file);
     });
     const sourceSeconds = await readAudioSeconds(file);
-    // Treat selected short audio like a WhatsApp voice note: the bridge
-    // converts it to OGG/Opus and sends the playable waveform (PTT) variant.
+    // Longer clips use WhatsApp audio messages, which also play inline.
+    const ptt = sourceSeconds > 0 && sourceSeconds < MAX_VOICE_NOTE_SECONDS && file.size <= MAX_VOICE_NOTE_BYTES;
     const caption = captionOverride?.trim() || "";
     msgId = deps.enqueueOutgoingMessage({
       chatId: deps.chatId,
@@ -95,7 +95,7 @@ export async function sendAudioMessage(
       mediaType: "audio",
       mediaUrl: dataUrl,
       mediaMime: file.type || "audio/mp4",
-      mediaPtt: true,
+      mediaPtt: ptt,
       mediaSeconds: sourceSeconds || undefined,
       mediaCaption: caption || undefined,
     });
@@ -106,7 +106,7 @@ export async function sendAudioMessage(
           () =>
             baileysSendVoice(recipient, dataUrl, {
               mimetype: file.type || "audio/mp4",
-              ptt: true,
+              ptt,
               seconds: sourceSeconds || undefined,
               accountId: deps.chatAccountId,
             })

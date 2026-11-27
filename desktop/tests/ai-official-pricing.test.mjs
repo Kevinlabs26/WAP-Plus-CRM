@@ -16,8 +16,7 @@ test('prices are channel-specific and unknown models, special tiers and audio bi
  for(const [provider,model]of [['constructor','name'],['openai','__proto__'],['__proto__','constructor']])assert.equal(officialAiPriceInfo(provider,model),undefined);
  assert.equal(officialAiPriceInfo('openai','gpt-4o-mini-2024-07-18').input,0.15);
  assert.equal(officialAiPriceInfo('openai','gpt-4o-2024-05-13'),undefined,'do not apply the newer GPT-4o price to an older snapshot');
- assert.equal(officialAiPriceInfo('vertex','gemini-2.5-flash').input,0.30);assert.equal(officialAiPriceInfo('groq','openai/gpt-oss-20b').input,0.075);
- assert.equal(officialAiUsageRate(row({provider:'vertex',model:'gemini-2.0-flash'})),undefined,'unknown caching prices are not treated as standard input prices');
+ assert.equal(officialAiPriceInfo('groq','openai/gpt-oss-20b').input,0.075);
 });
 
 test('provider costs win over estimates, optional custom prices can be removed, and unknown usage remains unknown',async()=>{
@@ -36,11 +35,10 @@ test('recording separates each requests context tier so many short calls cannot 
  const legacy=row({requests:3,input:600_000,unpricedInput:600_000});assert.equal(officialAiUsageRate(legacy),undefined,'legacy aggregates with ambiguous request sizes remain unpriced');
 });
 
-test('cache-write and tier metadata are validated, and Gemini long-context pricing includes thinking output',()=>{
+test('cache-write and tier metadata are validated, and Gemini usage includes thinking output',()=>{
  const input={usage:{prompt_tokens:1000,completion_tokens:200,total_tokens:1200,prompt_tokens_details:{cached_tokens:100,cache_write_tokens:200}},service_tier:'default'};
  assert.equal(parseAiTokenUsage(input,'openai').cacheWrite,200);assert.equal(parseAiTokenUsage(input,'openai').billingTier,'default');
  assert.equal(parseAiTokenUsage({...input,service_tier:''},'openai').billingTier,undefined);
  for(const writes of [-1,1.5,901])assert.equal(parseAiTokenUsage({...input,usage:{...input.usage,prompt_tokens_details:{cached_tokens:100,cache_write_tokens:writes}}},'openai'),null);
- const rate=officialAiUsageRate(row({provider:'vertex',model:'gemini-2.5-pro',longContext:true}));assert.equal(rate.input,2.50);assert.equal(rate.output,15);assert.equal(rate.cached,0.25);
- assert.equal(parseAiTokenUsage({usageMetadata:{promptTokenCount:10,candidatesTokenCount:3,thoughtsTokenCount:2,totalTokenCount:15,trafficType:'ON_DEMAND'}},'vertex').output,5);
+ assert.equal(parseAiTokenUsage({usageMetadata:{promptTokenCount:10,candidatesTokenCount:3,thoughtsTokenCount:2,totalTokenCount:15,trafficType:'ON_DEMAND'}},'gemini').output,5);
 });

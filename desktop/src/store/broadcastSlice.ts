@@ -7,7 +7,8 @@ import {
 import type { AppState, SliceContext } from "./types";
 import { resolveActiveSalesStage } from "@/lib/contactWorkflow";
 import { accountCreatedAtOf, persist } from "./persist";
-import { lastContactedAccounts, planSteps, recipientKey } from "@/lib/scheduledPlans";
+import { planSteps, recipientKey } from "@/lib/scheduledPlans";
+import { routeBroadcastAccounts } from "@/lib/broadcastAccountRouting";
 import { applyAccountWarmup } from "@/lib/accountWarmup";
 import { DEFAULT_RATE_LIMITS } from "@/channels/rateLimit";
 import {
@@ -33,6 +34,13 @@ export function createBroadcastSlice({
   return {
     createBroadcastCampaign: (input) => {
       const state = get();
+      const android = input.channelId === "android_bridge";
+      if (android && (state.settings.sendChannel !== "android_bridge" || !state.bridge.connected || state.bridge.deviceId !== input.accountId)) {
+        return { ok: false, reason: "请连接并选用原定的 Android 手机" };
+      }
+      if (android && (input.media?.length || input.variants?.some(variant => variant.media?.length))) {
+        return { ok: false, reason: "Android 群发仅支持文本" };
+      }
       const contactIds = [...input.contactIds];
       const contacts = [...state.contacts];
       for (const phone of parseBroadcastPhones((input.phoneNumbers || []).join("\n"))) {
@@ -57,16 +65,22 @@ export function createBroadcastSlice({
         });
         contactIds.push(id);
       }
-      const lastContacted = lastContactedAccounts(state.chats, state.contacts, state.messages);
-      const accountByPhone: Record<string, string> = {};
       const selectedContactIds = new Set(contactIds);
-      for (const contact of contacts) {
-        if (!selectedContactIds.has(contact.id)) continue;
-        const phone = contactSendablePhone(contact);
-        if (phone) accountByPhone[phone] = lastContacted.get(recipientKey("", phone)) || input.accountId;
+      const phones = contacts.flatMap(contact => selectedContactIds.has(contact.id) && contactSendablePhone(contact) || []);
+      const routing: ReturnType<typeof routeBroadcastAccounts> = android
+        ? {accountByPhone: {}, blockedByPhone: {}, contacted: 0, unclear: 0, unassigned: 0}
+        : routeBroadcastAccounts(state, phones, input.accountId, input.firstContactQuotas);
+      const {accountByPhone} = routing;
+      if (routing.unclear) return {ok:false, reason:"有收件人的原发送账号无法确认，请核对名单"};
+      if (routing.unassigned) return {ok:false, reason:"首次联系人数尚未全部分配，请调整各账号人数"};
+      const expected = input.expectedAccountByPhone;
+      if (!android && expected && (Object.keys(expected).length !== Object.keys(accountByPhone).length ||
+          Object.entries(accountByPhone).some(([phone, account]) => expected[phone] !== account))) {
+        return {ok:false, reason:"收件人的发送账号已变化，请返回预览重新确认"};
       }
-      for (const phone of parseBroadcastPhones((input.phoneNumbers || []).join("\n"))) {
-        accountByPhone[phone] = lastContacted.get(recipientKey("", phone)) || input.accountId;
+      for (const contact of contacts.slice(state.contacts.length)) {
+        const phone = contactSendablePhone(contact);
+        if (phone && accountByPhone[phone]) contact.accountId = accountByPhone[phone];
       }
       const rateLimits = {
         ...DEFAULT_RATE_LIMITS,
@@ -74,7 +88,7 @@ export function createBroadcastSlice({
         perPhonePerHour: state.settings.ratePerHour ?? DEFAULT_RATE_LIMITS.perPhonePerHour,
         minIntervalSec: state.settings.rateMinIntervalSec ?? DEFAULT_RATE_LIMITS.minIntervalSec,
       };
-      for (const id of new Set(Object.values(accountByPhone))) {
+      for (const id of android ? [] : new Set(Object.values(accountByPhone))) {
         const account = state.settings.waAccounts.find(item => item.id === id);
         if (!account) return { ok: false, reason: "发送账号不存在，请重新选择账号" };
         const warmup = applyAccountWarmup(rateLimits, account.warmupExempt ? undefined : accountCreatedAtOf(state.settings, id));
@@ -100,6 +114,7 @@ export function createBroadcastSlice({
         },
       });
       if (!res.ok) return { ok: false, reason: res.reason };
+      if (android) res.campaign.channelId = "android_bridge";
       if (!campaignHasMedia(res.campaign)) {
         const targets=new Map(res.campaign.items.filter(i=>i.status==="pending").map(i=>[recipientKey(i.accountId || input.accountId,i.phoneE164),i.bodyRendered.trim()]));
         const newer=(state.settings.scheduledPlans||[]).filter(p=>!["done","cancelled","expired"].includes(p.status)&&Math.abs(Date.parse(p.dueAt)-Date.now())<=86400_000&&planSteps(p).length===1&&!p.media&&p.items.some(i=>["pending","sending","unknown"].includes(i.status)&&targets.get(recipientKey(i.accountId,i.recipient))===p.text.trim()));
@@ -119,6 +134,9 @@ export function createBroadcastSlice({
       const state = get();
       const c = state.broadcastCampaigns.find((x) => x.id === id);
       if (!c) return { ok: false, reason: "战役不存在" };
+      if (c.channelId === "android_bridge" && (state.settings.sendChannel !== "android_bridge" || !state.bridge.connected || state.bridge.deviceId !== c.accountId)) {
+        return { ok: false, reason: "请重新连接此群发任务绑定的 Android 手机" };
+      }
       if (c.status === "running") return { ok: true };
       if (state.broadcastCampaigns.some((x) => x.id !== id && x.status === "running")) {
         return { ok: false, reason: "已有群发正在运行，请先暂停或结束" };
@@ -134,7 +152,7 @@ export function createBroadcastSlice({
                 status: "running",
                 startedAt: x.startedAt || new Date().toISOString(),
                 items: x.items.map((i) =>
-                  i.status === "pending" ? { ...i, status: "pending", error: undefined } : i
+                  i.status === "pending" ? { ...i, status: "pending", errorCode: undefined, error: undefined } : i
                 ),
               }
             : x
@@ -157,6 +175,12 @@ export function createBroadcastSlice({
       const state = get();
       const c = state.broadcastCampaigns.find((x) => x.id === id);
       if (!c) return { ok: false, reason: "战役不存在" };
+      if (c.items.some((item) => item.status === "sending")) {
+        return { ok: false, reason: "请等待当前条目的发送结果" };
+      }
+      if (c.channelId === "android_bridge" && (state.settings.sendChannel !== "android_bridge" || !state.bridge.connected || state.bridge.deviceId !== c.accountId)) {
+        return { ok: false, reason: "请重新连接此群发任务绑定的 Android 手机" };
+      }
       if (state.broadcastCampaigns.some((x) => x.id !== id && x.status === "running")) {
         return { ok: false, reason: "已有群发正在运行，请先暂停或结束" };
       }
@@ -190,7 +214,7 @@ export function createBroadcastSlice({
                 finishedAt: undefined,
                 items: item.items.map((entry) =>
                   entry.status === "failed" && retryIds.has(entry.id)
-                    ? { ...entry, status: "pending", error: undefined }
+                    ? { ...entry, status: "pending", deliveryUncertain: false, errorCode: undefined, error: undefined }
                     : entry
                 ),
               }
@@ -202,6 +226,8 @@ export function createBroadcastSlice({
     },
 
     cancelBroadcastCampaign: (id) => {
+      const campaign = get().broadcastCampaigns.find((entry) => entry.id === id);
+      if (!campaign || campaign.status === "done" || campaign.status === "cancelled") return;
       set((s) => ({
         broadcastCampaigns: s.broadcastCampaigns.map((x) =>
           x.id === id

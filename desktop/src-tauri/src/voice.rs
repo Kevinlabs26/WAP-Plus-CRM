@@ -3,13 +3,16 @@
 //! 设计要点：
 //! - 音频解码放在前端（WebView2 能解 ogg/opus/mp4 等所有 WhatsApp 语音格式），
 //!   Rust 只接收 16k 单声道 PCM i16，转成 f32 喂给识别器，零重解码栈。
-//! - 模型由前端下载 .tar.bz2 后交给 [`save_speech_model`] 解包到
-//!   `app_data_dir/speech-models/<name>/`，Rust 不做网络请求。
+//! - 模型通过 Rust 下载并解包到 `app_data_dir/speech-models/<name>/`，
+//!   避开 WebView 对 GitHub Release 跨域跳转的限制。
 //! - 所有路径操作都校验必须落在 speech-models 根内，防目录穿越。
 
 use serde::Serialize;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
+use std::time::Duration;
+use tauri::{AppHandle, Emitter, Manager};
+use tokio::io::AsyncWriteExt;
 
 #[derive(Serialize)]
 pub struct SpeechModelInfo {
@@ -134,41 +137,13 @@ pub fn list_speech_models(app: AppHandle) -> Result<Vec<SpeechModelInfo>, String
     Ok(out)
 }
 
-/// 前端已下载好的 .tar.bz2 压缩包字节流；解包进 speech-models/<name>/。
-/// 模型上百 MB：走 Tauri 原始字节通道（Uint8Array → InvokeBody::Raw），
-/// 名称放 x-speech-model-name 头，避免 JSON 数字数组膨胀数倍。
-#[tauri::command]
-pub fn save_speech_model(
-    app: AppHandle,
-    request: tauri::ipc::Request<'_>,
-) -> Result<String, String> {
-    let name = request
-        .headers()
-        .get("x-speech-model-name")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    let archive: std::borrow::Cow<'_, [u8]> = match request.body() {
-        tauri::ipc::InvokeBody::Raw(bytes) => std::borrow::Cow::Borrowed(bytes.as_slice()),
-        tauri::ipc::InvokeBody::Json(value) => std::borrow::Cow::Owned(
-            serde_json::from_value(value.clone())
-                .map_err(|_| "请求体不是有效字节数组".to_string())?,
-        ),
-    };
-    if archive.len() < 1024 {
-        return Err("压缩包内容过小，疑似下载失败".into());
-    }
-    if archive.len() > 512 * 1024 * 1024 {
-        return Err("模型压缩包超过 512 MB".into());
-    }
-    let safe = sanitize_name(&name)?;
-    let root = models_root(&app)?;
-    let dest = root.join(&safe);
+fn install_speech_model<R: Read>(root: &Path, safe: &str, archive: R) -> Result<PathBuf, String> {
+    let dest = root.join(safe);
     let staging = root.join(format!(".install-{}", uuid::Uuid::new_v4()));
     let backup = root.join(format!(".backup-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&staging).map_err(|e| e.to_string())?;
     let result = (|| -> Result<(), String> {
-        let decoder = bzip2::read::BzDecoder::new(archive.as_ref());
+        let decoder = bzip2::read::BzDecoder::new(archive);
         crate::speech_archive::unpack_model(decoder, &staging)?;
         // Validate all required files before replacing a previously working model.
         resolve_whisper_files(&staging)?;
@@ -198,11 +173,130 @@ pub fn save_speech_model(
     })();
     let _ = std::fs::remove_dir_all(&staging);
     result.map_err(|e| format!("解包失败：{e}"))?;
-    Ok(dest.to_string_lossy().to_string())
+    Ok(dest)
+}
+
+#[derive(Clone, Serialize)]
+struct SpeechModelDownloadProgress {
+    model: String,
+    received: u64,
+    total: u64,
+}
+
+static SPEECH_MODEL_CHANGES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+const MAX_SPEECH_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
+
+/// 下载固定来源的模型并流式写入磁盘，WebView 不再直接请求 GitHub。
+#[tauri::command]
+pub async fn download_speech_model(app: AppHandle, name: String) -> Result<String, String> {
+    let safe = sanitize_name(&name)?;
+    let url = match safe.as_str() {
+        "sherpa-onnx-whisper-tiny" => {
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.tar.bz2"
+        }
+        "sherpa-onnx-whisper-base" => {
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-base.tar.bz2"
+        }
+        _ => return Err("不支持的语音模型".into()),
+    };
+    let permit = SPEECH_MODEL_CHANGES.try_acquire()
+        .map_err(|_| "正在安装或删除语音模型，请稍候".to_string())?;
+    let root = models_root(&app)?;
+    tauri::async_runtime::spawn(async move {
+        // Keep the install and its cleanup running if the settings window closes.
+        let _permit = permit;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(15 * 60))
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= 5 || attempt.url().scheme() != "https" {
+                    attempt.stop()
+                } else {
+                    attempt.follow()
+                }
+            }))
+            .build()
+            .map_err(|e| format!("无法启动模型下载：{e}"))?;
+        let response = client.get(url).send().await
+            .map_err(|e| format!("模型下载连接失败：{}", e.without_url()))?;
+        let path = install_model_response(&root, &safe, response, MAX_SPEECH_ARCHIVE_BYTES, |received, total| {
+            let _ = app.emit("speech-model-download-progress", SpeechModelDownloadProgress {
+                model: safe.clone(), received, total,
+            });
+        }).await?;
+        Ok(path.to_string_lossy().to_string())
+    }).await.map_err(|e| format!("模型下载任务失败：{e}"))?
+}
+
+async fn install_model_response(
+    root: &Path, safe: &str, mut response: reqwest::Response, max_bytes: u64,
+    report: impl Fn(u64, u64),
+) -> Result<PathBuf, String> {
+    const PROGRESS_INTERVAL: u64 = 512 * 1024;
+    if !response.status().is_success() {
+        return Err(format!("模型下载失败：HTTP {}", response.status()));
+    }
+    let total = response.content_length().unwrap_or(0);
+    if total > max_bytes {
+        return Err("模型压缩包超过 512 MiB 上限".into());
+    }
+    let archive_path = root.join(format!(".download-{}.tar.bz2", uuid::Uuid::new_v4()));
+    let mut file = tokio::fs::File::create_new(&archive_path).await
+        .map_err(|e| format!("无法保存模型压缩包：{e}"))?;
+    let result = async move {
+        let mut received = 0_u64;
+        let mut last_reported = 0_u64;
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| format!("模型下载中断：{}", e.without_url()))?
+        {
+            received = received
+                .checked_add(chunk.len() as u64)
+                .ok_or("模型压缩包过大")?;
+            if received > max_bytes {
+                return Err("模型压缩包超过 512 MiB 上限".into());
+            }
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| format!("写入模型压缩包失败：{e}"))?;
+            if received - last_reported >= PROGRESS_INTERVAL {
+                report(received, total);
+                last_reported = received;
+            }
+        }
+        file.flush()
+            .await
+            .map_err(|e| format!("写入模型压缩包失败：{e}"))?;
+        drop(file);
+
+        if received < 1024 {
+            return Err("模型压缩包内容过小，疑似下载失败".into());
+        }
+        report(received, total);
+        Ok::<_, String>(())
+    }.await;
+
+    let result = if let Err(error) = result {
+        Err(error)
+    } else {
+        let root = root.to_path_buf();
+        let safe = safe.to_string();
+        let path = archive_path.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let archive = std::fs::File::open(path)
+                .map_err(|e| format!("无法读取模型压缩包：{e}"))?;
+            install_speech_model(&root, &safe, archive)
+        }).await.map_err(|e| format!("模型解包任务失败：{e}")).and_then(|result| result)
+    };
+
+    let _ = tokio::fs::remove_file(&archive_path).await;
+    result
 }
 
 #[tauri::command]
 pub fn remove_speech_model(app: AppHandle, name: String) -> Result<(), String> {
+    let _permit = SPEECH_MODEL_CHANGES.try_acquire()
+        .map_err(|_| "正在安装或删除语音模型，请稍候".to_string())?;
     let root = models_root(&app)?;
     let safe = sanitize_name(&name)?;
     let dir = root.join(safe);
@@ -282,6 +376,60 @@ static SPEECH_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_ne
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn model_download_bounds_streams_and_preserves_existing_models_on_failure() {
+        use tokio::io::AsyncReadExt;
+
+        let root = std::env::temp_dir().join(format!("wap-speech-download-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let name = "sherpa-onnx-whisper-tiny";
+        let installed = root.join(name);
+        std::fs::create_dir(&installed).unwrap();
+        std::fs::write(installed.join("tokens.txt"), "existing").unwrap();
+
+        for (headers, body, max_bytes, expected) in [
+            ("Content-Length: 1025", vec![], 1024, "512 MiB"),
+            ("Transfer-Encoding: chunked", b"401\r\n".iter().copied()
+                .chain(std::iter::repeat_n(b'x', 1025)).chain(b"\r\n0\r\n\r\n".iter().copied()).collect(), 1024, "512 MiB"),
+            ("Content-Length: 2048", vec![b'x'; 1024], 2048, "下载中断"),
+            ("Content-Length: 1024", vec![b'x'; 1024], 2048, "解包失败"),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    request.push(socket.read_u8().await.unwrap());
+                }
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nConnection: close\r\n{headers}\r\n\r\n").as_bytes()).await.unwrap();
+                socket.write_all(&body).await.unwrap();
+            });
+            let response = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(5))
+                .build().unwrap().get(format!("http://{address}")).send().await.unwrap();
+            let error = install_model_response(&root, name, response, max_bytes, |_, _| {}).await.unwrap_err();
+            server.await.unwrap();
+            assert!(error.contains(expected), "{error}");
+            assert_eq!(std::fs::read_to_string(installed.join("tokens.txt")).unwrap(), "existing");
+            assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        }
+        for (name, prefix) in [(name, "tiny"), ("sherpa-onnx-whisper-base", "base")] {
+            let mut tar = tar::Builder::new(bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::fast()));
+            for file in [format!("{prefix}-encoder.onnx"), format!("{prefix}-decoder.onnx"), format!("{prefix}-tokens.txt")] {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(7);
+                header.set_mode(0o600);
+                header.set_cksum();
+                tar.append_data(&mut header, Path::new(name).join(file), &b"fixture"[..]).unwrap();
+            }
+            let archive = tar.into_inner().unwrap().finish().unwrap();
+            let model = install_speech_model(&root, name, archive.as_slice()).unwrap();
+            assert!(resolve_whisper_files(&model).is_ok());
+        }
+        assert!(std::fs::read_dir(&root).unwrap().all(|entry| !entry.unwrap().file_name().to_string_lossy().starts_with('.')));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn native_transcription_has_one_worker_and_releases_it() {

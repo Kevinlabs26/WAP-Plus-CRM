@@ -1,9 +1,10 @@
 import type { OutreachState, OutreachReason } from "./aiOutreachContext";
-import { inspectOutreachCandidate, outreachFolderChatIds } from "./aiOutreachContext";
+import { inspectOutreachCandidate, outreachFolderChatIds, unresolvedOutreachRecipients } from "./aiOutreachContext";
 import { normalizeOutreachRule, nextOutreachWindow, outreachClock, type AiOutreachRun } from "./aiOutreachRules";
 import { lastContactedAccounts, recipientKey } from "./scheduledPlans";
 import { resolveSendTarget } from "./utils";
 import { isWithinAutoReplyHours, resolveAutoReplyPolicy } from "./aiSafety";
+import { activeFirstContactAssignments, extendScheduledFirstContactAssignments, firstContactHistory } from "./aiOutreachAllocation";
 
 export type OutreachPreviewRow={folderId:string;folderName:string;chatId:string;name:string;accountId:string;recipient:string;timeZone:string;mode:"auto"|"draft";scheduledAt:number|null;reason:OutreachReason;eligible:boolean;historyPending:boolean};
 export type OutreachPreview={checkedAt:number;rows:OutreachPreviewRow[];eligible:number;readyNow:number;blocked:number;nextAt:number|null};
@@ -14,7 +15,7 @@ export async function buildOutreachPreview(state:OutreachState,folderIds:readonl
   const settings=options.assumeRunning?{...state.settings,aiOutreachPaused:false}:state.settings;
   const snapshot={...state,settings},wanted=new Set(folderIds);
   const chats=new Map(state.chats.map(chat=>[chat.id,chat])),contacts=new Map(state.contacts.map(contact=>[contact.id,contact]));
-  const latest=lastContactedAccounts(state.chats,state.contacts,state.messages);
+  const unresolvedRecipients=unresolvedOutreachRecipients(snapshot);
   const byRecipient=new Map<string,AiOutreachRun[]>(),byChat=new Map<string,AiOutreachRun[]>(),lastRun=new Map<string,number>();
   for(const run of settings.aiOutreachRuns){
     const key=run.recipient?recipientKey("",run.recipient):"";
@@ -23,19 +24,26 @@ export async function buildOutreachPreview(state:OutreachState,folderIds:readonl
     lastRun.set(run.folderId,Math.max(lastRun.get(run.folderId)||0,Date.parse(run.at)||0));
   }
   const rows:OutreachPreviewRow[]=[],recipients=new Set<string>(),windowCache=new Map<string,number|null>();
-  const next=(rule:ReturnType<typeof normalizeOutreachRule>,at:number,skip=false)=>{const key=`${rule.timeZone}:${rule.time}:${Math.floor(at/60_000)}:${skip}`;if(!windowCache.has(key))windowCache.set(key,nextOutreachWindow(rule,at,skip));return windowCache.get(key)!;};
+  const next=(rule:ReturnType<typeof normalizeOutreachRule>,at:number,skip=false)=>{const key=`${rule.timeZone}:${rule.time}:${rule.startMode}:${rule.runNowAt||""}:${rule.scheduleStartAt||""}:${Math.floor(at/60_000)}:${skip}`;if(!windowCache.has(key))windowCache.set(key,nextOutreachWindow(rule,at,skip));return windowCache.get(key)!;};
   const folders=settings.chatFolders.filter(folder=>wanted.has(folder.id)).slice().sort((a,b)=>(lastRun.get(a.id)||0)-(lastRun.get(b.id)||0));
+  const allocationHistory=folders.some(folder=>folder.scope?.type==="all"&&folder.aiOutreach?.firstContactQuotas)?firstContactHistory(snapshot):undefined;
+  const latest=allocationHistory?.lastAccounts ?? lastContactedAccounts(state.chats,state.contacts,state.messages);
   let readyNow=0;
   for(const folder of folders){
-    const rule=normalizeOutreachRule(folder.aiOutreach),members=new Set(outreachFolderChatIds(snapshot,folder.id));
+    const members=new Set(outreachFolderChatIds(snapshot,folder.id));
+    const savedRule=normalizeOutreachRule(folder.aiOutreach);
+    const rule=folder.scope?.type==="all" ? extendScheduledFirstContactAssignments(snapshot,members,savedRule) : savedRule;
+    const assignments = activeFirstContactAssignments(rule);
     for(const chatId of members){
       options.signal?.throwIfAborted();
       if(rows.length&&rows.length%25===0){options.onProgress?.(rows.length);await new Promise<void>(resolve=>setTimeout(resolve,0));options.signal?.throwIfAborted();}
       const chat=chats.get(chatId),contact=chat&&contacts.get(chat.contactId);
       const recipient=contact?resolveSendTarget({phone:contact.phone,channelAddress:contact.channelAddress,entityId:contact.id}):"";
-      const accountId=chat?.accountId||contact?.accountId||settings.liveBaileysAccountId||settings.activeAccountId;
       const person=recipient?recipientKey("",recipient):"",recipientRuns=[...new Set([...(byRecipient.get(person)||[]),...(byChat.get(chatId)||[])])];
-      const check=(at:number)=>inspectOutreachCandidate(snapshot,folder.id,chatId,at,undefined,undefined,chat&&contact?{chat,contact,members,rule,clock:outreachClock(rule.timeZone,at),lastAccounts:latest,recipientRuns}:undefined);
+      const sourceAccount=chat?.accountId||contact?.accountId||settings.liveBaileysAccountId||settings.activeAccountId;
+      const accountId=folder.scope?.type==="all"&&rule.firstContactQuotas
+        ? allocationHistory?.known.get(person)?.accountId || assignments[person] || sourceAccount : sourceAccount;
+      const check=(at:number)=>inspectOutreachCandidate(snapshot,folder.id,chatId,at,undefined,undefined,chat&&contact?{chat,contact,members,rule,clock:outreachClock(rule.timeZone,at),lastAccounts:latest,recipientRuns,unresolvedRecipients,firstContactHistory:allocationHistory}:undefined);
       const current=check(now);
       let scheduledAt=next(rule,now),projected=current;
       if(scheduledAt!==null&&["ready","not_time","outside_hours","already_contacted","takeover"].includes(current.reason)){

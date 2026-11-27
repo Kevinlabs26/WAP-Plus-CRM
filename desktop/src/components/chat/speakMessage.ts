@@ -3,9 +3,11 @@
  * 零依赖零网络：语音由操作系统 TTS 引擎提供，离线可用。
  * 语言探测：文字系统直判（中/日/韩/俄/阿），拉丁语系按停用词+变音符打分。
  */
+import { isMac } from "@/lib/desktopPlatform";
+
 let speakingToken = 0;
 
-export const SPEECH_LANG_OPTIONS: { code: string; label: string }[] = [
+const SPEECH_LANG_OPTIONS: { code: string; label: string }[] = [
   { code: "zh-CN", label: "中文" },
   { code: "en-US", label: "English" },
   { code: "fr-FR", label: "Français" },
@@ -18,6 +20,30 @@ export const SPEECH_LANG_OPTIONS: { code: string; label: string }[] = [
   { code: "ja-JP", label: "日本語" },
   { code: "ko-KR", label: "한국어" },
 ];
+
+function normalizeVoiceLanguage(code: string): string {
+  return code.trim().replaceAll("_", "-");
+}
+
+export function speechLanguageOptions(voices: SpeechSynthesisVoice[], locale: string) {
+  const options = [...SPEECH_LANG_OPTIONS];
+  const seen = new Set(options.map(({ code }) => code.toLowerCase()));
+  const names = new Intl.DisplayNames([locale], { type: "language" });
+  for (const voice of voices) {
+    const code = normalizeVoiceLanguage(voice.lang);
+    const key = code.toLowerCase();
+    if (!key || seen.has(key)) continue;
+    let label = code;
+    try {
+      label = names.of(code) ?? code;
+    } catch {
+      // Some engines return a language tag that Intl cannot display.
+    }
+    options.push({ code, label });
+    seen.add(key);
+  }
+  return options;
+}
 
 type LangProbe = {
   code: string;
@@ -129,11 +155,11 @@ function refreshVoices(): SpeechSynthesisVoice[] {
 /** 为目标语言挑最合适的已安装音色：精确匹配 > 主子码前缀匹配 */
 function pickVoiceFor(lang: string): SpeechSynthesisVoice | undefined {
   const voices = refreshVoices();
-  const target = lang.toLowerCase();
-  const prefix = target.slice(0, 2);
+  const target = normalizeVoiceLanguage(lang).toLowerCase();
+  const primary = target.split("-")[0];
   return (
-    voices.find((v) => v.lang?.toLowerCase() === target) ??
-    voices.find((v) => v.lang?.toLowerCase().replace("_", "-").startsWith(prefix))
+    voices.find((v) => normalizeVoiceLanguage(v.lang).toLowerCase() === target) ??
+    voices.find((v) => normalizeVoiceLanguage(v.lang).toLowerCase().split("-")[0] === primary)
   );
 }
 
@@ -172,9 +198,10 @@ export function speakMessageText(
   const lang = opts?.lang || detectTextLanguage(trimmed);
   // 关键：WebView2 光设 utterance.lang 不一定切换音色，必须显式指定 .voice
   const voice = pickVoiceFor(lang);
+  const voiceSettings = isMac ? "Mac 系统设置 → 无障碍 → 阅读与朗读" : "Windows 设置 → 时间和语言 → 语音";
   const notice = voice
     ? undefined
-    : `系统没有 ${lang} 音色，只能用默认音色硬读（会变成英文腔）。请到 Windows 设置 → 时间和语言 → 语音 → 添加语音，装好后重启本应用。`;
+    : `系统没有 ${lang} 音色。请到 ${voiceSettings} 添加对应音色。`;
   const token = speakingToken;
   // 超长消息分段朗读：部分系统引擎对单条 utterance 有长度上限
   const chunks = trimmed.length > 220

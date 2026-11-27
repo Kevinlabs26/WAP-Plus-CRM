@@ -69,17 +69,17 @@ fn auth_path(app: &AppHandle, drive: bool) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&dir).map_err(|_| "Cannot create application data")?;
     Ok(dir.join(if drive { "google-drive.dpapi" } else { "google-sheets.dpapi" }))
 }
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn save_auth(app: &AppHandle, tokens: &Tokens, drive: bool) -> Result<(), String> {
     let raw = serde_json::to_vec(tokens).map_err(|_| "Cannot encode Google authorization")?;
     crate::atomic_file::write_atomic(&auth_path(app, drive)?, &crate::commands::protect_secrets(&raw)?)
         .map_err(|_| "Cannot save Google authorization".into())
 }
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn save_auth(_: &AppHandle, _: &Tokens, _: bool) -> Result<(), String> {
     Err("Secure Google login requires Windows".into())
 }
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn load_auth(app: &AppHandle, drive: bool) -> Result<Option<Tokens>, String> {
     let bytes = match std::fs::read(auth_path(app, drive)?) {
         Ok(bytes) => bytes,
@@ -90,7 +90,7 @@ fn load_auth(app: &AppHandle, drive: bool) -> Result<Option<Tokens>, String> {
         .map(Some)
         .map_err(|_| "Invalid saved Google authorization".into())
 }
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn load_auth(_: &AppHandle, _: bool) -> Result<Option<Tokens>, String> { Ok(None) }
 fn http() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
@@ -488,7 +488,7 @@ pub async fn google_sheets_read(
     if ranges.is_empty() {
         url.query_pairs_mut().append_pair(
             "fields",
-            "properties.title,sheets.properties(sheetId,title)",
+            "properties.title,sheets.properties(sheetId,title,gridProperties(rowCount))",
         );
     } else {
         for range in ranges {
@@ -539,7 +539,7 @@ pub async fn google_sheets_read_grid(
             query.append_pair("ranges", &range);
         }
         query.append_pair("includeGridData", "true");
-        query.append_pair("fields", "sheets(data(startRow,rowData(values(formattedValue,hyperlink,userEnteredValue(formulaValue),textFormatRuns(format(link(uri)))))))");
+        query.append_pair("fields", "sheets(data(startRow,startColumn,rowData(values(hyperlink,userEnteredValue(formulaValue),textFormatRuns(format(link(uri)))))))");
     }
     json(
         http()?

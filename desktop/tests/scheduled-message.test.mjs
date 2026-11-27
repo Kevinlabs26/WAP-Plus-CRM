@@ -4,12 +4,12 @@ import { buildSync } from "esbuild";
 import { fileURLToPath } from "node:url";
 
 const result = buildSync({
-  stdin: { contents: 'export * from "./src/store/settingsActionsSlice.ts"; export * from "./src/store/broadcastSlice.ts"; export { normalizeLoadedSettings } from "./src/store/settingsDefaults.ts";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
+  stdin: { contents: 'export * from "./src/store/settingsActionsSlice.ts"; export * from "./src/store/broadcastSlice.ts"; export { normalizeLoadedSettings } from "./src/store/settingsDefaults.ts"; export { parseBackupJson } from "./src/lib/exportData.ts";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
   bundle: true, format: "esm", platform: "browser", write: false,
   alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) },
   external: ["@tauri-apps/api/core"],
 });
-const { createSettingsActionsSlice, createBroadcastSlice, normalizeLoadedSettings } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`);
+const { createSettingsActionsSlice, createBroadcastSlice, normalizeLoadedSettings, parseBackupJson } = await import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`);
 
 function setup(tasks = []) {
   let state = { hydrated: false, settings: { scheduledMessages: tasks }, scheduledMessages: tasks, messages: [], broadcastCampaigns: [], pushToast() {} };
@@ -53,6 +53,27 @@ test("new tasks retain their sending account through settings reload", () => {
   assert.equal(restored[0].id, id);
   assert.equal(restored[0].accountId, "wa-a");
   assert.equal(restored[0].status, "pending");
+});
+
+test("new Android schedules require a device and retain its binding after reload", () => {
+  const { get } = setup();
+  const android = { ...draft, channelId: "android_bridge" };
+  assert.equal(get().scheduleMessage({ ...android, deviceId: null }), null);
+  assert.ok(get().scheduleMessage({ ...android, deviceId: "phone-a" }));
+  assert.equal(normalizeLoadedSettings(get().settings).scheduledMessages[0].deviceId, "phone-a");
+});
+
+test("restored unsent schedules can be explicitly replanned with the original phone", () => {
+  const backup = parseBackupJson({
+    version: 2, contacts: [{ id: "c", name: "Example" }],
+    settingsSafe: { scheduledMessages: [{ ...draft, id: "restored", channelId: "android_bridge", deviceId: "phone-a", status: "pending" }] },
+  });
+  const tasks = normalizeLoadedSettings(backup.settingsSafe).scheduledMessages;
+  const { get } = setup(tasks);
+  assert.equal(tasks[0].status, "expired");
+  assert.equal(get().updateScheduledMessage("restored", { dueAt: draft.dueAt }), true);
+  assert.equal(get().settings.scheduledMessages[0].status, "pending");
+  assert.equal(get().settings.scheduledMessages[0].deviceId, "phone-a");
 });
 
 test("loading older oversized task lists does not discard pending work", () => {

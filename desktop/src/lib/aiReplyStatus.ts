@@ -6,12 +6,13 @@ import { resolveAiReplyProfile } from "./aiPromptScope";
 import { hasRealAiKey } from "./aiSuggest";
 import { evaluateAutoReplyDecision, resolveAutoReplyPolicy } from "./aiSafety";
 
-type StatusKey = "paused"|"manual"|"offline"|"missingAi"|"invalidPrompt"|"queued"|"failed"|"uncertain"|"waitingReply"|"waiting"|"transcribing"|"generating"|"retry"|"human"|"outsideHours"|"takeover"|"ready";
-export function getChatAiStatus({settings,chatId,accountId,connected,thread,runtime,now=Date.now()}:{
-  settings:SettingsShape;chatId:string;accountId?:string;connected:boolean;thread:readonly Message[];runtime?:AutoReplyRuntime;now?:number;
+type StatusKey = "paused"|"manual"|"offline"|"missingAi"|"invalidPrompt"|"queued"|"failed"|"uncertain"|"waitingReply"|"waiting"|"transcribing"|"generating"|"retry"|"human"|"outsideHours"|"takeover"|"ready"|"groupChannel";
+export function getChatAiStatus({settings,chatId,accountId,connected,thread,runtime,isGroup=false,now=Date.now()}:{
+  settings:SettingsShape;chatId:string;accountId?:string;connected:boolean;thread:readonly Message[];runtime?:AutoReplyRuntime;isGroup?:boolean;now?:number;
 }):{key:StatusKey;reason?:string;retryAt?:number} {
-  const scope=resolveAutoReplyScope(settings,chatId);
+  const scope=resolveAutoReplyScope(settings,chatId,isGroup);
   if(scope.source==="paused")return {key:"paused"};
+  if(isGroup&&settings.sendChannel!=="baileys")return {key:"groupChannel"};
   if(scope.mode!=="auto")return {key:"manual",reason:scope.folderName};
   if(!connected)return {key:"offline"};
   if(!hasRealAiKey(settings))return {key:"missingAi"};

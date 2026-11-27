@@ -48,8 +48,6 @@ export type FolderScope =
   | { type: "account"; accountId: string }
   | { type: "all" };
 
-export const MAX_ACCOUNT_SLOTS = 8;
-
 export const DEFAULT_ACCOUNT_ID = "wa-default";
 
 /** 与原生会话目录约束一致，避免 Windows 路径碰撞。 */

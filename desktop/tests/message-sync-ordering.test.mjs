@@ -81,6 +81,47 @@ test('repeated incoming text with different protocol identities is not silently 
  assert.equal(bag.messages.length,2);
 });
 
+test('incoming protocol IDs avoid scanning history while old unkeyed arrivals keep the time window', () => {
+ const {bag, sync}=setup();
+ sync([{id:'seed',direction:'in',body:'Same text',sentAt:time('19')}]);
+ const old=bag.messages[0];
+ let bodyReads=0;
+ Object.defineProperty(old,'body',{get(){bodyReads++;return 'Same text';}});
+ applyMessagesSync({bag,items:[{...peer,id:'distinct',direction:'in',body:'Same text',sentAt:time('19')}],
+  payload:{source:'history',live:false},deviceId:'wa-a',selfName:''});
+ assert.equal(bodyReads,0);
+ assert.equal(bag.messages.length,2);
+ sync([{direction:'in',body:'Same  text',sentAt:time('20')}]);
+ assert.equal(bag.messages.length,2);
+ sync([{direction:'in',body:'Same text',sentAt:time('22')}]);
+ assert.equal(bag.messages.length,3);
+});
+
+test('outgoing alias collisions preserve ownership and the closest timestamp', () => {
+ const {bag,sync}=setup();
+ sync([{id:'seed',body:'original',sentAt:time('10')}]);
+ const seed=bag.messages[0];
+ bag.messages=[
+  {...seed,id:'closest',waMessageId:'shared',sentAt:time('19')},
+  {...seed,id:'old',waKey:{id:'shared'},sentAt:time('11')},
+  {...seed,id:'different-account',accountId:undefined,deviceId:'wa-b',waMessageId:'shared',sentAt:time('20')},
+ ];
+ sync([{id:'shared',body:'new content',sentAt:time('20')}]);
+ assert.equal(bag.messages.find(message=>message.id==='closest').body,'new content');
+ assert.equal(bag.messages.find(message=>message.id==='old').body,'original');
+ assert.equal(bag.messages.find(message=>message.id==='different-account').body,'original');
+ assert.equal(bag.messages.length,3);
+});
+
+test('legacy device ownership cannot suppress another account’s incoming message', () => {
+ const {bag, sync}=setup();
+ sync([{id:'seed',direction:'in',body:'Same text',sentAt:time('19')}]);
+ bag.messages=[{...bag.messages[0], id:'legacy', waMessageId:'shared', accountId:undefined,deviceId:'wa-b'}];
+ sync([{id:'shared',direction:'in',body:'Same text',sentAt:time('19')}]);
+ assert.equal(bag.messages.length,2);
+ assert.equal(bag.messages.find(message=>message.accountId==='wa-a').waMessageId,'shared');
+});
+
 test('a selected conversation cannot steal another chat\'s unbound outgoing message',()=>{
  const {bag,sync}=setup();sync([{id:'seed',body:'seed',sentAt:time('10')}]);const original=bag.messages[0];
  bag.nextSelectedChatId=original.chatId;bag.nextSelectedContactId=original.contactId;

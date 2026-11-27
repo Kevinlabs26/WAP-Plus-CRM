@@ -4,14 +4,14 @@ import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 import zh from "../src/i18n/locales/zh-CN.ts";
 
-const panels = ["Connection", "Messaging", "Ai", "Translation", "AutoReply", "QuickReplies", "Data", "Blocklist", "Appearance", "Speech", "Notifications", "ScheduledMessages", "Update", "CloudImages"];
+const panels = ["Connection", "Messaging", "Ai", "AiPrivacy", "PromptPlans", "PromptLibrary", "Translation", "AutoReply", "QuickReplies", "Data", "Blocklist", "Appearance", "Speech", "Notifications", "ScheduledMessages", "Update", "CloudImages"];
 const mocks = {
   "./SettingsGoogleSheets": "export const SettingsGoogleSheets=()=>null;",
   "./AiUsagePanel": "export const AiUsagePanel=()=>null;",
   "./PlaybookLibrary": "export const PlaybookLibrary=()=>null;",
   react: "export const memo=fn=>fn; export const useState=initial=>globalThis.settingsHookState?globalThis.settingsHookState(initial):[typeof initial==='function'?initial():initial,()=>{}]; export const useRef=value=>globalThis.settingsHookRef?globalThis.settingsHookRef(value):({current:null}); export const useEffect=fn=>globalThis.settingsEffects.push(fn);",
   "react/jsx-runtime": "export const jsx=(type,props,key)=>({type,props,key}); export const jsxs=jsx;",
-  "lucide-react": "export const Check=()=>null,ArrowLeft=Check,Save=Check,AudioLines=()=>null, CloudUpload=AudioLines, Bell=AudioLines, TableProperties=AudioLines, Bot=AudioLines, Clock3=AudioLines, Database=AudioLines, Info=AudioLines, MessageSquareText=AudioLines, Palette=AudioLines, Radio=AudioLines, ShieldBan=AudioLines, Workflow=AudioLines, X=AudioLines, Zap=AudioLines, Activity=AudioLines, BookOpen=AudioLines, AlertTriangle=AudioLines, CheckCircle2=AudioLines, Flame=AudioLines;",
+  "lucide-react": "export const Check=()=>null,ArrowLeft=Check,Save=Check,AudioLines=()=>null, CloudUpload=AudioLines, Bell=AudioLines, TableProperties=AudioLines, Bot=AudioLines, Clock3=AudioLines, Database=AudioLines, Info=AudioLines, MessageSquareText=AudioLines, Palette=AudioLines, Radio=AudioLines, ShieldBan=AudioLines, Shield=AudioLines, Workflow=AudioLines, X=AudioLines, Zap=AudioLines, Activity=AudioLines, BookOpen=AudioLines, AlertTriangle=AudioLines, CheckCircle2=AudioLines, Flame=AudioLines;",
   "@/store/appStore": "export const useAppStore=selector=>selector(globalThis.settingsState);",
   "@/i18n": "export const useI18n=()=>({t:globalThis.settingsTranslate});",
   ...Object.fromEntries(panels.map(name => [`./Settings${name}Panel`, `export const Settings${name}Panel=()=>null;`])),
@@ -126,11 +126,39 @@ test("Muse Playbook has a conditional submenu, and an unavailable saved category
 
     selected.length = 0;
     settingsState.settingsCategory = "playbook";
-    settingsState.settings.aiProvider = "openai";
-    all = nodes(SettingsModal());
-    assert.equal(all.some(node => node.type === "button" && text(node) === zh["playbook.library"]), false);
-    settingsEffects.at(-1)();
-    assert.deepEqual(selected, ["ai"]);
+    settingsState.settings.aiOutreachMuseAccountId = "saved-muse-account";
+    for (const aiProvider of ["gemini", "vertex", "openai"]) {
+      settingsState.settings.aiProvider = aiProvider;
+      all = nodes(SettingsModal());
+      assert.equal(all.some(node => node.type === "button" && text(node) === zh["playbook.library"]), false, aiProvider);
+      assert.equal(all.some(node => node.type === "button" && text(node) === zh["playbook.outreachLibrary"]), false, aiProvider);
+      assert.equal(all.some(node => node.props.Panel?.name === "PlaybookLibrary"), false, aiProvider);
+      assert.ok(all.some(node => node.props.active && node.props.Panel?.name === "SettingsAiPanel"), aiProvider);
+      settingsEffects.at(-1)();
+      assert.equal(selected.at(-1), "ai");
+    }
+    assert.deepEqual(selected, ["ai", "ai", "ai"]);
+  } finally {
+    for (const key of ["settingsTranslate", "settingsEffects", "settingsState"]) delete globalThis[key];
+  }
+});
+
+test("AI services exposes Prompt plans for Vertex and swaps it with Playbook on Muse", () => {
+  globalThis.settingsTranslate = translate;
+  globalThis.settingsEffects = [];
+  globalThis.settingsState = {
+    settingsOpen: true, settingsCategory: "ai", settings: { aiProvider: "vertex" },
+    setSettingsCategory: category => { settingsState.settingsCategory = category; },
+  };
+  const button = (tree, key) => nodes(tree).find(node => node.type === "button" && text(node) === zh[key]);
+  try {
+    button(SettingsModal(), "promptPlan.title").props.onClick();
+    assert.ok(nodes(SettingsModal()).some(node => node.props.active && node.props.Panel?.name === "SettingsPromptPlansPanel"));
+    settingsState.settings.aiProvider = "muse";
+    const muse = SettingsModal();
+    assert.equal(button(muse, "promptPlan.title"), undefined);
+    assert.ok(button(muse, "playbook.library"));
+    assert.ok(nodes(muse).some(node => node.props.active && node.props.Panel?.name === "SettingsAiPanel"));
   } finally {
     for (const key of ["settingsTranslate", "settingsEffects", "settingsState"]) delete globalThis[key];
   }

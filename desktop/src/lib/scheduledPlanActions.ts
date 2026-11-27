@@ -2,7 +2,7 @@ import { flushPersist, useAppStore } from "@/store/appStore";
 import { translateCurrent } from "@/i18n";
 import { isDataRestoreActive } from "@/store/restoreGuard";
 import { campaignHasMedia } from "@/lib/broadcastCampaign";
-import { lastContactedAccounts, MAX_SCHEDULED_PLANS, MAX_SCHEDULED_PLAN_ITEMS, MIN_SCHEDULED_GAP_SEC, MAX_PLAN_STEPS, planSteps, recipientKey, scheduledPlanTargets, scheduledMediaBytes, type ScheduledPlan } from "./scheduledPlans";
+import { scheduledPlanHistoryAccounts, MAX_SCHEDULED_PLANS, MAX_SCHEDULED_PLAN_ITEMS, MIN_SCHEDULED_GAP_SEC, MAX_PLAN_STEPS, planSteps, recipientKey, scheduledPlanTargets, scheduledMediaBytes, type ScheduledPlan } from "./scheduledPlans";
 
 export class DuplicateScheduledPlanError extends Error {
   constructor(readonly planIds: string[], readonly count: number) { super(translateCurrent("planQueue.duplicates", { count })); }
@@ -22,6 +22,14 @@ export async function updateScheduledPlan(id: string, change: (plan: ScheduledPl
   await flushPersist(() => useAppStore.getState());
 }
 
+export function cancelScheduledPlan(id: string) {
+  return updateScheduledPlan(id, plan => ["done", "cancelled"].includes(plan.status) ? plan : {
+    ...plan,
+    status: "cancelled",
+    items: plan.items.map(item => item.status === "pending" ? { ...item, status: "cancelled" } : item),
+  });
+}
+
 export async function prioritizeBatchTask(id: string) {
   if (isDataRestoreActive()) throw new Error(translateCurrent("planQueue.restoring"));
   const state=useAppStore.getState();const plans=state.settings.scheduledPlans||[],campaigns=state.broadcastCampaigns||[];
@@ -36,7 +44,8 @@ export async function saveScheduledPlan(input: Omit<ScheduledPlan, "id" | "creat
   const state = useAppStore.getState();
   if (isDataRestoreActive() || !state.hydrated || !state.uiReady) throw new Error(translateCurrent("planQueue.restoring"));
   const plans = state.settings.scheduledPlans || [];
-  if (!input.items.length || input.items.length > MAX_SCHEDULED_PLAN_ITEMS || plans.length >= MAX_SCHEDULED_PLANS) throw new Error(translateCurrent("planQueue.capacity"));
+  const activeCount = plans.filter(plan => ["pending", "running", "paused"].includes(plan.status)).length;
+  if (!input.items.length || input.items.length > MAX_SCHEDULED_PLAN_ITEMS || activeCount >= MAX_SCHEDULED_PLANS) throw new Error(translateCurrent("planQueue.capacity"));
   const dueAt = startNow ? new Date().toISOString() : input.dueAt;
   if ((!startNow && (!Number.isFinite(Date.parse(dueAt)) || Date.parse(dueAt) <= Date.now())) || !Number.isFinite(input.gapSec) || input.gapSec < MIN_SCHEDULED_GAP_SEC || input.gapSec > 3600) throw new Error(translateCurrent("planQueue.invalidTime"));
   if ((!input.text.trim() && !input.media) || input.text.length > 4000 || input.mediaUnavailable) throw new Error(translateCurrent("planQueue.invalidContent"));
@@ -49,14 +58,14 @@ export async function saveScheduledPlan(input: Omit<ScheduledPlan, "id" | "creat
   const sizes = steps.map(s => s.media ? scheduledMediaBytes(s.media) : 0);
   if (sizes.some(size => size > 8 * 1024 * 1024)) throw new Error(translateCurrent("settingsQuickReplies.mediaTooLarge"));
   if (plans.reduce((sum, plan) => sum + planSteps(plan).reduce((n, s) => n + (s.media?.size || 0), 0), sizes.reduce((a,b)=>a+b,0)) > 64 * 1024 * 1024) throw new Error(translateCurrent("quickLibrary.mediaCapacity"));
-  const lastContacted = lastContactedAccounts(state.chats, state.contacts, state.messages);
-  const fallbackAccountId = input.items.find(item => !lastContacted.has(recipientKey("", item.recipient)))?.accountId;
+  const lastContacted = scheduledPlanHistoryAccounts(state);
+  const fallbackAccountId = input.items.find(item => !item.recipient.endsWith("@g.us") && !lastContacted.has(recipientKey("", item.recipient)))?.accountId;
   const resolved = scheduledPlanTargets(state, input.items.map(item => item.chatId), fallbackAccountId);
   if (resolved.length !== input.items.length || input.items.some(item => !state.settings.waAccounts.some(account => account.id === item.accountId) ||
     !resolved.some(target => target.chatId === item.chatId && target.accountId === item.accountId && target.recipient === item.recipient))) throw new Error(translateCurrent("planQueue.targetsChanged"));
   const duplicates = duplicateScheduledPlans({ ...input, dueAt }, plans).filter(p => !confirmedDuplicates.includes(p.id));
   // Include legacy text broadcasts; their media is cached separately and cannot be compared reliably.
-  const oldDuplicates = (state.broadcastCampaigns || []).filter(c => ["draft", "running", "paused"].includes(c.status) && !campaignHasMedia(c) && steps.length === 1 && !input.media && c.items.some(i => ["pending", "sending"].includes(i.status) && i.bodyRendered.trim() === input.text.trim() && resolved.some(target => recipientKey(target.accountId,target.recipient) === recipientKey(c.accountId,i.phoneE164))) && !confirmedDuplicates.includes(c.id));
+  const oldDuplicates = (state.broadcastCampaigns || []).filter(c => ["draft", "running", "paused"].includes(c.status) && !campaignHasMedia(c) && steps.length === 1 && !input.media && c.items.some(i => ["pending", "sending"].includes(i.status) && i.bodyRendered.trim() === input.text.trim() && resolved.some(target => recipientKey(target.accountId,target.recipient) === recipientKey(i.accountId || c.accountId,i.phoneE164))) && !confirmedDuplicates.includes(c.id));
   if (duplicates.length || oldDuplicates.length) throw new DuplicateScheduledPlanError([...duplicates, ...oldDuplicates].map(p => p.id), duplicates.length + oldDuplicates.length);
   const plan: ScheduledPlan = { ...input, dueAt, text: input.text.trim(), id: crypto.randomUUID(), createdAt: new Date().toISOString(), status: "pending",
     priority: 0, endAt: input.endAt || undefined,

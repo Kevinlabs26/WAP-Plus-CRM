@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const result = await build({
-  entryPoints: [join(dir, "../src/store/broadcastSlice.ts")],
+  stdin: { contents: `export {createBroadcastSlice} from './src/store/broadcastSlice.ts'; export {trimCampaigns,normalizeCampaigns} from './src/lib/broadcastCampaign.ts'; export {routeBroadcastAccounts} from './src/lib/broadcastAccountRouting.ts';`, resolveDir: join(dir, '..') },
   bundle: true,
   format: "esm",
   platform: "browser",
@@ -15,9 +15,64 @@ const result = await build({
   write: false,
   plugins:[{name:'broadcast-ui-boundary',setup(b){b.onResolve({filter:/^@\/i18n$/},()=>({path:'i18n',namespace:'mock'}));b.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:'export const translateCurrent=(k,p)=>k+JSON.stringify(p||{});'}));}}],
 });
-const { createBroadcastSlice } = await import(
+const { createBroadcastSlice, trimCampaigns, normalizeCampaigns, routeBroadcastAccounts } = await import(
   `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text+'\n//# sourceURL=broadcast-slice-test.js').toString("base64")}`
 );
+
+test('history retention preserves older unfinished campaigns during creation and reload',()=>{
+ const base={accountId:'wa-1',template:'test',items:[{id:'item',status:'pending'}],createdAt:'2026-01-01T00:00:00Z'};
+ const active=['running','paused','draft'].map(status=>({...base,id:status,status}));
+ const done=Array.from({length:35},(_,n)=>({...base,id:`done-${n}`,status:'done',items:[],createdAt:new Date(Date.UTC(2026,1,n+1)).toISOString()}));
+ for(const records of [trimCampaigns([...active,...done]),normalizeCampaigns([...active,...done])]){
+  assert.equal(records.filter(campaign=>campaign.status==='done').length,30);
+  for(const campaign of active)assert.ok(records.some(record=>record.id===campaign.id));
+ }
+});
+
+test('ordinary broadcast creation rejects an account change after confirmation',()=>{
+ const {actions,get}=setup();const state=get();
+ state.contacts=[{id:'c',phone:'+12025550101',accountId:'wa-2'}];
+ state.chats=[{id:'chat',contactId:'c',accountId:'wa-2',hasMessageHistory:true,updatedAt:'2026-01-01T00:00:00Z'}];
+ const created=actions.createBroadcastCampaign({accountId:'wa-1',template:'Hello',contactIds:['c'],expectedAccountByPhone:{'+12025550101':'wa-1'}});
+ assert.equal(created.ok,false);assert.match(created.reason,/账号已变化/);
+});
+
+test("ordinary broadcast refuses unknown history and preserves original and genuinely new routes", () => {
+  const { actions, get } = setup();
+  const state = get();
+  state.contacts = [
+    { id: "orphan", phone: "+12025550101", lastMessageAt: "2026-01-01T00:00:00Z" },
+    { id: "legacy", phone: "+12025550102", accountId: "wa-1" },
+    { id: "ownerless", phone: "+12025550103" },
+    { id: "existing", phone: "+12025550104", accountId: "wa-1" },
+    { id: "new", phone: "+12025550105" },
+  ];
+  state.chats = [
+    { id: "legacy-chat", contactId: "legacy", accountId: "wa-1" },
+    { id: "old-chat", contactId: "ownerless", hasMessageHistory: true },
+    { id: "known-chat", contactId: "existing", accountId: "wa-1", hasMessageHistory: true },
+  ].map(chat => ({ ...chat, updatedAt: "2026-01-01T00:00:00Z" }));
+  state.broadcastCampaigns = [];
+  const draft = { accountId: "wa-2", template: "Hello" };
+  const preview = routeBroadcastAccounts(state, state.contacts.map(contact => contact.phone), draft.accountId);
+  assert.deepEqual(preview.blockedByPhone, {
+    "+12025550101": "unknownHistory", "+12025550102": "unknownHistory", "+12025550103": "unknownAccount",
+  });
+  assert.deepEqual(preview.accountByPhone, { "+12025550104": "wa-1", "+12025550105": "wa-2" });
+  const pending = routeBroadcastAccounts({ ...state, messages: [...state.messages, {
+    chatId: "known-chat", direction: "out", deliveryStatus: "queued",
+  }] }, ["+12025550104"], draft.accountId);
+  assert.deepEqual(pending.blockedByPhone, { "+12025550104": "pendingDelivery" });
+  for (const id of ["orphan", "legacy", "ownerless"]) {
+    const rejected = actions.createBroadcastCampaign({ ...draft, contactIds: [id] });
+    assert.equal(rejected.ok, false, id);
+    assert.match(rejected.reason, /无法确认/);
+  }
+  state.chats = [...state.chats, { id: "empty", contactId: "orphan", accountId: "wa-2", hasMessageHistory: false }];
+  assert.equal(actions.createBroadcastCampaign({ ...draft, contactIds: ["orphan"] }).ok, false);
+  assert.equal(actions.createBroadcastCampaign({ ...draft, contactIds: ["existing", "new"] }).ok, true);
+  assert.deepEqual(get().broadcastCampaigns[0].items.map(item => item.accountId), ["wa-1", "wa-2"]);
+});
 
 function setup() {
   let state = {
@@ -60,6 +115,22 @@ function setup() {
   const actions = createBroadcastSlice({ get, set });
   return { actions, get };
 }
+
+test("a previously contacted recipient with an unresolved delivery cannot enter another broadcast", () => {
+  const {actions,get} = setup();
+  const state = get();
+  state.broadcastCampaigns = [];
+  state.contacts = [{id:"customer",name:"Customer",phone:"+12025550100",accountId:"wa-1"}];
+  state.chats = [{id:"chat-1",contactId:"customer",accountId:"wa-1",hasMessageHistory:true,updatedAt:"2026-08-12T10:05:00.000Z"}];
+  state.messages = [
+    {...state.messages[0],id:"confirmed",deliveryStatus:"sent"},
+    {...state.messages[0],id:"uncertain",sentAt:"2026-08-12T10:05:00.000Z",deliveryStatus:"failed",deliveryUncertain:true},
+  ];
+  const result = actions.createBroadcastCampaign({accountId:"wa-2",template:"Hello",contactIds:["customer"],firstContactQuotas:{"wa-2":1}});
+  assert.equal(result.ok,false);
+  assert.match(result.reason,/无法确认/);
+  assert.equal(get().broadcastCampaigns.length,0);
+});
 
 test("cancel keeps the in-flight item for the runner to reconcile", () => {
   const { actions, get } = setup();

@@ -5,14 +5,13 @@ import { normalizeAiReplyTaskRecords, type AiReplyTaskRecord } from "@/lib/aiTas
 import type { AutoReplyMode } from "@/lib/autoReplyScope";
 import { normalizePlaybooks, normalizePlaybookBindings, type AiPlaybook } from "@/lib/aiPlaybooks";
 import { validTimeZone } from "@/lib/timeZone";
+import { isGroupWelcomeTask, normalizeGroupWelcomeRules, normalizeWelcomeImage, recentWelcomeEvents, type GroupWelcomeRule } from "@/lib/groupWelcome";
 import { normalizeScheduledPlans, type ScheduledPlan } from "@/lib/scheduledPlans";
 import {
   normalizeQuickReplyCategory,
   QUICK_REPLY_CATEGORIES,
-  MAX_QUICK_REPLIES,
   MAX_RECENT_QUICK_REPLIES,
   normalizeQuickReplyIds,
-  MAX_QUICK_REPLY_CATEGORIES,
   MAX_QUICK_REPLY_MEDIA_TOTAL_BYTES,
   type QuickReplyCategory,
   type QuickReplyCategoryOption,
@@ -36,11 +35,7 @@ export interface SettingsQuickReply {
   };
 }
 
-export interface AiReportTemplate {
-  id: string;
-  name: string;
-  body: string;
-}
+export type ComposerQuickAccessTab = "quick-replies" | "images";
 
 import type { AccountViewMode, FolderScope, WaAccount } from "@/types/account";
 import type { ScheduledMessage, SalesStage } from "@/types/crm";
@@ -56,8 +51,9 @@ import { normalizeVoiceInputLanguage } from "@/lib/voiceInputLanguage";
 import { resolveTranscriptionConfig, type TranscriptionProvider } from "@/lib/transcriptionConfig";
 import { resolveTranslationConfig, type TranslationProvider } from "@/lib/translationConfig";
 import { DEFAULT_ACCOUNT_ID } from "@/types/account";
-import { normalizePromptTemplates, type AiPromptTemplate } from "@/lib/aiPromptScope";
-import { normalizeOutreachRule, normalizeOutreachRuns, type AiOutreachRule, type AiOutreachRun } from "@/lib/aiOutreachRules";
+import { normalizePromptFolders, normalizePromptTemplates, type AiPromptFolder, type AiPromptTemplate } from "@/lib/aiPromptScope";
+import { legacySavedPromptPlanSchedules, normalizePromptPlan, normalizePromptPlanBindings, normalizeSavedPromptPlans, type PromptPlan, type SavedPromptPlan } from "@/lib/promptPlans";
+import { isImmediateOutreach, nextScheduledOutreachAt, normalizeOutreachRule, normalizeOutreachRuns, type AiOutreachRule, type AiOutreachRun } from "@/lib/aiOutreachRules";
 import {
   DEFAULT_FOLLOW_UP_RULE_SETTINGS,
   type FollowUpRuleSetting,
@@ -87,6 +83,7 @@ export interface SettingsChatFolder {
   aiSystemPrompt?: string;
   aiPromptMode?: "inherit" | "append" | "replace";
   aiPromptTemplateId?: string;
+  aiPromptPlan?: PromptPlan;
   aiPlaybookId?: string;
   sheetConnectionId?: string;
   aiPlaybookSchedule?: PlaybookSchedule;
@@ -157,9 +154,7 @@ export interface SettingsShape {
   openaiKey: string;
   groqKey: string;
   geminiKey: string;
-  vertexProjectId:string;
-  vertexLocation:string;
-  vertexCredentialId:string;
+  vertexCredential: string;
   openrouterKey: string;
   ollamaUrl: string;
   bridgeHost: string;
@@ -200,6 +195,7 @@ export interface SettingsShape {
    */
   aiReplyMode: "semi" | "auto";
   aiAutoReplyPaused: boolean;
+  aiAutoReplyDisabled: boolean;
   aiAutoFollowUpEnabled: boolean;
   aiAutoFollowUpEnabledAt: number;
   aiAutoFollowUpDelaysMinutes: number[];
@@ -217,11 +213,12 @@ export interface SettingsShape {
   aiSystemPrompt: string;
   /** WhatsApp 账号级身份覆盖；空值或无条目时继承 aiSystemPrompt */
   aiSystemPromptByAccountId: Record<string, string>;
+  aiPromptFolders: AiPromptFolder[];
   aiPromptTemplates: AiPromptTemplate[];
-  aiReportTemplates: AiReportTemplate[];
+  aiPromptPlans: SavedPromptPlan[];
+  aiPromptPlanByChat: Record<string, PromptPlan>;
   aiPlaybooks: AiPlaybook[];
   aiPlaybookPlans: PlaybookPlan[];
-  aiPlaybookOverviewId: string;
   aiPlaybookBindings: Record<string, string>;
   aiPlaybookMuseRoot: string;
   aiPlaybookMuseFolder: string;
@@ -232,15 +229,23 @@ export interface SettingsShape {
   aiPlaybookMuseSyncedAt: number;
   aiPlaybookMuseAttemptAt: number;
   aiPlaybookMuseError: string;
-  /** Per-Muse-account identity source; syncing updates only the account's SOUL file. */
-  museIdentityModeByAccountId: Record<string, "follow-primary" | "independent">;
-  museIdentitySyncByAccountId: Record<string, { primaryId: string; sha256: string; syncedAt: number }>;
+  museAccountChecks: Record<string, { ready: boolean; state: string; checkedAt: number; message?: string }>;
+  /** User-confirmed Muse privacy state; this is not remotely verified by Muse. */
+  musePrivacyByAccountId: Record<string, { trainingDisabledConfirmedAt?: number; memoryReviewedAt?: number }>;
+  /** 本机隐私规则，不写入备份。 */
+  museBlockedTerms: string;
   broadcastThemes: BroadcastTheme[];
   imagePromptTemplates: AiPromptTemplate[];
   aiContextMode: "compact" | "full";
   aiOutreachRuns: AiOutreachRun[];
   aiOutreachPaused: boolean;
   aiOutreachExcludedRecipients: string[];
+  /** Optional pinned Muse account for proactive outreach; empty keeps legacy rotation. */
+  aiOutreachMuseAccountId: string;
+  /** null keeps all Muse accounts in the auto-reply pool; an array selects accounts explicitly. */
+  museAutoReplyAccountIds: string[] | null;
+  /** Optional Muse account used to interpret local CRM agent requests. */
+  crmAgentMuseAccountId: string;
   aiTaskDismissedIds: string[];
   aiReplyTaskRecords: AiReplyTaskRecord[];
   /** AI 回复的本人时区；空值跟随电脑时区。 */
@@ -264,6 +269,7 @@ export interface SettingsShape {
   quickReplyCategoryOrder: string[];
   quickReplyPinnedIds: string[];
   quickReplyRecentIds: string[];
+  composerQuickAccessTabs: ComposerQuickAccessTab[];
   translateTargetLang: string;
   /** 自动根据联系人资料和最近入站消息判断对方语言。 */
   autoDetectContactLanguage: boolean;
@@ -328,6 +334,8 @@ export interface SettingsShape {
   followUpRuleSettings: FollowUpRuleSetting[];
   /** 一次性定时文字消息；由出站队列实际发送 */
   scheduledMessages: ScheduledMessage[];
+  groupWelcomeRules: Record<string, GroupWelcomeRule>;
+  groupWelcomeSeen: Record<string, number>;
   scheduledPlans: ScheduledPlan[];
   /** 健康度「过热」时是否拦截发送 */
   blockSendWhenOverheated: boolean;
@@ -401,9 +409,7 @@ export const defaultSettings: SettingsShape = {
   openaiKey: "",
   groqKey: "",
   geminiKey: "",
-  vertexProjectId:"",
-  vertexLocation:"global",
-  vertexCredentialId:"",
+  vertexCredential: "",
   openrouterKey: "",
   ollamaUrl: "http://127.0.0.1:11434",
   bridgeHost: "127.0.0.1",
@@ -426,6 +432,7 @@ export const defaultSettings: SettingsShape = {
   aiModel: "",
   aiReplyMode: "semi",
   aiAutoReplyPaused: false,
+  aiAutoReplyDisabled: false,
   aiAutoFollowUpEnabled: false,
   aiAutoFollowUpEnabledAt: 0,
   aiAutoFollowUpDelaysMinutes: [],
@@ -438,11 +445,12 @@ export const defaultSettings: SettingsShape = {
   aiAutoReplyPolicyByAccountId: {},
   aiSystemPrompt: "",
   aiSystemPromptByAccountId: {},
+  aiPromptFolders: [],
   aiPromptTemplates: [],
-  aiReportTemplates: [],
+  aiPromptPlans: [],
+  aiPromptPlanByChat: {},
   aiPlaybooks: [],
   aiPlaybookPlans: [],
-  aiPlaybookOverviewId: "",
   aiPlaybookBindings: {},
   aiPlaybookMuseRoot: "",
   aiPlaybookMuseFolder: "",
@@ -453,14 +461,18 @@ export const defaultSettings: SettingsShape = {
   aiPlaybookMuseSyncedAt: 0,
   aiPlaybookMuseAttemptAt: 0,
   aiPlaybookMuseError: "",
-  museIdentityModeByAccountId: {},
-  museIdentitySyncByAccountId: {},
+  museAccountChecks: {},
+  musePrivacyByAccountId: {},
+  museBlockedTerms: "",
   broadcastThemes: [],
   imagePromptTemplates: [],
   aiContextMode: "full",
   aiOutreachRuns: [],
   aiOutreachPaused: false,
   aiOutreachExcludedRecipients: [],
+  aiOutreachMuseAccountId: "",
+  museAutoReplyAccountIds: null,
+  crmAgentMuseAccountId: "",
   aiTaskDismissedIds: [],
   aiReplyTaskRecords: [],
   aiTimeZone: "",
@@ -479,6 +491,7 @@ export const defaultSettings: SettingsShape = {
   quickReplyCategoryOrder: [],
   quickReplyPinnedIds: [],
   quickReplyRecentIds: [],
+  composerQuickAccessTabs: [],
   translateTargetLang: "en",
   autoDetectContactLanguage: true,
   incomingTranslateEnabled: false,
@@ -514,6 +527,8 @@ export const defaultSettings: SettingsShape = {
   autoFollowUpEnabled: true,
   followUpRuleSettings: DEFAULT_FOLLOW_UP_RULE_SETTINGS,
   scheduledMessages: [],
+  groupWelcomeRules: {},
+  groupWelcomeSeen: {},
   scheduledPlans: [],
   blockSendWhenOverheated: true,
   sendPausedAccountIds: [],
@@ -575,6 +590,12 @@ export function normalizeLoadedSettings(
   delete src.wahaBaseUrl;
   delete src.wahaApiKey;
   delete src.wahaSession;
+  delete (src as Record<string, unknown>).vertexProjectId;
+  delete (src as Record<string, unknown>).vertexLocation;
+  delete (src as Record<string, unknown>).vertexCredentialId;
+  delete (src as Record<string, unknown>).aiPlaybookOverviewId;
+  delete (src as Record<string, unknown>).museIdentityModeByAccountId;
+  delete (src as Record<string, unknown>).museIdentitySyncByAccountId;
   stripRetiredAiSettings(src);
   const merged: SettingsShape = {
     ...defaultSettings,
@@ -598,7 +619,7 @@ export function normalizeLoadedSettings(
     ? merged.quickReplyCustomCategories
         .map((item, index) => ({
           id: String(item?.id || `custom-${index}`).trim().slice(0, 48),
-          label: String(item?.label || "").trim().slice(0, 32),
+          label: String(item?.label || "").trim(),
           ...(typeof item?.parentId === "string" ? { parentId: item.parentId.trim().slice(0, 48) } : {}),
         }))
         .filter((item, index, items) =>
@@ -607,12 +628,11 @@ export function normalizeLoadedSettings(
           !QUICK_REPLY_CATEGORIES.some((category) => category.id === item.id) &&
           items.findIndex((candidate) => candidate.id === item.id) === index
         )
-        .slice(0, MAX_QUICK_REPLY_CATEGORIES)
     : [];
   const quickReplyCategoryIds = new Set(merged.quickReplyCustomCategories.map(category => category.id));
   const validCategoryIds = new Set<string>([...QUICK_REPLY_CATEGORIES.filter(category => !merged.quickReplyRemovedCategories.includes(category.id)).map(category => category.id), ...quickReplyCategoryIds]);
   merged.quickReplyCategoryOrder = Array.isArray(merged.quickReplyCategoryOrder)
-    ? [...new Set(merged.quickReplyCategoryOrder.filter(id => typeof id === "string" && validCategoryIds.has(id)))].slice(0, MAX_QUICK_REPLY_CATEGORIES + QUICK_REPLY_CATEGORIES.length)
+    ? [...new Set(merged.quickReplyCategoryOrder.filter(id => typeof id === "string" && validCategoryIds.has(id)))]
     : [];
   for (const category of merged.quickReplyCustomCategories) {
     if (!category.parentId || !validCategoryIds.has(category.parentId) || category.parentId === "other" || category.parentId === category.id) delete category.parentId;
@@ -636,7 +656,7 @@ export function normalizeLoadedSettings(
     let quickReplyMediaBytes = 0;
     merged.quickReplies = merged.quickReplies
       .map((r, i) => {
-        const title = String(r?.title || "").slice(0, 40);
+        const title = String(r?.title || "");
         const body = String(r?.body || "");
         const translation = String(r?.translation || "");
         const rawMedia =
@@ -680,7 +700,7 @@ export function normalizeLoadedSettings(
         const originalColumn = Number(rawLink?.originalColumn);
         const translationColumn = Number(rawLink?.translationColumn);
         const sheetLink = rawLink && /^[a-zA-Z0-9_-]{1,200}$/.test(spreadsheetId) && tab.trim() && tab.length <= 200 && !/[\u0000-\u001f]/.test(tab) && Number.isInteger(row) && row >= 0 && row <= 10_000_000 && Number.isInteger(originalColumn) && originalColumn >= 0 && originalColumn <= 18_277 && Number.isInteger(translationColumn) && translationColumn >= 0 && translationColumn <= 18_277 && originalColumn !== translationColumn
-          ? { spreadsheetId, tab, row, originalColumn, translationColumn, titleSnapshot: String(rawLink.titleSnapshot ?? title).slice(0, 40), originalSnapshot: String(rawLink.originalSnapshot || ""), translationSnapshot: String(rawLink.translationSnapshot || ""), syncPending: rawLink.syncPending === true || undefined, syncError: String(rawLink.syncError || "").slice(0, 200) || undefined }
+          ? { spreadsheetId, tab, row, originalColumn, translationColumn, titleSnapshot: String(rawLink.titleSnapshot ?? title), originalSnapshot: String(rawLink.originalSnapshot || ""), translationSnapshot: String(rawLink.translationSnapshot || ""), syncPending: rawLink.syncPending === true || undefined, syncError: String(rawLink.syncError || "").slice(0, 200) || undefined }
           : undefined;
         return {
           id: String(r?.id || `qr-${i}`),
@@ -698,11 +718,13 @@ export function normalizeLoadedSettings(
           ),
         };
       })
-      .filter((r) => r.title || r.body || r.media)
-      .slice(0, MAX_QUICK_REPLIES);
+      .filter((r) => r.title || r.body || r.media);
   }
-  merged.quickReplyPinnedIds = normalizeQuickReplyIds(merged.quickReplyPinnedIds, merged.quickReplies, MAX_QUICK_REPLIES);
+  merged.quickReplyPinnedIds = normalizeQuickReplyIds(merged.quickReplyPinnedIds, merged.quickReplies);
   merged.quickReplyRecentIds = normalizeQuickReplyIds(merged.quickReplyRecentIds, merged.quickReplies, MAX_RECENT_QUICK_REPLIES);
+  merged.composerQuickAccessTabs = Array.isArray(merged.composerQuickAccessTabs)
+    ? [...new Set(merged.composerQuickAccessTabs.filter(tab => tab === "quick-replies" || tab === "images"))]
+    : [];
   merged.notificationPrivacy = merged.notificationPrivacy === "name" || merged.notificationPrivacy === "hidden"
     ? merged.notificationPrivacy : "full";
   merged.theme = merged.theme === "light" ? "light" : "dark";
@@ -784,6 +806,7 @@ export function normalizeLoadedSettings(
           contactName: String(value.contactName || "").slice(0, 120),
           recipient: String(value.recipient || "").slice(0, 160),
           text: String(value.text || "").trim().slice(0, 4000),
+          imageDataUrl: isGroupWelcomeTask(String(value.id || "")) ? normalizeWelcomeImage(value.imageDataUrl) : undefined,
           dueAt: String(value.dueAt || ""),
           channelId: value.channelId === "android_bridge" ? "android_bridge" : "baileys",
           deviceId: value.deviceId ? String(value.deviceId) : null,
@@ -804,9 +827,11 @@ export function normalizeLoadedSettings(
           createdAt: String(value.createdAt || new Date().toISOString()),
         } satisfies ScheduledMessage;
       })
-      .filter((item) => item.id && item.chatId && item.contactId && item.recipient && item.text && item.dueAt);
+      .filter((item) => item.id && item.chatId && item.contactId && item.recipient && (item.text || item.imageDataUrl) && item.dueAt);
   }
   merged.customAiBaseUrl = String(merged.customAiBaseUrl || "").trim().replace(/\/+$/, "");
+  merged.groupWelcomeRules = normalizeGroupWelcomeRules(merged.groupWelcomeRules);
+  merged.groupWelcomeSeen = recentWelcomeEvents(merged.groupWelcomeSeen);
   merged.customAiModel = String(merged.customAiModel || "").trim();
   merged.customWhisperModel = String(merged.customWhisperModel || "").trim();
   const transcription = resolveTranscriptionConfig(src);
@@ -821,14 +846,12 @@ export function normalizeLoadedSettings(
   merged.translationApiKey = translation.apiKey;
   merged.translationModel = translation.model;
   merged.aiModel = String(merged.aiModel || "").trim();
-  merged.vertexProjectId=String(merged.vertexProjectId||"").trim().slice(0,63);
-  merged.vertexLocation=String(merged.vertexLocation||"global").trim().slice(0,40);
-  merged.vertexCredentialId=typeof merged.vertexCredentialId==="string"&&/^[a-f0-9]{64}$/.test(merged.vertexCredentialId)?merged.vertexCredentialId:"";
   merged.bridgeToken = String(merged.bridgeToken || "").trim().slice(0, 256);
   merged.aiAutoReplyManualChatIds = Array.isArray(merged.aiAutoReplyManualChatIds)
     ? [...new Set(merged.aiAutoReplyManualChatIds.map((id) => String(id || "").trim()).filter(Boolean))]
     : [];
   merged.aiAutoReplyPaused = merged.aiAutoReplyPaused === true;
+  merged.aiAutoReplyDisabled = merged.aiAutoReplyDisabled === true;
   merged.aiAutoFollowUpDelaysMinutes = Array.isArray(merged.aiAutoFollowUpDelaysMinutes)
     ? merged.aiAutoFollowUpDelaysMinutes.slice(0, 10).map(value =>
         Number.isFinite(value) ? Math.max(0, Math.min(43_200, Math.round(value))) : 0)
@@ -838,21 +861,13 @@ export function normalizeLoadedSettings(
   merged.aiAutoFollowUpEnabled = merged.aiAutoFollowUpEnabled === true &&
     merged.aiAutoFollowUpEnabledAt > 0 && merged.aiAutoFollowUpDelaysMinutes.length > 0 &&
     merged.aiAutoFollowUpDelaysMinutes.every(value => value > 0);
-  merged.aiPromptTemplates = normalizePromptTemplates(merged.aiPromptTemplates);
-  merged.aiReportTemplates = Array.isArray(merged.aiReportTemplates)
-    ? merged.aiReportTemplates.reduce<AiReportTemplate[]>((items, value) => {
-        if (!value || typeof value !== "object") return items;
-        const item = value as Partial<AiReportTemplate>;
-        const id = typeof item.id === "string" ? item.id.trim().slice(0, 120) : "";
-        const name = typeof item.name === "string" ? item.name.trim().slice(0, 120) : "";
-        const body = typeof item.body === "string" ? item.body.slice(0, 12000) : "";
-        if (id && name && body.trim() && !items.some(existing => existing.id === id) && items.length < 50) items.push({ id, name, body });
-        return items;
-      }, [])
-    : [];
+  merged.aiPromptFolders = normalizePromptFolders(merged.aiPromptFolders);
+  merged.aiPromptTemplates = normalizePromptTemplates(merged.aiPromptTemplates, new Set(merged.aiPromptFolders.map(folder => folder.id)));
+  const legacyPromptPlanSchedules = legacySavedPromptPlanSchedules(merged.aiPromptPlans);
+  merged.aiPromptPlans = normalizeSavedPromptPlans(merged.aiPromptPlans);
+  merged.aiPromptPlanByChat = normalizePromptPlanBindings(merged.aiPromptPlanByChat, legacyPromptPlanSchedules);
   merged.aiPlaybookPlans = normalizePlaybookPlans(merged.aiPlaybookPlans);
   merged.aiPlaybooks = normalizePlaybooks(merged.aiPlaybooks);
-  merged.aiPlaybookOverviewId = typeof merged.aiPlaybookOverviewId === "string" ? merged.aiPlaybookOverviewId.slice(0,120) : "";
   merged.aiPlaybookBindings = normalizePlaybookBindings(merged.aiPlaybookBindings);
   merged.aiPlaybookMuseRoot = typeof merged.aiPlaybookMuseRoot === "string" && merged.aiPlaybookMuseRoot.length <= 500 ? merged.aiPlaybookMuseRoot : "";
   merged.aiPlaybookMuseFolder = typeof merged.aiPlaybookMuseFolder === "string" && merged.aiPlaybookMuseFolder.length <= 500 ? merged.aiPlaybookMuseFolder : "";
@@ -864,31 +879,48 @@ export function normalizeLoadedSettings(
   merged.aiPlaybookMuseAttemptAt = Number.isFinite(merged.aiPlaybookMuseAttemptAt) && merged.aiPlaybookMuseAttemptAt > 0 ? merged.aiPlaybookMuseAttemptAt : 0;
   merged.aiPlaybookMuseError = typeof merged.aiPlaybookMuseError === "string" ? merged.aiPlaybookMuseError.slice(0,400) : "";
   {
-    const rawModes = merged.museIdentityModeByAccountId && typeof merged.museIdentityModeByAccountId === "object" ? merged.museIdentityModeByAccountId : {};
-    const modes: SettingsShape["museIdentityModeByAccountId"] = {};
-    for (const [rawId, mode] of Object.entries(rawModes).slice(0, 12)) {
-      const id = rawId.trim().slice(0, 120);
-      if (id && (mode === "follow-primary" || mode === "independent")) modes[id] = mode;
-    }
-    merged.museIdentityModeByAccountId = modes;
-    const rawSyncs = merged.museIdentitySyncByAccountId && typeof merged.museIdentitySyncByAccountId === "object" ? merged.museIdentitySyncByAccountId : {};
-    const syncs: SettingsShape["museIdentitySyncByAccountId"] = {};
-    for (const [rawId, value] of Object.entries(rawSyncs).slice(0, 12)) {
+    const raw = merged.museAccountChecks && typeof merged.museAccountChecks === "object" ? merged.museAccountChecks : {};
+    const checks: SettingsShape["museAccountChecks"] = {};
+    for (const [rawId, value] of Object.entries(raw).slice(0, 12)) {
       const id = rawId.trim().slice(0, 120);
       if (!id || !value || typeof value !== "object") continue;
-      const record = value as Partial<SettingsShape["museIdentitySyncByAccountId"][string]>;
-      if (typeof record.primaryId === "string" && record.primaryId.length <= 120 && typeof record.sha256 === "string" && /^[a-f0-9]{64}$/.test(record.sha256) && Number.isFinite(record.syncedAt) && Number(record.syncedAt) > 0) {
-        syncs[id] = { primaryId: record.primaryId, sha256: record.sha256, syncedAt: Number(record.syncedAt) };
+      const record = value as Partial<SettingsShape["museAccountChecks"][string]>;
+      if (typeof record.ready === "boolean" && typeof record.state === "string" && record.state.length <= 40 &&
+          Number.isFinite(record.checkedAt) && Number(record.checkedAt) > 0) {
+        checks[id] = { ready: record.ready, state: record.state, checkedAt: Number(record.checkedAt), ...(typeof record.message === "string" ? { message: record.message.slice(0, 240) } : {}) };
       }
     }
-    merged.museIdentitySyncByAccountId = syncs;
+    merged.museAccountChecks = checks;
   }
+  {
+    const raw = merged.musePrivacyByAccountId && typeof merged.musePrivacyByAccountId === "object" ? merged.musePrivacyByAccountId : {};
+    const privacy: SettingsShape["musePrivacyByAccountId"] = {};
+    for (const [rawId, value] of Object.entries(raw).slice(0, 12)) {
+      const id = rawId.trim().slice(0, 120);
+      if (!id || !value || typeof value !== "object") continue;
+      const record = value as Partial<SettingsShape["musePrivacyByAccountId"][string]>;
+      const trainingDisabledConfirmedAt = Number.isFinite(record.trainingDisabledConfirmedAt) && Number(record.trainingDisabledConfirmedAt) > 0
+        ? Number(record.trainingDisabledConfirmedAt) : undefined;
+      const memoryReviewedAt = Number.isFinite(record.memoryReviewedAt) && Number(record.memoryReviewedAt) > 0
+        ? Number(record.memoryReviewedAt) : undefined;
+      if (trainingDisabledConfirmedAt || memoryReviewedAt) {
+        privacy[id] = { ...(trainingDisabledConfirmedAt ? { trainingDisabledConfirmedAt } : {}), ...(memoryReviewedAt ? { memoryReviewedAt } : {}) };
+      }
+    }
+    merged.musePrivacyByAccountId = privacy;
+  }
+  merged.museBlockedTerms = typeof merged.museBlockedTerms === "string" ? merged.museBlockedTerms.slice(0, 4000) : "";
   merged.broadcastThemes = normalizeBroadcastThemes(merged.broadcastThemes);
   merged.imagePromptTemplates = normalizePromptTemplates(merged.imagePromptTemplates).map(item => ({ ...item, prompt: item.prompt.slice(0, 4000) }));
   merged.aiContextMode = merged.aiContextMode === "compact" ? "compact" : "full";
   merged.aiOutreachRuns = normalizeOutreachRuns(merged.aiOutreachRuns);
   merged.aiOutreachPaused = merged.aiOutreachPaused === true;
   merged.aiOutreachExcludedRecipients = Array.isArray(merged.aiOutreachExcludedRecipients)?[...new Set(merged.aiOutreachExcludedRecipients.filter((value):value is string=>typeof value==="string"&&!!value.trim()&&value.length<=240).map(value=>value.trim()))].slice(0,50_000):[];
+  merged.aiOutreachMuseAccountId = typeof merged.aiOutreachMuseAccountId === "string" ? merged.aiOutreachMuseAccountId.trim().slice(0,120) : "";
+  merged.museAutoReplyAccountIds = merged.museAutoReplyAccountIds === null ? null : Array.isArray(merged.museAutoReplyAccountIds)
+    ? [...new Set(merged.museAutoReplyAccountIds.filter((value): value is string => typeof value === "string" && !!value.trim() && value.length <= 120).map(value => value.trim()))].slice(0, 12)
+    : [];
+  merged.crmAgentMuseAccountId = typeof merged.crmAgentMuseAccountId === "string" ? merged.crmAgentMuseAccountId.trim().slice(0,120) : "";
   merged.aiTaskDismissedIds = Array.isArray(merged.aiTaskDismissedIds)?[...new Set(merged.aiTaskDismissedIds.filter((value):value is string=>typeof value==="string"&&value.length>0&&value.length<=600))].slice(-50_000):[];
   merged.aiReplyTaskRecords = normalizeAiReplyTaskRecords(merged.aiReplyTaskRecords);
   merged.aiAutoReplyModeByChatId = Object.fromEntries(
@@ -1167,7 +1199,7 @@ export function normalizeLoadedSettings(
     .map((f, i) => {
       const id = String(f?.id || `folder-${i}`);
       const isLeadFolder = id === LEAD_INBOX_FOLDER_ID;
-      const name = String(f?.name || (isLeadFolder ? "主动联系" : "未命名分组")).slice(0, 40);
+      const name = String(f?.name || (isLeadFolder ? "主动联系" : "未命名分组"));
       const sort = Number.isFinite(Number(f?.sort)) ? Number(f.sort) : i;
       const scope: FolderScope =
         isLeadFolder || f?.scope?.type === "all"
@@ -1193,6 +1225,11 @@ export function normalizeLoadedSettings(
         seenPrimary.add(c);
         chatIds.push(c);
       }
+      const rawAiOutreach=f?.aiOutreach,aiOutreach=rawAiOutreach?normalizeOutreachRule(rawAiOutreach):undefined;
+      if(rawAiOutreach&&typeof rawAiOutreach==="object"&&!Array.isArray(rawAiOutreach)&&!("startMode" in rawAiOutreach)&&aiOutreach?.enabled){
+        if(isImmediateOutreach(aiOutreach)){aiOutreach.startMode="immediate";aiOutreach.scheduleStartAt=undefined;}
+        else{aiOutreach.runNowAt=undefined;aiOutreach.scheduleStartAt=nextScheduledOutreachAt(aiOutreach)??undefined;}
+      }
       return {
         id,
         name,
@@ -1207,12 +1244,13 @@ export function normalizeLoadedSettings(
         ...(f?.autoReplyMode === "auto" || f?.autoReplyMode === "manual" ? { autoReplyMode: f.autoReplyMode } : {}),
         ...(typeof f?.sheetConnectionId==="string"&&/^[\w-]{1,120}$/.test(f.sheetConnectionId)?{sheetConnectionId:f.sheetConnectionId}:{}),
         ...(typeof f?.aiSystemPrompt === "string" && f.aiSystemPrompt.trim()
-          ? { aiSystemPrompt: f.aiSystemPrompt.trim().slice(0, 6000) } : {}),
+          ? { aiSystemPrompt: f.aiSystemPrompt.trim() } : {}),
         ...(f?.aiPromptMode === "inherit" || f?.aiPromptMode === "append" || f?.aiPromptMode === "replace" ? {aiPromptMode: f.aiPromptMode} : {}),
         ...(typeof f?.aiPromptTemplateId === "string" && f.aiPromptTemplateId ? {aiPromptTemplateId: f.aiPromptTemplateId.slice(0,120)} : {}),
+        ...(f?.aiPromptPlan ? { aiPromptPlan: normalizePromptPlan(f.aiPromptPlan, legacyPromptPlanSchedules) } : {}),
         ...(f?.aiPlaybookSchedule ? {aiPlaybookSchedule:normalizePlaybookSchedule(f.aiPlaybookSchedule)} : {}),
         ...(typeof f?.aiPlaybookId === "string" && f.aiPlaybookId ? {aiPlaybookId: f.aiPlaybookId.slice(0,120)} : {}),
-        ...(f?.aiOutreach ? {aiOutreach: normalizeOutreachRule(f.aiOutreach)} : {}),
+        ...(aiOutreach ? {aiOutreach} : {}),
         ...(typeof f?.aiReplyMaxChars==="number"&&Number.isFinite(f.aiReplyMaxChars)?{aiReplyMaxChars:Math.min(2000,Math.max(20,Math.round(f.aiReplyMaxChars)))}:{}),
         ...(Array.isArray(f?.aiReplyForbiddenTerms)?{aiReplyForbiddenTerms:[...new Set(f.aiReplyForbiddenTerms.filter((term):term is string=>typeof term==="string"&&!!term.trim()).map(term=>term.trim().slice(0,100)))].slice(0,50)}:{}),
         chatIds,

@@ -1,4 +1,3 @@
-import { MAX_ACCOUNT_SLOTS } from "@/types/account";
 /**
  * 左上角 WhatsApp 账号菜单（独立文件，避免塞进 PhoneSidebar）
  * - 切换：全部 / 单号
@@ -28,11 +27,13 @@ import {
   nextAccountLabel,
 } from "@/lib/accountLabels";
 import {
+  applyChatAccountReplacements,
   createAccountSlot,
   ensureAccounts,
   healSingleSessionOwnership,
   pruneGhostDefaultAccounts,
 } from "@/lib/accounts";
+import { registerChatAccountReplacements } from "@/lib/storage";
 import type { AccountViewMode, WaAccount } from "@/types/account";
 import { DEFAULT_ACCOUNT_ID } from "@/types/account";
 import { useI18n } from "@/i18n";
@@ -154,9 +155,13 @@ export function AccountSwitcherMenu({
         activeAccountId: s.activeAccountId || live,
       });
       if (!healed.changed) return;
+      if (healed.chatAccountReplacements.length) {
+        registerChatAccountReplacements(healed.chatAccountReplacements);
+      }
       useAppStore.setState({
         contacts: healed.contacts,
         chats: healed.chats,
+        messages: applyChatAccountReplacements(state.messages, healed.chatAccountReplacements),
       });
       // 保留用户当前 active / view，只更新 accounts 结构与 live 纠正
       updateSettings({
@@ -608,10 +613,6 @@ export function AccountSwitcherMenu({
               type="button"
               className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px] text-zinc-200 hover:bg-zinc-800"
               onClick={() => {
-                if (accounts.length >= MAX_ACCOUNT_SLOTS) {
-                  pushToast(t("account.maxReached", { count: MAX_ACCOUNT_SLOTS }), "info");
-                  return;
-                }
                 const id = `wa-${Date.now().toString(36)}`;
                 const slot = createAccountSlot({
                   id,

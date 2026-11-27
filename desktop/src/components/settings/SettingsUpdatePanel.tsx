@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Download, RefreshCw, ShieldCheck } from "lucide-react";
+import { Check, Download, MessageSquareText, RefreshCw, ShieldCheck } from "lucide-react";
 import { Button, SectionLabel } from "@/components/ui/primitives";
 import { useAppStore } from "@/store/appStore";
 import { useI18n } from "@/i18n";
 import { getAppInfo, isTauri } from "@/lib/bridge";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
 import {
   checkForAppUpdate,
   installAppUpdate,
   type AppUpdate,
 } from "@/lib/appUpdate";
+
+const FEEDBACK_FORM_URL = "https://forms.gle/HhRMF6YjH7nFmDg17";
 
 export function SettingsUpdatePanel() {
   const { t } = useI18n();
@@ -85,6 +88,27 @@ export function SettingsUpdatePanel() {
           {t("updates.versionNote", { version })}
         </p>
       </header>
+
+      <section className="border-t border-zinc-800 pt-4">
+        <SectionLabel>{t("feedback.title")}</SectionLabel>
+        <p className="mt-2 text-[11px] leading-5 text-zinc-400">{t("feedback.description")}</p>
+        <Button
+          variant="secondary"
+          size="sm"
+          className="mt-3"
+          onClick={async () => {
+            try {
+              if (isTauri()) await openExternal(FEEDBACK_FORM_URL);
+              else window.open(FEEDBACK_FORM_URL, "_blank", "noopener,noreferrer");
+            } catch {
+              pushToast(t("nav.openLinkFailed"), "error");
+            }
+          }}
+        >
+          <MessageSquareText className="mr-1.5 h-3.5 w-3.5" />
+          {t("feedback.open")}
+        </Button>
+      </section>
 
       <section className="border-t border-zinc-800 pt-4">
         <SectionLabel>{t("updates.section")}</SectionLabel>

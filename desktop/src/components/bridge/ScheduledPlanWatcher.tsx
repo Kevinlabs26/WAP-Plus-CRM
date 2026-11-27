@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { flushPersist, useAppStore } from "@/store/appStore";
 import { withSendGate, sendRuntimeFromSettings } from "@/channels";
 import { baileysSend, baileysSendImage, baileysSendDocument, baileysSendVoice, baileysSendVideo } from "@/lib/baileysSend";
-import { isWaAccountConnected } from "@/lib/accountConnection";
+import { canBatchSendWithAccount, isWaAccountConnected } from "@/lib/accountConnection";
 import { activePlanStep, nextBatchTask, scheduledAudioMode, scheduledPlanTargets } from "@/lib/scheduledPlans";
 import { updateScheduledPlan } from "@/lib/scheduledPlanActions";
 import { createScheduledPlanRunner } from "@/lib/scheduledPlanRunner";
@@ -14,15 +14,19 @@ export function ScheduledPlanWatcher() {
   useEffect(() => {
     const runner = createScheduledPlanRunner({
       plans: () => useAppStore.getState().settings.scheduledPlans || [],
+      messages: () => useAppStore.getState().messages,
       ready: () => { const state = useAppStore.getState(); return state.hydrated && state.uiReady && !isDataRestoreActive() && !isAppLockActive(); },
+      isLocked: isAppLockActive,
       update: updateScheduledPlan,
-      hasTurn: id => {const s=useAppStore.getState();return nextBatchTask(s.settings.scheduledPlans || [],s.broadcastCampaigns || [])===id;},
+      hasTurn: id => {const s=useAppStore.getState();return nextBatchTask(s.settings.scheduledPlans || [],s.broadcastCampaigns || [],Date.now(),accountId=>canBatchSendWithAccount(s,accountId))===id;},
       availability: item => {
         if (item.retired) return "missing";
         const state = useAppStore.getState();
+        if (!state.settings.waAccounts.some(account => account.id === item.accountId)) return "missing";
+        if (!isWaAccountConnected(state.settings.waAccounts, item.accountId, state.settings.liveBaileysAccountId, state.baileysUi.connection)) return "offline";
         const target = scheduledPlanTargets(state, [item.chatId], item.accountId)[0];
         if (!target || target.accountId !== item.accountId || target.recipient !== item.recipient) return "missing";
-        return isWaAccountConnected(state.settings.waAccounts, item.accountId, state.settings.liveBaileysAccountId, state.baileysUi.connection) ? "ready" : "offline";
+        return "ready";
       },
       enqueue: (plan, item) => {
         const state = useAppStore.getState();
@@ -65,7 +69,10 @@ export function ScheduledPlanWatcher() {
       },
       finish: (id, result) => {
         const error = result.message || result.error;
-        useAppStore.getState().updateMessageDelivery(id, { deliveryStatus: result.ok ? "sent" : "failed", deliveryUncertain: result.uncertain === true,
+        const state = useAppStore.getState();
+        const current = state.messages.find(message => message.id === id);
+        if (["sent", "server", "delivered", "read", "played"].includes(current?.deliveryStatus || "")) return;
+        state.updateMessageDelivery(id, { deliveryStatus: result.ok ? "sent" : result.deferredForLock ? "pending" : "failed", deliveryUncertain: result.uncertain === true,
           waMessageId: result.remoteId, lastError: error?.startsWith("planQueue.") ? translateCurrent(error as TranslationKey) : error, nextAttemptAt: undefined });
       },
     });

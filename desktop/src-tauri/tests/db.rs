@@ -10,7 +10,50 @@ mod db_encryption;
 #[path = "../src/db.rs"]
 mod db;
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn encrypted_search_snapshot_allows_another_thread_to_save() {
+    use db::{migrate, save_snapshot, search_messages, AppSnapshot, PersistDirtyFlags};
+    use serde_json::json;
+
+    let root = std::env::temp_dir().join(format!("wap-search-wal-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("wap-plus.db");
+    let writer = crate::db_encryption::open(&path).unwrap();
+    writer.pragma_update(None, "journal_mode", "WAL").unwrap();
+    writer.busy_timeout(std::time::Duration::ZERO).unwrap();
+    migrate(&writer).unwrap();
+    let save = |id: &str| save_snapshot(&writer, &AppSnapshot {
+        messages: vec![json!({"id": id, "body": "合同 bonjour"})],
+        dirty: Some(PersistDirtyFlags { messages: true, ..Default::default() }),
+        ..Default::default()
+    }).unwrap();
+    save("first");
+
+    let timeout = std::time::Duration::from_secs(10);
+    let (started, wait_for_snapshot) = std::sync::mpsc::channel();
+    let (committed, wait_for_commit) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let conn = crate::db_encryption::open_readonly(&path).unwrap();
+        let snapshot = conn.unchecked_transaction().unwrap();
+        assert_eq!(search_messages(&snapshot, "合同", 40).unwrap().len(), 1);
+        started.send(()).unwrap();
+        wait_for_commit.recv_timeout(timeout).unwrap();
+        assert_eq!(search_messages(&snapshot, "合同", 40).unwrap().len(), 1);
+        assert_eq!(search_messages(&snapshot, "bonjour", 40).unwrap().len(), 1);
+        drop(snapshot);
+        assert_eq!(search_messages(&conn, "合同", 40).unwrap().len(), 2);
+        assert_eq!(search_messages(&conn, "bonjour", 40).unwrap().len(), 2);
+    });
+    wait_for_snapshot.recv_timeout(timeout).unwrap();
+    save("second");
+    committed.send(()).unwrap();
+    reader.join().unwrap();
+    drop(writer);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn sqlcipher_419_database_and_uncheckpointed_wal_survive_upgrade_and_restore() {
     let root = std::env::temp_dir().join(format!("wap-sqlcipher-upgrade-{}", uuid::Uuid::new_v4()));
@@ -42,7 +85,7 @@ fn sqlcipher_419_database_and_uncheckpointed_wal_survive_upgrade_and_restore() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn encrypted_migration_survives_restart_and_missing_or_wrong_keys_preserve_the_database() {
     let root=std::env::temp_dir().join(format!("wap-db-encryption-{}",uuid::Uuid::new_v4()));

@@ -6,6 +6,8 @@ mod baileys;
 mod bridge;
 #[cfg(windows)]
 mod clipboard;
+#[cfg(target_os = "macos")]
+mod clipboard_macos;
 mod clone_calls;
 mod commands;
 mod crm_backup;
@@ -19,7 +21,6 @@ mod image_library_import;
 mod muse_web;
 mod protocol;
 mod speech_archive;
-mod vertex_ai;
 mod voice;
 
 use baileys::BaileysState;
@@ -38,6 +39,14 @@ pub(crate) fn show_main_window(app: &tauri::AppHandle) {
         let _ = window.show();
         let _ = window.set_focus();
     }
+}
+
+#[tauri::command(async)]
+fn restart_after_macos_update(app: tauri::AppHandle) {
+    #[cfg(target_os = "macos")]
+    app.restart();
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
 }
 
 #[cfg(target_os = "windows")]
@@ -94,13 +103,13 @@ pub fn run() {
         .manage(BridgeState::default())
         .manage(BaileysState::default())
         .manage(google_sheets::GoogleState::default())
-        .manage(vertex_ai::VertexState::default())
         .manage(clone_calls::CloneCallsState::default())
         .manage(muse_web::MuseWebState::default())
         .setup(|app| {
             app.manage(app_instance::AppInstanceGuard::acquire(&app.path().app_data_dir()?)?);
             let conn = db::open_db(app.handle())?;
             app.manage(DbState(Mutex::new(conn)));
+            commands::start_chat_history_refresh(app.handle().clone());
 
             // 读线程 / connect 可向 WebView 推送 bridge://event 与 bridge://status
             #[cfg(not(test))]
@@ -155,6 +164,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            restart_after_macos_update,
             app_lock::app_lock_status,
             app_lock::app_lock_create,
             app_lock::app_lock_verify,
@@ -168,19 +178,28 @@ pub fn run() {
             clone_calls::clone_call_start,
             clone_calls::clone_call_cancel,
             muse_web::muse_web_open,
+            muse_web::muse_web_workspace_account,
+            muse_web::muse_web_workspace_content_visible,
+            muse_web::muse_web_workspace_sidebar_set_collapsed,
+            muse_web::muse_web_side_chats,
+            muse_web::muse_web_delete_side_chats,
+            muse_web::muse_web_cleanup_schedules,
+            muse_web::muse_web_cleanup_schedule_add,
+            muse_web::muse_web_cleanup_schedule_update,
+            muse_web::muse_web_cleanup_schedule_advance,
+            muse_web::muse_web_cleanup_schedule_resume,
+            muse_web::muse_web_cleanup_schedule_cancel,
             muse_web::muse_web_switch_account,
             muse_web::muse_web_accounts,
             muse_web::muse_web_account_add,
+            muse_web::muse_web_account_update,
+            muse_web::muse_web_account_remove,
             muse_web::muse_web_account_select,
             muse_web::muse_web_account_set_primary,
             muse_web::muse_web_status,
             muse_web::muse_web_generate,
             muse_web::muse_web_collect_media,
             muse_web::muse_web_cancel,
-            vertex_ai::vertex_ai_status,
-            vertex_ai::vertex_ai_save,
-            vertex_ai::vertex_ai_remove,
-            vertex_ai::vertex_ai_access_token,
             baileys::baileys_runtime,
             baileys::baileys_stop_account,
             baileys::baileys_reset_account,
@@ -188,6 +207,7 @@ pub fn run() {
             baileys::baileys_cancel_update,
             commands::list_adb_devices,
             commands::adb_forward,
+            commands::adb_install_bridge,
             commands::phone_screenshot,
             commands::bridge_status,
             commands::bridge_connect,
@@ -223,6 +243,7 @@ pub fn run() {
             commands::db_clear_remote_messages,
             commands::db_delete_messages_by_keys,
             commands::db_update_message_acks,
+            commands::db_update_message_edits,
             commands::db_info,
             commands::app_storage_usage,
             crm_backup::crm_backup_status,
@@ -233,7 +254,9 @@ pub fn run() {
             image_library::image_library,
             commands::db_load_full_history,
             commands::db_load_messages_page,
+            commands::db_latest_outgoing_message,
             commands::db_chats_with_inbound,
+            commands::db_latest_conversation_by_chat,
             commands::db_search_messages,
             commands::db_get_message,
             commands::secure_load_secrets,
@@ -251,10 +274,16 @@ pub fn run() {
             commands::secure_save_secrets,
             commands::typing_diagnostic_write,
             voice::list_speech_models,
-            voice::save_speech_model,
+            voice::download_speech_model,
             voice::remove_speech_model,
             voice::speech_transcribe,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running WAP Plus CRM");
+        .build(tauri::generate_context!())
+        .expect("error while building WAP Plus CRM")
+        .run(|_app, _event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = _event {
+                show_main_window(_app);
+            }
+        });
 }

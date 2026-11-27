@@ -40,6 +40,9 @@ test('returns only selected fields for every matching row and rejects ambiguous 
   assert.deepEqual(selectedSheetValues(headers, rows, {heading:'Phone'}, [{heading:'Order'}, {heading:'Name'}], '+12025550100'), [['A', 'Ana'], ['B', 'Ada']]);
   assert.deepEqual(selectedSheetValues([], rows, {position:1}, [{position:2}], '+12025550100'), [['A'], ['B']]);
   assert.equal(selectedSheetValues(['Name', 'Phone', 'Order', 'Order'], rows, {heading:'Phone'}, [{heading:'Order'}], '+12025550100'), null);
+  const repeated = [{position:2, expectedHeading:'Order'}, {position:3, expectedHeading:'Order'}];
+  assert.deepEqual(selectedSheetValues(['Name', 'Phone', 'Order', 'Order'], rows, {heading:'Phone'}, repeated, '+12025550100'), [['A', 'private'], ['B', 'private']]);
+  assert.equal(selectedSheetValues(headers, rows, {heading:'Phone'}, repeated, '+12025550100'), null);
 });
 
 test('each field follows its own interval, local daily time, or manual schedule', () => {

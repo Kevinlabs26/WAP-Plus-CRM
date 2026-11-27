@@ -179,6 +179,7 @@ export function buildPersistSlice(
     openaiKey: "",
     groqKey: "",
     geminiKey: "",
+    vertexCredential: "",
     openrouterKey: "",
     customAiKey: "",
     transcriptionApiKey: "",

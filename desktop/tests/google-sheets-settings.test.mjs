@@ -3,18 +3,29 @@ import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 const mocks={
- '@/store/appStore':'export const useAppStore=selector=>selector({requestConfirm:async opts=>{globalThis.sheetDisconnectPrompt=opts;return !!globalThis.sheetDisconnectApproved;}});',
+ '@/store/appStore':'const appState=()=>({requestConfirm:async opts=>{globalThis.sheetDisconnectPrompt=opts;return !!globalThis.sheetDisconnectApproved;},settings:globalThis.sheetSettingsStore?.settings||{chatFolders:[]},chats:globalThis.sheetSettingsStore?.chats||[]});export const useAppStore=selector=>selector(appState());useAppStore.getState=appState;',
  react:'export const useState=(v)=>globalThis.sheetSettingsHooks.state(v);export const useEffect=(f,d)=>globalThis.sheetSettingsHooks.effect(f,d);',
  'react/jsx-runtime':'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;export const Fragment="fragment";',
- 'lucide-react':'export const Pencil="icon",Star="icon",Trash2="icon",Check="icon",ExternalLink="icon",Link2="icon",RefreshCw="icon",TableProperties="icon";',
+ 'lucide-react':'export const Pencil="icon",Star="icon",Trash2="icon",Check="icon",ExternalLink="icon",Link2="icon",RefreshCw="icon",TableProperties="icon",Plus="icon",X="icon";',
  '@/components/ui/primitives':'export const Button="button",SectionLabel="label";',
- '@/i18n':'export const useI18n=()=>({t:k=>k});',
+ '@/i18n':'export const useI18n=()=>({t:(key,params)=>key==="sheets.table.inherited"?`${params.folder} ← ${params.source} (inherited)`:Object.entries(params||{}).reduce((value,[name,item])=>value.replaceAll(`{${name}}`,String(item)),key)});',
  '@/lib/googleSheetApi':'export const spreadsheetId=v=>v.includes("abc")?"abc":null;',
- '@/lib/googleSheets':'export const DEFAULT_SHEET_ID="default";export const sheetConnections=s=>s.config?[{id:"default",name:"Main table",config:s.config,data:s.data,error:s.error}]:[];export const removeSheetConnection=async()=>{};export const useGoogleSheets=()=>globalThis.sheetSettingsState;export const initializeSheets=async()=>{};export const letter=i=>String.fromCharCode(65+i);export const sheetHeaders=async()=>["Phone","Order"];export const saveSheetConfig=async(config,id,name)=>{globalThis.sheetSaved=config;globalThis.sheetSavedTarget={id,name};};export const readSheet=async()=>({sheets:[]});export const connectSheets=async()=>{};export const cancelSheetsConnect=async()=>{globalThis.sheetConnectCancelled=true;};export const disconnectSheets=async()=>{globalThis.sheetDisconnected=true;};export const refreshSheets=async()=>{};',
+ '@/lib/googleSheets':'export const DEFAULT_SHEET_ID="default";export const SHEET_TAG_COLORS=["amber","emerald","red","blue","violet","zinc"];export const normalizeSheetTagStyle=v=>v||{defaultColor:"zinc",rules:[]};export const sheetConnections=s=>s.config?[{id:"default",name:"Main table",config:s.config,data:s.data,error:s.error}]:[];export const removeSheetConnection=async()=>{};export const useGoogleSheets=()=>globalThis.sheetSettingsState;export const initializeSheets=async()=>{};export const letter=i=>{let name="";for(let n=i+1;n>0;n=Math.floor((n-1)/26))name=String.fromCharCode(65+(n-1)%26)+name;return name;};export const sheetHeaders=async()=>globalThis.sheetHeaderFixture||["Phone","Order"];export const saveSheetConfig=async(config,id,name,refresh)=>{globalThis.sheetSaved=config;globalThis.sheetSavedTarget={id,name};globalThis.sheetSavedRefresh=refresh;};export const saveSheetConfigs=async(entries,refreshIds)=>{globalThis.sheetSavedBatch=entries;globalThis.sheetSavedRefreshIds=[...refreshIds];};export const readSheet=async()=>({sheets:[]});export const connectSheets=async()=>{};export const cancelSheetsConnect=async()=>{globalThis.sheetConnectCancelled=true;};export const disconnectSheets=async()=>{globalThis.sheetDisconnected=true;};export const refreshSheets=async()=>{};',
 };
 const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/settings/SettingsGoogleSheets.tsx',import.meta.url))],bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},plugins:[{name:'boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
 const {SettingsGoogleSheets}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
 const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
+test('sheet list shows direct and inherited folder bindings',()=>{
+ globalThis.sheetSettingsState={ready:true,configured:true,email:'test@example.com',needsAccess:false,config:{spreadsheet:'abc',tab:'Customers',headerRow:1,phone:{heading:'Phone'},fields:[]},data:{},error:'',busy:false};
+ globalThis.sheetSettingsStore={settings:{chatFolders:[{id:'parent',name:'Main folder',chatIds:[],sheetConnectionId:'default'},{id:'child',name:'Child folder',parentId:'parent',chatIds:[]},{id:'unbound',name:'Unbound folder',chatIds:[]}]},chats:[]};
+ globalThis.sheetSettingsHooks={state:value=>[value,()=>{}],effect(){}};
+ try{
+  const binding=nodes(SettingsGoogleSheets()).find(node=>node.type==='td'&&node.props.title?.includes('Main folder'));
+  assert.ok(binding);
+  assert.equal(binding.props.children,'Main folder · Child folder ← Main folder (inherited)');
+  assert.equal(nodes(SettingsGoogleSheets()).find(node=>node.type==='th'&&node.props.children==='sheets.table.binding')?.props.children,'sheets.table.binding');
+ }finally{delete globalThis.sheetSettingsState;delete globalThis.sheetSettingsStore;delete globalThis.sheetSettingsHooks;}
+});
 test('authorization can be cancelled while an account is displayed or connecting for the first time',async()=>{
  const oldWindow=globalThis.window;globalThis.window={addEventListener(){},removeEventListener(){}};
  globalThis.sheetSettingsHooks={state:value=>[value,()=>{}],effect(){}};
@@ -45,15 +56,42 @@ test('reopening a saved connection and reloading headers preserves custom labels
   tree.find(node=>node.type==='button'&&node.props['aria-label']==='sheets.edit').props.onClick();await new Promise(resolve=>setImmediate(resolve));render();effects.splice(0).forEach(fn=>fn());tree=render();
   assert.ok(tree.some(node=>node.type==='input'&&node.props.value==='https://docs.google.com/spreadsheets/d/abc/edit'));
   const columns=tree.find(node=>node.type==='button'&&node.props.children==='sheets.columns');
+  globalThis.sheetHeaderFixture=Array(215).fill('');
+  globalThis.sheetHeaderFixture[0]='Phone';
+  globalThis.sheetHeaderFixture[1]='Order';
+  globalThis.sheetHeaderFixture[3]=globalThis.sheetHeaderFixture[4]='Repeated';
+  globalThis.sheetHeaderFixture[214]='Far column';
   columns.props.onClick();await new Promise(resolve=>setImmediate(resolve));
-  tree=render();
+  tree=render();effects.splice(0).forEach(fn=>fn());tree=render();
+  const textOf=node=>Array.isArray(node)?node.map(textOf).join(''):node?.props?textOf(node.props.children):typeof node==='string'?node:'';
+  assert.ok(tree.some(node=>node.type==='span'&&textOf(node)==='C · sheets.blankHeading'));
+  for (const [letter, index, action] of [['D', 3, 'edit'], ['E', 4, 'link']]) {
+    const label = tree.find(node => node.type === 'label' && textOf(node) === `${letter} · Repeated`);
+    label.props.children[0].props.onChange({target:{checked:true}});
+    tree = render();
+    tree.find(node => node.type === 'select' && node.props['aria-label'] === `sheets.action ${letter} · Repeated`).props.onChange({target:{value:action}});
+    assert.equal(tree.find(node => node.type === 'option' && node.props.value === index).props.disabled, false);
+    tree = render();
+  }
+  tree.find(node => node.type === 'select' && textOf(node).includes('D · Repeated')).props.onChange({target:{value:'4'}});
+  tree=render();effects.splice(0).forEach(fn=>fn());tree=render();
+  assert.ok(tree.some(node=>node.type==='label'&&textOf(node)==='HG · Far column'));
+  delete globalThis.sheetHeaderFixture;
   assert.ok(tree.some(node=>node.props.value==='My order status'));
   assert.ok(tree.some(node=>node.props.type==='time'&&node.props.value==='14:30'));
   const save=tree.find(node=>node.type==='button'&&node.props.children==='sheets.save');
-  assert.equal(save.props.disabled,false);save.props.onClick();await new Promise(resolve=>setImmediate(resolve));
-  assert.deepEqual(globalThis.sheetSaved.fields,fields);
-  assert.equal(globalThis.sheetSaved.headerRow,2);
-  assert.deepEqual(globalThis.sheetSavedTarget,{id:'default',name:'Main table'});
+  assert.equal(save.props.disabled,false);assert.equal(await globalThis.sheetCloseGuard.save(),true);
+  const saved = globalThis.sheetSavedBatch[0].config;
+  assert.deepEqual(saved.fields[0], fields[0]);
+  assert.deepEqual(saved.phone, {position:4, expectedHeading:'Repeated'});
+  assert.deepEqual(saved.fields.slice(1).map(({column,action})=>({column,action})), [
+    {column:{position:3, expectedHeading:'Repeated'}, action:'edit'},
+    {column:{position:4, expectedHeading:'Repeated'}, action:'link'},
+  ]);
+  assert.equal(globalThis.sheetSavedBatch[0].config.headerRow,2);
+  assert.equal(globalThis.sheetSavedBatch[0].connectionId,'default');
+  assert.equal(globalThis.sheetSavedBatch[0].name,'Main table');
+  assert.deepEqual(globalThis.sheetSavedRefreshIds,[]);
   tree=render();effects.splice(0).forEach(fn=>fn());tree=render();
   tree.find(node=>node.type==='button'&&node.props['aria-label']==='sheets.edit').props.onClick();await new Promise(resolve=>setImmediate(resolve));render();effects.splice(0).forEach(fn=>fn());tree=render();
   tree.find(node=>node.type==='button'&&node.props.children==='sheets.columns').props.onClick();await new Promise(resolve=>setImmediate(resolve));tree=render();
@@ -70,10 +108,10 @@ test('reopening a saved connection and reloading headers preserves custom labels
   assert.equal(globalThis.sheetCloseGuard.dirty,true);
   assert.equal(globalThis.sheetCloseGuard.canSave,true);
   assert.equal(await globalThis.sheetCloseGuard.save(),true);
-  assert.equal(globalThis.sheetSaved.fields[0].schedule.time,'15:45');
+  assert.equal(globalThis.sheetSavedBatch[0].config.fields[0].schedule.time,'15:45');
   globalThis.sheetSettingsState={...globalThis.sheetSettingsState,email:null,config:null};
   render();effects.splice(0).forEach(fn=>fn());
   globalThis.sheetSettingsState={...globalThis.sheetSettingsState,email:'new@example.com'};
   assert.ok(!render().some(node=>node.type==='input'&&node.props.placeholder?.includes('spreadsheets')));
- }finally{globalThis.window=oldWindow;for(const key of ['sheetSettingsHooks','sheetSettingsState','sheetSaved','sheetCloseGuard','sheetDisconnectPrompt','sheetDisconnectApproved','sheetDisconnected'])delete globalThis[key];}
+ }finally{globalThis.window=oldWindow;for(const key of ['sheetSettingsHooks','sheetSettingsState','sheetHeaderFixture','sheetSaved','sheetSavedRefresh','sheetSavedBatch','sheetSavedRefreshIds','sheetCloseGuard','sheetDisconnectPrompt','sheetDisconnectApproved','sheetDisconnected'])delete globalThis[key];}
 });

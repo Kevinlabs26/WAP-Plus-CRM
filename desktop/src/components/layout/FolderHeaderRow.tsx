@@ -15,6 +15,7 @@ import {
   GripVertical,
   LayoutGrid,
   MoreHorizontal,
+  Phone,
   Pencil,
   Trash2,
   Upload,
@@ -28,7 +29,8 @@ import EmojiPicker, { EmojiStyle, Theme, type EmojiClickData } from "emoji-picke
 import { useAppStore } from "@/store/appStore";
 import { canMoveChatFolderToParent } from "@/store/chatFolderActions";
 import { useShallow } from "zustand/react/shallow";
-import { sheetConnections, useGoogleSheets } from "@/lib/googleSheets";
+import { DEFAULT_SHEET_ID, refreshSheets, sheetConnections, useGoogleSheets } from "@/lib/googleSheets";
+import { activeFolderSheetIds } from "@/lib/folderSheetBinding";
 
 type FolderHeaderRowProps = {
   folderId: string;
@@ -51,6 +53,7 @@ type FolderHeaderRowProps = {
   onAiPrompt?: () => void;
   onSchedule?: () => void;
   onBroadcast?: () => void;
+  onCallByDelivery?: () => void;
   onToggle: () => void;
   onStartDrag: (event: React.PointerEvent) => void;
   onCreateChild: () => void;
@@ -62,6 +65,7 @@ type FolderHeaderRowProps = {
   onClear: () => void;
   onClearTree: () => void;
   onCopyUnreplied?: () => void;
+  onCopyInactive?: () => void;
   onBatchMove: () => void;
   onBatchDelete: () => void;
   onDelete: () => void;
@@ -89,6 +93,7 @@ export function FolderHeaderRow({
   onAiPrompt,
   onSchedule,
   onBroadcast,
+  onCallByDelivery,
   onToggle,
   onStartDrag,
   onCreateChild,
@@ -100,6 +105,7 @@ export function FolderHeaderRow({
   onClear,
   onClearTree,
   onCopyUnreplied,
+  onCopyInactive,
   onBatchMove,
   onBatchDelete,
   onDelete,
@@ -145,17 +151,18 @@ export function FolderHeaderRow({
   const appearanceColor=color||(isLeadInbox?"#ef4444":defaultColor);
   const appearanceDepth=isLeadInbox?40:colorDepth;
   const sheetBinding=useAppStore(state=>state.settings.chatFolders.find(folder=>folder.id===folderId)?.sheetConnectionId);
-  const sheetNames=useGoogleSheets(useShallow(state=>Object.fromEntries(sheetConnections(state).map(item=>[item.id,item.name]))));
+  const sheetNames=useGoogleSheets(useShallow(state=>Object.fromEntries(sheetConnections(state).map(item=>[item.id,item.name===item.config.tab?item.name:`${item.name} · ${item.config.tab}`]))));
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [submenu, setSubmenu] = useState<{ kind: SubmenuKind; left: number; top: number; focus: boolean } | null>(null);
   const [choosingMoveTarget, setChoosingMoveTarget] = useState(false);
   const replyTrigger = useRef<HTMLButtonElement>(null);
   const importTrigger = useRef<HTMLButtonElement>(null);
   const organizeTrigger = useRef<HTMLButtonElement>(null);
+  const appearanceTrigger = useRef<HTMLButtonElement>(null);
   const moveFolderTrigger = useRef<HTMLButtonElement>(null);
   const moveFolderBackTrigger = useRef<HTMLButtonElement>(null);
   const sheetTrigger = useRef<HTMLButtonElement>(null);
-  const submenuTriggers = { reply: replyTrigger, import: importTrigger, organize: organizeTrigger, appearance: organizeTrigger, sheet:sheetTrigger };
+  const submenuTriggers = { reply: replyTrigger, import: importTrigger, organize: organizeTrigger, appearance: appearanceTrigger, sheet:sheetTrigger };
   const submenuPopup = useRef<HTMLDivElement>(null);
   const menuPopup = useRef<HTMLDivElement>(null);
   const actionsTrigger = useRef<HTMLButtonElement>(null);
@@ -170,7 +177,7 @@ export function FolderHeaderRow({
     setChoosingMoveTarget(false);
     const rect = anchor.getBoundingClientRect();
     const width = kind === "appearance" ? 352 : 224;
-    const height = kind === "appearance" ? 420 : kind === "reply" ? 184 : kind === "organize" && onCopyUnreplied ? 144 : 112;
+    const height = kind === "appearance" ? 420 : kind === "reply" ? 184 : kind === "organize" && (onCopyUnreplied || onCopyInactive) ? 184 : 112;
     setSubmenu({
       kind,
       left: Math.max(8, Math.min(rect.right + 2 + width <= window.innerWidth - 8 ? rect.right + 2 : rect.left - width - 2, window.innerWidth - width - 8)),
@@ -388,6 +395,9 @@ export function FolderHeaderRow({
           {onSchedule && <button type="button" role="menuitem" className={itemClass} onClick={() => run(onSchedule)}>
             <Clock3 className="h-3.5 w-3.5 text-brand" />{t("planQueue.create")}
           </button>}
+          {onCallByDelivery && <button type="button" role="menuitem" className={itemClass} onClick={() => run(onCallByDelivery)}>
+            <Phone className="h-3.5 w-3.5 text-brand" />{t("folderCall.title")}
+          </button>}
           <button
             type="button"
             role="menuitem"
@@ -408,22 +418,11 @@ export function FolderHeaderRow({
             }}>
             <span className="flex-1">{t(kind === "import" ? "folder.importMenu" : "folder.organizeMenu")}</span><ChevronRight className="h-3.5 w-3.5" />
           </button>)}
-          {onAppearanceChange && <button ref={organizeTrigger} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={submenu?.kind === "appearance"}
+          {onAppearanceChange && <button ref={appearanceTrigger} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={submenu?.kind === "appearance"}
             className={itemClass} onMouseEnter={event => openSubmenu("appearance", event.currentTarget)} onClick={event => openSubmenu("appearance", event.currentTarget, true)}>
             <span className="flex-1">文件夹图标和颜色</span><ChevronRight className="h-3.5 w-3.5" />
           </button>}
 
-          {!fixedPosition && <div className="mt-1 border-t border-zinc-800 pt-1">
-          <button
-            type="button"
-            role="menuitem"
-            className={`${itemClass} text-rose-300 hover:bg-rose-500/10`}
-            onClick={() => run(onDelete)}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            {t("folder.delete")}
-          </button>
-          </div>}
         </div>, document.body
       )}
       {menu && submenu && createPortal(
@@ -455,7 +454,7 @@ export function FolderHeaderRow({
           </button>)}
           {submenu.kind === "reply" && <p className="border-t border-zinc-800 px-3 py-2 text-[11px] leading-4 text-zinc-500">{t("autoReplyScope.folderHint")}</p>}
           {submenu.kind==="sheet"&&<>
-            {[["",t("sheets.inherit")],["none",t("sheets.noBinding")],...Object.entries(sheetNames)].map(([id,label])=><button key={id} type="button" role="menuitem" aria-current={(sheetBinding||"")===id?"true":undefined} className={itemClass} onClick={()=>run(()=>{const state=useAppStore.getState();state.updateSettings({chatFolders:state.settings.chatFolders.map(folder=>folder.id===folderId?{...folder,sheetConnectionId:id||undefined}:folder)});})}><Check className={cn("h-3.5 w-3.5 shrink-0 text-brand",(sheetBinding||"")!==id&&"invisible")}/><span className="truncate">{label}</span></button>)}
+            {[["",t("sheets.inherit")],["none",t("sheets.noBinding")],...Object.entries(sheetNames)].map(([id,label])=><button key={id} type="button" role="menuitem" aria-current={(sheetBinding||"")===id?"true":undefined} className={itemClass} onClick={()=>run(()=>{const state=useAppStore.getState();state.updateSettings({chatFolders:state.settings.chatFolders.map(folder=>folder.id===folderId?{...folder,sheetConnectionId:id||undefined}:folder)});const current=useAppStore.getState();if(id!=="none"&&activeFolderSheetIds(current.settings,current.chats.filter(chat=>!chat.isGroup&&!chat.localOnly).map(chat=>chat.id)).has(id||DEFAULT_SHEET_ID))void refreshSheets(true,id||DEFAULT_SHEET_ID);})}><Check className={cn("h-3.5 w-3.5 shrink-0 text-brand",(sheetBinding||"")!==id&&"invisible")}/><span className="truncate">{label}</span></button>)}
           </>}
           {submenu.kind === "import" && <div>
           <button
@@ -502,6 +501,9 @@ export function FolderHeaderRow({
           {onCopyUnreplied && <button type="button" role="menuitem" className={itemClass} onClick={() => run(onCopyUnreplied)}>
             <Copy className="h-3.5 w-3.5 text-zinc-500" />{t("folder.copyUnreplied")}
           </button>}
+          {onCopyInactive && <button type="button" role="menuitem" className={itemClass} onClick={() => run(onCopyInactive)}>
+            <Clock3 className="h-3.5 w-3.5 text-brand" />{t("folder.copyInactive")}
+          </button>}
           <button
             type="button"
             role="menuitem"
@@ -541,6 +543,9 @@ export function FolderHeaderRow({
           <button type="button" role="menuitem" className={`${itemClass} text-rose-300 hover:bg-rose-500/10`} onClick={() => run(onClearTree)}>
             <Trash2 className="h-3.5 w-3.5" />{t("folder.clearTree")}
           </button>
+          {!fixedPosition && <button type="button" role="menuitem" className={`${itemClass} border-t border-zinc-800 text-rose-300 hover:bg-rose-500/10`} onClick={() => run(onDelete)}>
+            <Trash2 className="h-3.5 w-3.5" />{t("folder.delete")}
+          </button>}
           </div>}
           {submenu.kind === "appearance" && <div className="p-2" onMouseEnter={cancelClose}>
             <div className="mb-2 flex items-center justify-between">

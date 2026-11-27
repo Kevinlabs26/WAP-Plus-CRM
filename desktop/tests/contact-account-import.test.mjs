@@ -41,3 +41,42 @@ test('pasted contacts retain edits during status refresh and are saved into the 
   assert.equal(importCalls.find(call=>call[0]==='remote')[1],'b');assert.equal(importState.contacts[0].accountId,'a');
  }finally{for(const cell of cells)cell?.cleanup?.();globalThis.window=originalWindow;}
 });
+
+test('batch paste updates all existing target-account contacts and saves all valid rows to cloud',async()=>{
+ const originalWindow=globalThis.window;globalThis.window=new EventTarget();
+ const cells=[],effects=[];let cursor=0;globalThis.importCalls=[];
+ globalThis.importHooks={
+  state(initial){const i=cursor++;if(!(i in cells))cells[i]=typeof initial==='function'?initial():initial;return [cells[i],value=>cells[i]=typeof value==='function'?value(cells[i]):value];},
+  ref(initial){return cells[cursor++]??={current:initial};},
+  effect(fn,deps){const i=cursor++,old=cells[i];if(old&&deps.every((value,index)=>Object.is(value,old.deps[index])))return;cells[i]={deps,cleanup:old?.cleanup};effects.push(()=>{cells[i].cleanup?.();cells[i].cleanup=fn();});},
+ };
+ globalThis.importState={
+  contacts:[
+   {id:'grp-1',accountId:'b',name:'群成员',phone:'+243972816141'},
+   {id:'named-1',accountId:'b',name:'Keep Existing Name',phone:'+237656136816'},
+  ],
+  settings:{liveBaileysAccountId:'a'},phones:[],selectedPhoneId:null,bridge:{connected:false},
+  importContacts:rows=>{importCalls.push(['local',rows]);return rows.length;},
+  batchUpdateContacts:(ids,patch)=>{importCalls.push(['update',ids,patch]);return ids.length;},
+  pushToast:()=>{},
+ };
+ const props={open:true,onClose:()=>{},accounts:[{id:'a',label:'A'},{id:'b',label:'B'}],accountId:'b',connectedAccountIds:['a','b'],cloudAvailable:true};
+ const render=()=>{let tree;for(let i=0;i<2;i++){cursor=0;tree=BatchSaveContactsModal(props);while(effects.length)effects.shift()();}return nodes(tree);};
+ try{
+  render().find(node=>node.type==='textarea').props.onPaste({preventDefault(){},clipboardData:{getData:()=>'apot Israël\t243972816141\nHélène\t237656136816\ntossarock4\t22959274995'}});
+  const tree=render();
+  await tree.find(node=>node.type==='button'&&text(node).startsWith('batchContacts.save{')).props.onClick();
+  const created=importCalls.find(call=>call[0]==='local')[1];
+  assert.equal(created.length,1);
+  assert.equal(created[0].phone,'+22959274995');
+  const updates=importCalls.filter(call=>call[0]==='update');
+  assert.equal(updates.length,2);
+  assert.deepEqual(updates[0][1],['grp-1']);
+  assert.match(updates[0][2].name,/apot Israël$/);
+  assert.deepEqual(updates[1][1],['named-1']);
+  assert.match(updates[1][2].name,/Hélène$/);
+  const remote=importCalls.find(call=>call[0]==='remote');
+  assert.equal(remote[1],'b');
+  assert.equal(remote[2].length,3);
+ }finally{for(const cell of cells)cell?.cleanup?.();globalThis.window=originalWindow;}
+});

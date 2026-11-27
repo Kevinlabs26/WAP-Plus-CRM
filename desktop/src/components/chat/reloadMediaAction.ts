@@ -101,13 +101,14 @@ export async function reloadMedia({
     return;
   }
   if (!isBaileys) {
+    if (quiet || inferMediaType(sourceMessage) !== "audio") return;
     try {
-      await bridgeInvoke("bridge_send_raw", {
+      const ack = await bridgeInvoke<{ payload?: { status?: string } }>("bridge_send_raw", {
         envelope: {
           id: `prepare-media-${mediaCacheId}-${Date.now()}`,
           type: "wa.prepare_media",
           ts: Date.now(),
-          deviceId: sourceMessage.deviceId || chatAccountId,
+          deviceId: sourceMessage.deviceId ?? null,
           payload: {
             messageId: mediaCacheId,
             jid: sourceMessage.waKey?.remoteJid || "",
@@ -118,9 +119,10 @@ export async function reloadMedia({
           },
         },
       });
+      if (ack.payload?.status !== "ready") throw new Error(translateCurrent("runtime.phoneBridgeUnavailable"));
       pushToast(translateCurrent("runtime.prepareMediaPhone"), "info");
-    } catch {
-      pushToast(translateCurrent("runtime.phoneBridgeUnavailable"), "error");
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : String(error), "error");
     }
     return;
   }

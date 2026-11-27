@@ -198,8 +198,6 @@ export function createBaileysRequestHandler(getD) {
         return json(res, 200, body);
       }
       if (req.method === "POST" && url.pathname === "/pairing-code") {
-        if (!d.socket || !["starting", "qr", "reconnecting"].includes(d.connection))
-          return json(res, 409, { error: "请先启动未登录的 WhatsApp 会话" });
         const body = await requestBody(req);
         const result = await d.requestPairingCode(body.phoneNumber || body.phone);
         return json(res, 200, { ok: true, ...result });
@@ -888,6 +886,11 @@ if (req.method === "POST" && url.pathname === "/restart") {
               },
               jid
             );
+            const cachedContact = d.upsertContact?.(jid, name, phoneE164);
+            if (cachedContact) {
+              cachedContact.displayName = name;
+              cachedContact.updatedAt = Date.now();
+            }
             items.push({ status: "saved" });
           } catch (error) {
             items.push({

@@ -150,3 +150,14 @@ assert.equal(bigData.isReaction === false && bigData.mediaUrl, undefined);
 assert.equal(bigData.isReaction === false && bigData.mediaPending, true);
 
 console.log("parseMessageItem ok");
+
+const groupEvent = resultOf({
+  body: "Membership changed",
+  mediaType: "system",
+  systemKind: "group_participants",
+  systemAction: "add",
+  systemParticipants: ["123456789001@lid", "123456789001@lid", "12345@g.us", "12345"],
+  systemAuthor: "12025550123@s.whatsapp.net",
+});
+assert.deepEqual(groupEvent?.systemParticipants, ["123456789001@lid"]);
+assert.equal(groupEvent?.systemAuthor, "12025550123@s.whatsapp.net");

@@ -42,6 +42,8 @@ pub struct AppSnapshot {
     #[serde(default)]
     pub chat_message_remaps: Vec<ChatMessageRemap>,
     #[serde(default)]
+    pub chat_account_remaps: Vec<ChatAccountRemap>,
+    #[serde(default)]
     pub row_deltas: Option<RowDeltas>,
 }
 
@@ -59,6 +61,14 @@ pub struct ChatMessageRemap {
     pub to_chat_id: String,
     pub contact_id: String,
     pub account_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatAccountRemap {
+    pub chat_id: String,
+    pub from_account_id: String,
+    pub to_account_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -148,7 +158,63 @@ CREATE INDEX IF NOT EXISTS idx_messages_history_facts ON messages(
 );
 "#;
 
-fn migrate(conn: &Connection) -> Result<(), String> {
+const BOOT_OUTBOX_FILTER: &str = r#"
+    json_extract(json, '$.direction') = 'out'
+    AND (
+        COALESCE(json_extract(json, '$.deliveryStatus'), 'sent') IN ('queued', 'pending')
+        OR (COALESCE(json_extract(json, '$.deliveryStatus'), 'sent') = 'failed'
+            AND COALESCE(json_extract(json, '$.nextAttemptAt'), '') != '')
+        OR (COALESCE(json_extract(json, '$.systemKind'), '') = 'ai_proactive'
+            AND COALESCE(json_extract(json, '$.deliveryUncertain'), 0) = 1
+            AND COALESCE(json_extract(json, '$.deliveryStatus'), '') NOT IN ('sent', 'server', 'delivered', 'read', 'played'))
+    )
+"#;
+
+const CHAT_HISTORY_SUMMARY_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS chat_history_summary (
+    chat_id TEXT PRIMARY KEY NOT NULL,
+    dirty INTEGER NOT NULL DEFAULT 1,
+    foreign_owner INTEGER NOT NULL DEFAULT 0,
+    has_outgoing INTEGER NOT NULL DEFAULT 0,
+    has_history INTEGER NOT NULL DEFAULT 0,
+    latest TEXT,
+    first TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_chat_history_dirty ON chat_history_summary(chat_id) WHERE dirty = 1;
+
+CREATE TRIGGER IF NOT EXISTS chat_history_chat_insert AFTER INSERT ON chats BEGIN
+    INSERT OR IGNORE INTO chat_history_summary(chat_id) VALUES (NEW.id);
+END;
+CREATE TRIGGER IF NOT EXISTS chat_history_chat_delete AFTER DELETE ON chats BEGIN
+    DELETE FROM chat_history_summary WHERE chat_id = OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS chat_history_chat_owner AFTER UPDATE OF json ON chats
+WHEN json_extract(OLD.json, '$.accountId') IS NOT json_extract(NEW.json, '$.accountId')
+  OR json_extract(OLD.json, '$.phoneId') IS NOT json_extract(NEW.json, '$.phoneId')
+BEGIN
+    UPDATE chat_history_summary SET dirty = 1 WHERE chat_id = NEW.id AND dirty = 0;
+END;
+CREATE TRIGGER IF NOT EXISTS chat_history_message_insert AFTER INSERT ON messages BEGIN
+    UPDATE chat_history_summary SET dirty = 1 WHERE chat_id = NEW.chat_id AND dirty = 0;
+END;
+CREATE TRIGGER IF NOT EXISTS chat_history_message_delete AFTER DELETE ON messages BEGIN
+    UPDATE chat_history_summary SET dirty = 1 WHERE chat_id = OLD.chat_id AND dirty = 0;
+END;
+CREATE TRIGGER IF NOT EXISTS chat_history_message_update AFTER UPDATE OF json, chat_id, sent_at ON messages
+WHEN OLD.chat_id IS NOT NEW.chat_id OR OLD.sent_at IS NOT NEW.sent_at
+  OR json_extract(OLD.json, '$.direction') IS NOT json_extract(NEW.json, '$.direction')
+  OR json_extract(OLD.json, '$.mediaType') IS NOT json_extract(NEW.json, '$.mediaType')
+  OR json_extract(OLD.json, '$.systemKind') IS NOT json_extract(NEW.json, '$.systemKind')
+  OR json_extract(OLD.json, '$.deliveryStatus') IS NOT json_extract(NEW.json, '$.deliveryStatus')
+  OR json_extract(OLD.json, '$.deliveryUncertain') IS NOT json_extract(NEW.json, '$.deliveryUncertain')
+  OR json_extract(OLD.json, '$.accountId') IS NOT json_extract(NEW.json, '$.accountId')
+  OR json_extract(OLD.json, '$.deviceId') IS NOT json_extract(NEW.json, '$.deviceId')
+BEGIN
+    UPDATE chat_history_summary SET dirty = 1 WHERE chat_id IN (OLD.chat_id, NEW.chat_id) AND dirty = 0;
+END;
+"#;
+
+pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS meta (
@@ -169,6 +235,10 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         CREATE TABLE IF NOT EXISTS chats (
             id TEXT PRIMARY KEY NOT NULL,
             json TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS blocked_chat_remaps (
+            chat_id TEXT PRIMARY KEY NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS messages (
@@ -234,7 +304,9 @@ fn migrate(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_messages_sent_global ON messages(sent_at DESC, id DESC);
          CREATE INDEX IF NOT EXISTS idx_messages_wa_message_id ON messages(json_extract(json, '$.waMessageId'));
-         CREATE INDEX IF NOT EXISTS idx_messages_wa_key_id ON messages(json_extract(json, '$.waKey.id'));",
+         CREATE INDEX IF NOT EXISTS idx_messages_wa_key_id ON messages(json_extract(json, '$.waKey.id'));
+         CREATE INDEX IF NOT EXISTS idx_messages_auto_reply ON messages(chat_id, sent_at, id)
+           WHERE COALESCE(json_extract(json, '$.systemKind'), '') = 'ai_auto_reply';",
     )
     .map_err(|e| e.to_string())?;
 
@@ -254,49 +326,45 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         );
     }
 
-    // v6: 重建派生搜索索引，修复旧版本曾吞掉写入错误而留下的不完整索引。
-    // 若编译的 SQLite 无 FTS5 则跳过，搜索走 LIKE。
-    if schema_version < 6 {
-        let fts_ok = conn
-            .execute_batch(
+    // Keep the search rowid stable even if SQLite rewrites the messages table's implicit rowids.
+    if schema_version < 6 || !fts_available(conn) {
+        let rebuilt = (|| -> rusqlite::Result<()> {
+            let tx = conn.unchecked_transaction()?;
+            tx.execute_batch(
                 r#"
-                CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                DROP TABLE IF EXISTS messages_fts_keys;
+                DROP TABLE IF EXISTS messages_fts;
+                CREATE VIRTUAL TABLE messages_fts USING fts5(
                   id UNINDEXED,
                   body,
                   caption,
                   filename,
                   tokenize = 'unicode61'
                 );
+                CREATE TABLE messages_fts_keys (
+                    rowid INTEGER PRIMARY KEY,
+                    id TEXT NOT NULL UNIQUE
+                );
+                INSERT INTO messages_fts_keys(id) SELECT id FROM messages;
+                INSERT INTO messages_fts(rowid, id, body, caption, filename)
+                SELECT k.rowid, m.id,
+                       coalesce(json_extract(m.json, '$.body'), ''),
+                       coalesce(json_extract(m.json, '$.mediaCaption'), ''),
+                       coalesce(json_extract(m.json, '$.mediaFileName'), '')
+                FROM messages m JOIN messages_fts_keys k ON k.id = m.id;
+                CREATE TRIGGER messages_fts_keys_delete AFTER DELETE ON messages_fts_keys
+                BEGIN
+                    DELETE FROM messages_fts WHERE rowid = OLD.rowid;
+                END;
                 "#,
-            )
-            .is_ok();
-        if fts_ok {
-            // 一次性从现有 messages 重建；失败时移除索引，让搜索明确走 LIKE。
-            let rebuilt = (|| -> rusqlite::Result<()> {
-                let tx = conn.unchecked_transaction()?;
-                tx.execute_batch(
-                    r#"
-                    DELETE FROM messages_fts;
-                    INSERT INTO messages_fts(id, body, caption, filename)
-                    SELECT
-                      id,
-                      coalesce(json_extract(json, '$.body'), ''),
-                      coalesce(json_extract(json, '$.mediaCaption'), ''),
-                      coalesce(json_extract(json, '$.mediaFileName'), '')
-                    FROM messages;
-                    "#,
-                )?;
-                tx.commit()
-            })();
-            if let Err(error) = rebuilt {
-                conn.execute_batch("DROP TABLE IF EXISTS messages_fts;")
-                    .map_err(|e| e.to_string())?;
-                tracing::warn!(%error, "sqlite FTS5 rebuild failed; search keeps LIKE fallback");
-            } else {
-                tracing::info!("sqlite migrate → v6 (messages_fts rebuilt)");
-            }
+            )?;
+            tx.commit()
+        })();
+        if let Err(error) = rebuilt {
+            drop_fts(conn).map_err(|e| e.to_string())?;
+            tracing::warn!(%error, "sqlite FTS5 rebuild failed; search keeps LIKE fallback");
         } else {
-            tracing::warn!("sqlite FTS5 unavailable; search keeps LIKE fallback");
+            tracing::info!("sqlite migrate → v6 (messages_fts rebuilt)");
         }
     }
 
@@ -344,11 +412,23 @@ fn migrate(conn: &Connection) -> Result<(), String> {
     }
 
     conn.execute_batch(HISTORY_FACTS_INDEX_SQL).map_err(|e| e.to_string())?;
-    conn.execute(
-        "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '5')",
-        [],
-    )
-    .map_err(|e| e.to_string())?;
+    conn.execute_batch(&format!(
+        "CREATE INDEX IF NOT EXISTS idx_messages_boot_outbox ON messages(id) WHERE {BOOT_OUTBOX_FILTER};"
+    )).map_err(|e| e.to_string())?;
+    let summary_exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'chat_history_summary')", [], |row| row.get(0)
+    ).map_err(|e| e.to_string())?;
+    if schema_version < 7 || !summary_exists {
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        tx.execute_batch(CHAT_HISTORY_SUMMARY_SCHEMA).map_err(|e| e.to_string())?;
+        tx.execute("INSERT OR IGNORE INTO chat_history_summary(chat_id) SELECT id FROM chats", [])
+            .map_err(|e| e.to_string())?;
+        if schema_version < 7 {
+            tx.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', '7')", [])
+                .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -446,6 +526,26 @@ fn upsert_json_table(
     Ok((written, skipped, deleted))
 }
 
+fn blocked_chat_remap_ids(conn: &Connection) -> Result<HashSet<String>, String> {
+    let mut stmt = conn.prepare("SELECT chat_id FROM blocked_chat_remaps").map_err(|e| e.to_string())?;
+    let ids = stmt.query_map([], |row| row.get(0)).map_err(|e| e.to_string())?;
+    ids.collect::<Result<_, _>>().map_err(|e| e.to_string())
+}
+
+fn chat_has_foreign_owner(
+    conn: &Connection,
+    chat_id: &str,
+    source: &str,
+    target: &str,
+) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM messages WHERE chat_id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.deviceId'), ''), '') NOT IN ('', ?2, ?3))
+             OR EXISTS(SELECT 1 FROM chats WHERE id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.phoneId'), ''), '') NOT IN ('', ?2, ?3))",
+        params![chat_id, source, target],
+        |row| row.get(0),
+    ).map_err(|e| e.to_string())
+}
+
 fn fts_available(conn: &Connection) -> bool {
     conn.query_row(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts' LIMIT 1",
@@ -456,6 +556,10 @@ fn fts_available(conn: &Connection) -> bool {
     .ok()
     .flatten()
     .is_some()
+}
+
+fn drop_fts(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch("DROP TABLE IF EXISTS messages_fts_keys; DROP TABLE IF EXISTS messages_fts;")
 }
 
 /// 查询串是否包含 CJK 字符（中日韩）。FTS5 默认分词对 CJK 子串搜索无效，
@@ -478,15 +582,12 @@ fn upsert_message_fts(
     body: &str,
     caption: &str,
     filename: &str,
-    replace: bool,
 ) -> Result<(), String> {
-    // FTS 的 id 未建索引；新消息和回执更新不能逐条扫描整份搜索历史。
-    if replace {
-        tx.execute("DELETE FROM messages_fts WHERE id = ?1", params![id])
-            .map_err(|e| e.to_string())?;
-    }
+    tx.execute("INSERT OR IGNORE INTO messages_fts_keys(id) VALUES (?1)", [id])
+        .map_err(|e| e.to_string())?;
     tx.execute(
-        "INSERT INTO messages_fts(id, body, caption, filename) VALUES (?1, ?2, ?3, ?4)",
+        "INSERT OR REPLACE INTO messages_fts(rowid, id, body, caption, filename)
+         SELECT rowid, id, ?2, ?3, ?4 FROM messages_fts_keys WHERE id = ?1",
         params![id, body, caption, filename],
     )
     .map_err(|e| e.to_string())?;
@@ -580,6 +681,59 @@ pub fn update_message_acks(
     tx.commit().map_err(|e| e.to_string())
 }
 
+pub fn update_message_edits(conn: &Connection, items: &[Value], account_id: &str) -> Result<(), String> {
+    if account_id.is_empty() {
+        return Err("消息编辑缺少账号".into());
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let mut has_fts = fts_available(&tx);
+    for item in items {
+        let (Some(key), Some(jid), Some(body), Some(from_me), Some(edited_at)) = (
+            item["id"].as_str(), item["remoteJid"].as_str(), item["body"].as_str(),
+            item["fromMe"].as_bool(), item["editedAt"].as_f64(),
+        ) else { continue };
+        if key.is_empty() || jid.is_empty() || body.trim().is_empty() || body.encode_utf16().count() > 20_000 || edited_at < 0.0 {
+            continue;
+        }
+        let rows: Vec<(String, String)> = {
+            let mut stmt = tx.prepare(ACK_MESSAGE_ROWS_SQL).map_err(|e| e.to_string())?;
+            let rows = stmt.query_map(params![key, account_id], |r| Ok((r.get(0)?, read_json_text(r, 1)?)))
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
+        };
+        for (id, json) in rows {
+            let mut message: Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+            if (message["direction"].as_str() == Some("out")) != from_me
+                || message["waKey"]["remoteJid"].as_str().is_some_and(|stored| stored != jid)
+                || message["remoteEditedAt"].as_f64().unwrap_or(0.0) > edited_at {
+                continue;
+            }
+            if message["body"].as_str() != Some(body) {
+                if let Some(fields) = message.as_object_mut() {
+                    fields.remove("translation");
+                    fields.remove("translationLang");
+                }
+            }
+            message["body"] = Value::String(body.to_owned());
+            message["edited"] = Value::Bool(true);
+            message["remoteEditedAt"] = item["editedAt"].clone();
+            let updated = serde_json::to_string(&message).map_err(|e| e.to_string())?;
+            tx.execute("UPDATE messages SET json = ?1, content_hash = ?2 WHERE id = ?3",
+                params![updated, content_hash(&updated), id]).map_err(|e| e.to_string())?;
+            if has_fts {
+                let caption = message["mediaCaption"].as_str().unwrap_or("");
+                let filename = message["mediaFileName"].as_str().unwrap_or("");
+                if let Err(error) = upsert_message_fts(&tx, &id, body, caption, filename) {
+                    drop_fts(&tx).map_err(|e| e.to_string())?;
+                    has_fts = false;
+                    tracing::warn!(%error, "sqlite FTS5 write failed; search keeps LIKE fallback");
+                }
+            }
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())
+}
+
 pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String> {
     // dirty=None → 全量（兼容旧前端 / force 保存）。在事务前拒绝超限，保留原数据。
     let dirty = snap
@@ -601,6 +755,77 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
     let mut total_skipped = 0usize;
     let mut total_deleted = 0usize;
 
+    let mut blocked = blocked_chat_remap_ids(&tx)?;
+    let original_blocked_count = blocked.len();
+    let mut rejected_targets = HashSet::new();
+    if snap.replace_messages {
+        tx.execute("DELETE FROM blocked_chat_remaps", []).map_err(|e| e.to_string())?;
+        blocked.clear();
+    } else {
+        let repairs: HashMap<_, _> = snap.chat_account_remaps.iter()
+            .map(|remap| (remap.chat_id.as_str(), remap)).collect();
+        for remap in &snap.chat_account_remaps {
+            if remap.chat_id.is_empty() || remap.to_account_id.is_empty()
+                || remap.from_account_id == remap.to_account_id
+            {
+                return Err("聊天归属纠偏参数无效".into());
+            }
+            if !blocked.contains(&remap.chat_id)
+                && chat_has_foreign_owner(&tx, &remap.chat_id, &remap.from_account_id, &remap.to_account_id)?
+            {
+                blocked.insert(remap.chat_id.clone());
+            }
+        }
+        for remap in &snap.chat_message_remaps {
+            // A compatible account repair and subsequent merge are one decision.
+            let source_repair = repairs.get(remap.from_chat_id.as_str());
+            let target_repair = repairs.get(remap.to_chat_id.as_str());
+            let account = remap.account_id.as_str();
+            let from = source_repair.map_or(account, |repair| repair.from_account_id.as_str());
+            let target_from = target_repair.map_or(account, |repair| repair.from_account_id.as_str());
+            if !blocked.contains(&remap.from_chat_id)
+                && (source_repair.is_some_and(|repair| repair.to_account_id != account)
+                    || target_repair.is_some_and(|repair| repair.to_account_id != account)
+                    || chat_has_foreign_owner(&tx, &remap.from_chat_id, from, account)?
+                    || chat_has_foreign_owner(&tx, &remap.to_chat_id, target_from, account)?)
+            {
+                blocked.insert(remap.from_chat_id.clone());
+            }
+        }
+        loop {
+            let count = blocked.len();
+            rejected_targets.extend(snap.chat_message_remaps.iter()
+                .filter(|remap| blocked.contains(&remap.from_chat_id))
+                .map(|remap| remap.to_chat_id.as_str()));
+            for remap in &snap.chat_message_remaps {
+                if blocked.contains(&remap.to_chat_id) || rejected_targets.contains(remap.to_chat_id.as_str()) {
+                    blocked.insert(remap.from_chat_id.clone());
+                }
+            }
+            if blocked.len() == count { break; }
+        }
+        if blocked.len() > original_blocked_count {
+            for id in &blocked {
+                tx.execute("INSERT OR IGNORE INTO blocked_chat_remaps(chat_id) VALUES (?1)", params![id])
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    if !snap.replace_messages {
+        for remap in &snap.chat_account_remaps {
+            if blocked.contains(&remap.chat_id) { continue; }
+            tx.execute(
+                "UPDATE messages SET json = json_set(json, '$.accountId', ?3), content_hash = NULL WHERE chat_id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.deviceId'), ''), '') IN ('', ?2)",
+                params![remap.chat_id, remap.from_account_id, remap.to_account_id],
+            ).map_err(|e| e.to_string())?;
+            tx.execute(
+                "UPDATE chats SET json = json_set(json, '$.accountId', ?3) WHERE id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.phoneId'), ''), '') IN ('', ?2)",
+                params![remap.chat_id, remap.from_account_id, remap.to_account_id],
+            ).map_err(|e| e.to_string())?;
+        }
+    }
+
     for remap in &snap.chat_message_remaps {
         let target = snap
             .chats
@@ -620,21 +845,38 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
         {
             return Err("历史迁移会话归属不匹配".into());
         }
-        let wrong_owner: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.deviceId'), ''), '') NOT IN ('', ?2)",
-            params![remap.from_chat_id, remap.account_id], |row| row.get(0),
-        ).map_err(|e| e.to_string())?;
-        let wrong_chat_owner: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM chats WHERE id = ?1 AND COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.phoneId'), ''), '') NOT IN ('', ?2)",
-            params![remap.from_chat_id, remap.account_id], |row| row.get(0),
-        ).map_err(|e| e.to_string())?;
-        if wrong_owner > 0 || wrong_chat_owner > 0 {
-            return Err("已阻止跨账号迁移聊天历史".into());
+        if blocked.contains(&remap.from_chat_id) { continue; }
+        // Check again because another repair or merge can have changed the source.
+        if chat_has_foreign_owner(&tx, &remap.from_chat_id, &remap.account_id, &remap.account_id)? {
+            return Err("聊天归属在同一批迁移中变化".into());
         }
         tx.execute(
             "UPDATE messages SET chat_id = ?2, json = json_set(json, '$.chatId', ?2, '$.contactId', ?3), content_hash = NULL WHERE chat_id = ?1",
             params![remap.from_chat_id, remap.to_chat_id, remap.contact_id],
         ).map_err(|e| e.to_string())?;
+    }
+
+    // Keep original rows even when a stale full snapshot has already removed them in memory.
+    let mut original_chats = HashMap::<String, String>::new();
+    let mut original_contacts = HashMap::<String, String>::new();
+    let mut original_owners = HashMap::<String, String>::new();
+    for id in blocked.iter().map(String::as_str).chain(rejected_targets.iter().copied()) {
+        let original: Option<(String, Option<String>, String)> = tx.query_row(
+            "SELECT json, json_extract(json, '$.contactId'), COALESCE(NULLIF(json_extract(json, '$.accountId'), ''), NULLIF(json_extract(json, '$.phoneId'), ''), '') FROM chats WHERE id = ?1",
+            params![id],
+            |row| Ok((read_json_text(row, 0)?, row.get(1)?, row.get(2)?)),
+        ).optional().map_err(|e| e.to_string())?;
+        if let Some((json, contact_id, owner)) = original {
+            original_chats.insert(id.to_string(), json);
+            if blocked.contains(id) {
+                original_owners.insert(id.to_string(), owner);
+                if let Some(contact_id) = contact_id {
+                    let json = tx.query_row("SELECT json FROM contacts WHERE id = ?1", params![contact_id],
+                        |row| read_json_text(row, 0)).optional().map_err(|e| e.to_string())?;
+                    if let Some(json) = json { original_contacts.insert(contact_id, json); }
+                }
+            }
+        }
     }
 
     // phones / contacts / chats / follow_ups：仅写变更 + 删缺失
@@ -653,16 +895,22 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
 
     if dirty.contacts {
         let mut contact_rows = Vec::with_capacity(snap.contacts.len());
+        let mut contact_deletes = row_deltas.and_then(|delta| delta.contacts.clone());
+        if let Some(ids) = &mut contact_deletes {
+            ids.retain(|id| !original_contacts.contains_key(id));
+        }
         for c in &snap.contacts {
             let id = id_of(c).ok_or("contact missing id")?;
+            original_contacts.remove(&id);
             let j = serde_json::to_string(c).map_err(|e| e.to_string())?;
             contact_rows.push((id, j));
         }
+        contact_rows.extend(original_contacts);
         let (w, s, d) = upsert_json_table(
             &tx,
             "contacts",
             &contact_rows,
-            row_deltas.and_then(|delta| delta.contacts.as_deref()),
+            contact_deletes.as_deref(),
         )?;
         total_written += w;
         total_skipped += s;
@@ -673,14 +921,18 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
         let mut chat_rows = Vec::with_capacity(snap.chats.len());
         for c in &snap.chats {
             let id = id_of(c).ok_or("chat missing id")?;
+            if blocked.contains(&id) || rejected_targets.contains(id.as_str()) { continue; }
             let j = serde_json::to_string(c).map_err(|e| e.to_string())?;
             chat_rows.push((id, j));
         }
+        chat_rows.extend(original_chats);
+        let chat_deletes = row_deltas.and_then(|delta| delta.chats.as_ref())
+            .map(|ids| ids.iter().filter(|id| !blocked.contains(*id) && !rejected_targets.contains(id.as_str())).cloned().collect::<Vec<_>>());
         let (w, s, d) = upsert_json_table(
             &tx,
             "chats",
             &chat_rows,
-            row_deltas.and_then(|delta| delta.chats.as_deref()),
+            chat_deletes.as_deref(),
         )?;
         total_written += w;
         total_skipped += s;
@@ -691,9 +943,23 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
     // 用 content_hash 在 SQL 侧判断未变，禁止全表 SELECT json。
     if dirty.messages {
         let mut has_fts = fts_available(&tx);
+        let mut protected_message = if blocked.is_empty() { None } else {
+            Some(tx.prepare_cached(
+                "SELECT EXISTS(SELECT 1 FROM messages m JOIN blocked_chat_remaps b ON b.chat_id = m.chat_id WHERE m.id = ?1)"
+            ).map_err(|e| e.to_string())?)
+        };
         for m in &snap.messages {
             let id = id_of(m).ok_or("message missing id")?;
             let chat_id = m.get("chatId").and_then(|x| x.as_str()).unwrap_or("");
+            if let Some(stmt) = &mut protected_message {
+                let owner = m["accountId"].as_str().filter(|id| !id.is_empty())
+                    .or_else(|| m["deviceId"].as_str()).unwrap_or("");
+                if (blocked.contains(chat_id) && (owner.is_empty() || original_owners.get(chat_id).map(String::as_str) != Some(owner)))
+                    || stmt.query_row(params![id], |row| row.get::<_, bool>(0)).map_err(|e| e.to_string())?
+                {
+                    continue;
+                }
+            }
             let sent_at = m.get("sentAt").and_then(|x| x.as_str()).unwrap_or("");
             let mut message = m.clone();
             if !snap.replace_messages && m.get("direction").and_then(Value::as_str) == Some("out") {
@@ -756,9 +1022,8 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
                         body,
                         caption,
                         filename,
-                        previous_search.is_some(),
                     ) {
-                        tx.execute_batch("DROP TABLE messages_fts;")
+                        drop_fts(&tx)
                             .map_err(|e| e.to_string())?;
                         has_fts = false;
                         tracing::warn!(%error, "sqlite FTS5 write failed; search keeps LIKE fallback");
@@ -769,11 +1034,18 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
             }
         }
         for id in &snap.deleted_message_ids {
+            if let Some(stmt) = &mut protected_message {
+                if stmt.query_row(params![id], |row| row.get::<_, bool>(0)).map_err(|e| e.to_string())? { continue; }
+            }
             total_deleted += tx
                 .execute("DELETE FROM messages WHERE id = ?1", params![id])
                 .map_err(|e| e.to_string())?;
-            if fts_available(&tx) {
-                let _ = tx.execute("DELETE FROM messages_fts WHERE id = ?1", params![id]);
+            if has_fts {
+                if let Err(error) = tx.execute("DELETE FROM messages_fts_keys WHERE id = ?1", params![id]) {
+                    drop_fts(&tx).map_err(|e| e.to_string())?;
+                    has_fts = false;
+                    tracing::warn!(%error, "sqlite FTS5 delete failed; search keeps LIKE fallback");
+                }
             }
         }
         if snap.replace_messages {
@@ -790,42 +1062,46 @@ pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String
                     .map_err(|e| e.to_string())?;
                 }
             }
-            total_deleted += tx
+            let removed = tx
                 .execute(
                     "DELETE FROM messages WHERE id NOT IN (SELECT id FROM _keep_messages)",
                     [],
                 )
                 .map_err(|e| e.to_string())?;
-            if fts_available(&tx) {
-                let _ = tx.execute(
-                    "DELETE FROM messages_fts WHERE id NOT IN (SELECT id FROM messages)",
+            total_deleted += removed;
+            if has_fts && removed > 0 {
+                tx.execute(
+                    "DELETE FROM messages_fts_keys WHERE id NOT IN (SELECT id FROM messages)",
                     [],
-                );
+                ).map_err(|e| e.to_string())?;
             }
         }
         // 已删除的会话：清掉其磁盘消息（chats 表已按快照同步）
         // 仅当 chats 也在本轮写入时做，避免 dirty.messages-only 误删
         if dirty.chats && row_deltas.and_then(|delta| delta.chats.as_ref()).is_none() {
-            total_deleted += tx
+            let removed = tx
             .execute(
-                "DELETE FROM messages WHERE chat_id IS NOT NULL AND chat_id != '' AND chat_id NOT IN (SELECT id FROM chats)",
+                "DELETE FROM messages WHERE chat_id IS NOT NULL AND chat_id != '' AND chat_id NOT IN (SELECT id FROM chats) AND chat_id NOT IN (SELECT chat_id FROM blocked_chat_remaps)",
                 [],
             )
             .map_err(|e| e.to_string())?;
-            if fts_available(&tx) {
-                let _ = tx.execute(
-                    "DELETE FROM messages_fts WHERE id NOT IN (SELECT id FROM messages)",
+            total_deleted += removed;
+            if has_fts && removed > 0 {
+                tx.execute(
+                    "DELETE FROM messages_fts_keys WHERE id NOT IN (SELECT id FROM messages)",
                     [],
-                );
+                ).map_err(|e| e.to_string())?;
             }
         }
     } // end dirty.messages
 
     if dirty.chats {
         if let Some(ids) = row_deltas.and_then(|delta| delta.chats.as_ref()) {
+            let has_fts = fts_available(&tx);
             for id in ids {
-                if fts_available(&tx) {
-                    tx.execute("DELETE FROM messages_fts WHERE id IN (SELECT id FROM messages WHERE chat_id = ?1)", params![id]).map_err(|e| e.to_string())?;
+                if blocked.contains(id) || rejected_targets.contains(id.as_str()) { continue; }
+                if has_fts {
+                    tx.execute("DELETE FROM messages_fts_keys WHERE id IN (SELECT id FROM messages WHERE chat_id = ?1)", params![id]).map_err(|e| e.to_string())?;
                 }
                 total_deleted += tx
                     .execute("DELETE FROM messages WHERE chat_id = ?1", params![id])
@@ -1073,6 +1349,22 @@ pub fn load_messages_page(
     Ok(out)
 }
 
+pub fn latest_outgoing_message(conn: &Connection, chat_id: &str) -> Result<Option<Value>, String> {
+    let json = conn
+        .query_row(
+            "SELECT json FROM messages WHERE chat_id = ?1
+             AND json_extract(json, '$.direction') = 'out'
+             AND COALESCE(json_extract(json, '$.mediaType'), '') <> 'system'
+             ORDER BY julianday(sent_at) DESC, id DESC LIMIT 1",
+            [chat_id],
+            |row| read_json_text(row, 0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    json.map(|value| serde_json::from_str(&value).map_err(|error| error.to_string()))
+        .transpose()
+}
+
 pub fn count_messages_for_chat(conn: &Connection, chat_id: &str) -> Result<i64, String> {
     conn.query_row(
         "SELECT COUNT(*) FROM messages WHERE chat_id = ?1",
@@ -1114,6 +1406,35 @@ pub fn chats_with_inbound(conn: &Connection, chat_ids: &[String]) -> Result<Vec<
         }
     }
     Ok(replied)
+}
+
+pub fn latest_conversation_by_chat(conn: &Connection, chat_ids: &[String]) -> Result<Vec<(String, String)>, String> {
+    if chat_ids.len() > 50_000 || chat_ids.iter().any(|id| id.is_empty() || id.len() > 1000)
+        || chat_ids.iter().map(String::len).sum::<usize>() > 8 * 1024 * 1024 {
+        return Err("Invalid history query size".into());
+    }
+    let mut stmt = conn.prepare(r#"
+        SELECT (
+            SELECT m.sent_at FROM messages m WHERE m.chat_id = c.id
+              AND julianday(m.sent_at) IS NOT NULL AND COALESCE(json_extract(m.json, '$.mediaType'), '') != 'system'
+              AND ((json_extract(m.json, '$.direction') = 'in' AND COALESCE(json_extract(m.json, '$.systemKind'), '') = '')
+                OR (json_extract(m.json, '$.direction') = 'out'
+                  AND COALESCE(json_extract(m.json, '$.deliveryStatus'), '') IN ('','sent','server','delivered','read','played')
+                  AND COALESCE(json_extract(m.json, '$.deliveryUncertain'), 0) = 0))
+              AND (COALESCE(NULLIF(json_extract(m.json, '$.accountId'), ''), NULLIF(json_extract(m.json, '$.deviceId'), ''), '') = ''
+                OR COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''), NULLIF(json_extract(c.json, '$.phoneId'), ''), '') = ''
+                OR COALESCE(NULLIF(json_extract(m.json, '$.accountId'), ''), NULLIF(json_extract(m.json, '$.deviceId'), ''), '') =
+                   COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''), NULLIF(json_extract(c.json, '$.phoneId'), ''), ''))
+            ORDER BY julianday(m.sent_at) DESC LIMIT 1
+        ) FROM chats c WHERE c.id = ?1
+    "#).map_err(|e| e.to_string())?;
+    let mut latest = Vec::new();
+    for id in chat_ids.iter().collect::<HashSet<_>>() {
+        if let Some(at) = stmt.query_row(params![id], |row| row.get::<_, Option<String>>(0)).map_err(|e| e.to_string())? {
+            latest.push((id.clone(), at));
+        }
+    }
+    Ok(latest)
 }
 
 /// 全局消息搜索（磁盘冷历史 + 已落盘近期）。pattern 为小写子串。
@@ -1238,54 +1559,72 @@ fn load_table(conn: &Connection, table: &str) -> Result<Vec<Value>, String> {
     Ok(out)
 }
 
-fn load_chats_with_history(conn: &Connection) -> Result<Vec<Value>, String> {
-    let mut chats = load_table(conn, "chats")?;
-    let mut stmt = conn
-        .prepare(
+pub fn refresh_chat_history_batch(conn: &Connection) -> Result<bool, String> {
+    const BATCH: usize = 32;
+    let dirty = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM chat_history_summary WHERE dirty = 1)", [], |row| row.get::<_, bool>(0),
+    ).map_err(|e| e.to_string())?;
+    if !dirty { return Ok(false); }
+    conn.prepare_cached(
             r#"
-            WITH evidence AS (
-              SELECT m.chat_id, m.sent_at,
+            WITH pending AS MATERIALIZED (
+              SELECT s.chat_id,
+                     COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''),
+                              NULLIF(json_extract(c.json, '$.phoneId'), ''), '') AS owner
+              FROM chat_history_summary s CROSS JOIN chats c ON c.id = s.chat_id
+              WHERE s.dirty = 1 ORDER BY s.chat_id LIMIT ?1
+            ), evidence AS (
+              SELECT p.chat_id, p.owner, m.sent_at,
                      json_extract(m.json, '$.direction') AS direction,
+                     COALESCE(json_extract(m.json, '$.mediaType'), '') AS media,
                      COALESCE(json_extract(m.json, '$.systemKind'), '') AS kind,
                      COALESCE(json_extract(m.json, '$.deliveryStatus'), 'sent') AS delivery,
                      COALESCE(json_extract(m.json, '$.deliveryUncertain'), 0) AS uncertain,
                      COALESCE(NULLIF(json_extract(m.json, '$.accountId'), ''),
-                              NULLIF(json_extract(m.json, '$.deviceId'), ''), '') AS sender,
-                     COALESCE(NULLIF(json_extract(c.json, '$.accountId'), ''),
-                              NULLIF(json_extract(c.json, '$.phoneId'), ''), '') AS owner
-              FROM messages m INDEXED BY idx_messages_history_facts JOIN chats c ON c.id = m.chat_id
-              WHERE COALESCE(m.chat_id, '') != ''
-                AND COALESCE(json_extract(m.json, '$.mediaType'), '') != 'system'
+                              NULLIF(json_extract(m.json, '$.deviceId'), ''), '') AS sender
+              FROM pending p LEFT JOIN messages m INDEXED BY idx_messages_history_facts ON m.chat_id = p.chat_id
+            ), activity AS (
+              SELECT *, owner != '' AND sender NOT IN ('', owner) AS foreign_owner,
+                     chat_id != '' AND media != 'system' AND direction IN ('in', 'out')
+                       AND (direction = 'in' OR delivery NOT IN ('pending', 'queued', 'failed')) AS eligible
+              FROM evidence
             )
-            SELECT chat_id,
-                   MAX(CASE WHEN kind = '' AND direction = 'out'
-                             AND (sender = '' OR owner = '' OR sender = owner) THEN 1 ELSE 0 END),
-                   MAX(CASE WHEN kind = ''
-                             AND (sender = '' OR owner = '' OR sender = owner) THEN 1 ELSE 0 END),
-                   MAX(CASE WHEN direction = 'out' AND uncertain = 0
+            INSERT OR REPLACE INTO chat_history_summary(chat_id, dirty, foreign_owner, has_outgoing, has_history, latest, first)
+            SELECT chat_id, 0, MAX(foreign_owner),
+                   MAX(CASE WHEN eligible AND NOT foreign_owner AND kind = '' AND direction = 'out' THEN 1 ELSE 0 END),
+                   MAX(CASE WHEN eligible AND NOT foreign_owner AND kind = '' THEN 1 ELSE 0 END),
+                   MAX(CASE WHEN eligible AND direction = 'out' AND uncertain = 0
                              AND delivery IN ('sent', 'server', 'delivered', 'read', 'played')
                             THEN strftime('%Y-%m-%dT%H:%M:%fZ', sent_at) || '|' ||
                                  CASE WHEN sender != '' THEN sender ELSE owner END END),
-                   MIN(CASE WHEN (sender = '' OR owner = '' OR sender = owner)
+                   MIN(CASE WHEN eligible AND NOT foreign_owner
                              AND (kind = '' OR direction = 'out')
                              AND (direction = 'in' OR (uncertain = 0 AND delivery != 'local'))
                             THEN strftime('%Y-%m-%dT%H:%M:%fZ', sent_at) ||
                                  CASE WHEN direction = 'out' THEN '|0' ELSE '|1' END END)
-            FROM evidence
-            WHERE direction IN ('in', 'out')
-              AND (direction = 'in' OR delivery NOT IN ('pending', 'queued', 'failed'))
+            FROM activity
             GROUP BY chat_id
             "#,
-        )
-        .map_err(|e| e.to_string())?;
+    ).and_then(|mut statement| statement.execute([BATCH as i64]))
+        .map(|updated| updated == BATCH).map_err(|e| e.to_string())
+}
+
+fn load_chats_with_history(conn: &Connection) -> Result<Vec<Value>, String> {
+    while refresh_chat_history_batch(conn)? {}
+    let mut chats = load_table(conn, "chats")?;
+    let mut blocked = blocked_chat_remap_ids(conn)?;
+    let mut stmt = conn.prepare(
+        "SELECT chat_id, foreign_owner, has_outgoing, has_history, latest, first FROM chat_history_summary"
+    ).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, bool>(1)?,
                 row.get::<_, bool>(2)?,
-                row.get::<_, Option<String>>(3)?,
+                row.get::<_, bool>(3)?,
                 row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
             ))
         })
         .map_err(|e| e.to_string())?;
@@ -1294,7 +1633,10 @@ fn load_chats_with_history(conn: &Connection) -> Result<Vec<Value>, String> {
     let mut last_successful = HashMap::new();
     let mut first_conversation = HashMap::new();
     for row in rows {
-        let (id, outgoing, active, latest, first) = row.map_err(|e| e.to_string())?;
+        let (id, foreign_owner, outgoing, active, latest, first) = row.map_err(|e| e.to_string())?;
+        if foreign_owner {
+            blocked.insert(id.clone());
+        }
         if outgoing {
             outgoing_chat_ids.insert(id.clone());
         }
@@ -1312,6 +1654,11 @@ fn load_chats_with_history(conn: &Connection) -> Result<Vec<Value>, String> {
         let Some(object) = chat.as_object_mut() else {
             continue;
         };
+        if object.get("id").and_then(Value::as_str).is_some_and(|id| blocked.contains(id)) {
+            object.insert("historyRemapBlocked".into(), Value::Bool(true));
+        } else {
+            object.remove("historyRemapBlocked");
+        }
         let has_outgoing = object
             .get("id")
             .and_then(Value::as_str)
@@ -1349,7 +1696,7 @@ fn load_chats_with_history(conn: &Connection) -> Result<Vec<Value>, String> {
     Ok(chats)
 }
 
-/// 最近历史 + 未完成出站/定时任务引用的消息；普通冷历史仍按需分页。
+/// 最近历史和待执行任务需要的消息；普通冷历史仍按需分页。
 const BOOT_MESSAGES_CAP: i64 = 2_000;
 const BOOT_ACTIVITIES_CAP: i64 = 2_000;
 
@@ -1361,8 +1708,37 @@ fn load_messages_boot(conn: &Connection) -> Result<Vec<Value>, String> {
         return load_table(conn, "messages");
     }
     let mut stmt = conn
-        .prepare(
+        .prepare(&format!(
             r#"
+            WITH follow_up_chats AS MATERIALIZED (
+                SELECT reply.chat_id,
+                       COALESCE(NULLIF(json_extract(reply.json, '$.aiAutoFollowUpRootId'), ''),
+                                NULLIF(json_extract(reply.json, '$.aiReplyInboundId'), '')) AS root_id
+                FROM settings AS config
+                CROSS JOIN messages AS reply INDEXED BY idx_messages_auto_reply
+                WHERE config.key = 'app'
+                  AND json_extract(config.value, '$.aiAutoFollowUpEnabled') = 1
+                  AND COALESCE(json_extract(reply.json, '$.systemKind'), '') = 'ai_auto_reply'
+                  AND json_extract(reply.json, '$.direction') = 'out'
+                  AND COALESCE(json_extract(reply.json, '$.aiAutoFollowUpCancelled'), 0) = 0
+                  AND (
+                      (json_extract(reply.json, '$.deliveryStatus') IN ('sent', 'server', 'delivered', 'read', 'played')
+                       AND json_extract(reply.json, '$.aiAutoFollowUpSentAt') >= json_extract(config.value, '$.aiAutoFollowUpEnabledAt')
+                       AND EXISTS (
+                           SELECT 1 FROM json_each(config.value, '$.aiAutoFollowUpDelaysMinutes') AS delay
+                           WHERE delay.key = COALESCE(json_extract(reply.json, '$.aiAutoFollowUpStep'), 0) AND delay.value > 0
+                       ))
+                      OR (json_extract(reply.json, '$.aiAutoFollowUpStep') > 0 AND (
+                          json_extract(reply.json, '$.deliveryStatus') IN ('queued', 'pending')
+                          OR (json_extract(reply.json, '$.deliveryStatus') = 'failed'
+                              AND COALESCE(json_extract(reply.json, '$.nextAttemptAt'), '') != '')
+                      ))
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM messages AS newer WHERE newer.chat_id = reply.chat_id
+                        AND (newer.sent_at, newer.id) > (reply.sent_at, reply.id)
+                  )
+            )
             SELECT json FROM messages
             WHERE id IN (
                 SELECT id FROM (
@@ -1370,21 +1746,46 @@ fn load_messages_boot(conn: &Connection) -> Result<Vec<Value>, String> {
                     ORDER BY sent_at DESC, id DESC LIMIT ?1
                 )
                 UNION
-                SELECT id FROM messages INDEXED BY idx_messages_history_facts
-                WHERE json_extract(json, '$.direction') = 'out'
-                AND (
-                    COALESCE(json_extract(json, '$.deliveryStatus'), 'sent') IN ('queued', 'pending')
-                    OR (COALESCE(json_extract(json, '$.deliveryStatus'), 'sent') = 'failed'
-                        AND COALESCE(json_extract(json, '$.nextAttemptAt'), '') != '')
-                )
+                SELECT id FROM messages INDEXED BY idx_messages_boot_outbox WHERE {BOOT_OUTBOX_FILTER}
                 UNION
                 SELECT json_extract(task.value, '$.messageId')
                 FROM settings, json_each(settings.value, '$.scheduledMessages') AS task
                 WHERE settings.key = 'app' AND json_extract(task.value, '$.status') = 'queued'
+                UNION
+                SELECT json_extract(item.value, '$.messageId')
+                FROM settings, json_each(settings.value, '$.__broadcastCampaigns') AS campaign,
+                     json_each(campaign.value, '$.items') AS item
+                WHERE settings.key = 'app' AND json_extract(item.value, '$.status') != 'sent'
+                UNION
+                SELECT json_extract(item.value, '$.messageId')
+                FROM settings, json_each(settings.value, '$.scheduledPlans') AS plan,
+                     json_each(plan.value, '$.items') AS item
+                WHERE settings.key = 'app' AND json_extract(item.value, '$.status') IN ('sending', 'failed', 'unknown')
+                UNION
+                SELECT chain.id FROM follow_up_chats AS active
+                JOIN messages AS chain ON chain.chat_id = active.chat_id
+                WHERE chain.id = active.root_id OR (
+                    COALESCE(json_extract(chain.json, '$.systemKind'), '') = 'ai_auto_reply'
+                    AND COALESCE(NULLIF(json_extract(chain.json, '$.aiAutoFollowUpRootId'), ''),
+                                 NULLIF(json_extract(chain.json, '$.aiReplyInboundId'), '')) = active.root_id
+                )
+                UNION
+                SELECT recent.id FROM follow_up_chats AS active
+                CROSS JOIN messages AS recent ON recent.id IN (
+                    SELECT tail.id FROM messages AS tail WHERE tail.chat_id = active.chat_id
+                    ORDER BY tail.sent_at DESC, tail.id DESC LIMIT 361
+                )
+                WHERE active.root_id IS NOT NULL
+                UNION
+                SELECT (
+                    SELECT inbound.id FROM messages AS inbound INDEXED BY idx_messages_history_facts
+                    WHERE inbound.chat_id = active.chat_id AND json_extract(inbound.json, '$.direction') = 'in'
+                    ORDER BY inbound.sent_at DESC, inbound.id DESC LIMIT 1
+                ) FROM follow_up_chats AS active WHERE active.root_id IS NOT NULL
             )
             ORDER BY COALESCE(sent_at, '') DESC, id DESC
             "#,
-        )
+        ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![BOOT_MESSAGES_CAP], |row| {
@@ -1492,6 +1893,7 @@ pub fn load_snapshot(conn: &Connection) -> Result<Option<AppSnapshot>, String> {
         deleted_message_ids: Vec::new(),
         replace_messages: false,
         chat_message_remaps: Vec::new(),
+        chat_account_remaps: Vec::new(),
         row_deltas: None,
     }))
 }
@@ -1536,7 +1938,7 @@ pub fn clear_chat_messages(conn: &Connection, chat_id: &str) -> Result<(), Strin
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     if fts_available(&tx) {
         tx.execute(
-            "DELETE FROM messages_fts WHERE id IN (SELECT id FROM messages WHERE chat_id = ?1)",
+            "DELETE FROM messages_fts_keys WHERE id IN (SELECT id FROM messages WHERE chat_id = ?1)",
             params![chat_id],
         )
         .map_err(|e| e.to_string())?;
@@ -1564,7 +1966,7 @@ pub fn clear_remote_messages_before(
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     if fts_available(&tx) {
         tx.execute(
-            "DELETE FROM messages_fts WHERE id IN (
+            "DELETE FROM messages_fts_keys WHERE id IN (
                 SELECT id FROM messages
                 WHERE (
                     json_extract(json, '$.waKey.remoteJid') = ?1
@@ -1608,10 +2010,11 @@ pub fn delete_messages_by_keys(
 ) -> Result<(), String> {
     let account_id = account_id.unwrap_or("");
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let has_fts = fts_available(&tx);
     for key in keys.iter().filter(|key| !key.is_empty()) {
-        if fts_available(&tx) {
+        if has_fts {
             tx.execute(
-                "DELETE FROM messages_fts WHERE id IN (
+                "DELETE FROM messages_fts_keys WHERE id IN (
                     SELECT id FROM messages
                     WHERE (
                         id = ?1
@@ -1655,11 +2058,11 @@ pub fn delete_messages_by_keys(
 pub fn clear_all(conn: &Connection) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     if fts_available(&tx) {
-        tx.execute("DELETE FROM messages_fts", [])
+        tx.execute("DELETE FROM messages_fts_keys", [])
             .map_err(|e| e.to_string())?;
     }
     tx.execute_batch(
-        "DELETE FROM phones; DELETE FROM contacts; DELETE FROM chats; DELETE FROM messages; DELETE FROM follow_ups; DELETE FROM activities; DELETE FROM settings; DELETE FROM meta WHERE key = 'last_saved_at';",
+        "DELETE FROM phones; DELETE FROM contacts; DELETE FROM chats; DELETE FROM messages; DELETE FROM blocked_chat_remaps; DELETE FROM follow_ups; DELETE FROM activities; DELETE FROM settings; DELETE FROM meta WHERE key = 'last_saved_at';",
     ).map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
 }
@@ -1772,6 +2175,38 @@ mod tests {
     }
 
     #[test]
+    fn latest_outgoing_receipt_ignores_newer_inbound_and_system_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mut messages = vec![
+            serde_json::json!({"id":"older-double", "chatId":"cold", "direction":"out", "deliveryStatus":"delivered", "sentAt":"2025-01-02T00:00:00Z"}),
+            serde_json::json!({"id":"last-single", "chatId":"cold", "direction":"out", "deliveryStatus":"server", "sentAt":"2025-01-02T00:00:00.500Z"}),
+            serde_json::json!({"id":"system", "chatId":"cold", "direction":"out", "mediaType":"system", "sentAt":"2026-01-01T00:00:00.000Z"}),
+        ];
+        messages.extend((0..2002).map(|i| serde_json::json!({
+            "id": format!("incoming-{i}"), "chatId": "cold", "direction": "in", "sentAt": "2026-11-01T00:00:00.000Z"
+        })));
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: vec![serde_json::json!({"id":"cold"})],
+                messages,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(load_messages_boot(&conn)
+            .unwrap()
+            .iter()
+            .all(|message| message["id"] != "last-single"));
+        assert_eq!(
+            latest_outgoing_message(&conn, "cold").unwrap().unwrap()["id"],
+            "last-single"
+        );
+        assert!(latest_outgoing_message(&conn, "missing").unwrap().is_none());
+    }
+
+    #[test]
     fn inbound_lookup_checks_replies_older_than_the_boot_message_window() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
@@ -1796,6 +2231,24 @@ mod tests {
             chats_with_inbound(&conn, &["cold".into()]).unwrap(),
             ["cold"]
         );
+    }
+
+    #[test]
+    fn latest_conversation_ignores_failed_uncertain_and_other_account_messages() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        save_snapshot(&conn, &AppSnapshot {
+            chats: vec![serde_json::json!({"id":"chat","accountId":"a"})],
+            messages: vec![
+                serde_json::json!({"id":"ok","chatId":"chat","direction":"in","accountId":"a","sentAt":"2026-11-01T00:00:00Z"}),
+                serde_json::json!({"id":"failed","chatId":"chat","direction":"out","deliveryStatus":"failed","sentAt":"2026-11-02T00:00:00Z"}),
+                serde_json::json!({"id":"unknown","chatId":"chat","direction":"out","deliveryStatus":"sent","deliveryUncertain":true,"sentAt":"2026-11-03T00:00:00Z"}),
+                serde_json::json!({"id":"other","chatId":"chat","direction":"in","accountId":"b","sentAt":"2026-11-04T00:00:00Z"}),
+            ],
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(latest_conversation_by_chat(&conn, &["chat".into()]).unwrap(),
+            vec![("chat".into(), "2026-11-01T00:00:00Z".into())]);
     }
 
     #[test]
@@ -2192,6 +2645,8 @@ mod tests {
             ("old-retry", "failed", "2020-01-01"),
             ("old-hard-failure", "failed", ""),
             ("old-task-result", "sent", ""),
+            ("old-broadcast-receipt", "delivered", ""),
+            ("old-plan-receipt", "read", ""),
             ("old-history", "sent", ""),
         ] {
             messages.push(json!({"id":id, "chatId":"chat", "body":"hello",
@@ -2210,14 +2665,16 @@ mod tests {
         conn.execute(
             "INSERT INTO settings(key, value) VALUES ('app', ?1)",
             params![
-                json!({"scheduledMessages":[{"status":"queued", "messageId":"old-task-result"}]})
+                json!({"scheduledMessages":[{"status":"queued", "messageId":"old-task-result"}],
+                    "__broadcastCampaigns":[{"items":[{"status":"failed","messageId":"old-broadcast-receipt"}]}],
+                    "scheduledPlans":[{"items":[{"status":"unknown","messageId":"old-plan-receipt"}]}]})
                     .to_string()
             ],
         )
         .unwrap();
         let loaded = load_messages_boot(&conn).unwrap();
-        assert_eq!(loaded.len(), 2004);
-        for id in ["old-queued", "old-pending", "old-retry", "old-task-result"] {
+        assert_eq!(loaded.len(), 2006);
+        for id in ["old-queued", "old-pending", "old-retry", "old-task-result", "old-broadcast-receipt", "old-plan-receipt"] {
             assert!(
                 loaded.iter().any(|message| message["id"] == id),
                 "missing {id}"
@@ -2228,6 +2685,41 @@ mod tests {
                 !loaded.iter().any(|message| message["id"] == id),
                 "unexpected {id}"
             );
+        }
+    }
+
+    #[test]
+    fn boot_keeps_cold_follow_up_context_and_uncertain_outreach() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let mut messages: Vec<_> = (0..2005)
+            .map(|i| message(&format!("recent-{i:04}"), "busy-account", "peer"))
+            .collect();
+        for (chat, status) in [("active", "read"), ("outbox", "queued"), ("closed", "read")] {
+            let root = format!("{chat}-root");
+            messages.extend([
+                json!({"id":root,"chatId":chat,"direction":"in","sentAt":"2026-01-01T09:00:00Z"}),
+                json!({"id":format!("{chat}-first"),"chatId":chat,"direction":"out","sentAt":"2026-01-01T10:00:00Z","systemKind":"ai_auto_reply","deliveryStatus":"delivered","aiReplyInboundId":root,"aiAutoFollowUpSentAt":11}),
+                json!({"id":format!("{chat}-next"),"chatId":chat,"direction":"out","sentAt":"2026-01-02T09:00:00Z","systemKind":"ai_auto_reply","deliveryStatus":status,"aiAutoFollowUpRootId":root,"aiAutoFollowUpStep":1,"aiAutoFollowUpSentAt":12}),
+            ]);
+        }
+        messages.extend([
+            json!({"id":"closed-replied","chatId":"closed","direction":"in","sentAt":"2026-01-03T09:00:00Z"}),
+            json!({"id":"old-unknown","chatId":"other-wa-account","direction":"out","sentAt":"2026-01-01T09:00:00Z","systemKind":"ai_proactive","deliveryStatus":"failed","deliveryUncertain":true}),
+            json!({"id":"old-resolved","chatId":"other-wa-account","direction":"out","sentAt":"2026-01-01T10:00:00Z","systemKind":"ai_proactive","deliveryStatus":"delivered","deliveryUncertain":true}),
+        ]);
+        save_snapshot(&conn, &AppSnapshot { messages, dirty: Some(message_dirty()), ..Default::default() }).unwrap();
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES ('app', ?1)",
+            params![json!({"aiAutoFollowUpEnabled":true,"aiAutoFollowUpEnabledAt":1,"aiAutoFollowUpDelaysMinutes":[60,120]}).to_string()],
+        ).unwrap();
+
+        let loaded = load_snapshot(&conn).unwrap().unwrap().messages;
+        for id in ["active-root", "active-first", "active-next", "outbox-root", "outbox-first", "outbox-next", "old-unknown"] {
+            assert!(loaded.iter().any(|message| message["id"] == id), "missing {id}");
+        }
+        for id in ["closed-root", "closed-next", "old-resolved", "recent-0000"] {
+            assert!(!loaded.iter().any(|message| message["id"] == id), "unexpected {id}");
         }
     }
 
@@ -2650,6 +3142,93 @@ mod tests {
     }
 
     #[test]
+    fn history_summaries_seed_legacy_chats_and_refresh_one_batch_at_a_time() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        save_snapshot(&conn, &AppSnapshot {
+            chats: (0..65).map(|i| json!({"id": format!("chat-{i:02}"), "accountId":"wa-a"})).collect(),
+            messages: vec![json!({"id":"reply", "chatId":"chat-32", "direction":"in", "sentAt":"2026-11-01T10:00:00Z"})],
+            ..Default::default()
+        }).unwrap();
+        conn.execute_batch("DELETE FROM chat_history_summary; UPDATE meta SET value = '6' WHERE key = 'schema_version';").unwrap();
+        migrate(&conn).unwrap();
+        let pending = || conn.query_row("SELECT COUNT(*) FROM chat_history_summary WHERE dirty = 1", [], |r| r.get::<_, i64>(0)).unwrap();
+        assert_eq!(pending(), 65);
+        assert!(refresh_chat_history_batch(&conn).unwrap());
+        assert_eq!(pending(), 33);
+        let chats = load_chats_with_history(&conn).unwrap();
+        assert_eq!(pending(), 0);
+        assert_eq!(chats.iter().find(|c| c["id"] == "chat-32").unwrap()["hasMessageHistory"], true);
+        let writes = conn.total_changes();
+        assert_eq!(load_chats_with_history(&conn).unwrap(), chats);
+        assert_eq!(conn.total_changes(), writes);
+    }
+
+    #[test]
+    fn history_summary_invalidates_only_changed_chats_with_the_message_transaction() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        save_snapshot(&conn, &AppSnapshot {
+            chats: vec![json!({"id":"a", "accountId":"wa-a"}), json!({"id":"b", "accountId":"wa-b"})],
+            messages: vec![
+                json!({"id":"m", "chatId":"a", "accountId":"wa-a", "direction":"out", "deliveryStatus":"pending", "sentAt":"2026-11-01T10:00:00Z"}),
+                json!({"id":"foreign", "chatId":"a", "accountId":"wa-b", "mediaType":"system"}),
+            ],
+            ..Default::default()
+        }).unwrap();
+        let state = |id: &str| conn.query_row(
+            "SELECT dirty FROM chat_history_summary WHERE chat_id = ?1", [id], |row| row.get::<_, i64>(0),
+        ).unwrap();
+        let chat_a = || load_chats_with_history(&conn).unwrap().into_iter().find(|c| c["id"] == "a").unwrap();
+        assert_eq!(chat_a()["historyRemapBlocked"], true);
+        let tx = conn.unchecked_transaction().unwrap();
+        tx.execute("DELETE FROM messages WHERE id = 'foreign'", []).unwrap();
+        assert_eq!(state("a"), 1);
+        tx.rollback().unwrap();
+        assert_eq!(state("a"), 0);
+        assert_eq!(chat_a()["historyRemapBlocked"], true);
+
+        delete_messages_by_keys(&conn, &["foreign".into()], Some("wa-b")).unwrap();
+        update_message_acks(&conn, &[json!({"id":"m", "ack":"sent"})], "wa-a").unwrap();
+        assert_eq!((state("a"), state("b")), (1, 0));
+        let sent = chat_a();
+        assert_eq!(sent["hasOutgoingHistory"], true);
+        assert_eq!(sent["lastSuccessfulOutgoing"]["accountId"], "wa-a");
+        assert!(sent.get("historyRemapBlocked").is_none());
+        clear_chat_messages(&conn, "a").unwrap();
+        assert_eq!((state("a"), state("b")), (1, 0));
+        assert_eq!(chat_a()["hasMessageHistory"], false);
+        assert!(chat_a().get("lastSuccessfulOutgoing").is_none());
+    }
+
+    #[test]
+    fn legacy_search_upgrade_assigns_stable_keys_and_rebuilds_only_once() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO meta VALUES ('schema_version', '5');
+             CREATE TABLE messages (id TEXT PRIMARY KEY, chat_id TEXT, sent_at TEXT, json TEXT NOT NULL);
+             INSERT INTO messages VALUES ('a', 'chat', '', '{\"id\":\"a\",\"body\":\"bonjour\"}');
+             INSERT INTO messages VALUES ('b', 'chat', '', '{\"id\":\"b\",\"body\":\"salut\"}');
+             CREATE VIRTUAL TABLE messages_fts USING fts5(id UNINDEXED, body, caption, filename);
+             INSERT INTO messages_fts(rowid, id, body) VALUES (90, 'a', 'obsolete');",
+        ).unwrap();
+
+        migrate(&conn).unwrap();
+        assert_eq!(search_messages(&conn, "bonjour", 10).unwrap()[0]["id"], "a");
+        assert!(search_messages(&conn, "obsolete", 10).unwrap().is_empty());
+        let writes = conn.total_changes();
+        migrate(&conn).unwrap();
+        assert_eq!(conn.total_changes(), writes);
+
+        conn.execute_batch("VACUUM").unwrap();
+        delete_messages_by_keys(&conn, &["a".into()], None).unwrap();
+        assert!(search_messages(&conn, "bonjour", 10).unwrap().is_empty());
+        assert_eq!(search_messages(&conn, "salut", 10).unwrap()[0]["id"], "b");
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM messages_fts", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+    }
+
+    #[test]
     fn delivery_and_media_updates_preserve_search_rows_while_text_edits_replace_them() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
@@ -2669,6 +3248,7 @@ mod tests {
         first["body"] = json!("bonsoir");
         first["mediaCaption"] = json!("invitation");
         save(vec![first]);
+        assert_eq!(row(), before, "text updates must keep the stable rowid");
         assert_eq!(conn.query_row("SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'bonjour'", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
         assert_eq!(conn.query_row("SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'bonsoir OR invitation'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
         assert_eq!(conn.query_row("SELECT count(*) FROM messages_fts", [], |r| r.get::<_, i64>(0)).unwrap(), 2);
@@ -2712,6 +3292,29 @@ mod tests {
             get_message_by_id(&conn, "b").unwrap().unwrap()["deliveryStatus"],
             "sent"
         );
+    }
+
+    #[test]
+    fn cold_message_edit_keeps_original_identity_and_account() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let a = json!({"id":"a", "waMessageId":"same", "accountId":"wa-a", "direction":"in", "body":"Original", "translation":"Old translation", "sentAt":"2026-11-26T18:30:00Z"});
+        let mut b = a.clone();
+        b["id"] = json!("b");
+        b["accountId"] = json!("wa-b");
+        save_snapshot(&conn, &AppSnapshot { messages: vec![a, b], ..Default::default() }).unwrap();
+        let edit = json!({"id":"same", "remoteJid":"123@s.whatsapp.net", "fromMe":false, "body":"Updated", "editedAt":2});
+        update_message_edits(&conn, &[edit.clone()], "wa-a").unwrap();
+        let mut stale = edit;
+        stale["body"] = json!("Stale");
+        stale["editedAt"] = json!(1);
+        update_message_edits(&conn, &[stale], "wa-a").unwrap();
+        let saved = get_message_by_id(&conn, "a").unwrap().unwrap();
+        assert_eq!(saved["body"], "Updated");
+        assert_eq!(saved["sentAt"], "2026-11-26T18:30:00Z");
+        assert_eq!(saved["edited"], true);
+        assert!(saved.get("translation").is_none());
+        assert_eq!(get_message_by_id(&conn, "b").unwrap().unwrap()["body"], "Original");
     }
 
     #[test]
@@ -2914,7 +3517,108 @@ mod tests {
     }
 
     #[test]
-    fn chat_merge_refuses_cross_account_history_and_rolls_back() {
+    fn orphan_chat_owner_is_repaired_before_cold_history_merge() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let target = json!({"id":"kept", "contactId":"customer", "accountId":"wa-live"});
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: vec![
+                    json!({"id":"old", "contactId":"duplicate", "accountId":"wa-removed"}),
+                    target.clone(),
+                ],
+                messages: vec![json!({"id":"cold", "chatId":"old", "contactId":"duplicate", "accountId":"wa-removed", "body":"history"})],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: vec![target],
+                chat_account_remaps: vec![ChatAccountRemap {
+                    chat_id: "old".into(),
+                    from_account_id: "wa-removed".into(),
+                    to_account_id: "wa-live".into(),
+                }],
+                chat_message_remaps: vec![ChatMessageRemap {
+                    from_chat_id: "old".into(),
+                    to_chat_id: "kept".into(),
+                    contact_id: "customer".into(),
+                    account_id: "wa-live".into(),
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let message = get_message_by_id(&conn, "cold").unwrap().unwrap();
+        assert_eq!(message["chatId"], "kept");
+        assert_eq!(message["accountId"], "wa-live");
+    }
+
+    #[test]
+    fn orphan_chat_owner_conflict_preserves_history_and_saves_unrelated_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let target = json!({"id":"kept", "contactId":"customer", "accountId":"wa-live"});
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: vec![
+                    json!({"id":"old", "contactId":"duplicate", "accountId":"wa-removed"}),
+                    target.clone(),
+                ],
+                messages: vec![json!({"id":"foreign", "chatId":"old", "accountId":"wa-other"})],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        save_snapshot(
+            &conn,
+            &AppSnapshot {
+                chats: vec![target],
+                messages: vec![
+                    json!({"id":"foreign", "chatId":"kept", "accountId":"wa-live"}),
+                    json!({"id":"independent", "chatId":"kept", "accountId":"wa-live", "body":"new"}),
+                ],
+                deleted_message_ids: vec!["foreign".into()],
+                settings: json!({"savedDespiteConflict":true}),
+                chat_account_remaps: vec![ChatAccountRemap {
+                    chat_id: "old".into(),
+                    from_account_id: "wa-removed".into(),
+                    to_account_id: "wa-live".into(),
+                }],
+                chat_message_remaps: vec![ChatMessageRemap {
+                    from_chat_id: "old".into(),
+                    to_chat_id: "kept".into(),
+                    contact_id: "customer".into(),
+                    account_id: "wa-live".into(),
+                }],
+                ..Default::default()
+            }
+        )
+        .unwrap();
+        save_snapshot(&conn, &AppSnapshot {
+            chats: vec![json!({"id":"kept", "contactId":"customer", "accountId":"wa-live"})],
+            messages: vec![json!({"id":"foreign", "chatId":"kept", "accountId":"wa-live"})],
+            settings: json!({"savedDespiteConflict":true, "savedAgain":true}),
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(count_messages_for_chat(&conn, "old").unwrap(), 1);
+        let message = get_message_by_id(&conn, "foreign").unwrap().unwrap();
+        assert_eq!(message["chatId"], "old");
+        assert_eq!(message["accountId"], "wa-other");
+        assert_eq!(get_message_by_id(&conn, "independent").unwrap().unwrap()["body"], "new");
+        let saved = load_snapshot(&conn).unwrap().unwrap();
+        assert_eq!(saved.settings["savedAgain"], true);
+        let old = saved.chats.iter().find(|chat| chat["id"] == "old").unwrap();
+        assert_eq!(old["accountId"], "wa-removed");
+        assert_eq!(old["historyRemapBlocked"], true);
+    }
+
+    #[test]
+    fn chat_merge_skips_cross_account_history() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let target = json!({"id":"kept", "contactId":"customer", "accountId":"wa-b"});
@@ -2927,7 +3631,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(save_snapshot(
+        save_snapshot(
             &conn,
             &AppSnapshot {
                 chats: vec![target],
@@ -2940,7 +3644,7 @@ mod tests {
                 ..Default::default()
             }
         )
-        .is_err());
+        .unwrap();
         assert_eq!(count_messages_for_chat(&conn, "old").unwrap(), 1);
     }
 
@@ -2958,7 +3662,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(save_snapshot(
+        save_snapshot(
             &conn,
             &AppSnapshot {
                 chats: vec![target],
@@ -2971,7 +3675,7 @@ mod tests {
                 ..Default::default()
             }
         )
-        .is_err());
+        .unwrap();
         assert_eq!(count_messages_for_chat(&conn, "old").unwrap(), 1);
     }
 }

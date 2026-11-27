@@ -11,11 +11,18 @@ function Get-Sha256([string]$Path) {
     try { return [BitConverter]::ToString($sha.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
     finally { $sha.Dispose(); $stream.Dispose() }
 }
+function Sync-ProjectNotice {
+    $source = Join-Path $projectRoot 'docs/FFMPEG-NOTICE.txt'
+    $destination = Join-Path $binaryDir 'ffmpeg-NOTICE.txt'
+    if (!(Test-Path -LiteralPath $destination) -or (Get-Sha256 $source) -ne (Get-Sha256 $destination)) {
+        Copy-Item -LiteralPath $source -Destination $destination
+    }
+}
 New-Item -ItemType Directory -Force -Path $binaryDir, (Split-Path $archivePath -Parent) | Out-Null
 if ((Test-Path -LiteralPath $binaryPath) -and
     (Get-Sha256 $binaryPath) -eq $binaryHash -and
     (Test-Path -LiteralPath (Join-Path $binaryDir 'ffmpeg-LICENSE.txt'))) {
-    Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/FFMPEG-NOTICE.txt') -Destination (Join-Path $binaryDir 'ffmpeg-NOTICE.txt')
+    Sync-ProjectNotice
     Write-Output 'Project FFmpeg 9.0.2 verified'
     exit 0
 }
@@ -59,5 +66,5 @@ try {
 if ((Get-Sha256 $binaryPath) -ne $binaryHash) {
     throw 'FFmpeg executable SHA256 mismatch; refusing build'
 }
-Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/FFMPEG-NOTICE.txt') -Destination (Join-Path $binaryDir 'ffmpeg-NOTICE.txt')
+Sync-ProjectNotice
 Write-Output 'Project FFmpeg 9.0.2 prepared and verified'

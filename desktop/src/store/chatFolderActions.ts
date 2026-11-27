@@ -58,7 +58,7 @@ export function createChatFolderActions({
 
   return {
     createChatFolder(name: string, parentId?: string | null): string | null {
-      const title = name.trim().slice(0, 40);
+      const title = name.trim();
       if (!title) {
         pushToast(t("folder.toastNameRequired"), "error");
         return null;
@@ -101,7 +101,7 @@ export function createChatFolderActions({
     },
 
     renameChatFolder(folderId: string, name: string) {
-      const title = name.trim().slice(0, 40);
+      const title = name.trim();
       if (!title) return;
       updateSettings({
         chatFolders: getSettings().chatFolders.map((folder) =>
@@ -283,6 +283,27 @@ export function createChatFolderActions({
       });
     },
 
+    removeChatFromFolder(chatId: string, folderId: string): boolean {
+      const settings = getSettings();
+      const byId = new Map(settings.chatFolders.map(folder => [folder.id, folder]));
+      let folder = byId.get(folderId);
+      const seen = new Set<string>();
+      while (folder && !seen.has(folder.id)) {
+        if (folder.systemType === "leadInbox") return false;
+        seen.add(folder.id);
+        folder = folder.parentId ? byId.get(folder.parentId) : undefined;
+      }
+      const target = byId.get(folderId);
+      const wasPrimary = !!target?.chatIds.includes(chatId);
+      const hadClone = (settings.chatFolderClones || []).some(clone => clone.folderId === folderId && clone.sourceChatId === chatId);
+      if (!target || !chatId || !wasPrimary && !hadClone) return false;
+      updateSettings({
+        chatFolders: settings.chatFolders.map(item => item.id === folderId ? { ...item, chatIds: item.chatIds.filter(id => id !== chatId) } : item),
+        chatFolderClones: (settings.chatFolderClones || []).filter(clone => !(clone.folderId === folderId && clone.sourceChatId === chatId)),
+      });
+      return true;
+    },
+
     moveChatsToFolders(assignments: { chatId: string; folderId: string }[]) {
       const settings = getSettings();
       const folders = settings.chatFolders || [];
@@ -349,7 +370,7 @@ export function createChatFolderActions({
         pushToast(t("folder.toastCloneExists"), "info");
         return;
       }
-      const id = `clone-${Date.now().toString(36)}`;
+      const id = `clone-${crypto.randomUUID()}`;
       updateSettings({
         chatFolderClones: [...clones, { id, folderId, sourceChatId: chatId }],
       });

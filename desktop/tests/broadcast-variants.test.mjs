@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const result = buildSync({ entryPoints: [fileURLToPath(new URL('../src/lib/broadcastCampaign.ts', import.meta.url))],
   bundle: true, format: 'esm', platform: 'node', write: false,
   alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } });
-const { buildCampaignOrError, normalizeCampaigns, broadcastItemMedia, campaignHasMedia } = await import(
+const { buildCampaignOrError, normalizeCampaigns, broadcastItemMedia, campaignHasMedia, pendingBroadcastThread } = await import(
   'data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'));
 const image = { id: 'image', kind: 'image', mime: 'image/png', fileName: 'hello.png' };
 const video = { id: 'video', kind: 'video', mime: 'video/mp4', fileName: 'bonjour.mp4' };
@@ -87,4 +87,17 @@ test('fixed-content campaigns freeze random media too; older stored campaigns st
   const legacy = normalizeCampaigns([{ ...campaign, items: campaign.items.map(({ mediaId, ...item }) => item) }])[0];
   assert.equal(legacy.variants, undefined);
   assert.deepEqual(broadcastItemMedia(legacy, legacy.items[0]), [image, video]);
+});
+
+test('opening a queued recipient uses the campaign account before any message exists', () => {
+  const item = { contactId: 'account-1-contact', phoneE164: '+12025550100', status: 'pending' };
+  const campaign = { status: 'running', accountId: 'wa-1', items: [item] };
+  const sibling = { id: 'account-4-contact', phone: '+1 202 555 0100' };
+  assert.deepEqual(pendingBroadcastThread([campaign], sibling), { contactId: item.contactId, accountId: 'wa-1' });
+  assert.equal(pendingBroadcastThread([{ ...campaign, status: 'paused' }], sibling), undefined);
+  assert.equal(pendingBroadcastThread([{ ...campaign, items: [{ ...item, status: 'sent' }] }], sibling), undefined);
+  assert.equal(pendingBroadcastThread([campaign], { ...sibling, isGroup: true }), undefined);
+  assert.equal(pendingBroadcastThread([campaign], { ...sibling, phone: '+12025550199' }), undefined);
+  const sending = { ...item, accountId: 'wa-2', status: 'sending' };
+  assert.equal(pendingBroadcastThread([campaign, { ...campaign, items: [sending] }], sibling).accountId, 'wa-2');
 });

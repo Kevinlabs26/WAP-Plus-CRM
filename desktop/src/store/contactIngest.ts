@@ -27,6 +27,7 @@ export type ContactIngestBag = {
   _contactLookup?: ContactLookup;
   /** 同步合并会话后，文件夹和分身也必须改指向保留的会话。 */
   _chatReplacements?: Map<string, string>;
+  _contactsWithBlockedRemaps?: Set<string>;
 };
 
 /**
@@ -62,7 +63,8 @@ export function ensureIngestContact(
     contact.accountId || contact.boundPhoneId || DEFAULT_ACCOUNT_ID;
 
   // 批内 O(1) 命中；命中失败回退线性扫描，语义与原有 matchContact 完全一致
-  const lookup = (bag._contactLookup ??= createContactLookup(contacts));
+  if (bag._contactLookup?.source !== contacts) bag._contactLookup = createContactLookup(contacts);
+  const lookup = bag._contactLookup;
   let index = lookup.matchIndex({
     deviceId,
     channelAddress,
@@ -83,9 +85,13 @@ export function ensureIngestContact(
   }
 
   if (index >= 0 && phone) {
+    const protectedContacts = (bag._contactsWithBlockedRemaps ??= new Set(
+      chats.filter(chat => chat.historyRemapBlocked).map(chat => chat.contactId)
+    ));
     const dupIdx = contacts.findIndex(
       (c, i) =>
         i !== index &&
+        !protectedContacts.has(c.id) && !protectedContacts.has(contacts[index].id) &&
         contactOwner(c) === deviceId &&
         ((channelAddress && c.channelAddress === channelAddress) ||
           (c.phone && c.phone === phone) ||
@@ -121,10 +127,6 @@ export function ensureIngestContact(
         aiNextStep: keep.aiNextStep || drop.aiNextStep,
         aiSuggestedStage: keep.aiSuggestedStage || drop.aiSuggestedStage,
         aiInsightAt: keep.aiInsightAt || drop.aiInsightAt,
-        aiReport: keep.aiReport || drop.aiReport,
-        aiReportTemplateId: keep.aiReportTemplateId || drop.aiReportTemplateId,
-        aiReportTemplateName: keep.aiReportTemplateName || drop.aiReportTemplateName,
-        aiReportAt: keep.aiReportAt || drop.aiReportAt,
         stage: keep.stage !== "new" ? keep.stage : drop.stage,
         company: keep.company || drop.company,
         country: keep.country || drop.country,
@@ -182,6 +184,7 @@ export function ensureIngestContact(
       if (nextSelectedContactId === dropId) nextSelectedContactId = keepId;
       if (nextSelectedChatId === dropChatId) nextSelectedChatId = keepChatId;
       contacts.splice(dupIdx, 1);
+      lookup.invalidate();
       if (dupIdx < index) index -= 1;
     }
   }
@@ -267,6 +270,8 @@ export function ensureIngestContact(
     );
     if (contactChanged) {
       contacts[index] = nextContact;
+      if (nextContact.phone !== prev.phone || nextContact.channelAddress !== prev.channelAddress ||
+          contactOwner(nextContact) !== contactOwner(prev)) lookup.invalidate();
       if (nextContact.name !== prev.name) {
         chats = applyNameToChats(chats, nextContact.id, nextContact.name, {
           isGroup: nextContact.isGroup,

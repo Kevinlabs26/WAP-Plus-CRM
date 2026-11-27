@@ -8,6 +8,8 @@ const mocks = {
     useAppStore.getState = () => globalThis.deliveryState;`,
   '@/i18n': `export const translateCurrent = key => key; export const useI18n = () => ({t: key => key});`,
   '@/channels/mediaGate': 'export const gatedMediaSend = async (_input, send) => send();',
+  '@/lib/bridge': `export const bridgeInvoke = (...args) => globalThis.androidReply(...args);
+    export const getBridgeStatus = () => ({}); export const isTauri = () => true;`,
   '@/lib/baileys': `export const baileysFetchAvatar = async () => null;
     export const baileysSync = async () => {};
     export const baileysStatus = async () => ({connection: 'connected'});
@@ -27,6 +29,9 @@ const built = await build({
     export { parseBackupJson, buildExportBundle } from './src/lib/exportData.ts';
     export { recoverInterruptedMessage } from './src/store/hydrateMessageCleanup.ts';
     export { baileysChannel } from './src/channels/baileys.ts';
+    export { androidBridgeChannel } from './src/channels/androidBridge.ts';
+    export { openAndroidMediaShare } from './src/components/chat/openAndroidMediaShare.ts';
+    export { sendTextMessage } from './src/components/chat/sendTextMessage.ts';
     import { MessageBubble } from './src/components/chat/MessageBubble.tsx';
     import { createElement } from 'react'; import { renderToStaticMarkup } from 'react-dom/server';
     export const renderBubble = props => renderToStaticMarkup(createElement(MessageBubble, props));`,
@@ -45,7 +50,7 @@ try {
 } catch (error) {
   throw new Error(`Delivery test bundle could not load: ${error.message}`);
 }
-const { retryMessage, isDeliveryUncertain, isRetryableOutgoing, parseBackupJson, buildExportBundle, renderBubble, recoverInterruptedMessage, baileysChannel } = tested;
+const { retryMessage, isDeliveryUncertain, isRetryableOutgoing, parseBackupJson, buildExportBundle, renderBubble, recoverInterruptedMessage, baileysChannel, androidBridgeChannel, sendTextMessage, openAndroidMediaShare } = tested;
 const message = extra => ({ id: 'm', chatId: 'a', direction: 'out', body: '报价', phoneE164: '+33600000000',
   accountId: 'original-account', sentAt: '2026-10-04T10:00:00Z', deliveryStatus: 'failed', deliveryUncertain: true, ...extra });
 function setup(original, confirm) {
@@ -168,6 +173,56 @@ test('actual message bubble distinguishes an unknown result from a definite fail
   assert.doesNotMatch(unknown, /messageBubble.failed/);
   const definite = renderBubble({...props, m: message({deliveryUncertain: false})});
   assert.match(definite, /messageBubble.failed/); assert.match(definite, /messageBubble.retry/);
+});
+
+test('Android click or missing ACK leaves a pending verification bubble with no automatic retry', async () => {
+  const input = { phoneE164: '+33600000000', text: '报价' };
+  for (const status of ['clicked', 'unknown', 'failed', 'ipc-error']) {
+    let requests = 0;
+    globalThis.androidReply = async (command, payload) => {
+      requests++;
+      assert.equal(command, 'type_and_send');
+      assert.equal(payload.phoneE164, input.phoneE164);
+      if (status === 'ipc-error') throw new Error('IPC request timed out');
+      return { deviceId: 'phone-1', status, note: status === 'clicked' ? '已点击发送' : 'network timeout' };
+    };
+    const updates = [];
+    await sendTextMessage({
+      msgId: 'm', text: input.text, recipient: input.phoneE164, contact: { id: 'contact' },
+      channelId: 'android_bridge', chatAccountId: '', settings: { rateLimitEnabled: false }, messages: [],
+      updateMessageDelivery: (_id, patch) => updates.push(patch),
+      setSending() {}, pushToast() {}, clearDraft() {},
+    });
+    assert.equal(requests, 1);
+    assert.equal(updates.length, 1);
+    const patch = updates[0];
+    assert.equal(patch.deliveryStatus, 'failed');
+    assert.equal(patch.deliveryUncertain, status !== 'failed');
+    assert.equal(patch.nextAttemptAt, undefined);
+    assert.equal(isRetryableOutgoing(message(patch)), false);
+    if (status !== 'ipc-error') assert.equal(patch.deviceId, 'phone-1');
+  }
+  globalThis.androidReply = async () => ({ status: 'delivered', delivered: true });
+  assert.equal((await androidBridgeChannel.sendText(input)).status, 'sent');
+});
+
+test('Android attachment checks file size before IPC and shows phone confirmation after opening', async () => {
+  globalThis.deliveryState = { settings: { waAccounts: [] }, contacts: [], chats: [], messages: [] };
+  const max = 14 * 1024 * 1024;
+  const deps = { file: { name: 'voice.ogg', type: 'audio/ogg', size: max }, dataUrl: 'data:audio/ogg;base64,AA==',
+    caption: '', phoneE164: '+33600000000', selectedPhoneId: 'phone-a' };
+  globalThis.androidReply = assert.fail;
+  await assert.rejects(openAndroidMediaShare({ ...deps, file: { ...deps.file, size: max + 1 } }), /14 MiB/);
+  globalThis.androidReply = async (command, payload) => {
+    assert.equal(command, 'send_whatsapp_media');
+    assert.equal(payload.deviceId, 'phone-a');
+    return { opened: true, delivered: true };
+  };
+  assert.equal((await openAndroidMediaShare(deps)).delivered, false);
+  const html = renderBubble({
+    m: message({ channelId: 'android_bridge', deliveryStatus: 'local', mediaType: 'audio' }),
+  });
+  assert.match(html, /runtime.phoneShareConfirm/);
 });
 test('video bubble distinguishes byte upload progress from waiting for WhatsApp',()=>{
  globalThis.deliveryState={settings:{waAccounts:[]},contacts:[],chats:[],messages:[]};

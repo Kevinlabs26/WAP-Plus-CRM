@@ -10,6 +10,7 @@ import {
 } from "@/lib/baileys";
 import type { Message } from "@/types/crm";
 import { translateCurrent } from "@/i18n";
+import { MAX_VOICE_NOTE_SECONDS } from "@/lib/mediaBlob";
 import { isDeliveryUncertain } from "@/store/outgoingRetry";
 
 type RetryMessageActionDeps = {
@@ -65,10 +66,11 @@ export async function retryMessage({
     // 确认期间可能已收到回执、删掉消息或改了内容，不能继续发送旧快照。
     if (!message || message.deliveryStatus !== "failed" || message.body !== original.body
       || message.phoneE164 !== original.phoneE164 || message.accountId !== original.accountId
+      || message.deviceId !== original.deviceId || message.channelId !== original.channelId
       || message.mediaUrl !== original.mediaUrl) return;
   }
   const sendAccountId = message.accountId || chatAccountId;
-  if (message?.mediaType) {
+  if (message?.mediaType && !(message.systemKind === "ai_auto_reply" && message.aiReplyImageAssetId)) {
     if (
       !isBaileys ||
       !chatConnected ||
@@ -133,7 +135,7 @@ export async function retryMessage({
                     ? baileysSendVoice(target, mediaUrl, {
                         seconds: message.mediaSeconds,
                         mimetype: message.mediaMime,
-                        ptt: message.mediaPtt !== false,
+                        ptt: message.mediaPtt !== false && (message.mediaSeconds ?? 0) < MAX_VOICE_NOTE_SECONDS,
                         accountId: sendAccountId,
                       })
                     : Promise.reject(new Error(translateCurrent("runtime.mediaRetryUnsupported")))

@@ -4,7 +4,7 @@ use crate::bridge::{make_envelope, BridgeConnectionInfo, BridgeState};
 use crate::db::{self, AppSnapshot, DbState};
 use crate::protocol::{response_error, response_ok};
 use serde::{Deserialize, Serialize};
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub(crate) use crate::dpapi::{protect_secrets, unprotect_secrets};
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -135,6 +135,8 @@ pub struct SecureSecrets {
     #[serde(default)]
     pub gemini_key: String,
     #[serde(default)]
+    pub vertex_credential: String,
+    #[serde(default)]
     pub openrouter_key: String,
     #[serde(default)]
     pub custom_ai_key: String,
@@ -171,14 +173,14 @@ pub fn typing_diagnostic_write(app: AppHandle, line: String, reset: bool) -> Res
 
 #[tauri::command]
 pub fn secure_save_secrets(app: AppHandle, secrets: SecureSecrets) -> Result<(), String> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         let raw = serde_json::to_vec(&secrets).map_err(|e| e.to_string())?;
         let encrypted = protect_secrets(&raw)?;
         crate::atomic_file::write_atomic(&secure_secrets_path(&app)?, &encrypted)
             .map_err(|e| e.to_string())
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (app, secrets);
         Err("安全密钥存储仅支持 Windows 桌面版".into())
@@ -187,7 +189,7 @@ pub fn secure_save_secrets(app: AppHandle, secrets: SecureSecrets) -> Result<(),
 
 #[tauri::command]
 pub fn secure_load_secrets(app: AppHandle) -> Result<Option<SecureSecrets>, String> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         let path = secure_secrets_path(&app)?;
         let encrypted = match std::fs::read(path) {
@@ -200,7 +202,7 @@ pub fn secure_load_secrets(app: AppHandle) -> Result<Option<SecureSecrets>, Stri
             .map(Some)
             .map_err(|e| e.to_string())
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = app;
         Err("安全密钥存储仅支持 Windows 桌面版".into())
@@ -221,7 +223,7 @@ pub struct DroppedFile {
     pub bytes: Vec<u8>,
 }
 
-const MAX_CHAT_MEDIA_SAVE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_CHAT_MEDIA_SAVE_BYTES: usize = 100 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -303,13 +305,7 @@ fn chat_media_candidate(folder: &std::path::Path, name: &str, suffix: usize) -> 
     folder.join(format!("{} ({suffix}){}", &name[..split], &name[split..]))
 }
 
-#[tauri::command]
-pub async fn save_chat_media(
-    app: AppHandle,
-    data_url: String,
-    filename: String,
-    request_id: String,
-) -> Result<SavedChatMedia, String> {
+fn decode_chat_media(mut data_url: String) -> Result<Vec<u8>, String> {
     use base64::Engine;
 
     let (header, encoded) = data_url
@@ -321,9 +317,37 @@ pub async fn save_chat_media(
         || encoded.is_empty()
         || encoded.len() > max_encoded
     {
-        return Err("媒体数据格式无效或超过 16 MB".into());
+        return Err("媒体数据格式无效或超过 100 MiB".into());
     }
-    let encoded = encoded.to_string();
+    let prefix_len = header.len() + 1;
+    data_url.drain(..prefix_len);
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_url)
+        .map_err(|error| format!("媒体解码失败：{error}"))?;
+    if bytes.is_empty() || bytes.len() > MAX_CHAT_MEDIA_SAVE_BYTES {
+        return Err("媒体为空或超过 100 MiB".into());
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+#[test]
+fn chat_media_save_accepts_a_thirty_mib_video() {
+    use base64::Engine;
+    let video = vec![0x5a; 30 * 1024 * 1024];
+    let mut url = String::from("data:video/mp4;base64,");
+    base64::engine::general_purpose::STANDARD.encode_string(&video, &mut url);
+    assert_eq!(decode_chat_media(url).unwrap(), video);
+    assert!(decode_chat_media("data:video/mp4;base64,invalid".into()).is_err());
+}
+
+#[tauri::command]
+pub async fn save_chat_media(
+    app: AppHandle,
+    data_url: String,
+    filename: String,
+    request_id: String,
+) -> Result<SavedChatMedia, String> {
     let filename = safe_chat_media_filename(&filename);
     let request_id: String = request_id
         .chars()
@@ -341,12 +365,7 @@ pub async fn save_chat_media(
     let worker_app = app.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(encoded)
-            .map_err(|error| format!("媒体解码失败：{error}"))?;
-        if bytes.is_empty() || bytes.len() > MAX_CHAT_MEDIA_SAVE_BYTES {
-            return Err("媒体为空或超过 16 MB".into());
-        }
+        let bytes = decode_chat_media(data_url)?;
         std::fs::create_dir_all(&folder).map_err(|error| format!("无法创建下载文件夹：{error}"))?;
         let temporary = folder.join(format!(".media-{request_id}.part"));
         let mut file = std::fs::OpenOptions::new()
@@ -512,7 +531,12 @@ pub fn clipboard_write_text(app: AppHandle, text: String) -> Result<(), String> 
         let hwnd = window.hwnd().map_err(|e| e.to_string())?;
         crate::clipboard::write_text(hwnd.0, &text)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app;
+        crate::clipboard_macos::write_text(&text)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     { let _ = (app, text); Err("请使用系统复制按钮".into()) }
 }
 
@@ -528,7 +552,12 @@ pub fn clipboard_write_image(app: AppHandle, png_base64: String) -> Result<(), S
             .map_err(|e| format!("获取窗口句柄失败：{e}"))?;
         crate::clipboard::write_png(hwnd.0, &png_base64)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app;
+        crate::clipboard_macos::write_png(&png_base64)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (app, png_base64);
         Err("当前平台暂不支持原生图片剪贴板".into())
@@ -542,25 +571,74 @@ pub struct AdbDevice {
 }
 
 fn adb_command() -> Command {
+    let executable = format!("adb{}", std::env::consts::EXE_SUFFIX);
     for key in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
         if let Some(root) = std::env::var_os(key) {
-            let path = PathBuf::from(root).join("platform-tools").join("adb.exe");
+            let path = PathBuf::from(root).join("platform-tools").join(&executable);
             if path.is_file() {
                 return Command::new(path);
             }
         }
     }
-    if let Some(root) = std::env::var_os("LOCALAPPDATA") {
-        let path = PathBuf::from(root)
-            .join("Android")
-            .join("Sdk")
-            .join("platform-tools")
-            .join("adb.exe");
+    let default_sdk = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(|root| PathBuf::from(root).join("Android/Sdk"))
+    } else {
+        std::env::var_os("HOME").map(|root| PathBuf::from(root).join(if cfg!(target_os = "macos") {
+            "Library/Android/sdk"
+        } else {
+            "Android/Sdk"
+        }))
+    };
+    if let Some(root) = default_sdk {
+        let path = root.join("platform-tools").join(&executable);
         if path.is_file() {
             return Command::new(path);
         }
     }
-    Command::new("adb")
+    #[cfg(target_os = "macos")]
+    for path in ["/opt/homebrew/bin/adb", "/usr/local/bin/adb"] {
+        if std::path::Path::new(path).is_file() {
+            return Command::new(path);
+        }
+    }
+    Command::new(executable)
+}
+
+const ANDROID_BRIDGE_PORT: u16 = 17890;
+
+fn adb_output(args: &[&str]) -> Result<Vec<u8>, String> {
+    let output = adb_command().args(args).output()
+        .map_err(|e| format!("无法执行 adb：{e}。请安装 Android platform-tools。"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let detail = if stderr.trim().is_empty() {
+            stdout.trim()
+        } else {
+            stderr.trim()
+        };
+        return Err(if detail.is_empty() {
+            format!("ADB 执行失败：{}", output.status)
+        } else {
+            detail.to_owned()
+        });
+    }
+    Ok(output.stdout)
+}
+
+fn adb_forward_serial(port: u16) -> Option<String> {
+    let output = adb_output(&["forward", "--list"]).ok()?;
+    forwarded_android_serial(&String::from_utf8_lossy(&output), port)
+}
+
+fn forwarded_android_serial(output: &str, port: u16) -> Option<String> {
+    let local = format!("tcp:{port}");
+    let remote = format!("tcp:{ANDROID_BRIDGE_PORT}");
+    output.lines().find_map(|line| {
+        let mut parts = line.split_whitespace();
+        let serial = parts.next()?;
+        (parts.next()? == local && parts.next()? == remote).then(|| serial.to_owned())
+    })
 }
 
 #[tauri::command]
@@ -572,18 +650,10 @@ pub fn get_app_info() -> AppInfo {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_adb_devices() -> Result<Vec<AdbDevice>, String> {
-    let output = adb_command()
-        .args(["devices"])
-        .output()
-        .map_err(|e| format!("无法执行 adb：{e}。请安装 Android platform-tools 并加入 PATH。"))?;
-
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).into_owned());
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let output = adb_output(&["devices"])?;
+    let stdout = String::from_utf8_lossy(&output);
     let mut devices = Vec::new();
     for line in stdout.lines().skip(1) {
         let line = line.trim();
@@ -601,30 +671,94 @@ pub fn list_adb_devices() -> Result<Vec<AdbDevice>, String> {
     Ok(devices)
 }
 
-/// adb forward tcp:PORT tcp:PORT — USB 调试时把电脑端口转到手机
-#[tauri::command]
-pub fn adb_forward(port: u16) -> Result<String, String> {
-    let arg = format!("tcp:{port}");
-    let output = adb_command()
-        .args(["forward", &arg, &arg])
-        .output()
-        .map_err(|e| format!("adb forward 失败: {e}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).into_owned());
+#[tauri::command(async)]
+pub fn adb_forward(port: u16, serial: Option<String>) -> Result<String, String> {
+    if port == 0 { return Err("电脑端口必须在 1 到 65535 之间".into()); }
+    let devices = list_adb_devices()?;
+    let online: Vec<_> = devices.iter().filter(|device| device.state == "device").collect();
+    let serial = match (serial, online.as_slice()) {
+        (Some(serial), choices) if choices.iter().any(|device| device.serial == serial) => serial,
+        (Some(_), _) => return Err("所选 ADB 设备未连接或未授权".into()),
+        (None, [device]) => device.serial.clone(),
+        (None, []) => return Err("未检测到已授权的 ADB 设备，请检查 USB 调试".into()),
+        (None, _) => return Err("请先扫描 ADB 并选择要连接的手机".into()),
+    };
+    let local = format!("tcp:{port}");
+    let remote = format!("tcp:{ANDROID_BRIDGE_PORT}");
+    if adb_forward_serial(port).as_deref() != Some(serial.as_str()) {
+        adb_output(&["-s", &serial, "forward", "--no-rebind", &local, &remote])?;
     }
-    Ok(format!("adb forward {arg} {arg} ok"))
+    Ok(format!("adb -s {serial} forward {local} {remote} OK"))
 }
 
-#[tauri::command]
-pub fn phone_screenshot() -> Result<Vec<u8>, String> {
-    let output = adb_command()
-        .args(["exec-out", "screencap", "-p"])
-        .output()
-        .map_err(|e| format!("手机截图失败: {e}"))?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).into_owned());
+#[tauri::command(async)]
+pub fn adb_install_bridge(app: AppHandle, serial: Option<String>) -> Result<bool, String> {
+    let devices = list_adb_devices()?;
+    let device = match serial.as_deref() {
+        Some(serial) => devices
+            .iter()
+            .find(|device| device.serial == serial)
+            .ok_or("找不到所选手机，请重新扫描 ADB")?,
+        None => match devices.as_slice() {
+            [device] => device,
+            [] => return Err("未检测到手机，请连接 USB 数据线并开启 USB 调试".into()),
+            _ => return Err("检测到多个设备，请先扫描 ADB 并选择目标手机".into()),
+        },
+    };
+    match device.state.as_str() {
+        "device" => {}
+        "unauthorized" => return Err("手机尚未授权，请解锁手机并允许 USB 调试".into()),
+        _ => return Err("手机当前不可用，请重新连接 USB 后重试".into()),
     }
-    Ok(output.stdout)
+
+    let target = device.serial.as_str();
+    let installed = adb_output(&[
+        "-s", target, "shell", "pm", "list", "packages", "--user", "current", "com.wapplus.bridge",
+    ])?;
+    if String::from_utf8_lossy(&installed)
+        .lines()
+        .any(|line| line.trim() == "package:com.wapplus.bridge")
+    {
+        return Ok(false);
+    }
+
+    let mut apk = app
+        .path()
+        .resource_dir()
+        .map_err(|e| e.to_string())?
+        .join("resources/android-bridge/bridge.apk");
+    if cfg!(debug_assertions) && !apk.is_file() {
+        apk = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../android/app/build/outputs/apk/debug/app-debug.apk");
+    }
+    if !apk.is_file() {
+        return Err("当前桌面版本缺少 WAP Plus Bridge 安装包".into());
+    }
+    let apk = apk.to_str().ok_or("无法读取 Bridge 安装包路径")?;
+    adb_output(&["-s", target, "install", "--user", "current", apk])?;
+    Ok(true)
+}
+
+#[tauri::command(async)]
+pub fn phone_screenshot(state: State<'_, BridgeState>, device_id: Option<String>) -> Result<Vec<u8>, String> {
+    let info = state.snapshot();
+    if device_id.as_deref().is_some_and(|id| info.devices.first().map(|device| device.id.as_str()) != Some(id)) {
+        return Err("所选手机与实际连接的手机不匹配".into());
+    }
+    let serial = info.adb_serial.as_deref().filter(|_| info.connected)
+        .ok_or("请先通过 ADB 转发连接手机，再打开屏幕预览")?;
+    if adb_forward_serial(info.port).as_deref() != Some(serial) {
+        return Err("ADB 转发已变化，请重新连接目标手机".into());
+    }
+    let png = adb_output(&["-s", serial, "exec-out", "screencap", "-p"])?;
+    let current = state.snapshot();
+    if !current.connected || current.port != info.port || current.adb_serial.as_deref() != Some(serial) {
+        return Err("手机连接已变化，请重新打开屏幕预览".into());
+    }
+    if !png.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("手机没有返回有效的 PNG 截图".into());
+    }
+    Ok(png)
 }
 
 #[tauri::command]
@@ -632,17 +766,19 @@ pub fn bridge_status(state: State<'_, BridgeState>) -> BridgeConnectionInfo {
     state.snapshot()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn bridge_connect(
     state: State<'_, BridgeState>,
     host: String,
     port: u16,
     token: String,
 ) -> Result<BridgeConnectionInfo, String> {
-    state.connect(&host, port, &token)
+    let serial = (host.trim() == "127.0.0.1" || host.trim().eq_ignore_ascii_case("localhost"))
+        .then(|| adb_forward_serial(port)).flatten();
+    state.connect(&host, port, &token, serial)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn bridge_disconnect(state: State<'_, BridgeState>) -> Result<(), String> {
     state.disconnect();
     Ok(())
@@ -666,15 +802,18 @@ pub fn bridge_detach_event_listener(state: State<'_, BridgeState>, generation: u
     state.detach_event_listener(generation);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn bridge_send_raw(
     state: State<'_, BridgeState>,
     envelope: serde_json::Value,
-) -> Result<(), String> {
-    state.send_json(&envelope)
+) -> Result<serde_json::Value, String> {
+    if envelope["type"] != "wa.prepare_media" {
+        return Err("Bridge 仅支持在此入口准备语音回传".into());
+    }
+    state.send_json_wait_ack(&envelope, Duration::from_secs(7))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_phone_contact(
     state: State<'_, BridgeState>,
     device_id: Option<String>,
@@ -709,7 +848,7 @@ pub struct PhoneContactInput {
     pub phone_e164: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_phone_contacts(
     state: State<'_, BridgeState>,
     device_id: Option<String>,
@@ -742,7 +881,7 @@ pub fn save_phone_contacts(
     Ok(ack)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_whatsapp_chat(
     state: State<'_, BridgeState>,
     device_id: Option<String>,
@@ -770,7 +909,7 @@ pub fn open_whatsapp_chat(
     }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn sync_whatsapp_conversations(
     state: State<'_, BridgeState>,
     device_id: Option<String>,
@@ -787,7 +926,7 @@ pub fn sync_whatsapp_conversations(
     Ok(serde_json::json!({ "ack": ack, "synced": true }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn search_whatsapp_contact(
     state: State<'_, BridgeState>,
     device_id: Option<String>,
@@ -813,7 +952,7 @@ pub fn search_whatsapp_contact(
     }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn send_whatsapp_media(
     state: State<'_, BridgeState>,
     device_id: Option<String>,
@@ -823,17 +962,7 @@ pub fn send_whatsapp_media(
     mime: String,
     caption: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let limit = if mime.starts_with("audio/") { 24 } else { 20 };
-    if !data_url.starts_with("data:") || data_url.len() > limit * 1024 * 1024 {
-        return Err(if mime.starts_with("audio/") { "音频数据无效或超过 16 MiB" } else { "媒体数据无效或超过 14MB" }.into());
-    }
-    if mime.starts_with("audio/") {
-        use base64::Engine as _;
-        let payload = data_url.split_once(',').filter(|(header, _)| header.ends_with(";base64"))
-            .ok_or("音频数据无效")?.1;
-        let bytes = base64::engine::general_purpose::STANDARD.decode(payload).map_err(|_| "音频数据无效")?;
-        if bytes.len() > 16 * 1024 * 1024 { return Err("音频超过 16 MiB".into()); }
-    }
+    validate_android_media(&data_url)?;
     let envelope = make_envelope(
         "wa.send_media",
         device_id.as_deref(),
@@ -846,18 +975,55 @@ pub fn send_whatsapp_media(
         }),
     );
     let ack = state.send_json_wait_ack(&envelope, Duration::from_secs(20))?;
-    if !response_ok(&ack) {
-        return Err(response_error(&ack));
+    if ack.pointer("/payload/status").and_then(|status| status.as_str()) != Some("opened") {
+        return Err("手机未确认打开 WhatsApp 分享页".into());
     }
     Ok(serde_json::json!({
         "ack": ack,
         "opened": true,
         "delivered": false,
-        "note": "已在手机打开 WhatsApp 分享页，请确认发送",
+        "note": "请在手机核对收件人并确认发送",
     }))
 }
 
-#[tauri::command]
+fn validate_android_media(data_url: &str) -> Result<(), String> {
+    use base64::Engine as _;
+    const MAX_BYTES: usize = 14 * 1024 * 1024;
+    let (_, encoded) = data_url.split_once(',')
+        .filter(|(header, _)| header.starts_with("data:") && header.ends_with(";base64") && header.len() <= 512)
+        .ok_or("媒体数据无效")?;
+    if encoded.len() > MAX_BYTES.div_ceil(3) * 4 {
+        return Err("手机分享文件上限为 14 MiB".into());
+    }
+    let size = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|_| "媒体数据无效")?.len();
+    if size == 0 || size > MAX_BYTES {
+        return Err("文件为空或超过 14 MiB".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod android_bridge_tests {
+    use super::{forwarded_android_serial, validate_android_media};
+    use base64::Engine as _;
+
+    #[test]
+    fn forwards_only_the_port_leading_to_android_bridge() {
+        let listing = "phone-a tcp:17890 tcp:9999\nphone-b tcp:17891 tcp:17890\n";
+        assert_eq!(forwarded_android_serial(listing, 17890), None);
+        assert_eq!(forwarded_android_serial(listing, 17891).as_deref(), Some("phone-b"));
+    }
+
+    #[test]
+    fn android_media_enforces_the_decoded_limit() {
+        let encode = |size| format!("data:audio/ogg;base64,{}", base64::engine::general_purpose::STANDARD.encode(vec![0; size]));
+        assert!(validate_android_media(&encode(14 * 1024 * 1024)).is_ok());
+        assert!(validate_android_media(&encode(14 * 1024 * 1024 + 1)).is_err());
+        assert!(validate_android_media("data:audio/ogg;base64,").is_err());
+    }
+}
+
+#[tauri::command(async)]
 pub fn show_overlay_card(
     state: State<'_, BridgeState>,
     device_id: Option<String>,
@@ -888,7 +1054,7 @@ pub fn show_overlay_card(
     Ok(serde_json::json!({ "ack": ack, "shown": true }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn hide_overlay(
     state: State<'_, BridgeState>,
     device_id: Option<String>,
@@ -901,70 +1067,90 @@ pub fn hide_overlay(
     Ok(serde_json::json!({ "ack": ack, "hidden": true }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn type_and_send(
     state: State<'_, BridgeState>,
     device_id: Option<String>,
     text: String,
     phone_e164: Option<String>,
+    confirm_sent: Option<bool>,
 ) -> Result<serde_json::Value, String> {
-    let did = device_id.as_deref();
     let phone = phone_e164
         .filter(|p| !p.trim().is_empty())
         .ok_or_else(|| "缺少客户电话".to_string())?;
-    let envelope = make_envelope(
-        "wa.open_and_send",
-        did,
-        serde_json::json!({ "phoneE164": phone, "text": text }),
-    );
     tracing::debug!(
         phone_length = phone.len(),
         text_length = text.len(),
         "type_and_send open_and_send"
     );
 
-    match state.send_json_wait_ack(&envelope, Duration::from_secs(7)) {
-        Ok(ack) if response_ok(&ack) => {
-            // Android 的 ACTION_CLICK 只能证明按钮被点击，不能证明 WhatsApp
-            // 已接受消息。只有未来收到明确 delivered 回执时才算真正投递。
-            let delivered = ack
-                .pointer("/payload/status")
-                .and_then(|value| value.as_str())
-                == Some("delivered");
-            Ok(serde_json::json!({
-                "envelope": envelope,
-                "ack": ack,
-                "delivered": delivered,
-                "status": if delivered { "delivered" } else { "clicked" },
-                "note": if delivered {
-                    "Android 已确认 WhatsApp 投递"
-                } else {
-                    "Android 已点击发送，但未收到 WhatsApp 回执"
-                },
-            }))
+    let (device_id, response) = match state.request_verified_text(device_id.as_deref(), &phone, &text, confirm_sent.unwrap_or(false)) {
+        Ok(result) => result,
+        Err(error) => return Ok(serde_json::json!({ "status": "failed", "note": error })),
+    };
+    let (status, note) = match response {
+        Ok(ack) if ack.get("type").and_then(|value| value.as_str()) == Some("error") => {
+            ("failed", response_error(&ack))
         }
-        Ok(ack) => Ok(serde_json::json!({
-            "envelope": envelope,
-            "ack": ack,
-            "delivered": false,
-            "error": response_error(&ack),
-            "note": "Android 未确认发送",
-        })),
-        Err(error) => Ok(serde_json::json!({
-            "envelope": envelope,
-            "delivered": false,
-            "error": error,
-            "note": "Android 未确认发送",
-        })),
-    }
+        Ok(ack) if response_ok(&ack) => {
+            match ack.pointer("/payload/status").and_then(|value| value.as_str()) {
+                Some("delivered") => ("delivered", "Android 已确认 WhatsApp 投递".into()),
+                Some("phone_sent") => ("phone_sent", "已在手机 WhatsApp 中确认发出".into()),
+                Some("clicked") => ("clicked", "Android 已尝试点击发送，但未收到 WhatsApp 回执".into()),
+                _ => ("unknown", "手机未返回明确的发送结果".into()),
+            }
+        }
+        Ok(_) => ("unknown", "手机未返回明确的发送结果".into()),
+        Err(error) => ("unknown", error),
+    };
+    Ok(serde_json::json!({
+        "deviceId": device_id,
+        "status": status,
+        "delivered": status == "delivered",
+        "note": note,
+    }))
 }
 
 // ── SQLite ──────────────────────────────────────────────
 
-#[tauri::command(async)]
-pub fn db_load(state: State<'_, DbState>) -> Result<Option<AppSnapshot>, String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::load_snapshot(&conn)
+static CHAT_HISTORY_CHANGED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+pub(crate) fn start_chat_history_refresh(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            CHAT_HISTORY_CHANGED.notified().await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            loop {
+                let app = app.clone();
+                let result = tauri::async_runtime::spawn_blocking(move || {
+                    let db = app.state::<DbState>();
+                    let conn = db.0.lock().map_err(|e| e.to_string())?;
+                    db::refresh_chat_history_batch(&conn)
+                }).await;
+                match result {
+                    Ok(Ok(true)) => tokio::time::sleep(Duration::from_millis(25)).await,
+                    Ok(Ok(false)) => break,
+                    Ok(Err(error)) => { tracing::warn!(%error, "chat history summary refresh failed"); break; }
+                    Err(error) => { tracing::warn!(%error, "chat history summary worker failed"); break; }
+                }
+            }
+        }
+    });
+}
+
+#[tauri::command]
+pub async fn db_load(app: AppHandle) -> Result<Option<AppSnapshot>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<DbState>();
+        loop {
+            let conn = state.0.lock().map_err(|e| e.to_string())?;
+            if !db::refresh_chat_history_batch(&conn)? {
+                return db::load_snapshot(&conn);
+            }
+            drop(conn);
+            std::thread::yield_now();
+        }
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command(async)]
@@ -980,6 +1166,11 @@ pub fn db_save(state: State<'_, DbState>, snapshot: AppSnapshot) -> Result<(), S
             "db_save failed"
         );
         return Err(error);
+    }
+    if snapshot.dirty.as_ref().is_none_or(|dirty| dirty.chats || dirty.messages)
+        || !snapshot.chat_account_remaps.is_empty() || !snapshot.chat_message_remaps.is_empty()
+    {
+        CHAT_HISTORY_CHANGED.notify_one();
     }
     tracing::info!(
         phones = snapshot.phones.len(),
@@ -999,7 +1190,9 @@ pub fn db_clear(state: State<'_, DbState>) -> Result<(), String> {
 #[tauri::command(async)]
 pub fn db_clear_chat_messages(state: State<'_, DbState>, chat_id: String) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::clear_chat_messages(&conn, &chat_id)
+    db::clear_chat_messages(&conn, &chat_id)?;
+    CHAT_HISTORY_CHANGED.notify_one();
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -1010,7 +1203,9 @@ pub fn db_clear_remote_messages(
     before: Option<String>,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::clear_remote_messages_before(&conn, &remote_jid, account_id.as_deref(), before.as_deref())
+    db::clear_remote_messages_before(&conn, &remote_jid, account_id.as_deref(), before.as_deref())?;
+    CHAT_HISTORY_CHANGED.notify_one();
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -1020,7 +1215,21 @@ pub fn db_update_message_acks(
     account_id: String,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::update_message_acks(&conn, &items, &account_id)
+    db::update_message_acks(&conn, &items, &account_id)?;
+    CHAT_HISTORY_CHANGED.notify_one();
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn db_update_message_edits(
+    state: State<'_, DbState>,
+    items: Vec<serde_json::Value>,
+    account_id: String,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::update_message_edits(&conn, &items, &account_id)?;
+    CHAT_HISTORY_CHANGED.notify_one();
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -1030,7 +1239,9 @@ pub fn db_delete_messages_by_keys(
     account_id: Option<String>,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::delete_messages_by_keys(&conn, &keys, account_id.as_deref())
+    db::delete_messages_by_keys(&conn, &keys, account_id.as_deref())?;
+    CHAT_HISTORY_CHANGED.notify_one();
+    Ok(())
 }
 
 #[tauri::command(async)]
@@ -1196,6 +1407,24 @@ pub fn db_chats_with_inbound(
     db::chats_with_inbound(&conn, &chat_ids)
 }
 
+#[tauri::command(async)]
+pub fn db_latest_conversation_by_chat(
+    state: State<'_, DbState>,
+    chat_ids: Vec<String>,
+) -> Result<Vec<(String, String)>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::latest_conversation_by_chat(&conn, &chat_ids)
+}
+
+#[tauri::command(async)]
+pub fn db_latest_outgoing_message(
+    state: State<'_, DbState>,
+    chat_id: String,
+) -> Result<Option<serde_json::Value>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::latest_outgoing_message(&conn, &chat_id)
+}
+
 /// 冷历史分页：按 chat 倒序取消息（不含内存已有的更新部分时由前端 before* 游标控制）
 #[tauri::command(async)]
 pub fn db_load_messages_page(
@@ -1224,22 +1453,36 @@ pub fn db_load_messages_page(
     }))
 }
 
+static MESSAGE_SEARCH_WORKER: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
 /// 全局消息搜索（含磁盘冷历史）
-#[tauri::command(async)]
-pub fn db_search_messages(
-    state: State<'_, DbState>,
+#[tauri::command]
+pub async fn db_search_messages(
+    app: AppHandle,
     query: String,
     limit: Option<i64>,
 ) -> Result<serde_json::Value, String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let lim = limit.unwrap_or(40);
-    let items = db::search_messages(&conn, &query, lim)?;
-    Ok(serde_json::json!({
-        "ok": true,
-        "query": query,
-        "items": items,
-        "limit": lim.clamp(1, 80),
-    }))
+    let permit = MESSAGE_SEARCH_WORKER.acquire().await.map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        // Release the slot only when SQLite finishes, even if the caller stops waiting.
+        let _permit = permit;
+        let lim = limit.unwrap_or(40).clamp(1, 80);
+        let items = match db::open_db_readonly(&app) {
+            Ok(conn) => {
+                let snapshot = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+                db::search_messages(&snapshot, &query, lim)
+            }
+            Err(error) => {
+                tracing::warn!(%error, "read-only message search unavailable; using primary connection");
+                let state = app.state::<DbState>();
+                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                db::search_messages(&conn, &query, lim)
+            }
+        }?;
+        Ok(serde_json::json!({ "ok": true, "query": query, "items": items, "limit": lim }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command(async)]

@@ -1,5 +1,6 @@
 package com.wapplus.bridge.net
 
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -29,26 +30,38 @@ class BridgeServer(
     private val context: Context,
     private val port: Int,
     private val authToken: String,
+    private val onClientConnected: () -> Unit = {},
     private val onClientDisconnected: () -> Unit = {},
-    private val onMessage: (String, (String) -> Unit) -> Unit,
+    private val onMessage: (String, () -> Boolean, (String) -> Unit) -> Unit,
 ) {
     private val running = AtomicBoolean(false)
     private var serverSocket: ServerSocket? = null
+    private var stopped = false
     private val clients = CopyOnWriteArrayList<Socket>()
     private val connections = CopyOnWriteArrayList<Socket>()
     private val workers = BridgeWorkers()
 
-    fun start() {
-        if (!running.compareAndSet(false, true)) return
-        val ss = ServerSocket(port, 4, InetAddress.getLoopbackAddress())
-        serverSocket = ss
+    fun start(onListening: () -> Unit) {
+        val ss = synchronized(this) {
+            if (stopped || running.get()) return
+            ServerSocket(port, 4, InetAddress.getLoopbackAddress()).also {
+                serverSocket = it
+                running.set(true)
+            }
+        }
         Log.i(TAG, "listening on $port")
+        onListening()
         while (running.get()) {
             try {
                 val client = ss.accept()
                 Log.i(TAG, "client ${client.inetAddress}")
-                connections.add(client)
-                if (!workers.client(client) { handleClient(client) }) connections.remove(client)
+                synchronized(this) {
+                    if (!running.get()) client.close()
+                    else {
+                        connections.add(client)
+                        if (!workers.client(client) { handleClient(client) }) connections.remove(client)
+                    }
+                }
             } catch (e: Exception) {
                 if (running.get()) Log.e(TAG, "accept", e)
                 break
@@ -56,7 +69,10 @@ class BridgeServer(
         }
     }
 
+    @Synchronized
     fun stop() {
+        if (stopped) return
+        stopped = true
         running.set(false)
         connections.forEach { runCatching { it.close() } }
         connections.clear()
@@ -65,13 +81,15 @@ class BridgeServer(
         workers.close()
     }
 
-    fun broadcast(jsonLine: String) {
-        clients.forEach { writeResponse(it, jsonLine) }
+    fun broadcast(jsonLine: String): Boolean {
+        var queued = false
+        clients.forEach { if (writeResponse(it, jsonLine)) queued = true }
+        return queued
     }
 
-    private fun writeResponse(socket: Socket, jsonLine: String) {
+    private fun writeResponse(socket: Socket, jsonLine: String): Boolean {
         val line = if (jsonLine.endsWith("\n")) jsonLine else "$jsonLine\n"
-        workers.response(socket) {
+        return workers.response(socket) {
             runCatching {
                 synchronized(socket) {
                     val w = PrintWriter(socket.getOutputStream(), true)
@@ -101,17 +119,22 @@ class BridgeServer(
                 return
             }
             socket.soTimeout = 0
-            clients.add(socket)
             writer.println(authAck(auth?.optString("id").orEmpty()))
             writer.println(deviceHello())
             writer.println(deviceStatus())
             writer.println(deviceBattery())
+            if (writer.checkError()) return
+            synchronized(this) {
+                if (!running.get()) return
+                clients.add(socket)
+            }
+            onClientConnected()
 
             var line: String?
-            while (BoundedInput.readLine(reader, 16 * 1024 * 1024).also { line = it } != null) {
+            while (BoundedInput.readLine(reader, MAX_REQUEST_BYTES).also { line = it } != null) {
                 val msg = line ?: continue
                 if (msg.isNotBlank()) {
-                    onMessage(msg) { response ->
+                    onMessage(msg, { running.get() && !socket.isClosed && clients.contains(socket) }) { response ->
                         writeResponse(socket, response)
                     }
                 }
@@ -148,9 +171,7 @@ class BridgeServer(
             )
             .toString()
 
-    private fun deviceId(): String =
-        Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
-            ?: "android-bridge"
+    private fun deviceId(): String = com.wapplus.bridge.BridgeApp.deviceId(context)
 
     private fun batteryState(): Pair<Int, Boolean> {
         val batteryIntent =
@@ -189,6 +210,9 @@ class BridgeServer(
                     .put("model", android.os.Build.MODEL)
                     .put("androidVersion", android.os.Build.VERSION.RELEASE)
                     .put("bridgeVersion", "0.1.0")
+                    .put("verifiedTextSend", true)
+                    .put("phoneSentConfirmation", true)
+                    .put("maxRequestBytes", MAX_REQUEST_BYTES)
                     .put("battery", battery)
                     .put("accessibilityEnabled", WaAssistService.instance != null)
             )
@@ -200,6 +224,7 @@ class BridgeServer(
             "device.status",
             JSONObject()
                 .put("online", online)
+                .put("phoneLocked", context.getSystemService(KeyguardManager::class.java).isKeyguardLocked)
                 .put(
                     "whatsappInstalled",
                     context.packageManager.getLaunchIntentForPackage("com.whatsapp.w4b") != null ||
@@ -220,6 +245,7 @@ class BridgeServer(
     companion object {
         private const val TAG = "BridgeServer"
         private const val AUTH_TIMEOUT_MS = 10_000
+        private const val MAX_REQUEST_BYTES = 20 * 1024 * 1024
     }
 }
 

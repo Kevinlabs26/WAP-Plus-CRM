@@ -14,6 +14,7 @@ import {
 } from "@/lib/idb";
 import { isTauri } from "@/lib/bridge";
 import { clearMediaCache } from "@/lib/mediaCache";
+import type { ChatPreview, Message } from "@/types/crm";
 
 export type StorageEngine = "sqlite" | "idb" | "none";
 
@@ -107,7 +108,7 @@ export function getStorageEngine(): StorageEngine {
 
 export function canPersistRowDeltas(): boolean {
   // 历史合并需要完整会话列表校验归属，并与冷历史迁移一起提交。
-  return snapshotRowDeltas && pendingChatMessageRemaps.size === 0;
+  return snapshotRowDeltas && pendingChatMessageRemaps.size === 0 && pendingChatAccountRemaps.size === 0;
 }
 
 export async function resolveStorageEngine(): Promise<StorageEngine> {
@@ -164,17 +165,21 @@ export interface PersistedAppState {
   /** 备份恢复等完整快照：消息表以本次快照为准。 */
   replaceMessages?: boolean;
   chatMessageRemaps?: ChatMessageRemap[];
+  chatAccountRemaps?: ChatAccountRemap[];
 }
 
 type ChatMessageRemap = { fromChatId: string; toChatId: string; contactId: string; accountId: string };
+type ChatAccountRemap = { chatId: string; fromAccountId: string; toAccountId: string };
+type ChatRemapTarget = Pick<ChatPreview, "id" | "contactId" | "accountId" | "phoneId">;
 const pendingChatMessageRemaps = new Map<string, ChatMessageRemap>();
+const pendingChatAccountRemaps = new Map<string, ChatAccountRemap>();
 // 保存失败后增量基线会重置，删除意图必须留到真正落盘。
 const pendingDeletedMessageIds = new Set<string>();
 
 /** 会话合并必须同时迁移尚未加载的磁盘历史，且与会话快照同事务保存。 */
 export function registerChatMessageReplacements(
   replacements: ReadonlyMap<string, string>,
-  chats: readonly { id: string; contactId: string; accountId?: string; phoneId?: string }[]
+  chats: readonly ChatRemapTarget[]
 ): void {
   const byId = new Map(chats.map((chat) => [chat.id, chat]));
   for (const [fromChatId, toChatId] of replacements) {
@@ -185,6 +190,16 @@ export function registerChatMessageReplacements(
       if (pending.toChatId === fromChatId) pendingChatMessageRemaps.set(source, { ...remap, fromChatId: source });
     }
     pendingChatMessageRemaps.set(fromChatId, remap);
+  }
+}
+
+export function registerChatAccountReplacements(replacements: readonly ChatAccountRemap[]): void {
+  for (const replacement of replacements) {
+    const previous = pendingChatAccountRemaps.get(replacement.chatId);
+    pendingChatAccountRemaps.set(replacement.chatId, {
+      ...replacement,
+      fromAccountId: previous?.fromAccountId ?? replacement.fromAccountId,
+    });
   }
 }
 
@@ -207,7 +222,7 @@ interface RustSnapshot {
   replace_messages?: boolean;
 }
 
-const SECRET_SETTING_KEYS = ["openaiKey", "groqKey", "geminiKey", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "transcriptionApiKey", "translationApiKey", "bridgeToken"];
+const SECRET_SETTING_KEYS = ["openaiKey", "groqKey", "geminiKey", "vertexCredential", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "transcriptionApiKey", "translationApiKey", "bridgeToken"];
 
 function publicSettings(settings: unknown): unknown {
   if (!settings || typeof settings !== "object") return settings;
@@ -244,6 +259,7 @@ function toRust(data: PersistedAppState): Record<string, unknown> {
     deletedMessageIds: data.deletedMessageIds ?? [],
     replaceMessages: data.replaceMessages === true,
     chatMessageRemaps: data.chatMessageRemaps ?? [],
+    chatAccountRemaps: data.chatAccountRemaps ?? [],
     rowDeltas: data.replaceMessages ? undefined : data.rowDeltas,
     dirty: d
       ? {
@@ -453,16 +469,18 @@ async function saveAppStateNow(
       !data.replaceMessages &&
       (!data.dirty || data.dirty.messages)
     ) {
-      // 其他表和删除只随末块保存，最后按会话表清掉孤立消息。
+      const hasRemaps = Boolean(data.chatMessageRemaps?.length || data.chatAccountRemaps?.length);
+      // Validate ownership before writing any message with a proposed new chat/owner.
       for (let i = 0; i < messages.length; i += MESSAGE_CHUNK) {
-        const last = i + MESSAGE_CHUNK >= messages.length;
+        const checkpoint = hasRemaps ? i === 0 : i + MESSAGE_CHUNK >= messages.length;
         const part: PersistedAppState = {
           ...data,
           messages: messages.slice(i, i + MESSAGE_CHUNK),
-          dirty: last ? data.dirty : { messages: true },
-          deletedMessageIds: last ? data.deletedMessageIds : [],
-          chatMessageRemaps: last ? data.chatMessageRemaps : [],
-          rowDeltas: last ? data.rowDeltas : undefined,
+          dirty: checkpoint ? data.dirty : { messages: true },
+          deletedMessageIds: checkpoint ? data.deletedMessageIds : [],
+          chatMessageRemaps: checkpoint ? data.chatMessageRemaps : [],
+          chatAccountRemaps: checkpoint ? data.chatAccountRemaps : [],
+          rowDeltas: checkpoint ? data.rowDeltas : undefined,
           replaceMessages: false,
         };
         await saveSqliteSnapshot(toRust(part));
@@ -476,7 +494,9 @@ async function saveAppStateNow(
   }
 
   const drafts = data.draftReplyByChatId ?? (await idbLoad<PersistedAppState>())?.draftReplyByChatId ?? {};
-  await idbSave({ ...data, draftReplyByChatId: drafts, settings: publicSettings(data.settings) });
+  const persisted = { ...data };
+  delete persisted.chatAccountRemaps;
+  await idbSave({ ...persisted, draftReplyByChatId: drafts, settings: publicSettings(data.settings) });
   rememberSavedWeight(data);
 }
 
@@ -484,6 +504,7 @@ export type SecureSecrets = {
   openaiKey: string;
   groqKey: string;
   geminiKey: string;
+  vertexCredential: string;
   openrouterKey: string;
   customAiKey: string;
   transcriptionApiKey: string;
@@ -498,6 +519,7 @@ export async function loadSecureSecrets(): Promise<SecureSecrets | null> {
     openai_key?: string;
     groq_key?: string;
     gemini_key?: string;
+    vertex_credential?: string;
     openrouter_key?: string;
     custom_ai_key?: string;
     transcription_api_key?: string;
@@ -509,6 +531,7 @@ export async function loadSecureSecrets(): Promise<SecureSecrets | null> {
         openaiKey: secrets.openai_key || "",
         groqKey: secrets.groq_key || "",
         geminiKey: secrets.gemini_key || "",
+        vertexCredential: secrets.vertex_credential || "",
         openrouterKey: secrets.openrouter_key || "",
         customAiKey: secrets.custom_ai_key || "",
         transcriptionApiKey: secrets.transcription_api_key || "",
@@ -526,6 +549,7 @@ export async function saveSecureSecrets(
       openai_key: secrets.openaiKey,
       groq_key: secrets.groqKey,
       gemini_key: secrets.geminiKey,
+      vertex_credential: secrets.vertexCredential,
       openrouter_key: secrets.openrouterKey,
       custom_ai_key: secrets.customAiKey,
       transcription_api_key: secrets.transcriptionApiKey,
@@ -539,9 +563,26 @@ export function saveAppState(
   data: PersistedAppState,
   opts?: { force?: boolean }
 ): Promise<void> {
-  const chatIds = new Set(data.chats.map((chat) => (chat as { id?: string }).id));
+  const chatsById = new Map((data.chats as ChatRemapTarget[]).map(chat => [chat.id, chat]));
   const remaps = data.replaceMessages || (data.dirty && !data.dirty.chats) ? [] : [...pendingChatMessageRemaps.values()]
-    .filter((remap) => chatIds.has(remap.toChatId) && !chatIds.has(remap.fromChatId));
+    .filter((remap) => chatsById.has(remap.toChatId) && !chatsById.has(remap.fromChatId));
+  const mergedChatIds = new Set(remaps.map((remap) => remap.fromChatId));
+  const accountRemaps = data.replaceMessages || (data.dirty && !data.dirty.chats) ? [] : [...pendingChatAccountRemaps.values()]
+    .filter((remap) => chatsById.has(remap.chatId) || mergedChatIds.has(remap.chatId));
+  const repairsByChat = new Map(accountRemaps.map(repair => [repair.chatId, repair]));
+  const messageRemaps = remaps.map(remap => {
+    const target = chatsById.get(remap.toChatId)!;
+    const owner = target.accountId || target.phoneId || "";
+    const repair = repairsByChat.get(target.id);
+    if (owner !== remap.accountId && repair?.fromAccountId === remap.accountId && repair.toAccountId === owner) {
+      // The merged-out chat can still own messages on disk when login repairs its target.
+      if (!repairsByChat.has(remap.fromChatId)) {
+        repairsByChat.set(remap.fromChatId, { ...repair, chatId: remap.fromChatId });
+      }
+      return { ...remap, contactId: target.contactId, accountId: owner };
+    }
+    return { ...remap, contactId: target.contactId };
+  });
   const run = saveQueue.then(async () => {
     const writesMessages = !data.dirty || data.dirty.messages;
     const restoredIds = new Set(writesMessages && pendingDeletedMessageIds.size
@@ -551,7 +592,12 @@ export function saveAppState(
       ? [...new Set([...pendingDeletedMessageIds].filter(id => !restoredIds.has(id)).concat(data.deletedMessageIds || []))]
       : data.deletedMessageIds || [];
     try {
-      await saveAppStateNow({ ...data, chatMessageRemaps: remaps.length ? remaps : data.chatMessageRemaps, deletedMessageIds: deletedIds }, opts);
+      await saveAppStateNow({
+        ...data,
+        chatMessageRemaps: messageRemaps.length ? messageRemaps : data.chatMessageRemaps,
+        chatAccountRemaps: repairsByChat.size ? [...repairsByChat.values()] : data.chatAccountRemaps,
+        deletedMessageIds: deletedIds,
+      }, opts);
     } catch (error) {
       if (writesMessages) for (const id of deletedIds) pendingDeletedMessageIds.add(id);
       throw error;
@@ -564,6 +610,10 @@ export function saveAppState(
     if (data.replaceMessages) pendingChatMessageRemaps.clear();
     for (const remap of remaps) {
       if (pendingChatMessageRemaps.get(remap.fromChatId) === remap) pendingChatMessageRemaps.delete(remap.fromChatId);
+    }
+    if (data.replaceMessages) pendingChatAccountRemaps.clear();
+    for (const remap of accountRemaps) {
+      if (pendingChatAccountRemaps.get(remap.chatId) === remap) pendingChatAccountRemaps.delete(remap.chatId);
     }
   });
   saveQueue = run.catch(() => undefined);
@@ -584,11 +634,14 @@ async function clearAppStateNow(): Promise<void> {
   // 应用数据清空应包含下载媒体和未发送附件草稿，避免重置后磁盘仍留旧文件。
   await clearMediaCache(true);
   await idbDelPrefix("composer-media:");
+  await idbDelPrefix("quick-media:");
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("wap:quick-media"));
   lastSavedWeight = 0;
   lastSavedMsgCount = 0;
   lastSavedChatCount = 0;
   lastSavedContactCount = 0;
   pendingChatMessageRemaps.clear();
+  pendingChatAccountRemaps.clear();
   pendingDeletedMessageIds.clear();
 }
 
@@ -642,6 +695,16 @@ export function updateStoredMessageAcks(items: { id: string; ack: string }[], ac
   return run;
 }
 
+export function updateStoredMessageEdits(items: import("@shared/protocol").MessageEditItem[], accountId: string): Promise<void> {
+  if (!items.length) return Promise.resolve();
+  const run = saveQueue.then(async () => {
+    if (await resolveStorageEngine() !== "sqlite") return;
+    if (!await tryInvokeOk("db_update_message_edits", { items, accountId })) throw new Error("SQLite 消息编辑更新失败");
+  });
+  saveQueue = run.catch(() => undefined);
+  return run;
+}
+
 /** 删除未加载进内存的协议消息，兼容本地 id、waMessageId 和 waKey.id。 */
 export function deleteStoredMessagesByKeys(
   keys: string[],
@@ -681,6 +744,22 @@ export async function findChatsWithInbound(chatIds: string[]): Promise<string[]>
   return ids;
 }
 
+export async function findLatestChatActivity(chatIds: string[]): Promise<ReadonlyMap<string, number>> {
+  const latest = new Map<string, number>();
+  if (!chatIds.length || await resolveStorageEngine() !== "sqlite") return latest;
+  await saveQueue;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const rows = await invoke<unknown>("db_latest_conversation_by_chat", { chatIds });
+  const requested = new Set(chatIds);
+  if (!Array.isArray(rows)) throw new Error("Invalid chat activity result");
+  for (const row of rows) {
+    if (!Array.isArray(row) || row.length !== 2 || !requested.has(row[0]) || typeof row[1] !== "string") throw new Error("Invalid chat activity result");
+    const at = Date.parse(row[1]);
+    if (Number.isFinite(at)) latest.set(row[0], at);
+  }
+  return latest;
+}
+
 export type FullHistoryResult = {
   messages: unknown[];
   activities: unknown[];
@@ -706,6 +785,23 @@ export type MessagesPageResult = {
   limit: number;
 };
 
+async function waitForChatHistory(chatId: string) {
+  await saveQueue;
+  if ([...pendingChatMessageRemaps.values()].some((remap) => remap.toChatId === chatId)) {
+    throw new Error("会话历史合并尚未保存，请稍后重试");
+  }
+  if (pendingChatAccountRemaps.has(chatId)) {
+    throw new Error("会话账号归属修复尚未保存，请稍后重试");
+  }
+}
+
+export async function loadLatestOutgoingMessage(chatId: string): Promise<Message | null> {
+  if (await resolveStorageEngine() !== "sqlite") throw new Error("本地聊天历史不可用");
+  await waitForChatHistory(chatId);
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<Message | null>("db_latest_outgoing_message", { chatId });
+}
+
 /** SQLite 冷历史分页；浏览器 IDB 无分页时返回 null */
 export async function loadMessagesPage(opts: {
   chatId: string;
@@ -715,10 +811,7 @@ export async function loadMessagesPage(opts: {
 }): Promise<MessagesPageResult | null> {
   const eng = await resolveStorageEngine();
   if (eng !== "sqlite") return null;
-  await saveQueue;
-  if ([...pendingChatMessageRemaps.values()].some((remap) => remap.toChatId === opts.chatId)) {
-    throw new Error("会话历史合并尚未保存，请稍后重试");
-  }
+  await waitForChatHistory(opts.chatId);
   const page = await tryInvoke<MessagesPageResult>("db_load_messages_page", {
     chatId: opts.chatId,
     beforeSentAt: opts.beforeSentAt ?? null,

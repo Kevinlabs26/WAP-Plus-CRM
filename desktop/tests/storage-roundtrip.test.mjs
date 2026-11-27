@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
+import { packVertexCredentials, unpackVertexCredentials } from "../src/lib/vertexAi.ts";
 
 let sequence = 0;
 async function setup({ sqlite = false, readError = false, writeError = false, clearError = false, idbError = false, snapshot = null, fullHistory = null, fullHistoryError = false, secureReadError = false, secureWriteError = false, pageError = false, rowDeltas = true } = {}) {
   const values = new Map();
   const calls = [];
+  let secureSecrets = null;
   globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
   globalThis.indexedDB = {
     open() {
@@ -41,6 +43,8 @@ async function setup({ sqlite = false, readError = false, writeError = false, cl
     calls.push({ cmd, args });
     if (cmd === "secure_save_secrets" && secureWriteError) throw new Error("DPAPI write failed");
     if (cmd === "secure_load_secrets" && secureReadError) throw new Error("DPAPI unavailable");
+    if (cmd === "secure_save_secrets") { secureSecrets = structuredClone(args.secrets); return null; }
+    if (cmd === "secure_load_secrets") return structuredClone(secureSecrets);
     if (cmd === "db_info") return { engine: sqlite ? "sqlite" : "idb", snapshotRowDeltas: rowDeltas };
     if (cmd === "db_load" && readError) throw new Error("SQLite unavailable");
     if (cmd === "db_save" && writeError) throw new Error("SQLite write failed");
@@ -53,7 +57,7 @@ async function setup({ sqlite = false, readError = false, writeError = false, cl
     return null;
   };
   const result = await build({
-    stdin: { contents: 'export * from "./src/store/persist.ts"; export * from "./src/lib/storage.ts";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
+    stdin: { contents: 'export * from "./src/store/persist.ts"; export * from "./src/lib/storage.ts"; export { createBootSlice } from "./src/store/bootSlice.ts";', resolveDir: fileURLToPath(new URL("../", import.meta.url)) },
     bundle: true, format: "esm", platform: "browser", write: false,
     alias: { "@": fileURLToPath(new URL("../src", import.meta.url)) },
     plugins: [{ name: "storage-boundaries", setup(b) {
@@ -103,6 +107,94 @@ test("chat remaps accompany the merged snapshot, survive a failed save and retir
   assert.equal((await api.loadMessagesPage({ chatId: "kept" })).ok, true);
 });
 
+test("login ownership repair and pending history merge use the same account in SQLite", async () => {
+  const { api, calls } = await setup({ sqlite: true });
+  const target = { id: "kept", contactId: "customer", accountId: "wa-removed" };
+  api.registerChatMessageReplacements(new Map([["old", target.id]]), [target]);
+  api.registerChatAccountReplacements([
+    { chatId: target.id, fromAccountId: "wa-removed", toAccountId: "wa-live" },
+  ]);
+  const repairedTarget = { ...target, contactId: "current-customer", accountId: "wa-live" };
+  const snapshot = {
+    phones: [], contacts: [{ id: repairedTarget.contactId }], chats: [repairedTarget],
+    messages: [], followUps: [], settings: {},
+  };
+  const invoke = globalThis.__storageTestInvoke;
+  globalThis.__storageTestInvoke = async (cmd, args) => {
+    if (cmd === "db_save") {
+      for (const remap of args.snapshot.chatMessageRemaps) {
+        const destination = args.snapshot.chats.find(chat => chat.id === remap.toChatId);
+        if (destination?.accountId !== remap.accountId || destination.contactId !== remap.contactId) {
+          throw new Error("历史迁移会话归属不匹配");
+        }
+      }
+    }
+    return invoke(cmd, args);
+  };
+  try {
+    await api.saveAppState(snapshot);
+    const saved = calls.find(call => call.cmd === "db_save").args.snapshot;
+    assert.deepEqual(saved.chatMessageRemaps, [{
+      fromChatId: "old", toChatId: target.id, contactId: repairedTarget.contactId, accountId: "wa-live",
+    }]);
+    assert.deepEqual(saved.chatAccountRemaps, [target.id, "old"].map(chatId => ({
+      chatId, fromAccountId: "wa-removed", toAccountId: "wa-live",
+    })));
+    await api.saveAppState(snapshot);
+    const next = calls.filter(call => call.cmd === "db_save").at(-1).args.snapshot;
+    assert.deepEqual(next.chatMessageRemaps, []);
+    assert.deepEqual(next.chatAccountRemaps, []);
+  } finally {
+    globalThis.__storageTestInvoke = invoke;
+  }
+});
+
+test("startup sends ownership repairs for merged-out legacy chats with the history move", async () => {
+  const contact = { id: "customer", name: "Customer", phone: "+33612345678", accountId: "wa-live" };
+  const kept = { id: "chat-customer", contactId: contact.id, accountId: "wa-removed" };
+  const old = { id: "bridge-chat-customer", contactId: contact.id, phoneId: "wa-removed" };
+  const original = {
+    phones: [], contacts: [contact], chats: [kept, old], messages: [], followUps: [],
+    settings: { waAccounts: [{ id: "wa-live", label: "Live", status: "connected" }], liveBaileysAccountId: "wa-live" },
+  };
+  const { api, calls } = await setup({ sqlite: true, snapshot: original });
+  let state = { pushToast: message => assert.fail(message) };
+  await api.createBootSlice({ get: () => state, set: patch => { state = { ...state, ...patch }; } }).hydrate();
+
+  const saved = calls.find(call => call.cmd === "db_save").args.snapshot;
+  assert.deepEqual(saved.chats.map(chat => [chat.id, chat.accountId]), [[kept.id, "wa-live"]]);
+  assert.deepEqual(saved.chatAccountRemaps, [kept, old].map(chat => ({
+    chatId: chat.id, fromAccountId: "wa-removed", toAccountId: "wa-live",
+  })));
+  assert.deepEqual(saved.chatMessageRemaps, [{
+    fromChatId: old.id, toChatId: kept.id, contactId: contact.id, accountId: "wa-live",
+  }]);
+});
+
+test("orphan chat ownership corrections are transactional and retryable", async () => {
+  const { api, calls } = await setup({ sqlite: true });
+  const snapshot = { phones: [], contacts: [], chats: [{ id: "chat", accountId: "wa-live" }], messages: [], followUps: [], settings: {} };
+  api.registerChatAccountReplacements([{ chatId: "chat", fromAccountId: "wa-removed", toAccountId: "wa-live" }]);
+  let fail = true;
+  const invoke = globalThis.__storageTestInvoke;
+  globalThis.__storageTestInvoke = async (cmd, args) => {
+    if (cmd === "db_save" && fail) throw new Error("Disk full");
+    return invoke(cmd, args);
+  };
+  try {
+    await assert.rejects(api.saveAppState(snapshot), /保存失败/);
+    await assert.rejects(api.loadMessagesPage({ chatId: "chat" }), /归属修复尚未保存/);
+    fail = false;
+    await api.saveAppState(snapshot);
+    assert.deepEqual(calls.filter(call => call.cmd === "db_save").at(-1).args.snapshot.chatAccountRemaps,
+      [{ chatId: "chat", fromAccountId: "wa-removed", toAccountId: "wa-live" }]);
+    await api.saveAppState(snapshot);
+    assert.deepEqual(calls.filter(call => call.cmd === "db_save").at(-1).args.snapshot.chatAccountRemaps, []);
+  } finally {
+    globalThis.__storageTestInvoke = invoke;
+  }
+});
+
 test("draft-only saves leave pending history remaps for the chat snapshot", async () => {
   const { api, calls } = await setup({ sqlite: true });
   const target = { id: "kept", contactId: "customer", accountId: "wa-a" };
@@ -115,7 +207,7 @@ test("draft-only saves leave pending history remaps for the chat snapshot", asyn
   assert.equal(calls.filter(call => call.cmd === "db_save").at(-1).args.snapshot.chatMessageRemaps.length, 1);
 });
 
-test("chunked saves migrate cold history only with the final chat snapshot", async () => {
+test("chunked saves validate cold history with the chat snapshot before writing later chunks", async () => {
   const { api, calls } = await setup({ sqlite: true });
   const target = { id: "kept", contactId: "customer", accountId: "wa-a" };
   api.registerChatMessageReplacements(new Map([["old", "kept"]]), [target]);
@@ -123,9 +215,10 @@ test("chunked saves migrate cold history only with the final chat snapshot", asy
     messages: Array.from({ length: 1501 }, (_, i) => ({ id: `m-${i}`, chatId: "kept" })) });
   const snapshots = calls.filter(call => call.cmd === "db_save").map(call => call.args.snapshot);
   assert.equal(snapshots.length, 2);
-  assert.deepEqual(snapshots[0].chatMessageRemaps, []);
-  assert.equal(snapshots[1].chatMessageRemaps.length, 1);
-  assert.deepEqual(snapshots[1].chats, [target]);
+  assert.equal(snapshots[0].chatMessageRemaps.length, 1);
+  assert.deepEqual(snapshots[0].chats, [target]);
+  assert.deepEqual(snapshots[1].chatMessageRemaps, []);
+  assert.deepEqual(Object.keys(snapshots[1].dirty).filter(key => snapshots[1].dirty[key]), ["messages"]);
 });
 
 test("IDB roundtrip preserves unchanged messages, edits and deletions", async () => {
@@ -476,14 +569,27 @@ test("complete backup reads fail closed instead of exporting only hot history", 
 test("all shared save paths strip credentials without mutating runtime settings", async () => {
   for (const sqlite of [false, true]) {
     const { api, calls } = await setup({ sqlite });
-    const settings = { theme: "dark", customAiKey: "secret", transcriptionApiKey: "speech-secret", translationApiKey: "translation-secret", bridgeToken: "token", openaiKey: "key" };
+    const settings = { theme: "dark", vertexCredential: "vertex-secret", customAiKey: "secret", transcriptionApiKey: "speech-secret", translationApiKey: "translation-secret", bridgeToken: "token", openaiKey: "key" };
     await api.saveAppState({ phones: [], contacts: [], chats: [], messages: [], followUps: [], settings }, { force: true });
     const saved = sqlite ? calls.find(call => call.cmd === "db_save").args.snapshot : await api.loadAppState();
-    for (const key of ["customAiKey", "transcriptionApiKey", "translationApiKey", "bridgeToken", "openaiKey"]) assert.equal(saved.settings[key], undefined);
+    for (const key of ["vertexCredential", "customAiKey", "transcriptionApiKey", "translationApiKey", "bridgeToken", "openaiKey"]) assert.equal(saved.settings[key], undefined);
     assert.equal(saved.settings.theme, "dark");
     assert.equal(settings.customAiKey, "secret");
     assert.equal(settings.transcriptionApiKey, "speech-secret");
   }
+});
+
+test("the secure store round-trips both Vertex credentials and their selected method", async () => {
+  const { api } = await setup({ sqlite: true });
+  const credentials = {
+    mode: "service_account",
+    apiKey: "AQ.vertex-test-key",
+    serviceAccountJson: '{"type":"service_account","private_key":"test"}',
+  };
+  const vertexCredential = packVertexCredentials(credentials);
+  assert.equal(await api.saveSecureSecrets({ vertexCredential }), true);
+  const loaded = await api.loadSecureSecrets();
+  assert.deepEqual(unpackVertexCredentials(loaded.vertexCredential), credentials);
 });
 
 test("encrypted secret read errors propagate instead of looking like missing keys", async () => {
@@ -497,13 +603,15 @@ test("encrypted secret read errors propagate instead of looking like missing key
 
 
 test("legacy IDB credentials migrate before plaintext copies are removed", async () => {
-  const legacy = { phones: [], contacts: [{ id: "c" }], chats: [], messages: [], followUps: [], settings: { customAiKey: "legacy-key", transcriptionApiKey: "legacy-speech", bridgeToken: "legacy-token", theme: "light" } };
+  const legacy = { phones: [], contacts: [{ id: "c" }], chats: [], messages: [], followUps: [], settings: { vertexCredential: "legacy-vertex", customAiKey: "legacy-key", transcriptionApiKey: "legacy-speech", bridgeToken: "legacy-token", theme: "light" } };
   const { api, values, calls } = await setup({ sqlite: true });
   values.set("app_state_v1", legacy);
   const loaded = await api.loadAppState();
   assert.equal(loaded.settings.customAiKey, "legacy-key");
+  assert.equal(calls.find(call => call.cmd === "secure_save_secrets").args.secrets.vertex_credential, "legacy-vertex");
   assert.equal(calls.find(call => call.cmd === "secure_save_secrets").args.secrets.custom_ai_key, "legacy-key");
   assert.equal(calls.find(call => call.cmd === "secure_save_secrets").args.secrets.transcription_api_key, "legacy-speech");
+  assert.equal(values.get("app_state_v1").settings.vertexCredential, undefined);
   assert.equal(values.get("app_state_v1").settings.customAiKey, undefined);
   assert.equal(values.get("app_state_v1").settings.transcriptionApiKey, undefined);
   assert.equal(calls.find(call => call.cmd === "db_save").args.snapshot.settings.customAiKey, undefined);

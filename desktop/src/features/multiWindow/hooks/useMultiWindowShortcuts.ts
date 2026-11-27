@@ -15,7 +15,7 @@ export function useMultiWindowShortcuts({
 }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey) return;
+      if ((!event.ctrlKey && !event.metaKey) || !event.shiftKey || event.altKey) return;
       const target = event.target;
       if (target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
 
@@ -29,8 +29,9 @@ export function useMultiWindowShortcuts({
         setPage((current) => Math.min(totalPages - 1, current + 1));
         return;
       }
-      if (!/^[1-9]$/.test(event.key)) return;
-      const windowId = visibleIds[Number(event.key) - 1];
+      const digit = /^(?:Digit|Numpad)([1-9])$/.exec(event.code)?.[1];
+      if (!digit) return;
+      const windowId = visibleIds[Number(digit) - 1];
       const card = windowId ? cardRefs.current[windowId] : null;
       if (!card) return;
       event.preventDefault();

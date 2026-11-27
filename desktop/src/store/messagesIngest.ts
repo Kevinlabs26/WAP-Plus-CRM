@@ -19,9 +19,12 @@ import { parseMessageItem } from "./parseMessageItem";
 import {
   accountMessageIndexKey,
   createMessageSyncIndex,
+  indexSyncedMessage,
+  messageAliasCandidates,
   messageMatchesAccountAlias,
+  normalizeMessageBody,
+  rememberMessageAlias,
   reuseMessageSyncIndex,
-  setMessageIndexAlias,
   type MessageSyncIndex,
 } from "./messageSyncIndex";
 import { createChatIdLookup } from "./contactIndex";
@@ -74,6 +77,8 @@ function shallowMessageSame(a: Message, b: Message): boolean {
     a.quoted?.mediaSeconds === b.quoted?.mediaSeconds &&
     a.systemKind === b.systemKind &&
     a.systemAction === b.systemAction &&
+    a.systemAuthor === b.systemAuthor &&
+    a.systemParticipants?.join(",") === b.systemParticipants?.join(",") &&
     a.waKey?.id === b.waKey?.id &&
     a.waKey?.remoteJid === b.waKey?.remoteJid &&
     a.waKey?.fromMe === b.waKey?.fromMe &&
@@ -161,7 +166,6 @@ export function applyMessagesSync(opts: {
       opts.sourceMessages || messages
     );
     const ensureMsgIndex = () => syncIndex.byId;
-    const ensureInByChat = () => syncIndex.inboundByChat;
     const invalidateMsgIndex = () => {
       syncIndex = createMessageSyncIndex(messages);
     };
@@ -270,6 +274,8 @@ export function applyMessagesSync(opts: {
         waKey,
         systemKind,
         systemAction,
+        systemParticipants,
+        systemAuthor,
         mentionedJids,
         mentionedMe,
       } = parsed;
@@ -278,7 +284,7 @@ export function applyMessagesSync(opts: {
       const mergeDetails = (prev: Message): Message => ({
         ...prev,
         accountPhoneE164: opts.accountPhoneE164 || prev.accountPhoneE164,
-        body: body || prev.body,
+        body: prev.edited ? prev.body : body || prev.body,
         sentAt: item.sentAt != null && Number.isFinite(sentTs) ? sentAt : prev.sentAt,
         mediaType: mediaType || prev.mediaType,
         mediaUrl: mediaUrl || prev.mediaUrl,
@@ -302,6 +308,8 @@ export function applyMessagesSync(opts: {
         systemKind:
           (typeof systemKind === "string" && systemKind) ||
           prev.systemKind,
+        systemParticipants: systemParticipants ?? prev.systemParticipants,
+        systemAuthor: systemAuthor ?? prev.systemAuthor,
         systemAction:
           (typeof systemAction === "string" && systemAction) ||
           prev.systemAction,
@@ -335,7 +343,12 @@ export function applyMessagesSync(opts: {
         let localIdx = -1;
         let localBestRank = -1;
         let localBestDelta = Number.POSITIVE_INFINITY;
-        for (let li = 0; li < messages.length; li++) {
+        const candidates = new Set([
+          ...messageAliasCandidates(syncIndex, waId),
+          ...(localMessageId !== waId ? messageAliasCandidates(syncIndex, localMessageId) : []),
+          ...(syncIndex.unboundOutgoingByBody.get(normBody) || []),
+        ]);
+        for (const li of candidates) {
           const m = messages[li];
           if (m.direction !== "out") continue;
           // 多号：禁止跨账号合并乐观气泡
@@ -348,7 +361,7 @@ export function applyMessagesSync(opts: {
           if (!exactId) {
             // A known protocol ID belongs to one message, even when captions or timestamps match.
             if (m.waMessageId || m.waKey?.id || !String(m.id).startsWith("msg-")) continue;
-            if ((m.body || "").replace(/\s+/g, " ").trim() !== normBody) continue;
+            if (normalizeMessageBody(m.body) !== normBody) continue;
             const localType = m.mediaType === "voice" ? "audio" : m.mediaType || "";
             const remoteType = mediaType === "voice" ? "audio" : mediaType || "";
             if (localType !== remoteType) continue;
@@ -379,7 +392,7 @@ export function applyMessagesSync(opts: {
                 : 1;
           if (
             rank > localBestRank ||
-            (rank === localBestRank && delta < localBestDelta)
+            (rank === localBestRank && (delta < localBestDelta || (delta === localBestDelta && li < localIdx)))
           ) {
             localBestRank = rank;
             localBestDelta = delta;
@@ -410,7 +423,7 @@ export function applyMessagesSync(opts: {
             accountId: prev.accountId || deviceId,
             deviceId: prev.deviceId || deviceId,
           };
-          setMessageIndexAlias(ensureMsgIndex(), deviceId, waId, localIdx);
+          indexSyncedMessage(syncIndex, messages[localIdx]!, localIdx, prev);
           const chatIndex = findChatIdx(keepChatId);
           if (chatIndex >= 0) {
             const prevChat = chats[chatIndex];
@@ -453,41 +466,27 @@ export function applyMessagesSync(opts: {
       }
 
       // 入站：同 chat 近时同文案去重——只挡「完全重复」；有新媒体/键时交给后面 enrich
-      if (direction === "in" && normBody) {
-        const inTs = sentTs;
-        // 只扫同 chat 的入站消息（语义与 messages.find 等价，避免全表 O(N)）
-        let dupIn: Message | undefined;
-        for (const idx of ensureInByChat().get(chatId) || []) {
+      if (direction === "in" && normBody && !hasMediaHint && !item.waKey && !item.key) {
+        const hasId = Boolean(string(item.id, 300));
+        const candidates = hasId ? messageAliasCandidates(syncIndex, waId) : syncIndex.inboundByChat.get(chatId) || [];
+        let duplicateIndex: number | undefined;
+        for (const idx of candidates) {
           const m = messages[idx];
-          if (!m) continue;
-          if ((m.body || "").replace(/\s+/g, " ").trim() !== normBody)
-            continue;
-          if (m.id === waId || m.waMessageId === waId) {
-            dupIn = m;
-            break;
-          }
-          if (string(item.id, 300) || string(object(item.waKey ?? item.key)?.id, 300)) continue;
-          const t = Date.parse(m.sentAt);
-          if (
-            Number.isFinite(t) &&
-            Number.isFinite(inTs) &&
-            Math.abs(inTs - t) < 120_000
-          ) {
-            dupIn = m;
-            break;
+          if (!m || m.direction !== "in" || m.chatId !== chatId) continue;
+          const owner = m.accountId || m.deviceId;
+          if ((owner && owner !== deviceId) || (duplicateIndex !== undefined && idx >= duplicateIndex)) continue;
+          const exact = m.id === waId || m.waMessageId === waId;
+          if (!exact && (hasId || !(Math.abs(sentTs - Date.parse(m.sentAt)) < 120_000))) continue;
+          if (normalizeMessageBody(m.body) === normBody) {
+            duplicateIndex = idx;
+            if (!hasId) break;
           }
         }
-        // 已有正文且本条也无新媒体线索 → 真重复
-        if (
-          dupIn &&
-          !hasMediaHint &&
-          !item.waKey &&
-          !item.key &&
-          (dupIn.mediaUrl || !string(item.mediaUrl ?? item.mediaDataUrl, 20))
-        ) {
-          if (opts.accountPhoneE164 && !dupIn.accountPhoneE164 &&
-              (dupIn.waMessageId === waId || dupIn.waKey?.id === waId || dupIn.id === waId)) {
-            messages[messages.indexOf(dupIn)] = { ...dupIn, accountPhoneE164: opts.accountPhoneE164 };
+        if (duplicateIndex !== undefined) {
+          const duplicate = messages[duplicateIndex]!;
+          if (opts.accountPhoneE164 && !duplicate.accountPhoneE164 &&
+              (duplicate.waMessageId === waId || duplicate.waKey?.id === waId || duplicate.id === waId)) {
+            messages[duplicateIndex] = { ...duplicate, accountPhoneE164: opts.accountPhoneE164 };
           }
           continue;
         }
@@ -499,7 +498,8 @@ export function applyMessagesSync(opts: {
         const at = idxMap.get(accountMessageIndexKey(deviceId, key)) ?? idxMap.get(key);
         if (at == null) continue;
         const cand = messages[at];
-        if (cand && cand.chatId === chatId && (!cand.accountId || cand.accountId === deviceId)) {
+        const owner = cand?.accountId || cand?.deviceId;
+        if (cand && cand.chatId === chatId && (!owner || owner === deviceId)) {
           existingIdx = at;
           break;
         }
@@ -510,9 +510,10 @@ export function applyMessagesSync(opts: {
         // 内容未变则不替换引用：避免击穿 selectChatMessages 缓存 → 全部气泡重渲染闪烁
         if (!shallowMessageSame(prev, next)) {
           messages[existingIdx] = next;
+          indexSyncedMessage(syncIndex, next, existingIdx, prev);
         }
-        if (waId) ensureMsgIndex().set(waId, existingIdx);
-        if (waKey?.id) ensureMsgIndex().set(waKey.id, existingIdx);
+        rememberMessageAlias(syncIndex, deviceId, waId, existingIdx);
+        rememberMessageAlias(syncIndex, deviceId, waKey?.id, existingIdx);
         const existingChatIndex=findChatIdx(chatId);
         if(existingChatIndex>=0){
           const chat=chats[existingChatIndex];
@@ -552,6 +553,8 @@ export function applyMessagesSync(opts: {
         quoted,
         systemKind:
           typeof systemKind === "string" ? systemKind : undefined,
+        systemParticipants,
+        systemAuthor,
         systemAction:
           typeof systemAction === "string" ? systemAction : undefined,
         mentionedJids,
@@ -570,11 +573,6 @@ export function applyMessagesSync(opts: {
       });
       if (direction === "in") {
         addedInbound.push(messages[newIdx]!);
-        // 增量维护同 chat 入站列表（仅已建过时）
-        const byChat = ensureInByChat();
-        const list = byChat.get(chatId);
-        if (list) list.push(newIdx);
-        else byChat.set(chatId, [newIdx]);
       }
       try {
         noteTrendMessage({
@@ -586,12 +584,7 @@ export function applyMessagesSync(opts: {
       } catch {
         /* ignore */
       }
-      // 增量维护批内索引（仅在已建过 index 时更新，避免无反应批白建 Map）
-      const ix = ensureMsgIndex();
-      if (localMessageId) ix.set(localMessageId, newIdx);
-      if (waId) ix.set(waId, newIdx);
-      const keyId = waKey?.id;
-      if (keyId) ix.set(keyId, newIdx);
+      indexSyncedMessage(syncIndex, messages[newIdx]!, newIdx);
 
       const chatIndex = findChatIdx(chatId);
       // 正在看的会话不涨未读；历史/snapshot 不涨

@@ -1,12 +1,12 @@
 import { readAiJson } from "./aiResponse.ts";
 import { trackAiRequest } from "./aiUsage.ts";
-import { vertexAiConfig } from "./vertexAi.ts";
+import { redactAiContent } from "./aiPrivacy.ts";
 import { getTranslationSettings } from "./translationConfig.ts";
 import type { Contact } from "@/types/crm";
 import type { AppSettings } from "@/store/appStore";
 import { franc } from "franc-min";
 import { geminiGenerate } from "./gemini.ts";
-import { getOpenAiCompatibleConfig, hasAiCredentials, chatCompletionOptions } from "./aiProviders.ts";
+import { geminiCredentials, getOpenAiCompatibleConfig, hasAiCredentials, chatCompletionOptions } from "./aiProviders.ts";
 
 export type TranslateLangCode =
   | "en"
@@ -18,6 +18,9 @@ export type TranslateLangCode =
   | "ru"
   | "ar"
   | "sw"
+  | "hy"
+  | "hi"
+  | "id"
   | "ja"
   | "ko"
   | "auto";
@@ -36,6 +39,9 @@ export const TRANSLATE_LANGS: {
   { code: "ru", label: "Русский", native: "RU" },
   { code: "ar", label: "العربية", native: "AR" },
   { code: "sw", label: "Kiswahili", native: "SW" },
+  { code: "hy", label: "Հայերեն", native: "HY" },
+  { code: "hi", label: "हिन्दी", native: "HI" },
+  { code: "id", label: "Bahasa Indonesia", native: "ID" },
   { code: "ja", label: "日本語", native: "JA" },
   { code: "ko", label: "한국어", native: "KO" },
 ];
@@ -50,6 +56,9 @@ const LANG_NAME: Record<string, string> = {
   ru: "Russian",
   ar: "Arabic",
   sw: "Swahili",
+  hy: "Armenian",
+  hi: "Hindi",
+  id: "Indonesian",
   ja: "Japanese",
   ko: "Korean",
 };
@@ -142,6 +151,17 @@ const LATIN_PROFILES: LatinProfile[] = [
     strong: "ßäöü",
     general: "",
   },
+  {
+    code: "id",
+    words: [
+      "saya", "aku", "kamu", "anda", "yang", "dan", "tidak", "iya",
+      "terima", "kasih", "selamat", "pagi", "baik", "apa", "dengan",
+      "untuk", "ini", "itu", "bisa", "mau", "sudah", "belum", "dari",
+      "kami", "ada", "bagaimana", "berapa", "harga", "pesanan", "pengiriman",
+    ],
+    strong: "",
+    general: "",
+  },
 ];
 
 const LATIN_WORD_SETS = LATIN_PROFILES.map((profile) => ({
@@ -153,7 +173,7 @@ const LATIN_WORD_SETS = LATIN_PROFILES.map((profile) => ({
 
 // —— franc-min：成熟的 trigram 语言检测库，中长文本更可靠 ——
 const FRANC_WHITELIST = [
-  "eng", "cmn", "yue", "jpn", "kor", "fra", "spa", "deu", "por", "rus", "ara",
+  "eng", "cmn", "yue", "jpn", "kor", "fra", "spa", "deu", "por", "rus", "ara", "hye", "hin", "ind",
 ];
 const FRANC_TO_OURS: Record<string, Exclude<TranslateLangCode, "auto">> = {
   eng: "en",
@@ -167,11 +187,14 @@ const FRANC_TO_OURS: Record<string, Exclude<TranslateLangCode, "auto">> = {
   por: "pt",
   rus: "ru",
   ara: "ar",
+  hye: "hy",
+  hin: "hi",
+  ind: "id",
 };
 
 /** 字符集检测：中日韩俄阿拉伯几乎 100% 可靠，短句也不怕 */
 function detectByScript(t: string): Exclude<TranslateLangCode, "auto"> | null {
-  let han = 0, hira = 0, kata = 0, hangul = 0, cyr = 0, arab = 0, latin = 0;
+  let han = 0, hira = 0, kata = 0, hangul = 0, cyr = 0, arab = 0, armenian = 0, devanagari = 0, latin = 0;
   for (const ch of t) {
     const c = ch.codePointAt(0) || 0;
     if (c >= 0x4e00 && c <= 0x9fff) han += 1;
@@ -180,9 +203,11 @@ function detectByScript(t: string): Exclude<TranslateLangCode, "auto"> | null {
     else if (c >= 0xac00 && c <= 0xd7a3) hangul += 1;
     else if (c >= 0x0400 && c <= 0x04ff) cyr += 1;
     else if (c >= 0x0600 && c <= 0x06ff) arab += 1;
+    else if (c >= 0x0530 && c <= 0x058f) armenian += 1;
+    else if (c >= 0x0900 && c <= 0x097f) devanagari += 1;
     else if ((c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a)) latin += 1;
   }
-  const total = han + hira + kata + hangul + cyr + arab + latin;
+  const total = han + hira + kata + hangul + cyr + arab + armenian + devanagari + latin;
   if (total === 0) return null;
   // 假名（平/片假名）是日语独有字符集，出现即为日语。此判定必须先于
   // 汉字比例——日语正文普遍混有汉字，「私は東京に行きました」这类常见句
@@ -192,6 +217,8 @@ function detectByScript(t: string): Exclude<TranslateLangCode, "auto"> | null {
   if (hangul / total > 0.25) return "ko";
   if (cyr / total > 0.25) return "ru";
   if (arab / total > 0.25) return "ar";
+  if (armenian / total > 0.25) return "hy";
+  if (devanagari / total > 0.25) return "hi";
   if (latin / total < 0.3) return null;
   return null;
 }
@@ -274,6 +301,9 @@ export function resolveTargetLanguage(
     if (/germany|德国|de\b|austria|瑞士/.test(country)) return { code: "de", source: "country" };
     if (/brazil|brasil|葡萄牙|portugal/.test(country)) return { code: "pt", source: "country" };
     if (/russia|俄罗斯|ru\b/.test(country)) return { code: "ru", source: "country" };
+    if (/armenia|armenian|հայաստան|\b(?:am|arm)\b/.test(country)) return { code: "hy", source: "country" };
+    if (/india|印度|भारत|\b(?:in|ind)\b/.test(country)) return { code: "hi", source: "country" };
+    if (/indonesia|indonesian|印度尼西亚|\b(?:id|ind)\b/.test(country)) return { code: "id", source: "country" };
     if (/japan|日本|jp\b/.test(country)) return { code: "ja", source: "country" };
     if (/korea|韩国|kr\b/.test(country)) return { code: "ko", source: "country" };
     if (/arab|saudi|uae|dubai|埃及|qatar/.test(country)) return { code: "ar", source: "country" };
@@ -407,7 +437,7 @@ export function getTranslationContextKey(text: string, to: string, settings: App
   return JSON.stringify([to, text, service, google ? "google" : settings.aiProvider,
     google ? "" : config?.model || settings.aiModel || "",
     google ? "" : config?.baseUrl || (settings.aiProvider === "ollama" ? settings.ollamaUrl : ""),
-    google || ready, opts?.googleFirst && service === "auto" ? "google-first" : "", !google&&settings.aiProvider==="vertex"?[settings.vertexProjectId,settings.vertexLocation,settings.vertexCredentialId]:null,
+    google || ready, opts?.googleFirst && service === "auto" ? "google-first" : "",
     !google && settings.emojiEnabled !== false]);
 }
 
@@ -459,16 +489,17 @@ async function chatComplete(opts: {
   user: string;
   signal?: AbortSignal;
 }): Promise<string> {
-  if (opts.provider === "gemini"||opts.provider==="vertex") {
+  const system = redactAiContent(opts.system) || "";
+  const user = redactAiContent(opts.user) || "";
+  if (opts.provider === "gemini" || opts.provider === "vertex") {
     return geminiGenerate({
-      apiKey: opts.settings.geminiKey,
+      ...geminiCredentials(opts.settings),
       model: opts.settings.aiModel.trim() || undefined,
-      system: opts.system,
-      user: opts.user,
+      system,
+      user,
       temperature:0.2,
       signal: opts.signal,
       feature:"translation",
-      vertex:vertexAiConfig(opts.settings),
     });
   }
   if (opts.provider === "ollama") {
@@ -481,8 +512,8 @@ async function chatComplete(opts: {
         model: opts.settings.aiModel.trim() || "llama3.2",
         stream: false,
         messages: [
-          { role: "system", content: opts.system },
-          { role: "user", content: opts.user },
+          { role: "system", content: system },
+          { role: "user", content: user },
         ],
       }),
       signal: opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
@@ -516,8 +547,8 @@ async function chatComplete(opts: {
       ...(opts.provider === "groq" && /^openai\/gpt-oss-(20b|120b)$/.test(config.model)
         ? { reasoning_effort: "low", include_reasoning: false } : {}),
       messages: [
-        { role: "system", content: opts.system },
-        { role: "user", content: opts.user },
+        { role: "system", content: system },
+        { role: "user", content: user },
       ],
     }),
     signal: opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(60_000)]) : AbortSignal.timeout(60_000),
@@ -551,6 +582,7 @@ async function googleTranslate(
   timeoutMs = 30_000,
   signal?: AbortSignal
 ): Promise<string> {
+  text = redactAiContent(text) || "";
   const url = new URL("https://translate.googleapis.com/translate_a/single");
   url.searchParams.set("client", "gtx");
   url.searchParams.set("sl", "auto");

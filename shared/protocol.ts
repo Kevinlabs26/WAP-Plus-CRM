@@ -18,6 +18,7 @@ export const MESSAGE_TYPES = [
   "contacts.save_batch",
   "messages.sync",
   "messages.ack",
+  "messages.edit",
   "presence.update",
   "group.join_request",
   "messages.delete",
@@ -71,6 +72,9 @@ export interface DeviceHello {
   model: string;
   androidVersion?: string;
   bridgeVersion?: string;
+  verifiedTextSend?: boolean;
+  phoneSentConfirmation?: boolean;
+  maxRequestBytes?: number;
   battery?: number;
   accessibilityEnabled?: boolean;
 }
@@ -80,6 +84,7 @@ export interface BridgeAuth {
 }
 
 export interface DeviceStatus {
+  phoneLocked?: boolean;
   online: boolean;
   whatsappInstalled: boolean;
   accessibilityEnabled: boolean;
@@ -242,6 +247,14 @@ export interface MessageAckPayload {
   source?: string;
 }
 
+export interface MessageEditItem {
+  id: string;
+  remoteJid: string;
+  fromMe: boolean;
+  body: string;
+  editedAt: number;
+}
+
 export interface PresenceUpdateItem {
   jid: string;
   participant?: string;
@@ -324,6 +337,7 @@ export interface WaSend {
 
 /** 一键：打开聊天 + 输入 + 发送 */
 export interface WaOpenAndSend {
+  confirmSent?: boolean;
   phoneE164: string;
   text: string;
   displayName?: string;
@@ -349,6 +363,9 @@ export interface WaSendMedia {
   mime: string;
   caption?: string;
 }
+
+export const ANDROID_MEDIA_MAX_BYTES = 14 * 1024 * 1024;
+export const ANDROID_VOICE_RETURN_MAX_BYTES = 8 * 1024 * 1024;
 
 export interface WaSearchContact {
   query: string;
@@ -380,6 +397,7 @@ export interface AckPayload {
     | "exists"
     | "authenticated"
     | "clicked"
+    | "phone_sent"
     | "delivered";
   error?: string;
   items?: unknown[];
@@ -400,6 +418,7 @@ export interface ProtocolPayloadMap {
   "contacts.save_batch": ContactSaveBatchPayload;
   "messages.sync": MessagesSyncPayload;
   "messages.ack": MessageAckPayload;
+  "messages.edit": { items: MessageEditItem[] };
   "presence.update": PresenceUpdatePayload;
   "group.join_request": GroupJoinRequestPayload;
   "messages.delete": MessagesDeletePayload;

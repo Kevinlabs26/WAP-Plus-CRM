@@ -6,6 +6,25 @@ import {
   normalizeGroupMetadata,
   participantRefToJid,
 } from "./groupMeta.mjs";
+import { messageTimestampMs } from "./messageTimestamp.mjs";
+
+export function liveGroupJoin(message, type, stubTypes, isSelfJid) {
+  const groupJid = message?.key?.remoteJid;
+  const messageId = message?.key?.id;
+  if (type !== "notify" || !groupJid?.endsWith("@g.us") || !messageId ||
+      ![stubTypes.GROUP_PARTICIPANT_ADD, stubTypes.GROUP_PARTICIPANT_INVITE,
+        stubTypes.GROUP_PARTICIPANT_ADD_REQUEST_JOIN].includes(message.messageStubType)) return;
+  const joinedAt = messageTimestampMs(message.messageTimestamp, 0);
+  if (!joinedAt) return;
+  const hasNewMember = message.messageStubParameters?.some(value => {
+    try {
+      const member = JSON.parse(value);
+      const jid = participantRefToJid(member);
+      return !!jid && ![jid, member?.lid, member?.phoneNumber, member?.pnJid].some(candidate => candidate && isSelfJid(candidate));
+    } catch { return false; }
+  });
+  if (hasNewMember) return { groupJid, messageId, joinedAt };
+}
 
 /**
  * @param {{
@@ -26,27 +45,53 @@ export function attachGroupParticipantEvents(sock, deps) {
     if (!jid) return "";
     if (typeof deps.lookupName === "function") {
       const n = deps.lookupName(jid);
-      if (n) return n;
+      if (n && !(jid.endsWith("@lid") && /^\+?\d+$/.test(n.trim()))) return n;
     }
     const c = deps.contacts.get(jid);
-    if (c?.displayName) return c.displayName;
-    const phone = String(jid).replace(/@.+$/, "");
-    return phone || jid;
+    if (c?.displayName && !(jid.endsWith("@lid") && /^\+?\d+$/.test(c.displayName.trim()))) {
+      return c.displayName;
+    }
+    return jid;
   };
 
-  const onUpdate = (update) => {
+  const onUpdate = async (update) => {
     const id = update?.id;
     if (!id || !String(id).endsWith("@g.us")) return;
 
-    const body = formatParticipantUpdateBody(update, nameOf);
     const ts = Date.now();
     const msgId = `sys-gpart-${id}-${ts}-${String(update?.action || "x")}`;
-    const participantJids = (
-      Array.isArray(update?.participants) ? update.participants : []
-    )
-      .map((p) => participantRefToJid(p))
-      .filter(Boolean);
-    const authorJid = participantRefToJid(update?.author);
+    const phoneJid = (value) => {
+      const match = /^\+?([1-9]\d{6,14})(?::\d+)?(?:@(?:s\.whatsapp\.net|c\.us))?$/.exec(String(value || "").trim());
+      return match ? match[1] + "@s.whatsapp.net" : "";
+    };
+    const cachedMembers = deps.getCachedParticipants?.(id) || [];
+    const identities = new Map(cachedMembers.flatMap((member) =>
+      [member.id, member.jid, member.lid].filter(Boolean).map((jid) => [jid, member])
+    ));
+    const resolve = async (ref, explicitPhone) => {
+      const jid = participantRefToJid(ref);
+      if (!jid) return "";
+      const known = identities.get(jid);
+      const supplied = [explicitPhone, ref?.phoneNumber, ref?.pnJid, ref?.jidPn,
+        known?.phoneNumber, known?.pnJid, deps.contacts.get(jid)?.phoneE164]
+        .map(phoneJid).find(Boolean);
+      if (!jid.endsWith("@lid")) return phoneJid(jid) || supplied || jid;
+      const resolved = supplied || phoneJid(await deps.resolvePnJid?.(jid));
+      return resolved || jid;
+    };
+    const refs = Array.isArray(update?.participants) ? update.participants : [];
+    const [participants, authorJid] = await Promise.all([
+      Promise.all(refs.map((ref) => resolve(ref))),
+      resolve(update?.author || update?.authorPn, update?.authorPn),
+    ]);
+    const participantJids = participants.filter(Boolean);
+    const originalByResolved = new Map(participants.map((jid, index) => [jid, participantRefToJid(refs[index])]));
+    if (authorJid && update?.author) originalByResolved.set(authorJid, participantRefToJid(update.author));
+    const body = formatParticipantUpdateBody({ ...update, participants: participantJids, author: authorJid }, (jid) => {
+      const original = originalByResolved.get(jid);
+      const name = nameOf(jid);
+      return name === jid && original && original !== jid ? nameOf(original) : name;
+    });
     const sysMsg = {
       id: msgId,
       jid: id,
@@ -103,10 +148,11 @@ export function attachGroupParticipantEvents(sock, deps) {
       .catch(() => undefined);
   };
 
-  sock.ev.on("group-participants.update", onUpdate);
+  const handleUpdate = (update) => { void onUpdate(update).catch(() => undefined); };
+  sock.ev.on("group-participants.update", handleUpdate);
   return () => {
     try {
-      sock.ev.off("group-participants.update", onUpdate);
+      sock.ev.off("group-participants.update", handleUpdate);
     } catch {
       /* ignore */
     }

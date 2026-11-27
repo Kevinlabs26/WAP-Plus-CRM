@@ -40,7 +40,9 @@ test('large quick reply libraries and custom categories survive reload and backu
  const restored=parseBackupJson({version:2,contacts:[{id:'a',name:'A',phone:'12025550100'}],settingsSafe:buildSettingsSafe(settings)});
  assert.equal(restored.settingsSafe.quickReplies.length,1000);
  assert.deepEqual(normalizeLoadedSettings({quickReplies:[]}).quickReplies,[]);
- assert.equal(normalizeLoadedSettings({quickReplies:[...replies,{...replies[0],id:'extra'}]}).quickReplies.length,1000);
+ const expanded = normalizeLoadedSettings({quickReplies:[...replies,{...replies[0],id:'extra'}]}).quickReplies;
+ assert.equal(expanded.length,1001);
+ assert.equal(expanded.at(-1).id,'extra');
 });
 
 test('quick reply translations survive normalization and backup restore',()=>{
@@ -71,7 +73,7 @@ test('folder prompts survive normalization and backup restore without enabling a
  assert.equal(settings.chatFolders.find(f=>f.id==='profile').aiSystemPrompt,'FOLDER ROLE');
  assert.equal(settings.chatFolders.find(f=>f.id==='blank').aiSystemPrompt,undefined);
  assert.equal(settings.chatFolders.find(f=>f.id==='bad').aiSystemPrompt,undefined);
- assert.equal(settings.chatFolders.find(f=>f.id==='long').aiSystemPrompt.length,6000);
+ assert.equal(settings.chatFolders.find(f=>f.id==='long').aiSystemPrompt.length,7000);
  const restarted=normalizeLoadedSettings(JSON.parse(JSON.stringify(settings)));
  assert.equal(restarted.chatFolders.find(f=>f.id==='profile').aiSystemPrompt,'FOLDER ROLE');
  assert.equal(resolveAutoReplyScope(restarted,'a').mode,'manual');

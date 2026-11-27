@@ -9,32 +9,43 @@ const mocks={
  '@/channels':'export const sendRuntimeFromSettings=(s,messages)=>({...s,channelId:s.sendChannel,messages,rateLimits:{minIntervalSec:s.rateMinIntervalSec,perPhonePerMinute:s.ratePerMinute,perPhonePerHour:s.ratePerHour}});export const normalizeChannelId=id=>id;export const dispatchSendText=async(request,runtime)=>{if(globalThis.outreachBeforeTransport)await globalThis.outreachBeforeTransport();if(!runtime.canSend())return {ok:false,error:"automation_cancelled"};globalThis.outreachSent.push({request,gap:runtime.requiredMinGapSec});return {ok:true};};',
  '@/i18n':'export const translateCurrent=(key)=>key;',
  '@/store/appStore':`export const useAppStore=selector=>selector(globalThis.outreachState);useAppStore.getState=()=>globalThis.outreachState;useAppStore.setState=patch=>globalThis.outreachPatch(patch);export const flushPersist=async()=>{if(globalThis.outreachDiskError)throw Error('disk full');globalThis.outreachCheckpoints.push(structuredClone({runs:outreachState.settings.aiOutreachRuns,messages:outreachState.messages}));};`,
- '@/lib/storage':'export const loadMessagesPage=async()=>({items:globalThis.outreachHistoryItems||[]});',
+ '@/lib/storage':'export const loadMessagesPage=async()=>({items:globalThis.outreachHistoryItems||[]});export const saveAppState=async()=>{};export const getStorageEngine=()=>"sqlite";export const canPersistRowDeltas=()=>false;',
+ './museWeb.ts':`export const museWebAccounts=async()=>({primaryId:'muse',selectedId:'muse',accounts:[{id:'muse',name:'Muse'}]});export const nextMuseAutoReplyAccount=async()=>'muse';export const generateMuseWeb=async(...args)=>{await globalThis.outreachBeforeMuseSubmit?.();await args[5]?.();return globalThis.outreachMuse();};`,
+ './museSidebarData.ts':`export const museSidebarData=(_prompt,_settings,_chat,_phone,_connections,allowed)=>allowed ? JSON.stringify([{values:['Requested a catalog update'],freshForAutomaticContact:true}]) : '';export const museSidebarDataVersion=museSidebarData;`,
  '@/store/restoreGuard':'export const isDataRestoreActive=()=>false;export const getDataRestoreGeneration=()=>globalThis.outreachRestoreEpoch||0;',
  './appLockRuntime':'export const isAppLockActive=()=>false;',
 };
-const result=await build({stdin:{contents:`export * from './src/lib/aiOutreach.ts';export * from './src/lib/aiOutreachContext.ts';export * from './src/lib/aiOutreachRules.ts';export * from './src/lib/aiOutreachPreview.ts';export * from './src/lib/aiReplyStatus.ts';export {SendQueueWatcher} from './src/components/bridge/SendQueueWatcher.tsx';export {normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {buildSettingsSafe,parseBackupJson} from './src/lib/exportData.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',alias:{'@':root+'src'},plugins:[{name:'outreach-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
+const result=await build({stdin:{contents:`export * from './src/lib/aiOutreach.ts';export * from './src/lib/aiOutreachContext.ts';export * from './src/lib/aiOutreachRules.ts';export * from './src/lib/aiOutreachPreview.ts';export * from './src/lib/aiReplyStatus.ts';export {tickAiAutoFollowUps} from './src/lib/aiAutoReply.ts';export {SendQueueWatcher} from './src/components/bridge/SendQueueWatcher.tsx';export {normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {buildSettingsSafe,parseBackupJson} from './src/lib/exportData.ts';export {setAppLockActive} from './src/lib/appLockRuntime.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',alias:{'@':root+'src'},plugins:[{name:'outreach-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
 let sequence=0;
 async function fixture(mode='auto',trigger='new'){
  const api=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].text+'\n//# sourceURL=ai-proactive-fixture-'+sequence+++'.js').toString('base64'));
  const original={now:Date.now,fetch:globalThis.fetch,window:globalThis.window};let now=Date.parse('2026-11-06T09:15:00Z'),calls=0,fetchGate,networkFailure=false;
+ const requests=[];
  Date.now=()=>now;globalThis.outreachDiskError=false;globalThis.outreachCheckpoints=[];
  globalThis.outreachRestoreEpoch=0;
- globalThis.outreachSent=[];globalThis.outreachBeforeTransport=undefined;globalThis.window={setInterval(){return 1;},clearInterval(){},setTimeout(){return 1;}};
+ globalThis.outreachSent=[];globalThis.outreachBeforeTransport=undefined;globalThis.outreachBeforeMuseSubmit=undefined;globalThis.window={setInterval(){return 1;},clearInterval(){},setTimeout(){return 1;}};
  globalThis.outreachHistoryItems=[];
  globalThis.outreachPatch=patch=>{outreachState={...outreachState,...(typeof patch==='function'?patch(outreachState):patch)};outreachState.messagesByChatId=Object.fromEntries(outreachState.chats.map(chat=>[chat.id,outreachState.messages.filter(message=>message.chatId===chat.id)]));};
- globalThis.fetch=async()=>{calls++;if(fetchGate)await fetchGate;if(networkFailure)return Response.json({error:{message:'network failure'}},{status:503});return Response.json({choices:[{message:{content:'[{"text":"Bonjour, comment allez-vous ?"}]'}}]});};
- const settings=api.normalizeLoadedSettings({sendChannel:'baileys',aiProvider:'custom',customAiKey:'fixture',customAiModel:'fixture',customAiBaseUrl:'https://example.invalid',aiSystemPrompt:'Be brief and warm.',aiReplyMode:'semi',activeAccountId:'b',liveBaileysAccountId:'b',waAccounts:[{id:'a',label:'A',status:'connected'},{id:'b',label:'B',status:'connected'}],chatFolders:[{id:'folder',name:'Folder',sort:0,chatIds:['chat'],scope:{type:'account',accountId:'a'},aiOutreach:{enabled:true,mode,trigger,time:'09:00',timeZone:'UTC',dailyLimit:10,minIdleHours:12,goal:'Ask how the person is doing.'}}]});
+ globalThis.fetch=async(_url,options)=>{calls++;requests.push(options?.body);if(fetchGate)await fetchGate;if(networkFailure)return Response.json({error:{message:'network failure'}},{status:503});return Response.json({choices:[{message:{content:'[{"text":"Bonjour, comment allez-vous ?"}]'}}]});};
+ globalThis.outreachMuse=async()=>{calls++;if(fetchGate)await fetchGate;return JSON.stringify({action:'send',text:'Bonjour, comment allez-vous ?',reason:'A catalog update was requested.',evidence:'Requested a catalog update'});};
+ const settings=api.normalizeLoadedSettings({sendChannel:'baileys',aiProvider:'custom',customAiKey:'fixture',customAiModel:'fixture',customAiBaseUrl:'https://example.invalid',aiSystemPrompt:'Be brief and warm.',aiReplyMode:'semi',activeAccountId:'b',liveBaileysAccountId:'b',waAccounts:[{id:'a',label:'A',status:'connected'},{id:'b',label:'B',status:'connected'}],chatFolders:[{id:'folder',name:'Folder',sort:0,chatIds:['chat'],scope:{type:'account',accountId:'a'},aiOutreach:{enabled:true,mode,trigger,startMode:'scheduled',time:'09:00',timeZone:'UTC',dailyLimit:10,minIdleHours:12,goal:'Ask how the person is doing.'}}]});
+ if(mode==='auto'){
+  settings.aiProvider='muse';
+  settings.aiOutreachMuseAccountId='muse';
+  settings.musePrivacyByAccountId={muse:{trainingDisabledConfirmedAt:now}};
+  settings.chatFolders.find(folder=>folder.id==='folder').aiOutreach.allowSidebarData=true;
+ }
  globalThis.outreachState={settings,hydrated:true,uiReady:true,baileysUi:{connection:'connected'},draftReply:'UNSENT HUMAN DRAFT',messages:[],messagesByChatId:{},
   contacts:[{id:'person',name:'Person',phone:'+12025550101',accountId:'a',tags:[],stage:'new'}],
   chats:[{id:'chat',contactId:'person',accountId:'a',phoneId:'a',contactName:'Person',updatedAt:'2026-11-05T12:00:00.000Z',lastMessage:'',hasMessageHistory:false,hasOutgoingHistory:false}],
   updateSettings(patch){outreachState={...outreachState,settings:{...outreachState.settings,...patch}};},
   enqueueOutgoingMessage(input){const message={id:'out-'+outreachState.messages.length,direction:'out',sentAt:new Date(now).toISOString(),...input};outreachState={...outreachState,messages:[...outreachState.messages,message],messagesByChatId:{...outreachState.messagesByChatId,[input.chatId]:[...(outreachState.messagesByChatId[input.chatId]||[]),message]},draftReply:'',chats:outreachState.chats.map(chat=>chat.id===input.chatId?{...chat,lastMessage:input.body,lastMessageDirection:'out',updatedAt:message.sentAt}:chat)};return message.id;},
   updateMessageDelivery(id,patch){const messages=outreachState.messages.map(message=>message.id===id?{...message,...patch}:message);outreachState={...outreachState,messages,messagesByChatId:Object.fromEntries(outreachState.chats.map(chat=>[chat.id,messages.filter(message=>message.chatId===chat.id)]))};},
+  patchMessage(id,patch){outreachState.updateMessageDelivery(id,patch);},
   listRetryableOutgoing(){return outreachState.messages;},
   setDraftReply(value){outreachState={...outreachState,draftReply:value};},pushToast(){},
  };
- return {api,get state(){return outreachState;},get calls(){return calls;},advance(ms){now+=ms;},get now(){return now;},gate(value){fetchGate=value;},fail(value){networkFailure=value;},close(){globalThis.outreachQueueCleanup?.();globalThis.outreachQueueCleanup=undefined;Date.now=original.now;globalThis.fetch=original.fetch;globalThis.window=original.window;api.stopAiOutreach();}};
+ return {api,requests,get state(){return outreachState;},get calls(){return calls;},advance(ms){now+=ms;},get now(){return now;},gate(value){fetchGate=value;},fail(value){networkFailure=value;},close(){globalThis.outreachQueueCleanup?.();globalThis.outreachQueueCleanup=undefined;Date.now=original.now;globalThis.fetch=original.fetch;globalThis.window=original.window;api.stopAiOutreach();}};
 }
 
 function addQueuePeople(h,count=3){
@@ -44,6 +55,39 @@ function addQueuePeople(h,count=3){
   h.state.settings.chatFolders.find(f=>f.id==='folder').chatIds.push(`chat-${i}`);
  }
 }
+
+test('scheduled outreach fills unused first-contact slots without invalidating an existing draft',async()=>{
+ const h=await fixture('draft');try{
+  const folder=h.state.settings.chatFolders.find(item=>item.id==='folder');
+  folder.scope={type:'all'};
+  Object.assign(folder.aiOutreach,{firstContactQuotas:{a:2},firstContactAssignments:{':12025550101':'a'}});
+  await h.api.tickAiOutreach();
+  const original=h.state.settings.aiOutreachRuns[0];
+  assert.equal(original.status,'draft');
+  addQueuePeople(h,3);
+  globalThis.outreachPatch({chats:[...h.state.chats],contacts:[...h.state.contacts]});
+  h.advance(30_000);await h.api.tickAiOutreach();
+  const added=h.state.settings.aiOutreachRuns.find(run=>run.chatId==='chat-1');
+  assert.equal(added?.accountId,'a');
+  assert.equal(h.state.settings.aiOutreachRuns.length,2);
+  assert.equal(h.api.normalizeLoadedSettings(h.state.settings).chatFolders.find(item=>item.id==='folder').aiOutreach.scheduledFirstContactAssignments[':12025550102'],'a');
+  assert.equal(await h.api.queueOutreachDraft(original.id),true);
+ }finally{h.close();}
+});
+
+test('scheduled outreach releases a removed unsent allocation and saves the replacement across reload',async()=>{
+ const h=await fixture('draft');try{
+  addQueuePeople(h,2);
+  const folder=h.state.settings.chatFolders.find(item=>item.id==='folder');
+  folder.scope={type:'all'};
+  folder.chatIds=['chat-1'];
+  Object.assign(folder.aiOutreach,{firstContactQuotas:{a:1},firstContactAssignments:{':12025550101':'a'}});
+  await h.api.tickAiOutreach();
+  assert.equal(h.state.settings.aiOutreachRuns[0]?.chatId,'chat-1');
+  const saved=h.api.normalizeLoadedSettings(h.state.settings).chatFolders.find(item=>item.id==='folder').aiOutreach;
+  assert.deepEqual(saved.scheduledFirstContactAssignments,{':12025550101':null,':12025550102':'a'});
+ }finally{h.close();}
+});
 
 test('eligible people are durably listed before generation, preserving FIFO while batching generation on later ticks',async()=>{
  const h=await fixture();try{
@@ -100,6 +144,33 @@ test('retrying a failed delivery reuses its message and rejects uncertain delive
   assert.equal(h.calls,1);assert.equal(h.state.messages.length,1);assert.equal(h.state.messages[0].deliveryStatus,'queued');
   h.state.updateMessageDelivery(run.messageId,{deliveryStatus:'failed',deliveryUncertain:true});h.state.settings.aiOutreachRuns[0].status='failed';
   assert.equal(await h.api.retryAiOutreach(run.id),false);
+ }finally{h.close();}
+});
+
+test('an expired outreach with unconfirmed delivery blocks the same number on another account until acknowledged',async()=>{
+ const h=await fixture('draft');try{
+  const original=h.state.settings.chatFolders.find(folder=>folder.id==='folder');
+  h.state.settings.chatFolders.push({...original,id:'other',scope:{type:'account',accountId:'b'},chatIds:['chat-b'],aiOutreach:{...original.aiOutreach}});
+  h.state.chats.push({...h.state.chats[0],id:'chat-b',contactId:'person-b',accountId:'b',phoneId:'b'});
+  h.state.contacts.push({...h.state.contacts[0],id:'person-b',accountId:'b'});
+  const yesterday=new Date(h.now-86_400_000).toISOString();
+  h.state.settings.aiOutreachRuns=[{id:'expired',folderId:'folder',chatId:'chat',accountId:'a',recipient:'+12025550101',day:yesterday.slice(0,10),at:yesterday,basisAt:yesterday,status:'expired',messageId:'unknown'}];
+  globalThis.outreachPatch({messages:[{id:'unknown',chatId:'chat',accountId:'a',direction:'out',systemKind:'ai_proactive',sentAt:yesterday,body:'Previous outreach',deliveryStatus:'failed',deliveryUncertain:true}]});
+  const check=()=>h.api.inspectOutreachCandidate(h.state,'other','chat-b',h.now).reason;
+  assert.equal(check(),'delivery_pending');
+  assert.equal((await h.api.buildOutreachPreview(h.state,['other'],h.now)).rows[0].reason,'delivery_pending');
+  await h.api.tickAiOutreach();
+  assert.equal(h.calls,0);
+  h.state.updateMessageDelivery('unknown',{deliveryStatus:'delivered'});
+  assert.equal(check(),'ready');
+  original.aiOutreach.enabled=false;
+  await h.api.tickAiOutreach(h.now,true);
+  const next=h.state.settings.aiOutreachRuns.find(run=>run.folderId==='other');
+  assert.equal(await h.api.queueOutreachDraft(next.id),true);
+  globalThis.outreachBeforeTransport=()=>h.state.updateMessageDelivery('unknown',{deliveryStatus:'failed'});
+  h.api.SendQueueWatcher();
+  await new Promise(resolve=>setTimeout(resolve,25));
+  assert.equal(outreachSent.length,0);
  }finally{h.close();}
 });
 
@@ -307,6 +378,7 @@ test('a folder pause at the final transport gate retains the unsent queue item f
 
 test('chat status explains configuration and connection blocks without calling AI',async()=>{
  const h=await fixture();try{
+  h.state.settings.aiProvider='custom';
   h.state.settings.aiReplyMode='auto';const status=()=>h.api.getChatAiStatus({settings:h.state.settings,chatId:'chat',accountId:'a',connected:true,thread:[],now:h.now});
   assert.equal(status().key,'ready');h.state.settings.aiAutoReplyPaused=true;assert.equal(status().key,'paused');
   h.state.settings.aiAutoReplyPaused=false;h.state.settings.aiAutoReplyModeByChatId={chat:'manual'};assert.equal(status().key,'manual');
@@ -412,6 +484,24 @@ test('the real send queue sends to the original account with spacing and blocks 
  }finally{h.close();}}
 });
 
+test('locking at the outgoing transport gate preserves the queued message and its retry count',async()=>{
+ const h=await fixture();try{
+  await h.api.tickAiOutreach();
+  const original=h.state.messages[0];
+  let tick, lockedAtGate=false;
+  window.setInterval=callback=>{tick=callback;return 1;};
+  globalThis.outreachBeforeTransport=()=>{lockedAtGate=true;h.api.setAppLockActive(true);};
+  h.api.SendQueueWatcher();
+  for(let i=0;i<50&&(!lockedAtGate||h.state.messages[0].deliveryStatus==='pending');i++)await new Promise(resolve=>setTimeout(resolve,1));
+  assert.equal(lockedAtGate,true);assert.equal(outreachSent.length,0);
+  assert.equal(h.state.messages[0].deliveryStatus,'queued');
+  assert.equal(h.state.messages[0].retryCount,original.retryCount ?? 0);
+  h.api.setAppLockActive(false);globalThis.outreachBeforeTransport=undefined;tick();
+  for(let i=0;i<50&&!outreachSent.length;i++)await new Promise(resolve=>setTimeout(resolve,1));
+  assert.equal(outreachSent.length,1);assert.equal(h.state.messages[0].id,original.id);
+ }finally{h.api.setAppLockActive(false);h.close();}
+});
+
 test('temporary disconnection keeps queued outreach on its original account without another AI call',async()=>{
  const h=await fixture();try{
   await h.api.tickAiOutreach();h.state.settings.waAccounts[0].status='disconnected';h.api.SendQueueWatcher();for(let i=0;i<20;i++)await new Promise(resolve=>setImmediate(resolve));
@@ -505,6 +595,215 @@ test('runner starts an immediate round before the regular schedule without chang
   assert.equal(h.state.draftReply,'UNSENT HUMAN DRAFT');
  }finally{h.close();}
 });
+
+test('an immediate deadline survives reload and stops a queued message at the transport gate',async()=>{
+ const h=await fixture('draft');try{
+  const rule=h.state.settings.chatFolders.find(f=>f.id==='folder').aiOutreach;
+  Object.assign(rule,{startMode:'immediate',runNowAt:h.now});
+  await h.api.tickAiOutreach();
+  const run=h.state.settings.aiOutreachRuns[0];
+  assert.equal(run.expiresAt,h.now+2*3600_000);
+  assert.equal(h.api.normalizeOutreachRuns([{...run,expiresAt:undefined}])[0].expiresAt,run.expiresAt);
+  assert.equal(await h.api.queueOutreachDraft(run.id),true);
+  h.advance(2*3600_000-1);
+  globalThis.outreachBeforeTransport=()=>h.advance(1);
+  h.api.SendQueueWatcher();
+  await new Promise(resolve=>setTimeout(resolve,25));
+  assert.equal(outreachSent.length,0);
+  assert.equal(h.state.messages[0].lastError,'outreachReason.expired');
+  await h.api.tickAiOutreach(h.now,true);
+  assert.equal(h.state.settings.aiOutreachRuns[0].status,'expired');
+  assert.equal(await h.api.retryAiOutreach(run.id),false);
+ }finally{h.close();}
+});
+
+test('immediate generation that returns after the deadline becomes expired without creating a draft',async()=>{
+ const h=await fixture('draft');try{
+  Object.assign(h.state.settings.chatFolders.find(folder=>folder.id==='folder').aiOutreach,{startMode:'immediate',runNowAt:h.now});
+  let release;h.gate(new Promise(resolve=>release=resolve));
+  const pending=h.api.tickAiOutreach();
+  while(!h.calls)await new Promise(resolve=>setImmediate(resolve));
+  h.advance(2*3600_000);release();await pending;
+  assert.equal(h.state.settings.aiOutreachRuns[0].status,'expired');
+  assert.equal(h.state.messages.length,0);
+ }finally{h.close();}
+});
+
+test('a Muse request that waits past the immediate deadline is never submitted',async()=>{
+ const h=await fixture();try{
+  Object.assign(h.state.settings.chatFolders.find(folder=>folder.id==='folder').aiOutreach,{startMode:'immediate',runNowAt:h.now});
+  globalThis.outreachBeforeMuseSubmit=()=>h.advance(2*3600_000);
+  await h.api.tickAiOutreach();
+  assert.equal(h.calls,0);
+  assert.equal(h.state.settings.aiOutreachRuns[0].status,'expired');
+ }finally{h.close();}
+});
+
+test('automatic mode keeps a draft when Muse returns a send decision without authorized evidence',async()=>{
+ const h=await fixture();try{
+  h.state.settings.chatFolders.find(folder=>folder.id==='folder').aiOutreach.allowSidebarData=false;
+  await h.api.tickAiOutreach();
+  assert.equal(h.calls,1);
+  assert.equal(h.state.settings.aiOutreachRuns[0].status,'draft');
+  assert.equal(h.state.messages.length,0);
+ }finally{h.close();}
+});
+
+test('rechecking a draft queues a verified first contact on its assigned account without a model evidence quote',async()=>{
+ const h=await fixture();try{
+  const folder=h.state.settings.chatFolders.find(folder=>folder.id==='folder');
+  folder.scope={type:'all'};
+  Object.assign(folder.aiOutreach,{allowSidebarData:false,firstContactQuotas:{b:1},firstContactAssignments:{':12025550101':'b'}});
+  h.state.ensureChatForContact=(contactId,accountId)=>{
+   const id='assigned-chat';
+   if(!h.state.chats.some(chat=>chat.id===id))globalThis.outreachPatch({chats:[...h.state.chats,{...h.state.chats[0],id,contactId,accountId,phoneId:accountId,hasMessageHistory:undefined}]});
+   return id;
+  };
+  h.state.patchChat=(chatId,patch)=>globalThis.outreachPatch({chats:h.state.chats.map(chat=>chat.id===chatId?{...chat,...patch}:chat)});
+  globalThis.outreachMuse=async()=>JSON.stringify({action:'draft',text:'Bonjour !',reason:'Human review requested.'});
+  await h.api.tickAiOutreach();
+  const draft=h.state.settings.aiOutreachRuns[0];
+  assert.equal(draft.status,'draft');
+  assert.equal(h.state.messages.length,0);
+  globalThis.outreachMuse=async()=>JSON.stringify({action:'send',text:'Bonjour !',reason:'The folder permits a neutral first greeting.'});
+  assert.equal(await h.api.retryAiOutreach(draft.id),true);
+  const run=h.state.settings.aiOutreachRuns[0],message=h.state.messages[0];
+  assert.equal(run.id,draft.id);
+  assert.equal(run.status,'queued');
+  assert.equal(run.accountId,'b');
+  assert.equal(message.deliveryStatus,'queued');
+  assert.equal(message.accountId,'b');
+  assert.equal(message.chatId,'assigned-chat');
+  assert.equal(h.state.messages.length,1);
+  assert.ok(h.api.currentOutreachContext(h.state,message));
+  assert.equal(outreachSent.length,0);
+ }finally{h.close();}
+});
+
+test('rechecking unclear history keeps a draft even if Muse proposes sending',async()=>{
+ const h=await fixture();try{
+  const folder=h.state.settings.chatFolders.find(folder=>folder.id==='folder');
+  folder.scope={type:'all'};
+  Object.assign(folder.aiOutreach,{firstContactQuotas:{b:1},firstContactAssignments:{':12025550101':'b'}});
+  delete h.state.chats[0].hasMessageHistory;
+  await h.api.tickAiOutreach();
+  const draft=h.state.settings.aiOutreachRuns[0];
+  assert.equal(draft.status,'draft');
+  assert.equal(await h.api.retryAiOutreach(draft.id),true);
+  assert.equal(h.state.settings.aiOutreachRuns[0].status,'draft');
+  assert.equal(h.state.settings.aiOutreachRuns[0].decisionDetails.reason,'outreachReason.historyReview');
+  assert.equal(h.state.messages.length,0);
+ }finally{h.close();}
+});
+
+test('a folder contact can use the original WhatsApp conversation under a different saved contact ID',async()=>{
+ const h=await fixture();try{
+  const folder=h.state.settings.chatFolders.find(folder=>folder.id==='folder');
+  folder.scope={type:'all'};
+  folder.aiOutreach.firstContactQuotas={a:1};
+  h.state.contacts=[...h.state.contacts,{...h.state.contacts[0],id:'original-person',accountId:'b'}];
+  const at='2026-11-05T13:00:00.000Z';
+  h.state.chats=[...h.state.chats,{...h.state.chats[0],id:'original-chat',contactId:'original-person',accountId:'b',phoneId:'b',updatedAt:at,hasMessageHistory:true,lastSuccessfulOutgoing:{at,accountId:'b'}}];
+  await h.api.tickAiOutreach();
+  const message=h.state.messages[0];
+  assert.equal(h.state.settings.aiOutreachRuns[0].status,'queued');
+  assert.equal(message.accountId,'b');
+  assert.equal(message.contactId,'original-person');
+  assert.equal(message.chatId,'original-chat');
+  assert.ok(h.api.currentOutreachContext(h.state,message));
+  assert.deepEqual(folder.chatIds,['chat']);
+ }finally{h.close();}
+});
+
+test('welcome backup retains versions and images but restores with automation disabled',async()=>{
+ const h=await fixture();try{
+  const key=JSON.stringify(['a','123456@g.us']);
+  const templates=['Welcome!',{text:'With image',imageDataUrl:'data:image/png;base64,iVBORw0KGgo='}];
+  h.state.settings.groupWelcomeRules={[key]:{enabled:true,templates}};
+  const settingsSafe=h.api.buildSettingsSafe(h.state.settings);
+  const restored=h.api.parseBackupJson(JSON.parse(JSON.stringify({version:2,contacts:h.state.contacts,settingsSafe})));
+  assert.deepEqual(h.api.normalizeLoadedSettings(restored.settingsSafe).groupWelcomeRules[key],{enabled:false,templates});
+ }finally{h.close();}
+});
+
+test('a draft expires in its folder time zone and the next round can reconsider the same contact',async()=>{
+ const h=await fixture('draft');try{
+  Object.assign(h.state.settings.chatFolders.find(folder=>folder.id==='folder').aiOutreach,{time:'00:00',timeZone:'Europe/Paris'});
+  await h.api.tickAiOutreach();const yesterday=h.state.settings.aiOutreachRuns[0];
+  h.advance(Date.parse('2026-11-06T23:00:00Z')-h.now);
+  assert.equal(h.api.inspectOutreachCandidate(h.state,'folder','chat',h.now).reason,'ready');
+  assert.equal(await h.api.queueOutreachDraft(yesterday.id),false);
+  await h.api.tickAiOutreach();
+  assert.deepEqual(h.state.settings.aiOutreachRuns.map(run=>[run.status,run.day]),[['expired','2026-11-06'],['draft','2026-11-07']]);
+  assert.equal(h.state.settings.aiOutreachRuns[0].text,yesterday.text);
+ }finally{h.close();}
+});
+
+test('old completed records are archived without truncating recent deduplication or open runs on reload',async()=>{
+ const h=await fixture('draft');try{
+  addQueuePeople(h,2);
+  const row={folderId:'folder',chatId:'chat',accountId:'a',day:'2026-10-01',at:'2026-10-01T09:00:00Z',basisAt:'',status:'sent'};
+  h.state.settings.aiOutreachRuns=[
+   ...Array.from({length:10_001},(_,i)=>({...row,id:`history-${i}`})),
+   {...row,id:'today',day:'2026-11-06',at:new Date(h.now).toISOString()},
+  ];
+  await h.api.tickAiOutreach();
+  assert.equal(h.calls,1);
+  const restored=h.api.normalizeLoadedSettings(h.state.settings).aiOutreachRuns;
+  assert.equal(restored.length,10_003);
+  assert.equal(restored.filter(run=>run.archived).length,10_001);
+  assert.equal(restored.find(run=>run.id==='today').archived,undefined);
+  assert.equal(restored.at(-1).chatId,'chat-1');
+  assert.equal(restored.at(-1).status,'draft');
+  const open={...row,id:'open',status:'waiting',archived:true};
+  assert.deepEqual(h.api.normalizeOutreachRuns([open,...restored]).slice(0,1).map(run=>[run.id,run.status,run.archived]),[['open','waiting',undefined]]);
+ }finally{h.close();}
+});
+
+test('a changed prompt template discards automatic follow-up output and the next attempt uses the new version',async()=>{
+ const h=await fixture('draft');try{
+  Object.assign(h.state.settings,{aiReplyMode:'auto',aiAutoFollowUpEnabled:true,aiAutoFollowUpEnabledAt:h.now-180_000,aiAutoFollowUpDelaysMinutes:[1]});
+  h.state.settings.chatFolders.find(folder=>folder.id==='folder').aiPromptPlan={mode:'fixed',templateId:'follow-up'};
+  h.state.settings.aiPromptTemplates=[{id:'follow-up',name:'Follow-up',prompt:'Use original guidance.'}];
+  const base={chatId:'chat',contactId:'person',accountId:'a'};
+  globalThis.outreachPatch({messages:[
+   {...base,id:'inbound',direction:'in',body:'Please keep me informed.',sentAt:new Date(h.now-150_000).toISOString()},
+   {...base,id:'first',direction:'out',body:'I will keep you informed.',sentAt:new Date(h.now-120_000).toISOString(),deliveryStatus:'sent',systemKind:'ai_auto_reply',aiAutoFollowUpRootId:'inbound',aiAutoFollowUpSentAt:h.now-120_000},
+  ]});
+  let release;h.gate(new Promise(resolve=>release=resolve));
+  const pending=h.api.tickAiAutoFollowUps();
+  while(!h.calls)await new Promise(resolve=>setImmediate(resolve));
+  h.state.settings.aiPromptTemplates=[{...h.state.settings.aiPromptTemplates[0],prompt:'Use updated guidance.'}];
+  release();await pending;
+  assert.equal(h.state.messages.length,2);
+  assert.match(h.state.messages[1].lastError,/提示词/);
+  h.advance(60_000);
+  await h.api.tickAiAutoFollowUps();
+  assert.ok(h.requests[0].includes('Use original guidance.'));
+  assert.ok(h.requests[1].includes('Use updated guidance.'));
+  assert.equal(outreachSent.length,1);
+  assert.equal(h.state.messages.at(-1).aiAutoFollowUpStep,1);
+  assert.match(h.state.messages.at(-1).aiReplyContextHash,/^[a-f0-9]{64}$/);
+ }finally{h.close();}
+});
+
+test('automatic follow-ups continue after server, delivered, read or played receipts',async()=>{
+ for(const status of ['server','delivered','read','played']){
+  const h=await fixture('draft');try{
+   Object.assign(h.state.settings,{aiReplyMode:'auto',aiAutoFollowUpEnabled:true,aiAutoFollowUpEnabledAt:h.now-600_000,aiAutoFollowUpDelaysMinutes:[1,1]});
+   const base={chatId:'chat',contactId:'person',accountId:'a'};
+   globalThis.outreachPatch({messages:[
+    {...base,id:'inbound',direction:'in',body:'Please keep me informed.',sentAt:new Date(h.now-360_000).toISOString()},
+    {...base,id:'first',direction:'out',body:'I will keep you informed.',sentAt:new Date(h.now-240_000).toISOString(),deliveryStatus:'read',systemKind:'ai_auto_reply',aiAutoFollowUpRootId:'inbound',aiAutoFollowUpSentAt:h.now-240_000},
+    {...base,id:'next',direction:'out',body:'An update will be available soon.',sentAt:new Date(h.now-120_000).toISOString(),deliveryStatus:status,systemKind:'ai_auto_reply',aiAutoFollowUpRootId:'inbound',aiAutoFollowUpStep:1,aiAutoFollowUpSentAt:h.now-120_000},
+   ]});
+   await h.api.tickAiAutoFollowUps();
+   assert.equal(h.state.messages.at(-1).aiAutoFollowUpStep,2,status);
+   assert.equal(outreachSent.length,1,status);
+  }finally{h.close();}
+ }
+});
+
 test('scheduled outreach waits for the new local day schedule after midnight',async()=>{const h=await fixture();try{const rule=h.state.settings.chatFolders.find(f=>f.id==='folder').aiOutreach;rule.time='22:55';rule.timeZone='Europe/Paris';h.advance(Date.parse('2026-11-06T23:06:00Z')-h.now);assert.equal(h.api.outreachRunClock(rule,h.now).day,'2026-11-07');assert.equal(h.api.inspectOutreachCandidate(h.state,'folder','chat',h.now).reason,'not_time');assert.equal(h.api.nextOutreachWindow(rule,h.now),Date.parse('2026-11-07T21:55:00Z'));assert.equal(h.calls,0);}finally{h.close();}});
 
 test('legacy allocation fields cannot reroute the current conversation to another account',async()=>{const h=await fixture();try{const folder=h.state.settings.chatFolders.find(f=>f.id==='folder');folder.scope={type:'all'};folder.aiOutreach.firstContactAssignments={':12025550101':'b'};const candidate=h.api.inspectOutreachCandidate(h.state,'folder','chat',h.now);assert.equal(candidate.candidate.accountId,'a');assert.equal(h.state.chats[0].accountId,'a');assert.equal(h.calls,0);}finally{h.close();}});

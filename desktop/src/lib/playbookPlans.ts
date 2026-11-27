@@ -16,6 +16,9 @@ const formats=new Map<string,Intl.DateTimeFormat>();
 const dateNumber=(date:string)=>{if(!/^\d{4}-\d{2}-\d{2}$/.test(date))return NaN;const n=Date.parse(date+'T00:00:00Z');return Number.isFinite(n)&&new Date(n).toISOString().slice(0,10)===date?n:NaN;};
 export function scheduledPlaybook(plans:readonly PlaybookPlan[],schedule:PlaybookSchedule,now=Date.now()) {
  const plan=plans.find(p=>p.id===schedule.planId);
+ return scheduledPlan(plan,schedule,now);
+}
+export function scheduledPlan(plan: Pick<PlaybookPlan, "name" | "days"> | undefined, schedule: Omit<PlaybookSchedule, "planId">, now=Date.now(), loop=false) {
  const start=dateNumber(schedule.startDate);
  if(!plan||!plan.days.length)return {id:'',name:'',day:0,next:'',error:'聊天方案已不存在或没有每日内容，请重新选择'};
  if(!Number.isFinite(start)||!/^([01]\d|2[0-3]):[0-5]\d$/.test(schedule.switchTime))return {id:'',name:plan.name,day:0,next:'',error:'方案开始日期或切换时间无效'};
@@ -28,5 +31,7 @@ export function scheduledPlaybook(plans:readonly PlaybookPlan[],schedule:Playboo
   if(wall<180)for(let i=1;i<=180&&!switched;i++){const prior=clock(now-i*60000);switched=prior.date===current.date&&prior.time>=schedule.switchTime;}}
  const day=Math.floor((dateNumber(current.date)-start)/86400000)+Number(switched);
  const nextDate=day<1?schedule.startDate:new Date(dateNumber(current.date)+(switched?86400000:0)).toISOString().slice(0,10);
- return {id:day<1?'off':plan.days[Math.min(day,plan.days.length)-1],name:plan.name,day:Math.min(plan.days.length,Math.max(0,day)),ended:day>=plan.days.length,next:day>=plan.days.length?'':nextDate+' '+schedule.switchTime+' · '+schedule.timeZone};
+ const index = day < 1 ? -1 : loop ? (day - 1) % plan.days.length : Math.min(day,plan.days.length)-1;
+ const ended = !loop && day >= plan.days.length;
+ return {id:index<0?'off':plan.days[index],name:plan.name,day:index+1,ended,next:ended?'':nextDate+' '+schedule.switchTime+' · '+schedule.timeZone};
 }

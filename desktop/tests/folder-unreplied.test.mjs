@@ -10,7 +10,7 @@ const mocks={
  '@tauri-apps/api/core':'export const invoke=(command,args)=>globalThis.folderInboundNative(command,args);',
 };
 const built=await build({stdin:{contents:"export * from './src/lib/folderUnreplied.ts';export {findChatsWithInbound} from './src/lib/storage.ts';",resolveDir:fileURLToPath(new URL('../',import.meta.url))},bundle:true,write:false,format:'esm',platform:'node',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},plugins:[{name:'storage-boundary',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
-const {folderPhoneCandidates,neverRepliedPhones,copyNeverRepliedFolderNumbers,findChatsWithInbound}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text+'\n//# sourceURL=folder-unreplied-tests.js').toString('base64'));
+const {folderPhoneCandidates,neverRepliedPhones,copyNeverRepliedFolderNumbers,copyInactiveFolderNumbers,findChatsWithInbound}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text+'\n//# sourceURL=folder-unreplied-tests.js').toString('base64'));
 const phone=n=>`+12025550${String(n).padStart(3,'0')}`;
 function fixture(){
  const contacts=Array.from({length:8},(_,i)=>({id:'c'+i,name:'Person '+i,phone:phone(i),accountId:'a'}));
@@ -18,6 +18,19 @@ function fixture(){
  return {contacts,chats,messages:[],hydrated:true,uiReady:true,settings:{liveBaileysAccountId:'a',activeAccountId:'a',chatFolders:[{id:'folder',scope:{type:'account',accountId:'a'},chatIds:chats.slice(0,6).map(c=>c.id)},{id:'child',parentId:'folder',scope:{type:'account',accountId:'a'},chatIds:['c6']}],chatFolderClones:[{id:'clone',folderId:'folder',sourceChatId:'c7'}]}};
 }
 const inbound=(id,extra={})=>({id:'m-'+id,chatId:id,accountId:'a',direction:'in',body:'reply',...extra});
+
+test('failed send previews do not hide an inactive contact and recent stored replies still count',async()=>{
+ const state=fixture();
+ state.settings.chatFolders[0].chatIds=['c0','c1'];state.settings.chatFolderClones=[];
+ Object.assign(state.chats[0],{hasMessageHistory:true,lastMessageDirection:'out',updatedAt:'2026-11-24T12:00:00Z'});
+ state.messages=[inbound('c0',{direction:'out',deliveryStatus:'failed',sentAt:'2026-11-24T12:00:00Z'})];
+ let text;
+ const count=await copyInactiveFolderNumbers('folder',Date.parse('2026-11-15'),false,{
+  getState:()=>state,flush:async()=>{},findLatestActivity:async()=>new Map([['c0',Date.parse('2026-10-15')],['c1',Date.parse('2026-11-22')]]),
+  writeText:async value=>{text=value;},
+ });
+ assert.equal(count,1);assert.equal(text,phone(0));
+});
 
 test('only the current folder and its explicit clones are candidates; groups, notes and non-phone identities are excluded',()=>{
  const state=fixture();

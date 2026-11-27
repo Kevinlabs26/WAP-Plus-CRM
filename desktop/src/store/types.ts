@@ -30,6 +30,7 @@ import type {
 export type NavId =
   | "phones"
   | "chats"
+  | "contacts"
   | "stats"
   | "today"
   | "broadcast"
@@ -68,6 +69,7 @@ export interface ConfirmRequest {
 /** 运行时 Bridge 连接快照（不持久化） */
 export interface BridgeRuntime {
   connected: boolean;
+  deviceId?: string | null;
   host: string;
   port: number;
   deviceName: string | null;
@@ -145,7 +147,7 @@ export interface AppState extends PersistSlice {
   /** 聊天页右侧客户工作台是否收起 */
   crmPanelCollapsed: boolean;
   /** 客户工作台当前页签 */
-  crmPanelTab: "customer" | "quick-replies" | "images";
+  crmPanelTab: "customer" | "quick-replies" | "images" | "agent";
   chatListFilter: ChatListFilter;
   toasts: ToastItem[];
   /** 应用内确认框（替代 window.confirm） */
@@ -171,6 +173,7 @@ export interface AppState extends PersistSlice {
    */
   enqueueOutgoingMessage: (input: {
     body: string;
+    dedupeId?: string;
     chatId?: string | null;
     contactId?: string | null;
     phoneE164?: string;
@@ -179,7 +182,13 @@ export interface AppState extends PersistSlice {
     accountId?: string;
     systemKind?: string;
     aiReplyContextHash?: string;
+    aiReplyImageAssetId?: string;
     aiReplyInboundId?: string;
+    aiReplyReceivedAt?: number;
+    aiReplyDurationMs?: number;
+    aiReplyMuseAccountId?: string;
+    aiReplyMuseAccountName?: string;
+    aiDecisionDetails?: import("@/lib/aiDecisionDetails").AiDecisionDetails;
     aiAutoFollowUpRootId?: string;
     aiAutoFollowUpStep?: number;
     aiAutoFollowUpSentAt?: number;
@@ -191,6 +200,7 @@ export interface AppState extends PersistSlice {
     mediaMime?: Message["mediaMime"];
     mediaFileName?: Message["mediaFileName"];
     mediaCaption?: Message["mediaCaption"];
+    mediaThumbUrl?: Message["mediaThumbUrl"];
     lastError?: string;
     nextAttemptAt?: string;
   }) => string | null;
@@ -221,6 +231,7 @@ export interface AppState extends PersistSlice {
         | "mediaCaption"
         | "mediaUpload"
         | "mediaThumbUrl"
+        | "aiReplyImageAssetId"
         | "mediaPending"
         | "mediaError"
         | "mediaSeconds"
@@ -262,9 +273,12 @@ export interface AppState extends PersistSlice {
   /** 克制版群发战役 */
   createBroadcastCampaign: (input: {
     accountId: string;
+    channelId?: "android_bridge";
     template: string;
     contactIds: string[];
     phoneNumbers?: string[];
+    firstContactQuotas?: Record<string, number>;
+    expectedAccountByPhone?: Record<string, string>;
     extraGapSec?: number;
     extraGapMaxSec?: number;
     media?: import("@/types/broadcast").BroadcastMedia[];
@@ -310,7 +324,7 @@ export interface AppState extends PersistSlice {
   ensureMessageInMemory: (id: string) => Promise<unknown>;
   importBackup: (bundle: unknown) => Promise<{ ok: boolean; reason?: string }>;
   setCrmPanelCollapsed: (v: boolean) => void;
-  setCrmPanelTab: (tab: "customer" | "quick-replies" | "images") => void;
+  setCrmPanelTab: (tab: "customer" | "quick-replies" | "images" | "agent") => void;
   setChatListFilter: (f: ChatListFilter) => void;
   goToChats: (filter?: ChatListFilter) => void;
   openContacts: (tab?: "contacts" | "manage") => void;
@@ -352,6 +366,12 @@ export interface AppState extends PersistSlice {
   ) => number;
   /** 以 keep 为主统一客户资料；各账号联系人和会话独立保留。 */
   mergeContacts: (keepId: string, dropIds: string[]) => boolean;
+  /** Merge duplicate contacts sharing the same normalized phone within an account scope. */
+  dedupeAccountContacts: (accountId?: string) => {
+    groupsMerged: number;
+    removedContacts: number;
+    removedEmptyChats: number;
+  };
   addContact: (c: Omit<Contact, "id">) => void;
   /** 批量导入联系人：静默建联系人+会话行，返回新增数 */
   importContacts: (contacts: Omit<Contact, "id">[]) => number;
@@ -412,6 +432,7 @@ export interface AppState extends PersistSlice {
   reorderChatFolder: (folderId: string, targetFolderId: string, after?: boolean) => void;
   /** 主归属移入分组（从其它组移除）；folderId=null 则回未分组 */
   moveChatToFolder: (chatId: string, folderId: string | null, options?: { removeClones?: boolean }) => void;
+  removeChatFromFolder: (chatId: string, folderId: string) => boolean;
   moveChatsToFolders: (assignments: { chatId: string; folderId: string }[]) => number;
   /** 分身到另一分组（主归属不变） */
   cloneChatToFolder: (chatId: string, folderId: string) => void;

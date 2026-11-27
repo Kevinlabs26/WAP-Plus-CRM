@@ -70,6 +70,11 @@ const StarredView = lazy(() =>
     default: m.StarredView,
   }))
 );
+const ContactsView = lazy(() =>
+  import("@/components/views/ContactsView").then((m) => ({
+    default: m.ContactsView,
+  }))
+);
 const StatsView = lazy(() =>
   import("@/components/views/StatsView").then((m) => ({
     default: m.StatsView,
@@ -157,6 +162,7 @@ type MainNavPageId =
   | "today"
   | "phones"
   | "broadcast"
+  | "contacts"
   | "ai-outreach"
   | "starred"
   | "stats"
@@ -167,6 +173,7 @@ const MAIN_NAV_PAGES: Record<
   { Page: ComponentType; label: string }
 > = {
   today: { Page: TodayView, label: "工作台" },
+  contacts: { Page: ContactsView, label: "客户库" },
   phones: { Page: PhonesView, label: "设备" },
   broadcast: { Page: BroadcastView, label: "群发" },
   "ai-outreach": { Page: AiOutreachTasks, label: "主动联系" },

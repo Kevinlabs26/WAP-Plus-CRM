@@ -24,9 +24,36 @@ import { DEFAULT_RATE_LIMITS } from "@/channels/rateLimit";
 import { isDeliveryUncertain } from "@/store/outgoingRetry";
 import type { Message } from "@/types/crm";
 
+export function pendingBroadcastThread(campaigns: BroadcastCampaign[], contact: Contact) {
+  if (contact.isGroup) return;
+  const phone = contactSendablePhone(contact);
+  let pending: { contactId: string; accountId: string } | undefined;
+  for (const campaign of campaigns) {
+    if (campaign.status !== "running" || campaign.channelId === "android_bridge") continue;
+    for (const item of campaign.items) {
+      if (item.status !== "pending" && item.status !== "sending") continue;
+      if (item.contactId !== contact.id && (!phone || phone !== item.phoneE164)) continue;
+      const accountId = item.accountId || campaign.accountId;
+      if (!accountId) continue;
+      const thread = { contactId: item.contactId, accountId };
+      if (item.status === "sending") return thread;
+      pending ??= thread;
+    }
+  }
+  return pending;
+}
+
 export function broadcastItemUncertain(item: BroadcastItem, messages: Message[]) {
+  if (item.deliveryUncertain) return true;
   const message = messages.find(m=>m.id===item.messageId);
   return message ? isDeliveryUncertain(message) : isDeliveryUncertain({direction:"out",deliveryStatus:"failed",lastError:item.error});
+}
+
+export function confirmedBroadcastMessage(campaign: BroadcastCampaign, item: BroadcastItem, message?: Message): Message | undefined {
+  if (!message || message.id !== item.messageId || message.direction !== "out") return;
+  const sender = campaign.channelId === "android_bridge" ? message.deviceId : message.accountId || message.deviceId;
+  if (sender !== (item.accountId || campaign.accountId)) return;
+  if (["sent", "server", "delivered", "read", "played"].includes(message.deliveryStatus || "")) return message;
 }
 
 function uid(prefix: string) {
@@ -48,7 +75,7 @@ export function normalizeCampaigns(raw: unknown): BroadcastCampaign[] {
         const item = it as Partial<BroadcastItem>;
         const iid = String(item.id || "").trim();
         if (!iid) continue;
-        const unknown = /发送结果未知|baileys_delivery_unknown/.test(String(item.error || ""));
+        const unknown = item.deliveryUncertain === true || /发送结果未知|baileys_delivery_unknown/.test(String(item.error || ""));
         items.push({
           id: iid,
           contactId: String(item.contactId || ""),
@@ -56,6 +83,8 @@ export function normalizeCampaigns(raw: unknown): BroadcastCampaign[] {
           accountId: item.accountId ? String(item.accountId).trim().slice(0, 120) || undefined : undefined,
           phoneE164: String(item.phoneE164 || ""),
           bodyRendered: String(item.bodyRendered || ""),
+          ...(unknown || item.status === "sending" ? { deliveryUncertain: true } : {}),
+          ...(item.errorCode ? { errorCode: String(item.errorCode).slice(0, 80) } : {}),
           variantId: item.variantId ? String(item.variantId).slice(0, 120) : undefined,
           mediaId: item.mediaId ? String(item.mediaId).slice(0, 120) : undefined,
           // 应用退出时仍为 sending 的结果无法确认，不能静默重发。
@@ -74,6 +103,8 @@ export function normalizeCampaigns(raw: unknown): BroadcastCampaign[] {
               : item.error
                 ? String(item.error).slice(0, 300)
                 : undefined,
+          attemptedAt: item.attemptedAt ? String(item.attemptedAt) : undefined,
+          retryAt: typeof item.retryAt === "string" && Number.isFinite(Date.parse(item.retryAt)) ? item.retryAt : undefined,
           sentAt: item.sentAt ? String(item.sentAt) : undefined,
           messageId: item.messageId ? String(item.messageId) : undefined,
         });
@@ -92,6 +123,7 @@ export function normalizeCampaigns(raw: unknown): BroadcastCampaign[] {
     }
     out.push({
       id,
+      ...(c.channelId === "android_bridge" ? { channelId: c.channelId } : {}),
       accountId: String(c.accountId || "").trim() || "wa-default",
       priority: Number.isFinite(c.priority) ? c.priority : 0,
       title: c.title ? String(c.title).slice(0, 80) : undefined,
@@ -128,15 +160,19 @@ export function normalizeCampaigns(raw: unknown): BroadcastCampaign[] {
       items,
     });
   }
-  return out
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .slice(0, BROADCAST_HISTORY_MAX);
+  return trimCampaigns(out);
 }
 
 export function trimCampaigns(list: BroadcastCampaign[]): BroadcastCampaign[] {
+  let historyCount = 0;
   return [...list]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-    .slice(0, BROADCAST_HISTORY_MAX);
+    .filter(campaign => {
+      if (campaign.status === "draft" || campaign.status === "running" || campaign.status === "paused" ||
+          campaign.items.some(item => item.status !== "sent" && item.deliveryUncertain)) return true;
+      historyCount++;
+      return historyCount <= BROADCAST_HISTORY_MAX;
+    });
 }
 
 export type BuildCampaignInput = {

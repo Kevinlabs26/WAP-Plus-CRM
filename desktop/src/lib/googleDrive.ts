@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { idbGet, idbSet } from "./idb";
 import { isTauri } from "./bridge";
+import { copyLink } from "./copyLink";
 import { useAppStore } from "@/store/appStore";
 import { baileysFetchAvatar } from "./baileys";
 import type { Contact } from "@/types/crm";
@@ -128,7 +129,7 @@ async function imageData(source:string) {
 export async function copyDriveLink() {
   const job=useGoogleDrive.getState().job;
   if(!job?.shared||!job.url)throw Error("链接尚未完成分享");
-  if(isTauri())await invoke("clipboard_write_text",{text:job.url});else await navigator.clipboard.writeText(job.url);
+  await copyLink(job.url);
   if(useGoogleDrive.getState().job?.id===job.id){setJob({...job,stage:"done",completedAt:Date.now(),error:undefined,data:undefined,load:undefined});await persistJobs();}
 }
 async function runJob(job:DriveJob) {

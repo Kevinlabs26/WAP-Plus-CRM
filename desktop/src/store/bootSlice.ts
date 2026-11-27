@@ -8,10 +8,11 @@ import {
   saveAppState,
   saveSecureSecrets,
   registerChatMessageReplacements,
+  registerChatAccountReplacements,
 } from "@/lib/storage";
 import { parseBackupJson, readJsonFile } from "@/lib/exportData";
 import { buildPersonKey, looksLikeMessageAsName } from "@/lib/utils";
-import { healSingleSessionOwnership } from "@/lib/accounts";
+import { applyChatAccountReplacements, healSingleSessionOwnership } from "@/lib/accounts";
 import { normalizeCampaigns } from "@/lib/broadcastCampaign";
 import { calcStats } from "./calcStats";
 import { cleanHydratedMessages, recoverInterruptedMessage } from "./hydrateMessageCleanup";
@@ -36,6 +37,7 @@ import { clearTrendBuckets } from "./trendBuckets";
 import { buildPersistSlice, flushPersist, primePersistBaseline } from "./persist";
 import { cacheMediaUrl, readMediaCache, dropMediaCache } from "@/lib/mediaCache";
 import { restoreChatDrafts } from "@/lib/chatDrafts";
+import { remapPromptPlanBindings } from "@/lib/promptPlans";
 
 const blankData = (settings: AppSettings = defaultSettings as AppSettings): PersistSlice => ({
   phones: [],
@@ -73,6 +75,7 @@ export function createBootSlice({
         (legacySecrets?.openaiKey ||
           legacySecrets?.groqKey ||
           legacySecrets?.geminiKey ||
+          legacySecrets?.vertexCredential ||
           legacySecrets?.openrouterKey ||
           legacySecrets?.customAiKey ||
           legacySecrets?.transcriptionApiKey ||
@@ -83,6 +86,7 @@ export function createBootSlice({
           openaiKey: legacySecrets.openaiKey || "",
           groqKey: legacySecrets.groqKey || "",
           geminiKey: legacySecrets.geminiKey || "",
+          vertexCredential: legacySecrets.vertexCredential || "",
           openrouterKey: legacySecrets.openrouterKey || "",
           customAiKey: legacySecrets.customAiKey || "",
           transcriptionApiKey: legacySecrets.transcriptionApiKey || "",
@@ -95,6 +99,7 @@ export function createBootSlice({
             openaiKey: legacySecrets.openaiKey || "",
             groqKey: legacySecrets.groqKey || "",
             geminiKey: legacySecrets.geminiKey || "",
+            vertexCredential: legacySecrets.vertexCredential || "",
             openrouterKey: legacySecrets.openrouterKey || "",
             customAiKey: legacySecrets.customAiKey || "",
             transcriptionApiKey: legacySecrets.transcriptionApiKey || "",
@@ -104,7 +109,7 @@ export function createBootSlice({
         }
       }
       if (getStorageEngine() === "sqlite" && saved?.settings && secureSecrets &&
-          ["openaiKey", "groqKey", "geminiKey", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "transcriptionApiKey", "translationApiKey", "bridgeToken"].some(key => (saved.settings as unknown as Record<string, unknown>)[key])) {
+          ["openaiKey", "groqKey", "geminiKey", "vertexCredential", "deepseekKey", "qwenKey", "zhipuKey", "openrouterKey", "customAiKey", "transcriptionApiKey", "translationApiKey", "bridgeToken"].some(key => (saved.settings as unknown as Record<string, unknown>)[key])) {
         await saveAppState({ phones: [], contacts: [], chats: [], messages: [], followUps: [],
           settings: saved.settings, broadcastCampaigns: saved.broadcastCampaigns, dirty: { settings: true } }, { force: true });
       }
@@ -280,8 +285,8 @@ export function createBootSlice({
             : "";
         const accountId =
           ch.accountId ||
-          accountByContact.get(ch.contactId) ||
           fromPhone ||
+          accountByContact.get(ch.contactId) ||
           fallbackAccountId;
         return {
           ...ch,
@@ -293,6 +298,7 @@ export function createBootSlice({
       const chatsBeforeLocalRestore = chats;
       chats = restoreLocalContactChats(chats, contacts);
       const restoredLocalChats = chats !== chatsBeforeLocalRestore;
+      const chatsBeforeMerge = chats;
       const mergedLocalChats = mergeImportedContactChatDuplicates(
         chats,
         messages,
@@ -311,6 +317,9 @@ export function createBootSlice({
       );
       settingsNorm.chatFolders = cleanedFolderRefs.folders;
       settingsNorm.chatFolderClones = cleanedFolderRefs.clones;
+      if (mergedLocalChats.replacements.size) {
+        settingsNorm.aiPromptPlanByChat = remapPromptPlanBindings(settingsNorm.aiPromptPlanByChat, mergedLocalChats.replacements);
+      }
       const validLeadChatIds = new Set(chats.map((chat) => chat.id));
       settingsNorm.leadInbox = {
         ...settingsNorm.leadInbox,
@@ -335,7 +344,8 @@ export function createBootSlice({
 
       const healed = healSingleSessionOwnership({
         contacts,
-        chats,
+        // A merged-out chat still owns its SQLite history until the save commits.
+        chats: mergedLocalChats.changed ? chatsBeforeMerge : chats,
         folders: settingsNorm.chatFolders || [],
         accounts: settingsNorm.waAccounts || [],
         liveAccountId:
@@ -344,8 +354,20 @@ export function createBootSlice({
           DEFAULT_ACCOUNT_ID,
         activeAccountId: settingsNorm.activeAccountId || DEFAULT_ACCOUNT_ID,
       });
+      if (healed.chatAccountReplacements.length) {
+        registerChatAccountReplacements(healed.chatAccountReplacements);
+        messages = applyChatAccountReplacements(messages, healed.chatAccountReplacements);
+      }
       contacts = healed.contacts;
-      chats = healed.chats;
+      if (mergedLocalChats.changed) {
+        const ownerByChat = new Map(healed.chatAccountReplacements.map(remap => [remap.chatId, remap.toAccountId]));
+        chats = chats.map(chat => {
+          const accountId = ownerByChat.get(chat.id);
+          return accountId ? { ...chat, accountId } : chat;
+        });
+      } else {
+        chats = healed.chats;
+      }
       settingsNorm.chatFolders = healed.folders as AppSettings["chatFolders"];
       settingsNorm.waAccounts = healed.accounts;
       settingsNorm.liveBaileysAccountId = healed.liveAccountId;
@@ -501,6 +523,7 @@ export function createBootSlice({
           openaiKey: currentSettings.openaiKey,
           groqKey: currentSettings.groqKey,
           geminiKey: currentSettings.geminiKey,
+          vertexCredential: currentSettings.vertexCredential,
           openrouterKey: currentSettings.openrouterKey,
           customAiKey: currentSettings.customAiKey,
           transcriptionApiKey: currentSettings.transcriptionApiKey,

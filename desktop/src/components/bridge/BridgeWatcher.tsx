@@ -57,6 +57,7 @@ export function BridgeWatcher() {
     let eventListenerWarning: string | null = null;
     let statusListenerWarning: string | null = null;
     let overflowWarning: string | null = null;
+    let pollingStatus = false;
 
     const runtimeError = () =>
       [bridgeError, eventListenerWarning, statusListenerWarning, overflowWarning]
@@ -74,6 +75,7 @@ export function BridgeWatcher() {
           port: settings.bridgePort,
           tauriUnavailable: true,
           deviceName: null,
+          deviceId: null,
           transport: null,
           lastError: runtimeError(),
         });
@@ -90,6 +92,7 @@ export function BridgeWatcher() {
         host: s.host || settings.bridgeHost,
         port: s.port || settings.bridgePort,
         deviceName,
+        deviceId: connected ? s.devices?.[0]?.id ?? null : null,
         transport,
         lastError: runtimeError(),
         tauriUnavailable: false,
@@ -114,7 +117,7 @@ export function BridgeWatcher() {
     };
 
     const tickStatus = async (allowAuto = true) => {
-      if (cancelled) return;
+      if (cancelled || pollingStatus) return;
 
       if (!isTauri()) {
         setBridgeRuntime({
@@ -129,6 +132,7 @@ export function BridgeWatcher() {
         return;
       }
 
+      pollingStatus = true;
       try {
         let s = await getBridgeStatus();
         if (cancelled) return;
@@ -144,7 +148,7 @@ export function BridgeWatcher() {
         let fromAuto = false;
         if (
           allowAuto &&
-          settings.autoConnectBridge &&
+          useAppStore.getState().settings.autoConnectBridge &&
           settings.bridgeToken.trim() &&
           !s.connected &&
           !(s && "mock" in s && s.mock)
@@ -155,10 +159,12 @@ export function BridgeWatcher() {
               settings.bridgeHost,
               settings.bridgePort,
               settings.bridgeToken,
+              true,
             );
-          } catch {
+          } catch (error) {
+            if (cancelled) return;
             booted.current = true;
-            bridgeError = "自动连接失败，正在重试";
+            bridgeError = error instanceof Error ? error.message : String(error);
             setBridgeRuntime({
               connected: false,
               host: settings.bridgeHost,
@@ -185,6 +191,8 @@ export function BridgeWatcher() {
           wasConnected.current = false;
         }
         booted.current = true;
+      } finally {
+        pollingStatus = false;
       }
     };
 

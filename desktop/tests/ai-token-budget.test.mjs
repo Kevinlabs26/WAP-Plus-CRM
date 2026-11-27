@@ -21,7 +21,7 @@ assert.match(suggestions, /chatCompletionOptions\([^\n]+opts\.auto \|\| opts\.re
 assert.match(suggestions, /num_predict: auto \|\| replyTo \|\| count === 1 \? SINGLE_REPLY_TOKENS : MULTI_REPLY_TOKENS/);
 assert.equal(
   [...suggestions.matchAll(/signal: .*AbortSignal\.timeout\(60_000\)/g)].length,
-  2
+  4
 );
 assert.equal(
   [...customerCard.matchAll(/signal: [^\n]*AbortSignal\.timeout\(60_000\)/g)].length,

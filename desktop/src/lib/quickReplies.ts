@@ -6,9 +6,7 @@ export const QUICK_REPLY_CATEGORIES = [
   { id: "other", label: "其他" },
 ] as const;
 
-export const MAX_QUICK_REPLIES = 1000;
 export const MAX_RECENT_QUICK_REPLIES = 20;
-export const MAX_QUICK_REPLY_CATEGORIES = 100;
 export const MAX_QUICK_REPLY_MEDIA_BYTES = 8 * 1024 * 1024;
 // shortcut: Media remains inline in settings (64 MB total); use file storage if larger media libraries are needed.
 export const MAX_QUICK_REPLY_MEDIA_TOTAL_BYTES = 64 * 1024 * 1024;
@@ -131,7 +129,7 @@ export function quickReplyPreviewText(title: string, value: string) {
   return content.slice(heading.length).trim();
 }
 
-export function normalizeQuickReplyIds(value: unknown, replies: { id: string }[], limit: number): string[] {
+export function normalizeQuickReplyIds(value: unknown, replies: { id: string }[], limit = replies.length): string[] {
   const valid = new Set(replies.map(reply => reply.id));
   return Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === "string" && valid.has(id)))].slice(0, limit) : [];
 }

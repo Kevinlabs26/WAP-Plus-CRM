@@ -4,8 +4,9 @@ import { Avatar } from "@/components/ui/Avatar";
 import { useAppStore } from "@/store/appStore";
 import { useI18n, type TranslationKey } from "@/i18n";
 import { DuplicateScheduledPlanError, saveScheduledPlan } from "@/lib/scheduledPlanActions";
+import { parsePhoneEntries } from "@/lib/phoneEntries";
 import { PlanVoiceRecorder } from "./PlanVoiceRecorder";
-import { lastContactedAccounts, recipientKey, scheduledAudioMode, scheduledFolderChatIds, scheduledPlanTargets, MAX_SCHEDULED_PLAN_ITEMS, MIN_SCHEDULED_GAP_SEC, MAX_PLAN_STEPS, type ScheduledPlan, type ScheduledPlanStep } from "@/lib/scheduledPlans";
+import { scheduledPlanHistoryAccounts, recipientKey, scheduledAudioMode, scheduledFolderChatIds, inspectScheduledPlanTargets, MAX_SCHEDULED_PLAN_ITEMS, MIN_SCHEDULED_GAP_SEC, MAX_PLAN_STEPS, type ScheduledPlan, type ScheduledPlanStep } from "@/lib/scheduledPlans";
 
 function localTime() {
   const date = new Date(Date.now() + 5 * 60_000);
@@ -26,6 +27,7 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
   const [selected, setSelected] = useState(() => new Set(chatIds || (folderId ? scheduledFolderChatIds(settings, folderId, false) : [])));
   const [defaultAccountId, setDefaultAccountId] = useState(() => settings.waAccounts.find(account => account.id === settings.liveBaileysAccountId)?.id || settings.waAccounts.find(account => account.id === settings.activeAccountId)?.id || settings.waAccounts[0]?.id || "");
   const [query, setQuery] = useState("");
+  const [numberQuery, setNumberQuery] = useState("");
   const [templateQuery, setTemplateQuery] = useState("");
   const [title, setTitle] = useState("");
   const [text, setText] = useState(initialText);
@@ -56,28 +58,17 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
   const gapInput = useRef<HTMLInputElement>(null);
   const folder = settings.chatFolders.find(item => item.id === folderId);
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const lastContacted = useMemo(() => lastContactedAccounts(chats, contacts, messages), [chats, contacts, messages]);
-  const candidates = useMemo(() => {
-    let ids = folderId ? scheduledFolderChatIds(settings, folderId, includeChildren) : chatIds;
-    if (folder && folder.scope?.type !== "all") {
-      const sourceAccount = folder.scope?.accountId || settings.liveBaileysAccountId || settings.activeAccountId || "wa-default";
-      const chatsById = new Map(chats.map(chat => [chat.id, chat]));
-      const contactsById = new Map(contacts.map(contact => [contact.id, contact]));
-      ids = ids?.filter(id => {
-        const chat = chatsById.get(id);
-        return chat && (chat.accountId || contactsById.get(chat.contactId)?.accountId || "wa-default") === sourceAccount;
-      });
-    }
-    const all = scheduledPlanTargets({ settings, chats, contacts, messages }, ids, defaultAccountId);
-    if (!folder || folder.scope?.type === "all") return all;
-    const owner = folder.scope?.accountId || settings.liveBaileysAccountId || settings.activeAccountId || "wa-default";
-    return all.filter(item => {
-      const chat = chats.find(candidate => candidate.id === item.chatId);
-      const contact = contacts.find(candidate => candidate.id === item.contactId);
-      return (chat?.accountId || contact?.accountId || "wa-default") === owner;
-    });
+  const lastContacted = useMemo(() => scheduledPlanHistoryAccounts({chats, contacts, messages}), [chats, contacts, messages]);
+  const { items: candidates, blocked } = useMemo(() => {
+    const ids = folderId ? scheduledFolderChatIds(settings, folderId, includeChildren) : chatIds;
+    return inspectScheduledPlanTargets({ settings, chats, contacts, messages }, ids, defaultAccountId);
   }, [settings, chats, contacts, messages, chatIds, folderId, includeChildren, defaultAccountId]);
   const chosen = candidates.filter(item => selected.has(item.chatId));
+  const defaultAccountCount = chosen.filter(item => !item.recipient.endsWith("@g.us") && !lastContacted.has(recipientKey("", item.recipient))).length;
+  const numberEntries = useMemo(() => new Set(parsePhoneEntries(numberQuery)), [numberQuery]);
+  const numberMatchIds = useMemo(() => new Set(candidates.filter(item =>
+    /^\+?\d{7,15}$/.test(item.recipient) && numberEntries.has(item.recipient.replace(/\D/g, ""))
+  ).map(item => item.chatId)), [candidates, numberEntries]);
   const visible = candidates.filter(item => (!review || selected.has(item.chatId)) && `${item.contactName}\n${item.recipient}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   const currentPage = Math.min(page, Math.max(0, Math.ceil(visible.length / 50) - 1));
   const pageItems = visible.slice(currentPage * 50, currentPage * 50 + 50);
@@ -178,16 +169,34 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
         </div>
         <aside className="flex min-h-0 min-w-0 flex-col gap-3 md:overflow-y-auto">
           <h3 className="text-sm font-medium text-zinc-200">{t("planQueue.targets", { count: chosen.length })} {folder ? "· " + folder.name : ""}</h3>
+          {!!blocked.length && <details open={!review} className="shrink-0 rounded bg-amber-500/10 p-2 text-xs text-amber-400">
+            <summary className="cursor-pointer">{t("planQueue.blockedTargets", { count: blocked.length })}</summary>
+            <ul className="mt-1 max-h-32 space-y-1 overflow-y-auto">
+              {blocked.map(item => <li key={item.chatId} className="break-words">{item.name} · {t(`planQueue.blocked.${item.reason}`)}</li>)}
+            </ul>
+          </details>}
           <label className="block space-y-1 text-xs text-zinc-400"><span>{t("planQueue.newContactAccount")}</span><select className="ui-control w-full px-2" value={defaultAccountId} onChange={event => setDefaultAccountId(event.target.value)}>{settings.waAccounts.map(account => <option key={account.id} value={account.id}>{account.label || account.id}</option>)}</select><span className="block">{t("planQueue.accountRoutingHint")}</span></label>
-          <p className="text-xs text-zinc-500">{t("planQueue.accountRoutingSummary", { contacted: chosen.filter(item => lastContacted.has(recipientKey("", item.recipient))).length, new: chosen.filter(item => !lastContacted.has(recipientKey("", item.recipient))).length })}</p>
+          <p className="text-xs text-zinc-500">{t("planQueue.accountRoutingSummary", { contacted: chosen.length - defaultAccountCount, new: defaultAccountCount })}</p>
           {folderId && !review && <label className="flex items-center gap-2 text-xs text-zinc-400"><input type="checkbox" aria-label={t("planQueue.includeChildren")} checked={includeChildren} onChange={event => {
             const include = event.target.checked; setIncludeChildren(include); setSelected(new Set(scheduledFolderChatIds(settings, folderId, include))); setPage(0);
           }} />{t("planQueue.includeChildren")}</label>}
           <Input aria-label={t("planQueue.searchTargets")} placeholder={t("planQueue.searchTargets")} value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} />
+          {!review && <details>
+            <summary className="cursor-pointer text-xs text-zinc-500 hover:text-zinc-300">{t("planQueue.phoneSelection")} · {t("planQueue.phoneMatchCount", { count: numberMatchIds.size })}</summary>
+            <div className="mt-2 space-y-1">
+              <Textarea rows={2} aria-label={t("planQueue.phoneNumbers")} placeholder={t("planQueue.phoneNumbers")} value={numberQuery} onChange={event => setNumberQuery(event.target.value)} />
+              <p className="text-2xs text-zinc-500">{t("planQueue.phoneMatchHint")}</p>
+              <div className="flex flex-wrap gap-1">
+                <Button variant="ghost" size="xs" className="text-brand" disabled={!numberMatchIds.size} onClick={() => setSelected(previous => new Set([...previous, ...numberMatchIds]))}>{t("planQueue.addPhoneMatches")}</Button>
+                <Button variant="ghost" size="xs" className="text-brand" disabled={!numberMatchIds.size} onClick={() => setSelected(new Set(numberMatchIds))}>{t("planQueue.onlyPhoneMatches")}</Button>
+                <Button variant="ghost" size="xs" className="text-brand" disabled={!numberMatchIds.size} onClick={() => setSelected(previous => new Set([...previous].filter(id => !numberMatchIds.has(id))))}>{t("planQueue.removePhoneMatches")}</Button>
+              </div>
+            </div>
+          </details>}
           {!review && !!pageItems.length && <label className="flex items-center gap-2 text-xs text-zinc-400"><input type="checkbox" checked={pageItems.every(item => selected.has(item.chatId))} onChange={event => {
             const next = new Set(selected); pageItems.forEach(item => event.target.checked ? next.add(item.chatId) : next.delete(item.chatId)); setSelected(next);
           }} />{t("quickLibrary.selectPage")}</label>}
-          <div className="min-h-24 max-h-64 flex-1 space-y-1 overflow-y-auto rounded-lg md:max-h-none border border-zinc-800 p-2">
+          <div className="min-h-24 max-h-64 flex-1 space-y-1 overflow-y-auto md:max-h-none">
             {pageItems.map((item, index) => { const contact = contactsById.get(item.contactId); return <label key={item.id} className="flex items-start gap-2 rounded p-2 hover:bg-zinc-800">
               {!review && <input type="checkbox" className="mt-1" checked={selected.has(item.chatId)} onChange={event => { const next = new Set(selected); event.target.checked ? next.add(item.chatId) : next.delete(item.chatId); setSelected(next); }} />}
               <Avatar name={item.contactName} seed={item.contactId} src={contact?.avatarFullUrl || contact?.avatarUrl} size="sm" />
@@ -205,7 +214,7 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
             {!startNow && <label className="col-span-2 block space-y-1 text-xs text-zinc-400"><span>{t("planQueue.startTime")}</span><Input ref={dueAtInput} aria-label={t("planQueue.startTime")} type="datetime-local" required value={dueAt} onInput={event => setDueAt(event.currentTarget.value)} /></label>}
             <label className="col-span-2 block space-y-1 text-xs text-zinc-400"><span>{t("planQueue.gap")}</span><Input ref={gapInput} type="number" min={20} max={3600} required value={gapSec} onInput={event => setGapSec(Number(event.currentTarget.value))} /></label>
           </div> : <p className="text-sm text-brand">{startNow ? t("planQueue.queueNow") : new Date(dueAt).toLocaleString(locale, { timeZone }) + " · " + timeZone}<br />{t(sequence.length>1?"planQueue.defaultPace":"planQueue.pace", { seconds: gapSec })}</p>}
-          {!review?<details className="rounded-lg border border-zinc-800 p-2.5"><summary className="cursor-pointer text-xs text-zinc-500">{t("planQueue.advanced")}{(endAt || quiet) && <span className="ml-1 text-brand">· {[!!endAt, quiet].filter(Boolean).length}</span>}</summary><div className="mt-2 space-y-2 text-xs text-zinc-400"><label className="block">{t("planQueue.deadline")}<Input type="datetime-local" value={endAt} onInput={e=>setEndAt(e.currentTarget.value)}/></label><label className="flex gap-2"><input type="checkbox" checked={quiet} onChange={e=>setQuiet(e.target.checked)}/>{t("planQueue.quietHours")}</label>{quiet&&<div className="flex gap-2"><Input type="time" aria-label={t("planQueue.quietStart")} value={quietStart} onInput={e=>setQuietStart(e.currentTarget.value)}/><Input type="time" aria-label={t("planQueue.quietEnd")} value={quietEnd} onInput={e=>setQuietEnd(e.currentTarget.value)}/></div>}</div></details>:<p className="text-xs text-zinc-400">{endAt&&t("planQueue.deadline")+": "+new Date(endAt).toLocaleString(locale)} {quiet&&`${quietStart}–${quietEnd} · ${timeZone}`}</p>}
+          {!review?<details className="border-t border-zinc-800 pt-2.5"><summary className="cursor-pointer text-xs text-zinc-500">{t("planQueue.advanced")}{(endAt || quiet) && <span className="ml-1 text-brand">· {[!!endAt, quiet].filter(Boolean).length}</span>}</summary><div className="mt-2 space-y-2 text-xs text-zinc-400"><label className="block">{t("planQueue.deadline")}<Input type="datetime-local" value={endAt} onInput={e=>setEndAt(e.currentTarget.value)}/></label><label className="flex gap-2"><input type="checkbox" checked={quiet} onChange={e=>setQuiet(e.target.checked)}/>{t("planQueue.quietHours")}</label>{quiet&&<div className="flex gap-2"><Input type="time" aria-label={t("planQueue.quietStart")} value={quietStart} onInput={e=>setQuietStart(e.currentTarget.value)}/><Input type="time" aria-label={t("planQueue.quietEnd")} value={quietEnd} onInput={e=>setQuietEnd(e.currentTarget.value)}/></div>}</div></details>:<p className="text-xs text-zinc-400">{endAt&&t("planQueue.deadline")+": "+new Date(endAt).toLocaleString(locale)} {quiet&&`${quietStart}–${quietEnd} · ${timeZone}`}</p>}
 
             {review && hasAudio && <p className="text-xs text-zinc-400">{t("planQueue.audioMode")} · {t(`planQueue.audioMode.${audioMode}`)}</p>}
             <details className="text-xs text-zinc-500"><summary className="cursor-pointer">{t("planQueue.notes")}</summary><div className="mt-2 space-y-2">

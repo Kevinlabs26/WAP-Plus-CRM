@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {fileURLToPath} from 'node:url';
 const mocks={
- react:'export const useState=()=>[globalThis.retrySelected,v=>{globalThis.retrySelected=typeof v==="function"?v(globalThis.retrySelected):v;}];',
+ react:'export const useMemo=f=>f();export const useState=i=>Array.isArray(i)?[globalThis.retrySelected,v=>{globalThis.retrySelected=typeof v==="function"?v(globalThis.retrySelected):v;}]:[i,()=>{}];',
  'react/jsx-runtime':'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;export const Fragment="fragment";',
  'lucide-react':'export const Pause="pause",Play="play",RotateCcw="retry",Square="square";',
  '@/components/ui/primitives':'export const Button="button";',
+ '@/components/ui/Avatar':'export const Avatar="avatar";',
  '@/store/appStore':'export const useAppStore=f=>f(globalThis.retryState);',
  '@/i18n':'export const useI18n=()=>({t:(key,p)=>key+(p?JSON.stringify(p):"")});',
 };
@@ -14,7 +15,7 @@ const out=await build({entryPoints:[fileURLToPath(new URL('../src/components/vie
 const {CampaignRunPanel}=await import('data:text/javascript;base64,'+Buffer.from(out.outputFiles[0].text+'\n//# sourceURL=campaign-retry-ui-test.js').toString('base64'));
 const nodes=tree=>Array.isArray(tree)?tree.flatMap(nodes):tree?.props?[tree,...nodes(tree.props.children)]:[];
 test('only selected definite failures use bulk retry; an unknown item has an individual review action',()=>{
- globalThis.retrySelected=[];globalThis.retryState={messages:[],settings:{waAccounts:[]},broadcastCampaigns:[{id:'c',status:'paused',items:[{id:'known',contactName:'Known',status:'failed',error:'rejected'},{id:'unknown',contactName:'Unknown',status:'failed',error:'发送结果未知'}]}]};
+ globalThis.retrySelected=[];globalThis.retryState={messages:[],contacts:[],phones:[],settings:{waAccounts:[]},broadcastCampaigns:[{id:'c',status:'paused',items:[{id:'known',contactName:'Known',status:'failed',error:'rejected'},{id:'unknown',contactName:'Unknown',status:'failed',error:'发送结果未知'}]}]};
  const calls=[];const render=()=>nodes(CampaignRunPanel({campaignId:'c',onRetryFailed:(...args)=>calls.push(args)}));
  let ui=render();assert.equal(ui.find(n=>n.props.children?.[1]==='broadcast.run.retryFailed{"count":0}').props.disabled,true);
  ui.find(n=>n.props['aria-label']==='planQueue.selectRetry{"name":"Known"}').props.onChange({target:{checked:true}});

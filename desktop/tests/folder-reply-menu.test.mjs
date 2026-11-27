@@ -7,12 +7,12 @@ import { translate } from '../src/i18n/core.ts';
 const mocks={
  '@/store/appStore':'export const useAppStore=f=>f(globalThis.folderSheetState||{settings:{theme:"dark",chatFolders:[]}});useAppStore.getState=()=>globalThis.folderSheetState;',
  'zustand/react/shallow':'export const useShallow=f=>f;',
- '@/lib/googleSheets':'export const sheetConnections=()=>[{id:"sheet-a",name:"表格 A"},{id:"sheet-b",name:"表格 B"}];export const useGoogleSheets=f=>f({});',
+ '@/lib/googleSheets':'export const DEFAULT_SHEET_ID="default";export const refreshSheets=async()=>{};export const sheetConnections=()=>[{id:"sheet-a",name:"表格 A",config:{tab:"表格 A"}},{id:"sheet-b",name:"表格 B",config:{tab:"表格 B"}}];export const useGoogleSheets=f=>f({});',
  'emoji-picker-react':'export default "emoji-picker";export const EmojiStyle={NATIVE:"native"};export const Theme={DARK:"dark"};',
  react:'export const useState=v=>globalThis.folderMenuHooks.state(v);export const useRef=v=>globalThis.folderMenuHooks.ref(v);export const useEffect=(f,d)=>globalThis.folderMenuHooks.effect(f,d);export const useLayoutEffect=useEffect;',
  'react-dom':'export const createPortal=children=>children;',
  'react/jsx-runtime':'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;export const Fragment="fragment";',
- 'lucide-react':['CornerDownRight','UserRoundPlus','Clock3', 'Check','Copy','ChevronDown','ChevronRight','Folder','FolderPlus','Link2','GripVertical','LayoutGrid','MoreHorizontal','Pencil','Trash2','Upload','Users','UserRoundX'].map(n=>`export const ${n}="${n}";`).join(''),
+ 'lucide-react':['CornerDownRight','UserRoundPlus','Clock3', 'Check','Copy','ChevronDown','ChevronRight','Folder','FolderPlus','Link2','GripVertical','LayoutGrid','MoreHorizontal','Pencil','Phone','Trash2','Upload','Users','UserRoundX'].map(n=>`export const ${n}="${n}";`).join(''),
  '@/i18n':'export const useI18n=()=>({t:(k,p)=>globalThis.folderMenuTranslate(k,p)});',
 };
 const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/layout/FolderHeaderRow.tsx',import.meta.url))],bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',
@@ -63,6 +63,24 @@ function fixture(mode,rect={left:700,right:940,top:650,bottom:682}) {
  };
  ui.render();return ui;
 }
+
+test("the folder action opens delivery-based calling when supported", () => {
+  const ui = fixture();
+  try {
+    ui.open();
+    const callAction = () => ui.tree.find(node => node.props.role === "menuitem" && node.props.children?.includes?.(translate("zh-CN", "folderCall.title")));
+    assert.equal(callAction(), undefined);
+    let opened = 0;
+    ui.props.onCallByDelivery = () => opened++;
+    ui.render();
+    callAction().props.onClick();
+    ui.render();
+    assert.equal(opened, 1);
+    assert.equal(ui.root, undefined);
+  } finally {
+    ui.close();
+  }
+});
 
 test('reply settings are only in a submenu, preserve the selected rule and apply each option once',()=>{
  for(const initial of [undefined,'auto','manual']) {
@@ -146,7 +164,7 @@ test('folder bulk send and scheduled send are separate actions and each closes t
 });
 
 const item=(ui,label)=>ui.tree.find(n=>n.props.role==='menuitem'&&nodes(n).some(child=>child.props.children===label||Array.isArray(child.props.children)&&child.props.children.includes(label)));
-for(const [kind,label,first,last] of [['import','导入与添加','导入号码','选择已加入的群组'],['organize','整理文件夹','新建子分组','清空此文件夹及子文件夹']]){
+for(const [kind,label,first,last] of [['import','导入与添加','导入号码','选择已加入的群组'],['organize','整理文件夹','新建子分组','删除分组']]){
  test(`${kind} opens a side submenu on hover and stays open while crossing the pointer gap`,()=>{
   const ui=fixture();try{
    ui.open();const trigger=item(ui,label);trigger.props.onMouseEnter(ui.event(trigger));ui.render();

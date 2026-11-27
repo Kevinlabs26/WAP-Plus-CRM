@@ -4,6 +4,7 @@ import type { Message } from "@/types/crm";
 import { scheduledMessageExpired } from "@/lib/scheduledMessageExpiry";
 import { translateCurrent } from "@/i18n";
 import { isAppLockActive } from "@/lib/appLockRuntime";
+import { groupWelcomeBlockedStatus, groupWelcomePendingWrites, isGroupWelcomeTask } from "@/lib/groupWelcome";
 
 const POLL_MS = 2_000;
 
@@ -52,7 +53,7 @@ export function ScheduledMessageWatcher() {
 
         const now = Date.now();
         for (const task of useAppStore.getState().settings.scheduledMessages || []) {
-          if (task.status !== "pending") continue;
+          if (task.status !== "pending" || groupWelcomePendingWrites.has(task.id)) continue;
           const dueAt = Date.parse(task.dueAt);
           if (!Number.isFinite(dueAt)) {
             useAppStore.getState().updateScheduledMessage(task.id, {
@@ -62,9 +63,15 @@ export function ScheduledMessageWatcher() {
           }
           if (dueAt > now) continue;
           const latest = useAppStore.getState();
-          if (scheduledMessageExpired(task, now)) {
-            latest.updateScheduledMessage(task.id, { status: "expired", error: translateCurrent("scheduled.expired") });
-            latest.pushToast(translateCurrent("scheduled.expired"), "info");
+          const welcomeStatus = groupWelcomeBlockedStatus(latest.settings, task, now);
+          if (welcomeStatus === "cancelled") {
+            latest.updateScheduledMessage(task.id, { status: "cancelled", error: translateCurrent("groupWelcome.stopped") });
+            continue;
+          }
+          if (scheduledMessageExpired(task, now) || welcomeStatus === "expired") {
+            const error = translateCurrent(welcomeStatus ? "groupWelcome.stopped" : "scheduled.expired");
+            latest.updateScheduledMessage(task.id, { status: "expired", error });
+            latest.pushToast(error, "info");
             continue;
           }
           const chat = latest.chats.find((item) => item.id === task.chatId);
@@ -77,6 +84,13 @@ export function ScheduledMessageWatcher() {
             continue;
           }
           const accountId = task.accountId;
+          if (task.channelId === "android_bridge" && !task.deviceId?.trim()) {
+            latest.updateScheduledMessage(task.id, {
+              status: "failed",
+              error: "定时消息没有绑定 Android 手机，请重新创建",
+            });
+            continue;
+          }
           if (task.channelId === "baileys" &&
               (!accountId || !latest.settings.waAccounts.some((account) => account.id === accountId))) {
             latest.updateScheduledMessage(task.id, {
@@ -86,9 +100,11 @@ export function ScheduledMessageWatcher() {
             continue;
           }
           const messageId = latest.enqueueOutgoingMessage({
+            ...(isGroupWelcomeTask(task.id) ? { dedupeId: task.id } : {}),
             chatId: task.chatId,
             contactId: task.contactId,
             body: task.text,
+            ...(task.imageDataUrl ? { mediaType: "image", mediaUrl: task.imageDataUrl, mediaCaption: task.text } : {}),
             systemKind: "scheduled_message",
             phoneE164: task.recipient,
             channelId: task.channelId,

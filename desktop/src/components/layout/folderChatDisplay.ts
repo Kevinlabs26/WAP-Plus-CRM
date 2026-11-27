@@ -10,7 +10,8 @@ export type FolderDisplayChat = {
 
 export function collapseAllAccountFolderChats(
   chats: ChatPreview[],
-  contactById: ReadonlyMap<string, Contact>
+  contactById: ReadonlyMap<string, Contact>,
+  lastMsgAtByChat?: ReadonlyMap<string, string>
 ): FolderDisplayChat[] {
   const grouped = new Map<
     string,
@@ -21,6 +22,8 @@ export function collapseAllAccountFolderChats(
       memberChatIds: string[];
     }
   >();
+  const activityTime = (chat: ChatPreview) =>
+    Date.parse(lastMsgAtByChat?.get(chat.id) || chat.updatedAt || "") || 0;
   for (const chat of chats) {
     const contact = contactById.get(chat.contactId);
     const key = phoneIdentity(chat, contact);
@@ -44,7 +47,7 @@ export function collapseAllAccountFolderChats(
     if (
       (chatHasMessageHistory(chat) && !chatHasMessageHistory(current.chat)) ||
       (chatHasMessageHistory(chat) === chatHasMessageHistory(current.chat) &&
-        (chat.updatedAt || "") > (current.chat.updatedAt || ""))
+        activityTime(chat) > activityTime(current.chat))
     ) {
       current.chat = chat;
     }

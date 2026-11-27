@@ -4,8 +4,6 @@ import android.Manifest
 import android.accessibilityservice.AccessibilityService
 import android.app.KeyguardManager
 import android.app.Notification
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -23,28 +21,25 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
 
 /**
  * WhatsApp / WhatsApp Business 辅助操作（需用户在系统设置中开启）。
  *
  * - openChat: wa.me deep link
- * - typeText: 定位输入框 → ACTION_SET_TEXT，失败则剪贴板 + 粘贴
- * - clickSend: 按文案/描述/viewId 启发式点击发送
+ * - openChatAndType: 核验目标会话后输入并发送
  */
 class WaAssistService : AccessibilityService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var pendingText: String? = null
-    private var pendingSend: Boolean = false
-    private var pendingCompletion: ((Boolean, String?) -> Unit)? = null
+    private var textSendInProgress = false
     private var lastNotification = ""
     private var lastNotificationAt = 0L
     private var syncInProgress = false
     private var searchInProgress = false
-    // 命令代次：每次新的打字/发送命令自增。此前 postDelayed 的重试与超时回调
-    // 从不取消——上一条命令遗留的超时会在新命令进行中触发，把新命令误判为
-    // 「未找到输入框/发送按钮」而失败（桌面端随即标记失败并可能重发＝重复消息）。
-    private var assistOpGeneration = 0L
+    private var navigationConnected: (() -> Boolean)? = null
+    val whatsappBusy: Boolean
+        get() = textSendInProgress || syncInProgress || searchInProgress
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
@@ -53,12 +48,6 @@ class WaAssistService : AccessibilityService() {
 
         if (event.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
             reportNotification(event)
-            return
-        }
-
-        // 聊天界面就绪后消化排队动作
-        if (pendingText != null || pendingSend) {
-            mainHandler.postDelayed({ flushPending() }, 400)
         }
     }
 
@@ -139,9 +128,9 @@ class WaAssistService : AccessibilityService() {
             .put("payload", payload)
             .toString()
 
-    fun syncConversations(onComplete: (Boolean, String?, JSONArray?) -> Unit) {
-        if (syncInProgress) {
-            onComplete(false, "会话同步正在进行", null)
+    fun syncConversations(isConnected: () -> Boolean, onComplete: (Boolean, String?, JSONArray?) -> Unit) {
+        if (whatsappBusy) {
+            onComplete(false, "手机正在操作 WhatsApp", null)
             return
         }
         val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
@@ -156,10 +145,18 @@ class WaAssistService : AccessibilityService() {
             onComplete(false, "未安装 WhatsApp", null)
             return
         }
-        val launch = packageManager.getLaunchIntentForPackage(targetPackage) ?: return
-        syncInProgress = true
+        val launch = packageManager.getLaunchIntentForPackage(targetPackage)
+        if (launch == null) {
+            onComplete(false, "无法打开 WhatsApp", null)
+            return
+        }
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-        startActivity(launch)
+        if (runCatching { startActivity(launch) }.isFailure) {
+            onComplete(false, "无法打开 WhatsApp", null)
+            return
+        }
+        syncInProgress = true
+        navigationConnected = isConnected
         mainHandler.postDelayed({
             scanConversationPage(
                 targetPackage,
@@ -180,6 +177,10 @@ class WaAssistService : AccessibilityService() {
         retries: Int,
         onComplete: (Boolean, String?, JSONArray?) -> Unit,
     ) {
+        if (navigationConnected?.invoke() != true) {
+            finishConversationSync(contacts, onComplete, "Bridge 已断开")
+            return
+        }
         val root = rootInActiveWindow
         if (root == null || root.packageName?.toString() != targetPackage) {
             root?.recycle()
@@ -269,13 +270,20 @@ class WaAssistService : AccessibilityService() {
             return ""
         return contentResolver.query(
             ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-            arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
+            arrayOf(ContactsContract.CommonDataKinds.Phone.NORMALIZED_NUMBER, ContactsContract.CommonDataKinds.Phone.NUMBER),
             "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME_PRIMARY} = ?",
             arrayOf(name),
             null,
         )?.use { cursor ->
-            if (!cursor.moveToFirst()) return@use ""
-            cursor.getString(0).orEmpty().replace(Regex("[\\s()\\-]"), "")
+            var confirmed = ""
+            while (cursor.moveToNext()) {
+                val raw = cursor.getString(0) ?: cursor.getString(1).orEmpty()
+                val number = raw.replace(Regex("[\\s()\\-]"), "")
+                if (!number.matches(Regex("^\\+[1-9][0-9]{6,14}$"))) return@use ""
+                if (confirmed.isNotEmpty() && confirmed != number) return@use ""
+                confirmed = number
+            }
+            confirmed
         }.orEmpty()
     }
 
@@ -285,6 +293,7 @@ class WaAssistService : AccessibilityService() {
         error: String? = null,
     ) {
         syncInProgress = false
+        navigationConnected = null
         if (error != null) {
             onComplete(false, error, null)
             return
@@ -301,10 +310,11 @@ class WaAssistService : AccessibilityService() {
 
     fun searchContact(
         query: String,
+        isConnected: () -> Boolean,
         onComplete: (Boolean, String?, JSONArray?, Boolean) -> Unit,
     ) {
-        if (searchInProgress) {
-            onComplete(false, "联系人搜索正在进行", null, false)
+        if (whatsappBusy) {
+            onComplete(false, "手机正在操作 WhatsApp", null, false)
             return
         }
         val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
@@ -319,10 +329,18 @@ class WaAssistService : AccessibilityService() {
             onComplete(false, "未安装 WhatsApp", null, false)
             return
         }
-        searchInProgress = true
-        val launch = packageManager.getLaunchIntentForPackage(targetPackage)!!
+        val launch = packageManager.getLaunchIntentForPackage(targetPackage)
+        if (launch == null) {
+            onComplete(false, "无法打开 WhatsApp", null, false)
+            return
+        }
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        startActivity(launch)
+        if (runCatching { startActivity(launch) }.isFailure) {
+            onComplete(false, "无法打开 WhatsApp", null, false)
+            return
+        }
+        searchInProgress = true
+        navigationConnected = isConnected
         mainHandler.postDelayed(
             { openContactSearch(targetPackage, query, 0, onComplete) },
             1000L,
@@ -335,6 +353,10 @@ class WaAssistService : AccessibilityService() {
         retries: Int,
         onComplete: (Boolean, String?, JSONArray?, Boolean) -> Unit,
     ) {
+        if (navigationConnected?.invoke() != true) {
+            finishContactSearch(false, "Bridge 已断开", null, false, onComplete)
+            return
+        }
         val root = rootInActiveWindow
         if (root == null || root.packageName?.toString() != targetPackage) {
             root?.recycle()
@@ -377,9 +399,14 @@ class WaAssistService : AccessibilityService() {
             return
         }
         mainHandler.postDelayed({
+            if (navigationConnected?.invoke() != true) {
+                finishContactSearch(false, "Bridge 已断开", null, false, onComplete)
+                return@postDelayed
+            }
             val searchRoot = rootInActiveWindow
-            val input = searchRoot?.let { findFirstEditable(it) }
-            if (input == null) {
+            val input = searchRoot?.takeIf { it.packageName?.toString() == targetPackage }
+                ?.let { findFirstEditable(it) }
+            if (searchRoot == null || input == null) {
                 searchRoot?.recycle()
                 finishContactSearch(false, "未找到 WhatsApp 搜索框", null, false, onComplete)
                 return@postDelayed
@@ -387,13 +414,7 @@ class WaAssistService : AccessibilityService() {
             // 安全护栏：必须确认当前可编辑节点真的是搜索框，才能写入联系人名。
             // 否则（搜索按钮点击没生效时）会把名字打进正打开的聊天的消息输入框——
             // 桌面端随后的发送命令会把这段文字当消息发出去。
-            val looksLikeSearch =
-                input.viewIdResourceName?.contains("search", ignoreCase = true) == true ||
-                    findByContentDesc(searchRoot) { desc ->
-                        val value = desc.lowercase()
-                        value.contains("search") || value.contains("搜索") ||
-                            value.contains("clear") || value.contains("清除")
-                    } != null
+            val looksLikeSearch = input.viewIdResourceName?.contains("search", ignoreCase = true) == true
             if (!looksLikeSearch && retries < 4) {
                 searchRoot.recycle()
                 mainHandler.postDelayed(
@@ -436,6 +457,10 @@ class WaAssistService : AccessibilityService() {
         query: String,
         onComplete: (Boolean, String?, JSONArray?, Boolean) -> Unit,
     ) {
+        if (navigationConnected?.invoke() != true) {
+            finishContactSearch(false, "Bridge 已断开", null, false, onComplete)
+            return
+        }
         val root = rootInActiveWindow
         if (root == null || root.packageName?.toString() != targetPackage) {
             root?.recycle()
@@ -453,7 +478,7 @@ class WaAssistService : AccessibilityService() {
                     .put("resultIndex", index)
             )
         }
-        val opened = hits.size == 1 && (
+        val opened = hits.size == 1 && navigationConnected?.invoke() == true && (
             hits[0].performAction(AccessibilityNodeInfo.ACTION_CLICK) || clickParent(hits[0])
         )
         hits.forEach { it.recycle() }
@@ -498,185 +523,202 @@ class WaAssistService : AccessibilityService() {
         onComplete: (Boolean, String?, JSONArray?, Boolean) -> Unit,
     ) {
         searchInProgress = false
+        navigationConnected = null
         onComplete(ok, error, items, opened)
     }
 
-    fun openChat(phoneE164: String): Boolean {
-        val digits = phoneE164.filter { it.isDigit() }
-        if (digits.isBlank()) return false
-        val uri = Uri.parse("https://wa.me/$digits")
-        fun launch(pkg: String) {
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                data = uri
-                setPackage(pkg)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            startActivity(intent)
-        }
-        try {
-            launch(PACKAGE_WAB)
-            Log.i(TAG, "openChat WAB")
-            return true
-        } catch (e: Exception) {
-            Log.w(TAG, "WAB missing, fallback WA", e)
-            return runCatching { launch(PACKAGE_WA) }.isSuccess
+    fun openChat(phoneE164: String): Boolean = launchChat(phoneE164) != null
+
+    private fun launchChat(phoneE164: String, challenge: String? = null): String? {
+        val digits = phoneE164.filter { it in '0'..'9' }
+        if (digits.isBlank()) return null
+        val link = Uri.parse("https://wa.me/$digits").buildUpon()
+        if (challenge != null) link.appendQueryParameter("text", challenge)
+        val uri = link.build()
+        return listOf(PACKAGE_WAB, PACKAGE_WA).firstOrNull { pkg ->
+            runCatching {
+                startActivity(Intent(Intent.ACTION_VIEW, uri).apply {
+                    setPackage(pkg)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+            }.isSuccess
         }
     }
 
-    /**
-     * 打开聊天并在界面就绪后输入（可选自动发送）。
-     */
     fun openChatAndType(
         phoneE164: String,
         text: String,
-        send: Boolean,
-        onComplete: (Boolean, String?) -> Unit,
+        confirmSent: Boolean,
+        isConnected: () -> Boolean,
+        onComplete: (code: String?, message: String?, confirmed: Boolean) -> Unit,
     ) {
-        if (pendingCompletion != null) {
-            onComplete(false, "已有消息正在发送")
+        if (whatsappBusy) {
+            onComplete("whatsapp_busy", "手机正在操作 WhatsApp", false)
             return
         }
-        pendingText = text
-        pendingSend = send
-        pendingCompletion = onComplete
-        if (!openChat(phoneE164)) {
-            pendingText = null
-            pendingSend = false
-            finishPending(false, "WhatsApp 未安装或手机号无效")
+        val keyguard = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+        if (keyguard.isKeyguardLocked) {
+            onComplete("phone_locked", "请先解锁手机", false)
             return
         }
-        val gen = ++assistOpGeneration
-        // 多次重试，适配 WA 启动慢
-        listOf(350L, 700L, 1300L, 2200L).forEach { delay ->
-            mainHandler.postDelayed({ if (gen == assistOpGeneration) flushPending() }, delay)
-        }
-        mainHandler.postDelayed({
-            if (gen != assistOpGeneration) return@postDelayed
-            if (pendingCompletion != null) {
-                pendingText = null
-                pendingSend = false
-                finishPending(false, "未找到 WhatsApp 输入框或发送按钮")
-            }
-        }, 3200L)
-    }
 
-    fun typeText(text: String, onComplete: ((Boolean, String?) -> Unit)? = null) {
-        if (onComplete != null && pendingCompletion != null) {
-            onComplete(false, "已有命令正在执行")
+        // WhatsApp 按深链号码把一次性字符串填入目标会话。联系人标题不能证明号码。
+        val challenge = "WAP-" + UUID.randomUUID()
+        val targetPackage = launchChat(phoneE164, challenge)
+        if (targetPackage == null) {
+            onComplete("whatsapp_not_installed", "无法打开手机上的 WhatsApp", false)
             return
         }
-        if (onComplete != null) pendingCompletion = onComplete
-        pendingText = text
-        val gen = ++assistOpGeneration
-        if (tryTypeNow(text)) {
-            pendingText = null
-            if (!pendingSend) finishPending(true, null)
-        } else {
-            Log.i(TAG, "typeText queued")
-            mainHandler.postDelayed({ if (gen == assistOpGeneration) flushPending() }, 600)
-            mainHandler.postDelayed({ if (gen == assistOpGeneration) flushPending() }, 1500)
-            if (onComplete != null) {
-                mainHandler.postDelayed({
-                    if (gen != assistOpGeneration) return@postDelayed
-                    if (pendingCompletion != null && pendingText != null) {
-                        pendingText = null
-                        finishPending(false, "未找到 WhatsApp 输入框")
+        textSendInProgress = true
+        val deadline = SystemClock.elapsedRealtime() + 5_000L
+
+        fun finish(code: String?, message: String?, confirmed: Boolean = false) {
+            textSendInProgress = false
+            onComplete(code, message, confirmed)
+        }
+
+        fun awaitReceipt(window: Int, composer: Int, title: String, previous: Set<Int>, until: Long) {
+            if (!isConnected() || keyguard.isKeyguardLocked || SystemClock.elapsedRealtime() >= until) {
+                finish(null, null)
+                return
+            }
+            val root = rootInActiveWindow
+            val input = root?.let { conversationInput(it, targetPackage) }
+            val sameChat = root != null && input != null && input.hashCode() == composer && root.windowId == window &&
+                nodeText(root, "$targetPackage:id/conversation_contact_name") == title
+            val matches = if (sameChat && (input?.isShowingHintText == true || input?.text.isNullOrEmpty()))
+                messageMatches(checkNotNull(root), targetPackage, text) else emptyMap()
+            input?.recycle()
+            root?.recycle()
+            if (matches.size > previous.size && matches.any { (id, sent) -> sent && id !in previous }) {
+                finish(null, null, confirmed = true)
+            } else if (!sameChat) finish(null, null)
+            else mainHandler.postDelayed({ awaitReceipt(window, composer, title, previous, until) }, 250L)
+        }
+
+        fun trySend() {
+            if (!isConnected()) {
+                finish("bridge_disconnected", "Bridge 已断开")
+                return
+            }
+            if (keyguard.isKeyguardLocked) {
+                finish("phone_locked", "请先解锁手机")
+                return
+            }
+            if (SystemClock.elapsedRealtime() >= deadline) {
+                finish("chat_unverified", "未能核验 WhatsApp 目标会话，请在手机检查号码与界面")
+                return
+            }
+
+            val root = rootInActiveWindow
+            val input = root?.let { conversationInput(it, targetPackage) }
+            if (root == null || input == null || input.text?.toString() != challenge) {
+                input?.recycle()
+                root?.recycle()
+                mainHandler.postDelayed({ trySend() }, 200L)
+                return
+            }
+            val readyButton = findSendNode(root, targetPackage)
+            if (readyButton == null) {
+                input.recycle()
+                root.recycle()
+                mainHandler.postDelayed({ trySend() }, 200L)
+                return
+            }
+            readyButton.recycle()
+            val title = if (confirmSent) nodeText(root, "$targetPackage:id/conversation_contact_name") else ""
+            val previous = if (title.isNotBlank()) messageMatches(root, targetPackage, text).keys else emptySet()
+            val window = root.windowId
+            val composer = input.hashCode()
+
+            var clickAttempted = false
+            var clickAccepted = false
+            val failure = runCatching {
+                val args = Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+                }
+                if (input.refresh() && input.text?.toString() == challenge &&
+                    input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                ) {
+                    val active = rootInActiveWindow
+                    val currentInput = active?.let { conversationInput(it, targetPackage) }
+                    try {
+                        if (active != null && active == root && currentInput != null && currentInput == input) {
+                            findSendNode(active, targetPackage)?.let { button ->
+                                try {
+                                    if (currentInput.refresh() && currentInput.text?.toString() == text &&
+                                        !keyguard.isKeyguardLocked && SystemClock.elapsedRealtime() < deadline && isConnected()
+                                    ) {
+                                        clickAttempted = true
+                                        clickAccepted = button.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                                    }
+                                } finally {
+                                    button.recycle()
+                                }
+                            }
+                        }
+                    } finally {
+                        currentInput?.recycle()
+                        active?.recycle()
                     }
-                }, 2500)
+                }
+            }.exceptionOrNull()
+            input.recycle()
+            root.recycle()
+
+            if (clickAttempted) {
+                // 一旦调用点击操作，返回值不能作为重发依据。
+                if (clickAccepted && title.isNotBlank()) {
+                    val until = SystemClock.elapsedRealtime() + 3_000L
+                    mainHandler.postDelayed({ awaitReceipt(window, composer, title, previous, until) }, 250L)
+                } else finish(null, null)
+            } else {
+                if (failure != null) Log.w(TAG, "Verified text send stopped before click", failure)
+                finish("chat_unverified", "未能核验输入内容或发送按钮，请在手机检查会话")
             }
         }
+
+        mainHandler.postDelayed({ trySend() }, 200L)
     }
 
-    fun clickSend(onComplete: ((Boolean, String?) -> Unit)? = null) {
-        if (onComplete != null && pendingCompletion != null) {
-            onComplete(false, "已有命令正在执行")
-            return
-        }
-        if (onComplete != null) pendingCompletion = onComplete
-        pendingSend = true
-        val gen = ++assistOpGeneration
-        if (tryClickSendNow()) {
-            pendingSend = false
-            finishPending(true, null)
-        } else {
-            Log.i(TAG, "clickSend queued")
-            mainHandler.postDelayed({ if (gen == assistOpGeneration) flushPending() }, 500)
-            mainHandler.postDelayed({ if (gen == assistOpGeneration) flushPending() }, 1200)
-            if (onComplete != null) {
-                mainHandler.postDelayed({
-                    if (gen != assistOpGeneration) return@postDelayed
-                    if (pendingCompletion != null && pendingSend) {
-                        pendingSend = false
-                        finishPending(false, "未找到 WhatsApp 发送按钮")
+    private fun messageMatches(root: AccessibilityNodeInfo, pkg: String, text: String): Map<Int, Boolean> {
+        val textId = "$pkg:id/message_text"
+        val matches = mutableMapOf<Int, Boolean>()
+        for (node in root.findAccessibilityNodeInfosByViewId(textId).orEmpty()) {
+            if (node.isVisibleToUser && node.text?.toString() == text) {
+                var ancestor = node.parent
+                var sent = false
+                repeat(3) {
+                    val row = ancestor ?: return@repeat
+                    val bodies = row.findAccessibilityNodeInfosByViewId(textId).orEmpty()
+                    val singleBody = bodies.size == 1
+                    bodies.forEach { it.recycle() }
+                    if (singleBody) for (statusId in listOf("status", "message_status")) {
+                        val statuses = row.findAccessibilityNodeInfosByViewId("$pkg:id/$statusId").orEmpty()
+                        sent = sent || statuses.any {
+                            it.isVisibleToUser && it.contentDescription?.toString()?.trim()?.lowercase() in SENT_LABELS
+                        }
+                        statuses.forEach { it.recycle() }
                     }
-                }, 2200)
+                    ancestor = if (sent || !singleBody || it == 2) null else row.parent
+                    row.recycle()
+                }
+                matches[node.hashCode()] = sent
             }
+            node.recycle()
         }
+        return matches
     }
 
-    private fun flushPending() {
-        val text = pendingText
-        if (text != null && tryTypeNow(text)) {
-            pendingText = null
-            // 仅打字（不发送）模式：文本就位即算完成。否则完成回调永远悬空，
-            // 只能等超时误报「未找到输入框」——桌面端据此把气泡标成失败并
-            // 重试，实际却已把文字打进聊天框＝重复输入。
-            if (!pendingSend) finishPending(true, null)
+    private fun conversationInput(root: AccessibilityNodeInfo, pkg: String): AccessibilityNodeInfo? {
+        if (root.packageName?.toString() != pkg) return null
+        for (id in listOf("entry", "conversation_entry")) {
+            val nodes = root.findAccessibilityNodeInfosByViewId("$pkg:id/$id").orEmpty()
+            val input = nodes.singleOrNull { it.isEditable && it.isEnabled && it.isVisibleToUser }
+            nodes.forEach { if (it !== input) it.recycle() }
+            if (input != null) return input
         }
-        if (pendingSend && pendingText == null && tryClickSendNow()) {
-            pendingSend = false
-            finishPending(true, null)
-        }
-    }
-
-    private fun finishPending(ok: Boolean, error: String?) {
-        val completion = pendingCompletion ?: return
-        pendingCompletion = null
-        completion(ok, error)
-    }
-
-    private fun tryTypeNow(text: String): Boolean {
-        val root = rootInActiveWindow ?: return false
-        try {
-            val input = findInputNode(root) ?: return false
-            input.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-
-            val args = Bundle().apply {
-                putCharSequence(
-                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                    text
-                )
-            }
-            if (input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
-                Log.i(TAG, "SET_TEXT ok len=${text.length}")
-                return true
-            }
-
-            // 回退：剪贴板 + PASTE
-            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            cm.setPrimaryClip(ClipData.newPlainText("wap_plus", text))
-            if (input.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
-                Log.i(TAG, "PASTE ok")
-                return true
-            }
-            Log.w(TAG, "type failed on node ${input.className}")
-            return false
-        } finally {
-            root.recycle()
-        }
-    }
-
-    private fun tryClickSendNow(): Boolean {
-        val root = rootInActiveWindow ?: return false
-        try {
-            val btn = findSendNode(root) ?: return false
-            val clicked = btn.performAction(AccessibilityNodeInfo.ACTION_CLICK) ||
-                clickParent(btn)
-            Log.i(TAG, "clickSend=$clicked desc=${btn.contentDescription}")
-            return clicked
-        } finally {
-            root.recycle()
-        }
+        return null
     }
 
     private fun clickParent(node: AccessibilityNodeInfo): Boolean {
@@ -694,31 +736,6 @@ class WaAssistService : AccessibilityService() {
         return false
     }
 
-    private fun findInputNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        // 常见 WA 输入框 id（不同版本可能变化，配合 class 兜底）
-        val idHints = listOf(
-            "com.whatsapp.w4b:id/entry",
-            "com.whatsapp:id/entry",
-            "com.whatsapp.w4b:id/conversation_entry",
-            "com.whatsapp:id/conversation_entry",
-        )
-        for (id in idHints) {
-            val list = root.findAccessibilityNodeInfosByViewId(id)
-            val hit = list?.firstOrNull { it.isEditable || it.className?.contains("EditText") == true }
-            if (hit != null) return hit
-        }
-
-        // 文案提示
-        for (hint in listOf("消息", "Message", "Type a message", "发消息")) {
-            val list = root.findAccessibilityNodeInfosByText(hint)
-            val hit = list?.firstOrNull {
-                it.isEditable || it.className?.toString()?.contains("EditText") == true
-            }
-            if (hit != null) return hit
-        }
-
-        return findFirstEditable(root)
-    }
 
     private fun findFirstEditable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         if (node.isEditable) return node
@@ -733,32 +750,14 @@ class WaAssistService : AccessibilityService() {
         return null
     }
 
-    private fun findSendNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        val idHints = listOf(
-            "com.whatsapp.w4b:id/send",
-            "com.whatsapp:id/send",
-            "com.whatsapp.w4b:id/conversation_entry_action_button",
-            "com.whatsapp:id/conversation_entry_action_button",
-            "com.whatsapp.w4b:id/send_button",
-            "com.whatsapp:id/send_button",
-        )
-        for (id in idHints) {
-            val list = root.findAccessibilityNodeInfosByViewId(id)
-            val hit = list?.firstOrNull { it.isClickable || it.isEnabled }
-            if (hit != null) return hit
+    private fun findSendNode(root: AccessibilityNodeInfo, pkg: String): AccessibilityNodeInfo? {
+        for (id in listOf("send", "send_button")) {
+            val nodes = root.findAccessibilityNodeInfosByViewId("$pkg:id/$id").orEmpty()
+            val button = nodes.singleOrNull { it.isClickable && it.isEnabled && it.isVisibleToUser }
+            nodes.forEach { if (it !== button) it.recycle() }
+            if (button != null) return button
         }
-
-        for (label in listOf("发送", "Send", "Envoyer", "Enviar")) {
-            val list = root.findAccessibilityNodeInfosByText(label)
-            val hit = list?.firstOrNull { it.isClickable || it.parent?.isClickable == true }
-            if (hit != null) return hit
-        }
-
-        // contentDescription 含 send
-        return findByContentDesc(root) { desc ->
-            val d = desc.lowercase()
-            d.contains("send") || d.contains("发送") || d == "send"
-        }
+        return null
     }
 
     private fun findByContentDesc(
@@ -793,6 +792,7 @@ class WaAssistService : AccessibilityService() {
     }
 
     companion object {
+        private val SENT_LABELS = setOf("sent", "delivered", "read", "已发送", "已送达", "已读", "envoyé", "distribué", "lu")
         private const val TAG = "WaAssist"
         const val PACKAGE_WAB = "com.whatsapp.w4b"
         const val PACKAGE_WA = "com.whatsapp"
@@ -801,7 +801,7 @@ class WaAssistService : AccessibilityService() {
         var instance: WaAssistService? = null
 
         @Volatile
-        var eventSink: ((String) -> Unit)? = null
+        var eventSink: ((String) -> Boolean)? = null
 
         @Volatile
         var statusSink: (() -> Unit)? = null
@@ -838,7 +838,9 @@ class WaAssistService : AccessibilityService() {
             displayName: String,
             body: String,
             sentAt: Long,
-        ) {
+        ): Boolean {
+            if (instance == null || pendingMediaEvent != null) return false
+            if (pendingMediaShareTicket() != null) return pendingMedia?.optString("messageId") == messageId
             pendingMediaGeneration++
             pendingMediaPreparedAt = SystemClock.elapsedRealtime()
             pendingMedia = JSONObject()
@@ -848,6 +850,7 @@ class WaAssistService : AccessibilityService() {
                 .put("displayName", displayName)
                 .put("body", body)
                 .put("sentAt", sentAt)
+            return true
         }
 
         @Synchronized
@@ -876,16 +879,14 @@ class WaAssistService : AccessibilityService() {
                 JSONObject().put("items", JSONArray().put(item)).put("source", "android-media-share")
             )
             pendingMedia = null
-            val sink = eventSink
-            if (sink == null) pendingMediaEvent = event else sink.invoke(event)
+            if (eventSink?.invoke(event) != true) pendingMediaEvent = event
             return true
         }
 
         @Synchronized
         fun flushPendingMedia() {
             val event = pendingMediaEvent ?: return
-            pendingMediaEvent = null
-            eventSink?.invoke(event)
+            if (eventSink?.invoke(event) == true) pendingMediaEvent = null
         }
     }
 }

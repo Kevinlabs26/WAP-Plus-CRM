@@ -94,7 +94,7 @@ async function loadMediaDraft(chatKey: string): Promise<{
         id: item.id,
         kind: item.kind,
         file,
-        previewUrl: file.type.startsWith("image/")
+        previewUrl: item.kind === "audio" || file.type.startsWith("image/")
           ? URL.createObjectURL(file)
           : undefined,
       } satisfies PendingMediaItem];
@@ -280,7 +280,7 @@ export function useComposerMedia(opts: UseComposerMediaOptions) {
         id: crypto.randomUUID(),
         file,
         kind,
-        previewUrl: file.type.startsWith("image/")
+        previewUrl: kind === "audio" || file.type.startsWith("image/")
           ? URL.createObjectURL(file)
           : undefined,
       };

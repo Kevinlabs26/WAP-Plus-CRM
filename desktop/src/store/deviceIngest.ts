@@ -122,6 +122,7 @@ export function applyDeviceStatus(
       typeof payload.charging === "boolean"
         ? payload.charging
         : next[index].charging,
+    ...(typeof payload.phoneLocked === "boolean" ? { phoneLocked: payload.phoneLocked } : {}),
     whatsappInstalled:
       typeof payload.whatsappInstalled === "boolean"
         ? payload.whatsappInstalled

@@ -1,27 +1,41 @@
-name: Publish Windows release
+name: Publish desktop release
 
 on:
   workflow_dispatch:
     inputs:
-      verify_existing:
-        description: Verify and publish an already built draft without rebuilding identical app sources
+      notarize_macos:
+        description: Sign and notarize the macOS DMGs using the configured Apple credentials
         type: boolean
         default: false
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  publish-windows:
-    if: ${{ !inputs.verify_existing }}
+  build-macos:
+    if: github.ref_type == 'tag'
+    uses: ./.github/workflows/macos.yml
+    with:
+      notarize: ${{ inputs.notarize_macos == true }}
+    secrets: inherit
+
+  build-windows:
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: write
     runs-on: windows-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -44,6 +58,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Set up Java for the Android Bridge
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Prepare Android Bridge APK
+        run: npm run android:bridge:prepare
+
       - name: Run tests and frontend build
         run: npm run check
         timeout-minutes: 10
@@ -61,10 +85,9 @@ jobs:
         run: |
           $config = Get-Content desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
           $releaseTag = "v$($config.version)"
-          if ($env:GITHUB_REF_TYPE -eq "tag" -and $env:GITHUB_REF_NAME -ne $releaseTag) {
+          if ($env:GITHUB_REF_TYPE -ne "tag" -or $env:GITHUB_REF_NAME -ne $releaseTag) {
             throw "Git tag $env:GITHUB_REF_NAME does not match app version $releaseTag"
           }
-          "RELEASE_TAG=$releaseTag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build and upload draft Tauri release
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
@@ -84,41 +107,28 @@ jobs:
         shell: pwsh
         run: .github/scripts/smoke-windows-installer.ps1
 
-      - name: Publish verified release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "$env:RELEASE_TAG" --draft=false
-
-  verify-existing:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_existing }}
-    runs-on: windows-latest
+  publish:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: macos-update-publish
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          fetch-depth: 0
-      - name: Download previously built draft with identical application sources
-        shell: pwsh
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: macos-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish both platforms and advance the macOS update feed
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $config = Get-Content desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
-          $releaseTag = "v$($config.version)"
-          git diff --quiet $releaseTag HEAD -- desktop shared android package.json package-lock.json
-          if ($LASTEXITCODE -ne 0) { throw 'Application sources differ from the release tag; rebuild instead' }
-          $bundleDirectory = 'desktop/src-tauri/target/release/bundle/nsis'
-          New-Item -ItemType Directory -Force -Path $bundleDirectory | Out-Null
-          gh release download $releaseTag --pattern "*$($config.version)*x64-setup.exe" --dir $bundleDirectory
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot download the existing release installer' }
-          $downloaded = @(Get-ChildItem -LiteralPath $bundleDirectory -Filter "*$($config.version)*x64-setup.exe")
-          if ($downloaded.Count -ne 1) { throw 'Expected exactly one Windows installer' }
-          Rename-Item -LiteralPath $downloaded[0].FullName -NewName "$($config.productName)_$($config.version)_x64-setup.exe"
-          "RELEASE_TAG=$releaseTag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Smoke test packaged Windows installer
-        shell: pwsh
-        run: .github/scripts/smoke-windows-installer.ps1
-      - name: Publish verified release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "$env:RELEASE_TAG" --draft=false
+          GH_TOKEN: ${{ github.token }}
+          NOTARIZE: ${{ inputs.notarize_macos == true }}
+        run: bash .github/scripts/publish-desktop-release.sh

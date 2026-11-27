@@ -207,14 +207,19 @@ unsafe fn window_app_id(hwnd: HWND) -> Option<String> {
     result
 }
 
-unsafe fn client_windows(family: &str, prefer_content: bool) -> Result<Vec<HWND>, String> {
+unsafe fn visible_client_windows(family: &str) -> Result<Vec<HWND>, String> {
     let mut matches = (family.to_string(), Vec::<HWND>::new());
     EnumWindows(Some(enumerate), LPARAM(&mut matches as *mut _ as isize))
         .map_err(|e| e.to_string())?;
+    Ok(matches.1)
+}
+
+unsafe fn client_windows(family: &str, prefer_content: bool) -> Result<Vec<HWND>, String> {
+    let matches = visible_client_windows(family)?;
     // Account/profile pages belong to the WinUI host, alongside the chat WebView.
     let mut hosts = Vec::new();
     let mut content = Vec::new();
-    for hwnd in &matches.1 {
+    for hwnd in &matches {
         let mut pid = 0;
         GetWindowThreadProcessId(*hwnd, Some(&mut pid));
         let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
@@ -245,7 +250,7 @@ unsafe fn client_windows(family: &str, prefer_content: bool) -> Result<Vec<HWND>
     } else if !content.is_empty() {
         content
     } else {
-        matches.1
+        matches
     })
 }
 
@@ -952,15 +957,28 @@ impl Ui<'_> {
         Err("聊天标题与选中的联系人不一致或尚未就绪，未拨号".into())
     }
     unsafe fn wait_chat_header(
-        &self,
+        &mut self,
+        family: &str,
+        host: HWND,
         recipient: &str,
         selected_label: &str,
-    ) -> Result<IUIAutomationElement, String> {
+    ) -> Result<VoiceCallAction, String> {
         let until = self.deadline.min(Instant::now() + Duration::from_secs(5));
         loop {
             self.check()?;
-            // The previous chat's call button can remain visible while React switches the header.
-            match self.chat_call(recipient, selected_label) {
+            if window(family).is_ok_and(|current| current != host) {
+                return Err("客户端主窗口已改变，未拨号".into());
+            }
+            let verified = chat_window(family).and_then(|hwnd| {
+                // Opening a chat can replace the WebView under the same client host.
+                self.hwnd = hwnd;
+                let call = self.chat_call(recipient, selected_label)?;
+                if window(family)? != host || chat_window(family)? != hwnd {
+                    return Err("客户端聊天窗口仍在切换，未拨号".into());
+                }
+                VoiceCallAction::prepare(&call)
+            });
+            match verified {
                 Ok(call) => return Ok(call),
                 Err(error) if Instant::now() >= until => return Err(error),
                 Err(_) => {}
@@ -1093,7 +1111,158 @@ pub fn verify_owner(id: &str, owner: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn call(id: &str, recipient: &str, cancelled: &AtomicBool) -> Result<(), String> {
+const END_CALL_NAMES: &[&str] = &[
+    "End call",
+    "End Call",
+    "Hang up",
+    "Hang Up",
+    "挂断",
+    "挂断通话",
+    "结束通话",
+    "结束语音通话",
+    "Raccrocher",
+    "Terminer l’appel",
+    "Terminer l'appel",
+];
+
+unsafe fn active_call_windows(ui: &mut Ui<'_>, family: &str) -> Result<Vec<HWND>, String> {
+    let windows = visible_client_windows(family)?;
+    if windows.is_empty() || windows.iter().any(|hwnd| IsIconic(*hwnd).as_bool()) {
+        return Err("客户端窗口不可见，无法核对通话".into());
+    }
+    let previous = (ui.hwnd, ui.chat);
+    ui.chat = false;
+    let mut active = Vec::new();
+    let result = (|| {
+        for hwnd in windows {
+            ui.hwnd = hwnd;
+            if !ui
+                .named_candidates(END_CALL_NAMES, &[UIA_ButtonControlTypeId], true)?
+                .is_empty()
+            {
+                active.push(hwnd);
+            }
+        }
+        Ok(active)
+    })();
+    (ui.hwnd, ui.chat) = previous;
+    result
+}
+
+unsafe fn wait_for_call_end(ui: &mut Ui<'_>, family: &str, recipient: &str, label: &str) -> bool {
+    let mut seen = Vec::new();
+    let mut last_evidence = Instant::now();
+    let mut idle_samples = 0;
+    // shortcut: Only match exposed hang-up controls. Pause for confirmation on unknown layouts.
+    while !ui.cancelled.load(Ordering::SeqCst) && last_evidence.elapsed() < Duration::from_secs(12) {
+        ui.deadline = Instant::now() + Duration::from_secs(4);
+        match active_call_windows(ui, family) {
+            Ok(active) if !active.is_empty() => {
+                for hwnd in active {
+                    if !seen.contains(&hwnd) {
+                        seen.push(hwnd);
+                    }
+                }
+                last_evidence = Instant::now();
+                idle_samples = 0;
+            }
+            Ok(_) if !seen.is_empty() && chat_ready_after_call(ui, family, &seen, recipient, label) =>
+            {
+                idle_samples += 1;
+                if idle_samples == 3 {
+                    return true;
+                }
+            }
+            _ => idle_samples = 0,
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    false
+}
+
+unsafe fn chat_ready_after_call(
+    ui: &mut Ui<'_>,
+    family: &str,
+    seen: &[HWND],
+    recipient: &str,
+    label: &str,
+) -> bool {
+    let (Ok(host), Ok(chat)) = (window(family), chat_window(family)) else {
+        return false;
+    };
+    if seen.iter().any(|hwnd| {
+        *hwnd != host && *hwnd != chat && IsWindow(Some(*hwnd)).as_bool()
+    }) {
+        return false;
+    }
+    ui.hwnd = chat;
+    ui.chat = true;
+    ui.chat_call(recipient, label).is_ok_and(|button| {
+        button.CurrentIsEnabled().is_ok_and(|enabled| enabled.as_bool())
+    })
+}
+
+unsafe fn invoke_call(
+    ui: &mut Ui<'_>,
+    family: &str,
+    host: HWND,
+    recipient: &str,
+    label: &str,
+    track_end: bool,
+) -> Result<bool, String> {
+    if track_end && !active_call_windows(ui, family)?.is_empty() {
+        return Err("客户端已有通话，请结束后再继续".into());
+    }
+    // The chat can redraw while the call-state scan is running. Prepare on the fresh header.
+    let action = ui.wait_chat_header(family, host, recipient, label)?;
+    ui.check()?;
+    action.start()?;
+    Ok(track_end && wait_for_call_end(ui, family, recipient, label))
+}
+
+enum VoiceCallAction {
+    Invoke(IUIAutomationInvokePattern),
+    Legacy(IUIAutomationLegacyIAccessiblePattern),
+}
+
+impl VoiceCallAction {
+    unsafe fn prepare(button: &IUIAutomationElement) -> Result<Self, String> {
+        let readiness_error = |error: windows::core::Error| {
+            format!("语音通话按钮尚未就绪，未拨号（0x{:08X}）", error.code().0 as u32)
+        };
+        if !button.CurrentIsEnabled().map_err(readiness_error)?.as_bool() {
+            return Err("语音通话按钮尚不可用，未拨号".into());
+        }
+        if let Ok(pattern) =
+            button.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+        {
+            return Ok(Self::Invoke(pattern));
+        }
+        button.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
+            UIA_LegacyIAccessiblePatternId,
+        )
+        .map(Self::Legacy)
+        .map_err(readiness_error)
+    }
+
+    unsafe fn start(self) -> Result<(), String> {
+        // UI Automation can report an error after dispatching the click.
+        let result = match self {
+            Self::Invoke(pattern) => pattern.Invoke(),
+            Self::Legacy(pattern) => pattern.DoDefaultAction(),
+        };
+        result.map_err(|error| {
+            format!("Windows 未能确认语音呼叫已发出。请查看 WhatsApp 当前是否在拨号（0x{:08X}）", error.code().0 as u32)
+        })
+    }
+}
+
+pub fn call(
+    id: &str,
+    recipient: &str,
+    cancelled: &AtomicBool,
+    track_end: bool,
+) -> Result<bool, String> {
     let started = Instant::now();
     #[cfg(debug_assertions)]
     let timing_file = std::cell::RefCell::new(
@@ -1119,17 +1288,17 @@ pub fn call(id: &str, recipient: &str, cancelled: &AtomicBool) -> Result<(), Str
         let family = id.split_once('!').ok_or("无效实例")?.0;
         let hwnd = ui.hwnd;
         unsafe {
+            if track_end && !active_call_windows(&mut ui, family)?.is_empty() {
+                return Err("客户端已有通话，请结束后再继续".into());
+            }
             // Chat controls live in the WebView; the native host can repeat that tree many times.
             ui.hwnd = chat_window(family)?;
             ui.chat = true;
             mark("检查当前聊天");
-            if let Ok(call) = ui.chat_call(recipient, "") {
+            if ui.chat_call(recipient, "").is_ok() {
                 // Only a visible full phone number qualifies; a saved nickname still uses number search.
-                if window(family)? != hwnd || chat_window(family)? != ui.hwnd {
-                    return Err("客户端窗口已改变，未拨号".into());
-                }
                 mark("直接发起语音通话");
-                return ui.invoke(&call);
+                return invoke_call(&mut ui, family, hwnd, recipient, "", track_end);
             }
             mark("打开联系人搜索");
             ui.invoke(&ui.wait_named(NEW_CHAT_NAMES, &[UIA_ButtonControlTypeId])?)?;
@@ -1198,18 +1367,20 @@ pub fn call(id: &str, recipient: &str, cancelled: &AtomicBool) -> Result<(), Str
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
-            mark("确认聊天已切换");
-            let call = ui.wait_chat_header(recipient, &selected_label)?;
-            // Final action is never retried: an invocation error can still mean a call was placed.
-            if window(family)? != hwnd || chat_window(family)? != ui.hwnd {
-                return Err("客户端窗口已改变，未拨号".into());
-            }
             mark("发起语音通话");
-            ui.invoke(&call)
+            invoke_call(&mut ui, family, hwnd, recipient, &selected_label, track_end)
         }
     })();
     result.map_err(|error: String| {
         eprintln!("[voice-call] failed at {}: {error}", stage.get());
+        #[cfg(debug_assertions)]
+        if let Some(file) = timing_file.borrow_mut().as_mut() {
+            use std::io::Write;
+            let stage = stage.get();
+            if matches!(stage, "发起语音通话" | "直接发起语音通话") {
+                let _ = writeln!(file, "失败 {stage}: {error}");
+            }
+        }
         format!("{}：{error}", stage.get())
     })
 }
@@ -1239,10 +1410,11 @@ mod tests {
             let walker = automation.RawViewWalker().unwrap();
             let mut checked = 0;
             for app in apps().unwrap() {
-                let Ok(hwnd) = chat_window(app.app_id.split_once('!').unwrap().0) else {
+                let family = app.app_id.split_once('!').unwrap().0;
+                let (Ok(host), Ok(hwnd)) = (window(family), chat_window(family)) else {
                     continue;
                 };
-                let ui = Ui {
+                let mut ui = Ui {
                     automation: automation.clone(),
                     hwnd,
                     deadline: Instant::now() + Duration::from_secs(15),
@@ -1290,7 +1462,7 @@ mod tests {
                         let label = normalized_label(&node.CachedName().ok()?.to_string());
                         displayed_phone(header_contact_label(&label))
                     }) {
-                        ui.wait_chat_header(&phone, "").expect(
+                        ui.wait_chat_header(family, host, &phone, "").expect(
                             "an observed complete header phone must verify without clicking",
                         );
                         assert!(ui

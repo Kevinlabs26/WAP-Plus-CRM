@@ -5,8 +5,9 @@ import { Button, Input, SectionLabel, Textarea } from "@/components/ui/primitive
 import { useDetailsMenu } from "@/components/ui/useDetailsMenu";
 import { baileysRemoveQuickReply, baileysSyncQuickReplies } from "@/lib/baileys";
 import { isWaAccountConnected } from "@/lib/accountConnection";
-import { filterQuickReplies, quickReplyPreviewText, flattenQuickReplyCategories, getQuickReplyCategories, quickReplyCategoryDescendants, QUICK_REPLY_CATEGORIES, MAX_QUICK_REPLIES, MAX_QUICK_REPLY_CATEGORIES, MAX_QUICK_REPLY_MEDIA_BYTES, MAX_QUICK_REPLY_MEDIA_TOTAL_BYTES, type QuickReplySheetLink } from "@/lib/quickReplies";
-import { parseQuickReplyTable, quickReplyRowsToTsv, quickReplySheetRowsWithLinks } from "@/lib/quickReplyImport";
+import { filterQuickReplies, quickReplyPreviewText, flattenQuickReplyCategories, getQuickReplyCategories, quickReplyCategoryDescendants, QUICK_REPLY_CATEGORIES, MAX_QUICK_REPLY_MEDIA_BYTES, MAX_QUICK_REPLY_MEDIA_TOTAL_BYTES, type QuickReplySheetLink } from "@/lib/quickReplies";
+import { parseQuickReplyTable, parseQuickReplyTextFile, quickReplySheetRowsWithLinks, QUICK_REPLY_TEXT_IMPORT_LIMIT } from "@/lib/quickReplyImport";
+import { quickReplyColumnIndex, quickReplyColumnName, quickReplyWorkbookRows, type QuickReplyWorkbookSheet } from "@/lib/quickReplyWorkbook";
 import { spreadsheetId } from "@/lib/googleSheetApi";
 import { connectSheets, initializeSheets, readSheet, tabRange, useGoogleSheets } from "@/lib/googleSheets";
 import { sheetErrorHint } from "@/lib/googleSheetErrors";
@@ -14,6 +15,10 @@ import { cancelQuickReplySheetSync, removeQuickReplySheetRow, restoreQuickReplyS
 import { QuickReplySheetStatus } from "@/components/chat/QuickReplySheetStatus";
 import type { AppSettings } from "@/store/appStore";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { downloadJson, readJsonFile } from "@/lib/exportData";
+import { buildQuickReplyBackup, mergeQuickReplyBackup } from "@/lib/quickReplyBackup";
+import { flushPersist } from "@/store/persist";
+import { isDataRestoreActive } from "@/store/restoreGuard";
 
 type QuickReply = AppSettings["quickReplies"][number];
 
@@ -72,16 +77,45 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
   const [page, setPage] = useState(0);
   const [bulkCategory, setBulkCategory] = useState("");
   const [importOpen, setImportOpen] = useState(importOnly);
+  const backupFile = useRef<HTMLInputElement>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+
+  async function restoreQuickReplyBackup(file: File) {
+    setBackupBusy(true);
+    try {
+      const input = await readJsonFile(file);
+      const state = useAppStore.getState();
+      if (!state.hydrated || isDataRestoreActive()) throw Error("quickLibrary.importError");
+      const { added, patch } = mergeQuickReplyBackup(state.settings, input);
+      state.updateSettings(patch);
+      await flushPersist(() => useAppStore.getState());
+      state.pushToast(t("quickLibrary.backupMerged", { count: added }), "success");
+    } catch (error) {
+      const key = error instanceof Error && (error.message === "quickLibrary.mediaCapacity" || error.message === "quickLibrary.categoryLimit")
+        ? error.message : "quickLibrary.importError";
+      useAppStore.getState().pushToast(t(key), "error");
+    } finally { setBackupBusy(false); }
+  }
   const [importText, setImportText] = useState("");
+  const [textFilePreview, setTextFilePreview] = useState<ReturnType<typeof parseQuickReplyTable> | null>(null);
+  const [importFileName, setImportFileName] = useState("");
+  const [workbookSheets, setWorkbookSheets] = useState<QuickReplyWorkbookSheet[] | null>(null);
+  const [workbookSheetIndex, setWorkbookSheetIndex] = useState(0);
+  const workbookSheet = workbookSheets?.[workbookSheetIndex];
+  const importFileGeneration = useRef(0);
+  const [importFileError, setImportFileError] = useState(false);
+  const importFileInput = useRef<HTMLInputElement>(null);
+  const importDetails = useRef<HTMLDetailsElement>(null);
   const [sheetUrl, setSheetUrl] = useState("");
   const [sheetBusy, setSheetBusy] = useState(false);
   const [sheetError, setSheetError] = useState("");
   const [sheetTabs, setSheetTabs] = useState<string[]>([]);
+  const sheetRowCounts = useRef(new Map<string, number>());
   const [selectedSheetTabs, setSelectedSheetTabs] = useState<Set<string>>(new Set());
   const [sheetGroupName, setSheetGroupName] = useState("");
   const [categoryMenu, setCategoryMenu] = useState<{ id: string; x: number; y: number } | null>(null);
-  const [sheetOriginalColumn, setSheetOriginalColumn] = useState(0);
-  const [sheetTranslationColumn, setSheetTranslationColumn] = useState(1);
+  const [sheetOriginalColumn, setSheetOriginalColumn] = useState("A");
+  const [sheetTranslationColumn, setSheetTranslationColumn] = useState("B");
   const [sheetTitleSource, setSheetTitleSource] = useState<"original" | "translation">("original");
   const [fetchingTabs, setFetchingTabs] = useState(false);
   const [mediaBusyId, setMediaBusyId] = useState<string | null>(null);
@@ -118,7 +152,9 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
   const menuDescendants = menuCategory ? quickReplyCategoryDescendants(menuCategory.id, categoryOptions) : new Set<string>();
   const menuCustom = menuCategory && customCategories.some(item => item.id === menuCategory.id);
   const renderCategoryTree = (parentId: string | undefined, depth = 0): React.ReactNode => categoryOptions
-    .filter(category => category.parentId === parentId && (category.id === "other" || categoryCount(category.id) > 0 || quickReplyCategoryDescendants(category.id, categoryOptions).has(listCategory)))
+    .filter(category => category.parentId === parentId && (category.id === "other"
+      ? categoryCount(category.id) > 0
+      : categoryCount(category.id) > 0 || quickReplyCategoryDescendants(category.id, categoryOptions).has(listCategory)))
     .map(category => {
       const children = categoryOptions.some(item => item.parentId === category.id);
       const expanded = expandedCategories.includes(category.id);
@@ -132,10 +168,21 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
         {children && expanded && renderCategoryTree(category.id, depth + 1)}
       </div>;
     });
-  const importPreview = useMemo(() => {
+  const importPreview = useMemo<ReturnType<typeof parseQuickReplyTable> & { error: boolean }>(() => {
+    if (importFileError) return { rows: [], invalidRows: [], error: true };
+    if (textFilePreview) return { ...textFilePreview, error: false };
+    if (workbookSheets) {
+      const rows = quickReplyWorkbookRows(workbookSheets);
+      let rowNumber = 0;
+      const invalidRows = workbookSheets.flatMap(sheet => sheet.rows.flatMap(row => {
+        rowNumber++;
+        return row[sheet.sendColumn] || (sheet.translationColumn !== null && row[sheet.translationColumn]) ? [] : [rowNumber];
+      }));
+      return { rows, invalidRows, error: false };
+    }
     try { return { ...parseQuickReplyTable(importText), error: false }; }
     catch { return { rows: [], invalidRows: [], error: true }; }
-  }, [importText]);
+  }, [importFileError, importText, workbookSheets, textFilePreview]);
   useEffect(() => { setSelectedIds(new Set()); }, [listCategory, listQuery]);
   useEffect(() => { void initializeSheets(); }, []);
   useEffect(() => { setMoveCategoryMenu(false); }, [categoryMenu?.id]);
@@ -144,6 +191,12 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
   useEffect(() => {
     if (listCategory !== "all" && !categoryOptions.some(item => item.id === listCategory)) setListCategory("all");
   }, [listCategory, settings.quickReplyCustomCategories, settings.quickReplyRemovedCategories]);
+  useEffect(() => {
+    if (listCategory === "other" && !replies.some(reply => reply.category === "other")) {
+      setListCategory("all");
+      setPage(0);
+    }
+  }, [listCategory, replies]);
   const accountId =
     settings.liveBaileysAccountId || settings.activeAccountId || null;
   const connected = isWaAccountConnected(
@@ -173,10 +226,18 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
         <div className="relative flex shrink-0 flex-col items-start gap-1.5 sm:items-end">
           <div className="flex flex-wrap gap-2">
             <Button size="sm" onClick={() => setImportOpen(open => !open)}>{t("quickLibrary.import")}</Button>
+            <Button size="sm" disabled={backupBusy} onClick={() => {
+              downloadJson("quick-replies.json", buildQuickReplyBackup(useAppStore.getState().settings));
+            }}>{t("quickLibrary.backupExport")}</Button>
+            <Button size="sm" disabled={backupBusy} onClick={() => backupFile.current?.click()}>{t("quickLibrary.backupRestore")}</Button>
+            <input ref={backupFile} type="file" accept=".json,application/json" hidden onChange={event => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = "";
+              if (file) void restoreQuickReplyBackup(file);
+            }} />
             <Button
               variant="primary"
               size="sm" className="text-2xs"
-              disabled={replies.length >= MAX_QUICK_REPLIES}
               onClick={() => addReply()}
             >
               {t("settingsQuickReplies.add")}
@@ -221,6 +282,56 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
         <section className={`space-y-3 ${importOnly ? "border-b border-zinc-800 pb-3" : "rounded-lg border border-zinc-800 p-4"}`}>
           {!importOnly && <SectionLabel>{t("quickLibrary.import")}</SectionLabel>}
           <p className="text-2xs text-zinc-500">{t("quickLibrary.sheetSyncHint")}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <input ref={importFileInput} type="file" className="hidden" accept=".xlsx,.xls,.csv,.tsv,.json,.txt" aria-label={t("quickLibrary.importFile")} onChange={event => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = "";
+              if (!file) return;
+              importDetails.current?.setAttribute("open", "");
+              const generation = ++importFileGeneration.current;
+              setWorkbookSheets(null);
+              setWorkbookSheetIndex(0);
+              setTextFilePreview(null);
+              setImportFileName(file.name);
+              setImportText("");
+              setImportFileError(false);
+              const failed = () => { if (generation === importFileGeneration.current) setImportFileError(true); };
+              if (/\.xlsx?$/i.test(file.name)) {
+                void import("@/lib/quickReplyWorkbookImport").then(async ({ readQuickReplyWorkbookInWorker }) => {
+                  const sheets = await readQuickReplyWorkbookInWorker(file);
+                  if (generation === importFileGeneration.current) setWorkbookSheets(sheets);
+                }).catch(failed);
+                return;
+              }
+              void parseQuickReplyTextFile(file).then(preview => {
+                if (generation === importFileGeneration.current) setTextFilePreview(preview);
+              }).catch(error => {
+                if (generation === importFileGeneration.current && String(error).includes("limit")) pushToast(t("quickLibrary.textFileTooLarge"), "error");
+                failed();
+              });
+            }} />
+            <Button size="sm" variant="primary" onClick={() => importFileInput.current?.click()}>{t("quickLibrary.importFile")}</Button>
+            {importFileName && <span className="max-w-full truncate text-xs text-zinc-500" title={importFileName}>{importFileName}</span>}
+          </div>
+          {workbookSheet && <div className="grid gap-2 sm:grid-cols-4">
+            <select aria-label={t("quickLibrary.selectTabs")} className="ui-control min-w-0" value={workbookSheetIndex}
+              onChange={event => setWorkbookSheetIndex(Number(event.target.value))}>
+              {workbookSheets?.map((sheet, index) => <option key={index} value={index}>{sheet.name}</option>)}
+            </select>
+            {([
+              ["sendColumn", "quickLibrary.originalColumn"],
+              ["translationColumn", "quickLibrary.translationColumn"],
+              ["titleColumn", "settingsQuickReplies.commandTitle"],
+            ] as const).map(([field, label]) => <select key={field} aria-label={t(label)} className="ui-control min-w-0"
+              value={workbookSheet[field] ?? -1} onChange={event => {
+                const index = Number(event.target.value);
+                setWorkbookSheets(sheets => sheets?.map((sheet, sheetIndex) => sheetIndex === workbookSheetIndex
+                  ? { ...sheet, [field]: index < 0 ? null : index } : sheet) || null);
+              }}>
+              {field !== "sendColumn" && <option value={-1}>{t("quickLibrary.columnNone")}</option>}
+              {workbookSheet.columns.map(column => <option key={column.index} value={column.index}>{column.label}</option>)}
+            </select>)}
+          </div>}
           <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
             <label className="text-xs text-zinc-500">{t("quickLibrary.sheetUrl")}
               <Input
@@ -309,22 +420,20 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
               </div>
               <div className="grid gap-2 border-t border-zinc-800/80 pt-2 sm:grid-cols-3">
                 <label className="text-2xs text-zinc-500">{t("quickLibrary.originalColumn")}
-                  <select aria-label={t("quickLibrary.originalColumn")} className="ui-control mt-1 w-full px-2 py-1.5 text-xs" disabled={sheetBusy} value={sheetOriginalColumn} onChange={event => {
-                    const column = Number(event.target.value);
+                  <Input aria-label={t("quickLibrary.originalColumn")} className="mt-1 w-full" disabled={sheetBusy} value={sheetOriginalColumn} onChange={event => {
+                    const value = event.target.value.trim().toUpperCase();
+                    const column = /^\d+$/.test(value) ? quickReplyColumnName(Number(value)) : value;
                     if (column === sheetTranslationColumn) setSheetTranslationColumn(sheetOriginalColumn);
                     setSheetOriginalColumn(column);
-                  }}>
-                    <option value={0}>A</option><option value={1}>B</option>
-                  </select>
+                  }} />
                 </label>
                 <label className="text-2xs text-zinc-500">{t("quickLibrary.translationColumn")}
-                  <select aria-label={t("quickLibrary.translationColumn")} className="ui-control mt-1 w-full px-2 py-1.5 text-xs" disabled={sheetBusy} value={sheetTranslationColumn} onChange={event => {
-                    const column = Number(event.target.value);
+                  <Input aria-label={t("quickLibrary.translationColumn")} className="mt-1 w-full" disabled={sheetBusy} value={sheetTranslationColumn} onChange={event => {
+                    const value = event.target.value.trim().toUpperCase();
+                    const column = /^\d+$/.test(value) ? quickReplyColumnName(Number(value)) : value;
                     if (column === sheetOriginalColumn) setSheetOriginalColumn(sheetTranslationColumn);
                     setSheetTranslationColumn(column);
-                  }}>
-                    <option value={0}>A</option><option value={1}>B</option>
-                  </select>
+                  }} />
                 </label>
                 <label className="text-2xs text-zinc-500">{t("quickLibrary.titleSource")}
                   <select aria-label={t("quickLibrary.titleSource")} className="ui-control mt-1 w-full px-2 py-1.5 text-xs" disabled={sheetBusy} value={sheetTitleSource} onChange={event => setSheetTitleSource(event.target.value as "original" | "translation")}>
@@ -351,11 +460,18 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
           )}
           {sheetError && <p role="alert" className="text-xs text-red-400">{sheetError}</p>}
           {sheets.error && <p role="alert" className="text-xs text-red-400">{t(sheetErrorHint(sheets.error))}</p>}
-          <details className="border-t border-zinc-800 pt-3">
+          <details ref={importDetails} className="border-t border-zinc-800 pt-3">
           <summary className="cursor-pointer text-xs text-zinc-500">{t("quickLibrary.pasteInstead")}</summary>
           <p className="my-2 text-xs text-zinc-500">{t("quickLibrary.importHint")}</p>
-          <Textarea rows={5} maxLength={3_000_000} value={importText} aria-label={t("quickLibrary.import")}
-            onChange={event => setImportText(event.target.value)} />
+          <Textarea rows={5} value={importText} aria-label={t("quickLibrary.import")}
+            onPaste={event => {
+              const field = event.currentTarget;
+              const selected = field.selectionEnd - field.selectionStart;
+              if (field.value.length - selected + event.clipboardData.getData("text").length <= QUICK_REPLY_TEXT_IMPORT_LIMIT) return;
+              event.preventDefault();
+              pushToast(t("quickLibrary.pasteTooLarge"), "error");
+            }}
+            onChange={event => { importFileGeneration.current++; setWorkbookSheets(null); setTextFilePreview(null); setImportFileName(""); setImportText(event.target.value); setImportFileError(false); }} />
           <p role="status" className="text-xs text-zinc-500">
             {importPreview.error ? t("quickLibrary.importError") : importPreview.invalidRows.length
               ? t("quickLibrary.invalidRows", { rows: importPreview.invalidRows.slice(0, 10).join(", ") })
@@ -382,8 +498,8 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
           {categoriesOpen && <div id="quick-reply-category-manager" className="space-y-2 py-2">
             {newCategoryParent && <div className="flex items-center justify-between gap-1 text-xs text-brand"><span>{t("quickLibrary.addInside", { name: categoryLabel(newCategoryParent) })}</span><Button size="xs" variant="ghost" onClick={() => setNewCategoryParent("")}>{t("common.cancel")}</Button></div>}
             <form className="flex gap-1" onSubmit={event => { event.preventDefault(); addCategory(); }}>
-              <Input ref={newCategoryInput} autoFocus className="min-w-0 flex-1" size="sm" value={newCategory} maxLength={32} placeholder={t("settingsQuickReplies.categoryPlaceholder")} aria-label={t("settingsQuickReplies.categoryPlaceholder")} onChange={event => setNewCategory(event.target.value)} />
-              <Button type="submit" size="xs" aria-label={t("settingsQuickReplies.addCategory")} title={t("settingsQuickReplies.addCategory")} disabled={!newCategory.trim() || customCategories.length >= MAX_QUICK_REPLY_CATEGORIES}>＋</Button>
+              <Input ref={newCategoryInput} autoFocus className="min-w-0 flex-1" size="sm" value={newCategory} placeholder={t("settingsQuickReplies.categoryPlaceholder")} aria-label={t("settingsQuickReplies.categoryPlaceholder")} onChange={event => setNewCategory(event.target.value)} />
+              <Button type="submit" size="xs" aria-label={t("settingsQuickReplies.addCategory")} title={t("settingsQuickReplies.addCategory")} disabled={!newCategory.trim()}>＋</Button>
             </form>
             <div data-category-id="__root" className={`rounded px-2 py-1 text-xs text-zinc-500 ${categoryDropClass("__root")}`}>{t("quickLibrary.allCategories")}</div>
             {visibleCategoryTreeRows.filter(({ category }) => category.id !== "other").map(({ category, depth, hasChildren }) => {
@@ -391,7 +507,7 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
                 <div className="flex items-center gap-1">
                   {hasChildren && <button type="button" aria-label={t(expandedCategories.includes(category.id) ? "quickLibrary.collapseCategory" : "quickLibrary.expandCategory", { name: categoryLabel(category.id) })} aria-expanded={expandedCategories.includes(category.id)} onClick={() => setExpandedCategories(current => current.includes(category.id) ? current.filter(id => id !== category.id) : [...current, category.id])} className="w-3 text-zinc-500">{expandedCategories.includes(category.id) ? "▾" : "▸"}</button>}
                   <button {...categoryDragProps(category.id)} type="button" className="shrink-0 touch-none select-none cursor-grab rounded px-1 text-zinc-500 active:cursor-grabbing" aria-label={t("quickLibrary.dragCategory", { name: categoryLabel(category.id) })} title={t("quickLibrary.categoryDragHint")}>⠿</button>
-                  <Input size="sm" className="min-w-0 flex-1" maxLength={32} aria-label={t("settingsQuickReplies.renameCategory", { name: categoryLabel(category.id) })}
+                  <Input size="sm" className="min-w-0 flex-1" aria-label={t("settingsQuickReplies.renameCategory", { name: categoryLabel(category.id) })}
                     value={categoryDrafts[category.id] ?? categoryLabel(category.id)}
                     onChange={event => setCategoryDrafts(values => ({ ...values, [category.id]: event.target.value }))}
                     onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); event.currentTarget.blur(); } }}
@@ -415,7 +531,7 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="space-y-3 border-b border-zinc-800 p-3">
             <div className="flex items-center justify-between text-xs text-zinc-500">
-              <SectionLabel>{t("settingsQuickReplies.list")}</SectionLabel><span>{replies.length} / {MAX_QUICK_REPLIES}</span>
+              <SectionLabel>{t("settingsQuickReplies.list")}</SectionLabel><span>{replies.length}</span>
             </div>
             <Input value={listQuery} onChange={event => { setSelectedId(null); setListQuery(event.target.value); setPage(0); }}
               placeholder={t("multi.searchQuickReplies")} aria-label={t("multi.searchQuickReplies")} />
@@ -485,7 +601,7 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
         <summary className="sr-only">{t("nav.more")}</summary>
         {menuCategory && <div className="max-h-[70vh] space-y-3 overflow-y-auto" role="dialog" aria-label={t("quickLibrary.categoryActions", { name: categoryLabel(menuCategory.id) })}>
           <div className="flex items-center justify-between gap-2"><span className="truncate text-xs font-semibold">{categoryLabel(menuCategory.id)}</span><Button size="xs" variant="ghost" onClick={() => setCategoryMenu(null)}>{t("common.close")}</Button></div>
-          <Input maxLength={32} aria-label={t("settingsQuickReplies.renameCategory", { name: categoryLabel(menuCategory.id) })} value={categoryDrafts[menuCategory.id] ?? categoryLabel(menuCategory.id)} onChange={event => setCategoryDrafts(values => ({ ...values, [menuCategory.id]: event.target.value }))} onBlur={event => { renameCategory(menuCategory.id, event.currentTarget.value); setCategoryDrafts(values => { const next = { ...values }; delete next[menuCategory.id]; return next; }); }} onKeyDown={event => { if (event.key === "Enter") event.currentTarget.blur(); }} />
+          <Input aria-label={t("settingsQuickReplies.renameCategory", { name: categoryLabel(menuCategory.id) })} value={categoryDrafts[menuCategory.id] ?? categoryLabel(menuCategory.id)} onChange={event => setCategoryDrafts(values => ({ ...values, [menuCategory.id]: event.target.value }))} onBlur={event => { renameCategory(menuCategory.id, event.currentTarget.value); setCategoryDrafts(values => { const next = { ...values }; delete next[menuCategory.id]; return next; }); }} onKeyDown={event => { if (event.key === "Enter") event.currentTarget.blur(); }} />
           <Button size="sm" variant="ghost" className="w-full justify-start" onClick={() => { setNewCategoryParent(menuCategory.id); setNewCategory(""); setCategoriesOpen(true); setCategoryMenu(null); }}>{t("quickLibrary.newSubcategory")}</Button>
           {menuCustom && <><Button size="sm" variant="ghost" className="w-full justify-start" aria-expanded={moveCategoryMenu} onClick={() => setMoveCategoryMenu(open => !open)}>{t("quickLibrary.moveCategory")}</Button>
             {moveCategoryMenu && <div className="max-h-44 space-y-1 overflow-y-auto rounded-lg border border-zinc-800 p-1">
@@ -509,7 +625,7 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2"><SectionLabel>{t("quickLibrary.edit")}</SectionLabel><SaveBadge state={saveHint} /><QuickReplySheetStatus reply={editing} /></div>
               <div className="flex gap-1"><Button size="sm" variant="ghost" onClick={() => { setSelectedId(null); setConfirmDeleteId(null); }}>{t("quickLibrary.collapseEditor")}</Button>
-                <Button size="sm" disabled={replies.length >= MAX_QUICK_REPLIES} onClick={() => addReply(editing)}>{t("settingsQuickReplies.duplicate")}</Button>
+                <Button size="sm" onClick={() => addReply(editing)}>{t("settingsQuickReplies.duplicate")}</Button>
                 {confirmDeleteId === editing.id ? <>
                   <Button size="sm" className="text-rose-400" onClick={() => void removeReply(editing.id)}>{t("settingsQuickReplies.confirmDelete")}</Button>
                   <Button size="sm" variant="ghost" onClick={() => setConfirmDeleteId(null)}>{t("common.cancel")}</Button>
@@ -518,7 +634,7 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
             <label className="block space-y-1 text-xs text-zinc-500"><span>{t("settingsQuickReplies.commandTitle")}</span>
-              <Input maxLength={40} value={editing.title} aria-label={t("settingsQuickReplies.commandTitle")} onChange={event => updateReply(editing.id, { title: event.target.value })} />
+              <Input value={editing.title} aria-label={t("settingsQuickReplies.commandTitle")} onChange={event => updateReply(editing.id, { title: event.target.value })} />
             </label>
             <label className="block space-y-1 text-xs text-zinc-500"><span>{t("settingsQuickReplies.category")}</span>
               <select value={editing.category} aria-label={t("settingsQuickReplies.category")} className="ui-control w-full px-2 text-sm" onChange={event => updateReply(editing.id, { category: event.target.value })}>
@@ -564,7 +680,6 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
   }
 
   function commitReplies(next: QuickReply[]) {
-    if (next.length > MAX_QUICK_REPLIES) { pushToast(t("settingsQuickReplies.limit"), "info"); return false; }
     if (next.reduce((bytes, reply) => bytes + (reply.media?.size || 0), 0) > MAX_QUICK_REPLY_MEDIA_TOTAL_BYTES) {
       pushToast(t("quickLibrary.mediaCapacity"), "error"); return false;
     }
@@ -577,9 +692,8 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
 
   function addCategory() {
     const label = newCategory.trim();
-    if (!label || label.length > 32) return;
+    if (!label) return;
     const latest = useAppStore.getState().settings;
-    if ((latest.quickReplyCustomCategories || []).length >= MAX_QUICK_REPLY_CATEGORIES) { pushToast(t("quickLibrary.categoryLimit"), "error"); return; }
     const options = getQuickReplyCategories(latest.quickReplyCustomCategories, latest.quickReplyRemovedCategories, latest.quickReplyCategoryLabels);
     if (newCategoryParent && !options.some(category => category.id === newCategoryParent && category.id !== "other")) return;
     if (options.some(category => categoryLabel(category.id, latest).toLocaleLowerCase() === label.toLocaleLowerCase())) { pushToast(t("settingsQuickReplies.categoryExists"), "info"); return; }
@@ -692,7 +806,7 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
 
   function renameCategory(id: string, value: string) {
     const label = value.trim();
-    if (!label || label.length > 32) { pushToast(t("settingsQuickReplies.categoryInvalid"), "info"); return; }
+    if (!label) { pushToast(t("settingsQuickReplies.categoryInvalid"), "info"); return; }
     const latest = useAppStore.getState().settings;
     const options = getQuickReplyCategories(latest.quickReplyCustomCategories, latest.quickReplyRemovedCategories, latest.quickReplyCategoryLabels);
     if (id === "other" || !options.some(category => category.id === id)) return;
@@ -804,20 +918,22 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
     const additions: QuickReply[] = [];
     const linkedUpdates: { reply: QuickReply; source: QuickReplySheetLink; row: typeof preview.rows[number] }[] = [];
     const linkedReplyIds = new Set<string>();
+    const linkKey = (source: QuickReplySheetLink) => JSON.stringify([source.spreadsheetId, source.tab, source.row]);
+    const currentByLink = new Map(current.flatMap(reply => reply.sheetLink?.row ? [[linkKey(reply.sheetLink), reply] as const] : []));
     const sourceCursors = new Map<string, number>();
-    for (const row of preview.rows) {
+    for (const [index, row] of preview.rows.entries()) {
+      if (index > 0 && index % 2000 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));
       const sourceKey = sheetImportKey([row.title, row.body, row.category, row.translation || "", row.parent || ""]);
       const sourceIndex = sourceCursors.get(sourceKey) || 0;
       const source = sources[sourceKey]?.[sourceIndex];
       if (source) sourceCursors.set(sourceKey, sourceIndex + 1);
-      const linked = source && current.find(reply => reply.sheetLink?.spreadsheetId === source.spreadsheetId && reply.sheetLink.tab === source.tab && reply.sheetLink.row === source.row);
+      const linked = source && currentByLink.get(linkKey(source));
       if (linked) { linkedUpdates.push({ reply: linked, source, row }); continue; }
 
       let parentId: string | undefined;
       if (row.parent) {
         let parent = categories.find(item => !item.parentId && item.label.toLocaleLowerCase() === row.parent!.toLocaleLowerCase());
         if (!parent) {
-          if (categories.length >= MAX_QUICK_REPLY_CATEGORIES) { pushToast(t("quickLibrary.categoryLimit"), "error"); return; }
           parent = { id: "custom-" + crypto.randomUUID(), label: row.parent };
           categories.push(parent);
         }
@@ -828,7 +944,6 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
         : categoryIds.get(row.category.toLocaleLowerCase())
         : (listCategory === "all" ? "other" : listCategory);
       if (!category) {
-        if (categories.length >= MAX_QUICK_REPLY_CATEGORIES) { pushToast(t("quickLibrary.categoryLimit"), "error"); return; }
         category = "custom-" + crypto.randomUUID();
         categories.push({ id: category, label: row.category, ...(parentId ? { parentId } : {}) });
         if (!parentId) categoryIds.set(row.category.toLocaleLowerCase(), category);
@@ -862,7 +977,6 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
     if (afterConfirm.quickReplies !== latest.quickReplies || afterConfirm.quickReplyCustomCategories !== latest.quickReplyCustomCategories) {
       pushToast(t("quickLibrary.importChanged"), "info"); return;
     }
-    if (current.length + additions.length > MAX_QUICK_REPLIES) { pushToast(t("settingsQuickReplies.limit"), "error"); return; }
     const syncIds: string[] = [];
     const linkedById = new Map(linkedUpdates.map(update => [update.reply.id, update]));
     const nextReplies = current.map(reply => {
@@ -892,7 +1006,7 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
     linkedUpdates.forEach(({ reply }) => cancelQuickReplySheetSync(reply.id));
     updateSettings({ quickReplies: [...nextReplies, ...additions], quickReplyCustomCategories: categories });
     syncIds.forEach(id => scheduleQuickReplySheetSync(id, t));
-    markSavedSoon(); setImportOpen(false); setImportText(""); setListQuery(""); setListCategory("all");
+    markSavedSoon(); setImportOpen(false); setWorkbookSheets(null); setTextFilePreview(null); setImportFileName(""); setImportText(""); setImportFileError(false); setListQuery(""); setListCategory("all");
     const firstImported = additions[0] || linkedUpdates[0]?.reply;
     if (firstImported) {
       setSelectedId(null); setListCategory(firstImported.category); setPage(0);
@@ -913,6 +1027,7 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
     try {
       const metadata = await readSheet(id);
       const tabs = metadata.sheets?.map(item => item.properties.title) || [];
+      sheetRowCounts.current = new Map((metadata.sheets || []).map(({ properties }) => [properties.title, properties.gridProperties?.rowCount || 0]));
       if (!tabs.length) throw new Error("empty");
       const groupName = metadata.properties?.title || t("quickLibrary.sheetGroup");
       setSheetTabs(tabs);
@@ -938,32 +1053,57 @@ export function SettingsQuickRepliesPanel({ importOnly = false, defaultCategory 
     setSheetError("");
     try {
       const groupName = sheetGroupName || t("quickLibrary.sheetGroup");
-      const allRows: string[][] = [];
+      const allRows: ReturnType<typeof parseQuickReplyTable>["rows"] = [];
       const sourceByKey: Record<string, QuickReplySheetLink[]> = {};
-      for (let index = 0; index < tabsToImport.length; index += 4) {
-        const currentTabs = tabsToImport.slice(index, index + 4);
-        const responses = await Promise.all(currentTabs.map(tab => readSheet(id, [`${tabRange(tab)}!A1:B1001`])));
-        const { rows, links } = quickReplySheetRowsWithLinks(responses.map((response, sheetIndex) => {
-          if (response.valueRanges?.length !== 1) throw new Error("Incomplete Google Sheets response");
-          return { name: currentTabs[sheetIndex], columns: response.valueRanges[0].values || [] };
-        }), groupName, id, {
-          originalColumn: sheetOriginalColumn,
-          translationColumn: sheetTranslationColumn,
-          titleSource: sheetTitleSource,
-        });
-        rows.forEach((row, rowIndex) => {
-          const key = sheetImportKey(row);
-          (sourceByKey[key] ||= []).push(links[rowIndex]);
-        });
-        allRows.push(...rows);
-        if (allRows.length > MAX_QUICK_REPLIES) throw new Error("limit");
+      const originalColumn = quickReplyColumnIndex(sheetOriginalColumn);
+      const translationColumn = quickReplyColumnIndex(sheetTranslationColumn);
+      if ([originalColumn, translationColumn].some(column => column < 0 || column >= 18_278) || originalColumn === translationColumn) {
+        throw Error("invalidColumn");
+      }
+      const lastColumn = Math.max(originalColumn, translationColumn);
+      for (const tab of tabsToImport) {
+        const rowCount = sheetRowCounts.current.get(tab) || 0;
+        const readPage = async (offset: number, end: number): Promise<void> => {
+          const range = (first: string, last: string) => `${tabRange(tab)}!${first}${end ? offset + 1 : ""}:${last}${end || ""}`;
+          const wide = !!rowCount || lastColumn >= 26;
+          const originalName = quickReplyColumnName(originalColumn);
+          const translationName = quickReplyColumnName(translationColumn);
+          const ranges = wide ? [range(originalName, originalName), range(translationName, translationName)]
+            : [range("A", quickReplyColumnName(lastColumn))];
+          let response;
+          try { response = await readSheet(id, ranges); }
+          catch (error) {
+            if (!String(error).includes("32 MiB") || end - offset <= 1) throw error;
+            const midpoint = Math.floor((offset + end) / 2);
+            await readPage(offset, midpoint);
+            await readPage(midpoint, end);
+            return;
+          }
+          if (response.valueRanges?.length !== ranges.length) throw Error("Incomplete Google Sheets response");
+          const columns = wide ? [] : response.valueRanges[0].values || [];
+          if (wide) {
+            columns[originalColumn] = response.valueRanges[0].values?.[0] || [];
+            columns[translationColumn] = response.valueRanges[1].values?.[0] || [];
+          }
+          const { rows, links } = quickReplySheetRowsWithLinks([{ name: tab, columns, rowOffset: offset }], groupName, id, {
+            originalColumn, translationColumn, titleSource: sheetTitleSource,
+          });
+          for (const [index, row] of rows.entries()) {
+            const [title, body, category, translation, parent] = row;
+            (sourceByKey[sheetImportKey(row)] ||= []).push(links[index]);
+            allRows.push({ title, body, category, translation, parent });
+          }
+        };
+        for (let offset = 0; offset < (rowCount || 1); offset += 1000) {
+          await readPage(offset, rowCount ? Math.min(offset + 1000, rowCount) : 0);
+        }
       }
       if (!allRows.length) throw new Error("empty");
-      const preview = { ...parseQuickReplyTable(quickReplyRowsToTsv(allRows)), error: false };
+      const preview = { rows: allRows, invalidRows: [], error: false };
       await importReplies(false, preview, sourceByKey);
     } catch (error) {
       const message = String(error);
-      setSheetError(message.includes("limit") ? t("quickLibrary.importError") : message.includes("empty") ? t("quickLibrary.sheetEmpty") : t(sheetErrorHint(message)));
+      setSheetError(message.includes("invalidColumn") ? t("quickLibrary.invalidColumn") : message.includes("limit") ? t("quickLibrary.importError") : message.includes("empty") ? t("quickLibrary.sheetEmpty") : t(sheetErrorHint(message)));
     } finally {
       setSheetBusy(false);
     }

@@ -11,13 +11,22 @@ type Props = {
   phones: PhoneDevice[];
   selectedPhoneId?: string | null;
   onSelect: (id: string) => void;
+  onSwitchToQr: () => void;
 };
 
-export function PhoneListSection({ phones, selectedPhoneId, onSelect }: Props) {
+export function PhoneListSection({ phones, selectedPhoneId, onSelect, onSwitchToQr }: Props) {
   const { t } = useI18n();
   return (
     <section className="border-b border-zinc-800/90 p-2.5">
-      <SectionLabel>{t("phones.title")}</SectionLabel>
+      <SectionLabel
+        action={
+          <button type="button" className="text-2xs text-brand hover:underline" onClick={onSwitchToQr}>
+            {t("phonesBridge.switchToQr")}
+          </button>
+        }
+      >
+        {t("phones.title")}
+      </SectionLabel>
       <ul className="space-y-0.5">
         {phones.map((p) => (
           <li key={p.id}>

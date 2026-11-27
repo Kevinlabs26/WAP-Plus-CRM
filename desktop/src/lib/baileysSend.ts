@@ -157,7 +157,7 @@ export const baileysSendVoice = (
     body: JSON.stringify({
       phoneE164,
       audioDataUrl,
-      mediaType: "ptt",
+      mediaType: opts?.ptt === false ? "audio" : "ptt",
       ptt: opts?.ptt !== false,
       seconds: opts?.seconds,
       mimetype: opts?.mimetype,
@@ -181,7 +181,7 @@ export const baileysSendVideo = async (phoneE164: string, videoDataUrl: string |
     const header = new TextEncoder().encode(JSON.stringify({phoneE164, caption, size:video.size}));
     const length = new Uint8Array(4);
     new DataView(length.buffer).setUint32(0, header.length);
-    if (canSend && !canSend()) throw Object.assign(new Error("发送任务已暂停或取消"), {deliveryUncertain:false});
+    if (canSend && !canSend()) throw Object.assign(new Error("发送任务已暂停或取消"), {code:"automation_cancelled",deliveryUncertain:false});
     return request<BaileysSendResponse>("/send/video", {
       method:"POST", signal:AbortSignal.timeout(900_000),
       headers:{"Content-Type":"application/octet-stream"}, body:new Blob([length, header, video]),

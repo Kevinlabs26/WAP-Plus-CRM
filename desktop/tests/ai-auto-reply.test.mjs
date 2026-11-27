@@ -353,8 +353,8 @@ for (const provider of ["custom", "gemini", "ollama"]) {
       assert.match(system, /respect an explicit wish to stop/);
       assert.doesNotMatch(system, /upsell|advance the deal/);
       assert.match(system, new RegExp(`exactly ${replyCount} object`));
-      assert.ok(user.includes(`Me: ${JSON.stringify("Salut, ça marche !")}`));
-      assert.ok(user.includes(`Customer: ${JSON.stringify("Je t'ai envoyé le document.")}`));
+      assert.ok(user.includes(`${JSON.stringify("Me")}: ${JSON.stringify("Salut, ça marche !")}`));
+      assert.ok(user.includes(`${JSON.stringify("Customer")}: ${JSON.stringify("Je t'ai envoyé le document.")}`));
       if (auto) assert.match(system, /DIRECTLY to the other person as an AI assistant/);
       else if(!single)assert.match(system, /not three paraphrases/);
       if(single){assert.doesNotMatch(system,/DIRECTLY to the other person/);assert.equal(provider==='gemini'?request.generationConfig.maxOutputTokens:provider==='ollama'?request.options.num_predict:request.max_tokens,512);}

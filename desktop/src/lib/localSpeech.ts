@@ -2,9 +2,10 @@
  * 本地语音识别（sherpa-onnx，经 Rust voice.rs 命令）。
  * - 音频解码用 WebView2 的 WebAudio（支持 ogg/opus/mp4 等全部 WhatsApp 语音格式），
  *   统一重采样为 16k 单声道 PCM i16 后交给 Rust。
- * - 模型文件走 Tauri 原始字节通道上传，解包在 app_data_dir/speech-models/<name>/。
+ * - 模型由 Tauri 后端下载并解包到 app_data_dir/speech-models/<name>/。
  */
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { mediaUrlToBlob } from "@/lib/mediaBlob";
 import { abortable } from "./abortable";
 
@@ -14,24 +15,21 @@ export interface SpeechModelInfo {
   ready: boolean;
 }
 
-/** 可商用的 sherpa-onnx 预置模型（GitHub Releases 直链） */
+/** 可商用的 sherpa-onnx 预置模型 */
 export const SPEECH_MODEL_PRESETS: {
   id: string;
   label: string;
   detail: string;
-  url: string;
 }[] = [
   {
     id: "sherpa-onnx-whisper-tiny",
     label: "Whisper Tiny · 多语种",
     detail: "约 170MB · 中/英/法/西/德等 99 种语言，CPU 实时",
-    url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.tar.bz2",
   },
   {
     id: "sherpa-onnx-whisper-base",
     label: "Whisper Base · 多语种",
     detail: "约 290MB · 精度更高，速度稍慢",
-    url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-base.tar.bz2",
   },
 ];
 
@@ -52,49 +50,25 @@ export async function removeLocalSpeechModel(name: string): Promise<void> {
   await invoke("remove_speech_model", { name });
 }
 
-/** 下载模型压缩包并交给 Rust 解包。onProgress 回调收到已下载字节数。 */
+/** 由桌面后台下载和解包。onProgress 回调收到已下载字节数。 */
 export async function downloadSpeechModel(
   preset: (typeof SPEECH_MODEL_PRESETS)[number],
   onProgress?: (received: number, total: number) => void,
 ): Promise<string> {
-  const maxBytes = 512 * 1024 * 1024; // Same archive limit as Rust speech_archive.rs.
-  const resp = await fetch(preset.url, { signal: AbortSignal.timeout(15 * 60 * 1000) });
-  if (!resp.ok) throw new Error(`模型下载失败：HTTP ${resp.status}`);
-  const total = Number(resp.headers.get("content-length") || 0);
-  if (total > maxBytes) {
-    await resp.body?.cancel();
-    throw new Error("模型压缩包超过 512 MiB 上限");
+  const unlisten = onProgress && await listen<{ model: string; received: number; total: number }>(
+    "speech-model-download-progress",
+    ({ payload }) => {
+      if (payload.model === preset.id) onProgress(payload.received, payload.total);
+    },
+  ).catch(() => undefined);
+  try {
+    return await invoke<string>("download_speech_model", { name: preset.id });
+  } catch (error) {
+    if (typeof error === "string" && error.trim()) throw new Error(error);
+    throw error;
+  } finally {
+    unlisten?.();
   }
-  if (!resp.body) throw new Error("模型下载没有响应数据流");
-  let bytes: ArrayBuffer;
-  {
-    const reader = resp.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let received = 0;
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        received += value.byteLength;
-        if (received > maxBytes) throw new Error("模型压缩包超过 512 MiB 上限");
-        chunks.push(value);
-        onProgress?.(received, total);
-      }
-    } finally {
-      await reader.cancel().catch(() => undefined);
-      reader.releaseLock();
-    }
-    bytes = new ArrayBuffer(received);
-    const view = new Uint8Array(bytes);
-    let offset = 0;
-    for (const chunk of chunks) {
-      view.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-  }
-  return invoke<string>("save_speech_model", bytes, {
-    headers: { "x-speech-model-name": preset.id },
-  });
 }
 
 /** 把任意音频 URL（data:/blob:/http:）解码并重采样成 16k 单声道 PCM i16 */

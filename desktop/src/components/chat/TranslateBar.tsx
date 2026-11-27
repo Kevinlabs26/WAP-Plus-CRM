@@ -1,4 +1,5 @@
 import { Languages, Loader2, Undo2 } from "lucide-react";
+import { useLayoutEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import {
   TRANSLATE_LANGS,
@@ -54,6 +55,19 @@ export function TranslateBar({
   recordSec,
 }: Props) {
   const { t } = useI18n();
+  const translatedDraftRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const textarea = translatedDraftRef.current;
+    if (!textarea) return;
+    const fitHeight = () => {
+      textarea.style.height = "0px";
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    };
+    fitHeight();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(fitHeight);
+    if (textarea.parentElement) observer?.observe(textarea.parentElement);
+    return () => observer?.disconnect();
+  }, [translatedDraft, visible]);
   if (!visible) return null;
   const sourceLabels = {
     preferred: "translation.sourcePreferred",
@@ -132,23 +146,28 @@ export function TranslateBar({
         )}
       </div>
       {translatedDraft != null && (
-        <div className="mt-1.5 w-full rounded-lg border border-brand/20 bg-brand/5 px-2.5 py-1.5" aria-live="polite">
-          <span className="mr-1 text-[10px] text-brand">{t("translation.resultLabel")}:</span>
-          <textarea
-            value={translatedDraft}
-            onChange={(e) => onTranslatedDraftChange?.(e.target.value)}
-            rows={1}
-            aria-label={t("translation.resultLabel")}
-            className="mt-0.5 block min-h-7 w-full resize-y bg-transparent text-[12px] leading-5 text-zinc-200 outline-none placeholder:text-zinc-500"
-          />
-        </div>
-      )}
-      {(backTranslation != null || backTranslating) && translatedDraft != null && (
-        <div className="mt-1.5 w-full rounded-lg border border-zinc-800 bg-zinc-900/50 px-2.5 py-1.5 text-[11px] leading-5 text-zinc-400" aria-live="polite">
-          <span className="mr-1 text-zinc-500">{t("translation.backLabel")}:</span>
-          {backTranslating
-            ? t("translation.backBusy")
-            : backTranslation || t("translation.backUnavailable")}
+        <div className="w-full min-w-0 space-y-0.5" aria-live="polite">
+          <div className="flex min-w-0 items-start gap-1.5 px-1.5 py-0.5 transition-colors focus-within:rounded-md focus-within:bg-brand/5">
+            <span className="shrink-0 text-[12px] leading-5 text-brand">{t("translation.resultLabel")}:</span>
+            <textarea
+              ref={translatedDraftRef}
+              value={translatedDraft}
+              onChange={(e) => onTranslatedDraftChange?.(e.target.value)}
+              rows={1}
+              aria-label={t("translation.resultLabel")}
+              className="block min-h-5 min-w-0 flex-1 resize-none overflow-hidden bg-transparent p-0 text-[12px] leading-5 text-zinc-200 outline-none placeholder:text-zinc-500"
+            />
+          </div>
+          {(backTranslation != null || backTranslating) && (
+            <div className="flex min-w-0 items-start gap-1.5 px-1.5 text-[11px] leading-5 text-zinc-500">
+              <span className="shrink-0">{t("translation.backLabel")}:</span>
+              <span className="min-w-0 whitespace-pre-wrap break-words">
+                {backTranslating
+                  ? t("translation.backBusy")
+                  : backTranslation || t("translation.backUnavailable")}
+              </span>
+            </div>
+          )}
         </div>
       )}
       {recording ? (

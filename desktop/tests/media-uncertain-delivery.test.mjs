@@ -229,3 +229,18 @@ test('product sends explain uncertainty without claiming success or replaying th
   assert.equal(fetchCalls.length, 1); assert.match(deps.toasts.at(-1)[0], /runtime.sendUnknown/);
   assert.deepEqual(deps.patches, []); assert.deepEqual(deps.busy, [true, false]);
 });
+
+test('short and 36-minute audio both use playable WhatsApp audio with the original duration', async () => {
+  globalThis.fetch = async (...args) => { fetchCalls.push(args); return Response.json({ ok: true, id: 'audio-id' }); };
+  for (const duration of [30, 36 * 60 + 14]) {
+    globalThis.document.createElement = () => ({ duration, remove() {}, set src(_url) { queueMicrotask(() => this.onloadedmetadata()); } });
+    const deps = mediaDeps();
+    assert.equal(await sendAudioMessage(new File(['fixture'], 'clip.mp3', { type: 'audio/mpeg' }), '', deps), true);
+    const payload = JSON.parse(fetchCalls.at(-1)[1].body);
+    assert.equal(payload.mediaType, duration === 30 ? 'ptt' : 'audio');
+    assert.equal(payload.ptt, duration === 30);
+    assert.equal(payload.seconds, duration);
+    assert.equal(deps.patches[0][1].mediaType, 'audio');
+    assert.equal(deps.patches[0][1].mediaSeconds, duration);
+  }
+});

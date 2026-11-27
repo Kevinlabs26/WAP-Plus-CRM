@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 #[cfg(not(test))]
 use tauri::{AppHandle, Emitter};
 
@@ -63,6 +63,7 @@ pub struct BridgeConnectionInfo {
     pub connected: bool,
     pub last_error: Option<String>,
     pub last_hello: Option<serde_json::Value>,
+    pub adb_serial: Option<String>,
     pub devices: Vec<ConnectedDevice>,
 }
 
@@ -74,6 +75,7 @@ impl Default for BridgeConnectionInfo {
             connected: false,
             last_error: None,
             last_hello: None,
+            adb_serial: None,
             devices: vec![],
         }
     }
@@ -82,6 +84,8 @@ impl Default for BridgeConnectionInfo {
 struct LiveSocket {
     writer: TcpStream,
     reader: Option<std::thread::JoinHandle<()>>,
+    device_id: String,
+    max_request_bytes: usize,
 }
 
 pub struct BridgeState {
@@ -206,6 +210,7 @@ impl BridgeState {
         }
         if let Ok(mut info) = self.info.lock() {
             info.connected = false;
+            info.devices.iter_mut().for_each(|device| device.online = false);
         }
         if emit {
             self.emit_status();
@@ -217,33 +222,27 @@ impl BridgeState {
         host: &str,
         port: u16,
         token: &str,
+        adb_serial: Option<String>,
     ) -> Result<BridgeConnectionInfo, String> {
         let _guard = self.lifecycle.lock().map_err(|e| e.to_string())?;
-        // 重连过程中不推断开，避免前端连闪 toast
-        self.disconnect_inner(false);
-
         let token = token.trim();
         if token.is_empty() {
             return Err("缺少 Android Bridge Token，请先在手机 Bridge 页面复制 Token".into());
         }
 
-        let addr_label = format!("{host}:{port}");
-        // 先按 IP 字面量解析；失败再走系统域名解析（支持 localhost / 主机名）。
-        let resolved = addr_label.parse::<std::net::SocketAddr>().ok().or_else(|| {
-            use std::net::ToSocketAddrs;
-            (host, port)
-                .to_socket_addrs()
-                .ok()
-                .and_then(|mut addrs| addrs.next())
-        });
-        let Some(sock_addr) = resolved else {
-            return Err(format!("地址无效 {addr_label}"));
+        let host = host.trim();
+        let ip = if host.eq_ignore_ascii_case("localhost") {
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        } else {
+            host.trim_matches(['[', ']']).parse::<std::net::IpAddr>()
+                .map_err(|_| "Android Bridge 仅允许 localhost 或回环 IP 地址")?
         };
-        if !sock_addr.ip().is_loopback() {
+        if !ip.is_loopback() {
             return Err("Android Bridge 仅允许 USB/ADB 回环连接；不通过明文网络发送 Token".into());
         }
+        let sock_addr = std::net::SocketAddr::new(ip, port);
         let stream = TcpStream::connect_timeout(&sock_addr, Duration::from_secs(3))
-            .map_err(|e| format!("连接 Bridge 失败 {addr_label}: {e}"))?;
+            .map_err(|e| format!("连接 Bridge 失败 {sock_addr}: {e}"))?;
 
         stream.set_read_timeout(Some(Duration::from_secs(3))).ok();
         stream.set_write_timeout(Some(Duration::from_secs(3))).ok();
@@ -269,9 +268,15 @@ impl BridgeState {
             .map_err(|e| format!("发送 Bridge 鉴权失败: {e}"))?;
 
         // 逐字节读一行，避免 BufReader 预读后续 hello/status 行并被丢弃。
+        let deadline = Instant::now() + Duration::from_secs(3);
         let read_line = |reader: &mut TcpStream| -> Result<String, String> {
             let mut bytes = Vec::with_capacity(256);
             loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err("等待 Android Bridge 握手超时".into());
+                }
+                reader.set_read_timeout(Some(remaining)).map_err(|e| e.to_string())?;
                 let mut byte = [0u8; 1];
                 reader
                     .read_exact(&mut byte)
@@ -289,35 +294,31 @@ impl BridgeState {
         let auth_response = read_line(&mut reader_stream)?;
         let auth_response = serde_json::from_str::<serde_json::Value>(&auth_response)
             .map_err(|e| format!("Bridge 鉴权响应无效: {e}"))?;
-        if auth_response
-            .pointer("/payload/ok")
-            .and_then(|v| v.as_bool())
-            != Some(true)
-        {
+        if !crate::protocol::response_ok(&auth_response) {
             let message = auth_response
                 .pointer("/payload/message")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Bridge Token 无效");
             return Err(message.to_string());
         }
-
-        // 读一行 hello（可选）：
-        // Android 在 hello 后会立刻连发 status/battery 行，若用临时
-        // BufReader 只读一行，缓冲区里的后续行会随 reader 一起被丢弃。
-        let mut hello: Option<serde_json::Value> = None;
+        if auth_response["type"] != "ack"
+            || auth_response.pointer("/payload/refId") != auth.get("id")
+            || auth_response.pointer("/payload/status").and_then(|value| value.as_str()) != Some("authenticated")
         {
-            match read_line(&mut reader_stream) {
-                Ok(line) if !line.is_empty() => {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
-                        hello = Some(v);
-                    }
-                }
-                Ok(_) => {}
-                Err(e) => tracing::warn!(error = %e, "read hello"),
-            }
+            return Err("Bridge 鉴权响应与当前请求不匹配".into());
         }
 
+        let hello: serde_json::Value = serde_json::from_str(&read_line(&mut reader_stream)?)
+            .map_err(|e| format!("Bridge 设备握手无效: {e}"))?;
+        if hello["type"] != "device.hello" {
+            return Err("Bridge 未返回设备握手".into());
+        }
+        let device_id = hello.get("deviceId").or_else(|| hello.pointer("/payload/id"))
+            .and_then(|id| id.as_str()).filter(|id| !id.is_empty() && *id != "android-bridge")
+            .ok_or("Bridge 未返回有效的设备身份")?.to_owned();
+
         reader_stream.set_read_timeout(None).ok();
+        self.disconnect_inner(false);
 
         // 后台读线程：分发 ACK；其它上报入队并 emit 给前端
         self.alive.store(true, Ordering::SeqCst);
@@ -337,30 +338,30 @@ impl BridgeState {
             *sock = Some(LiveSocket {
                 writer,
                 reader: None,
+                device_id: device_id.clone(),
+                max_request_bytes: if hello.pointer("/payload/maxRequestBytes").and_then(|value| value.as_u64()) == Some(20 * 1024 * 1024) {
+                    20 * 1024 * 1024
+                } else {
+                    16 * 1024 * 1024
+                },
             });
         }
 
         let mut device = ConnectedDevice {
-            id: "bridge-1".into(),
+            id: device_id,
             name: "Android Bridge".into(),
             online: true,
             battery: 0,
-            transport: if host == "127.0.0.1" || host == "localhost" {
-                "usb/adb-reverse".into()
+            transport: if adb_serial.is_some() {
+                "usb/adb-forward".into()
             } else {
-                "wifi".into()
+                "loopback".into()
             },
         };
 
-        if let Some(ref h) = hello {
+        {
+            let h = &hello;
             if let Some(p) = h.get("payload") {
-                if let Some(id) = h
-                    .get("deviceId")
-                    .or_else(|| p.get("id"))
-                    .and_then(|x| x.as_str())
-                {
-                    device.id = id.to_string();
-                }
                 if let Some(name) = p
                     .get("name")
                     .or_else(|| p.get("model"))
@@ -379,7 +380,8 @@ impl BridgeState {
             port,
             connected: true,
             last_error: None,
-            last_hello: hello,
+            last_hello: Some(hello),
+            adb_serial,
             devices: vec![device],
         };
 
@@ -408,7 +410,10 @@ impl BridgeState {
                             tracing::debug!(bytes = t.len(), "bridge <<");
                             if let Ok(value) = serde_json::from_str::<serde_json::Value>(t) {
                                 let handled = value
-                                    .get("payload")
+                                    .get("type")
+                                    .and_then(|kind| kind.as_str())
+                                    .filter(|kind| matches!(*kind, "ack" | "error"))
+                                    .and_then(|_| value.get("payload"))
                                     .and_then(|p| p.get("refId"))
                                     .and_then(|id| id.as_str())
                                     .and_then(|ref_id| {
@@ -439,6 +444,7 @@ impl BridgeState {
             }
             if let Ok(mut info) = info_arc.lock() {
                 info.connected = false;
+                info.devices.iter_mut().for_each(|device| device.online = false);
                 let snap = info.clone();
                 drop(info);
                 #[cfg(not(test))]
@@ -455,16 +461,22 @@ impl BridgeState {
             }
         }
 
-        tracing::info!(%addr_label, "bridge connected");
+        tracing::info!(%sock_addr, "bridge connected");
         self.emit_status();
         Ok(self.snapshot())
     }
 
-    pub fn send_line(&self, line: &str) -> Result<(), String> {
+    fn send_line(&self, line: &str, device_id: Option<&str>) -> Result<(), String> {
         let mut sock = self.socket.lock().map_err(|e| e.to_string())?;
         let live = sock
             .as_mut()
             .ok_or_else(|| "未连接 Bridge。请先在设置或手机页连接。".to_string())?;
+        if device_id.is_some_and(|id| live.device_id != id) {
+            return Err("所选手机与实际连接的手机不匹配".into());
+        }
+        if line.len() >= live.max_request_bytes {
+            return Err("命令超过当前手机 Bridge 的传输上限，请减小文件或更新手机端".into());
+        }
 
         let payload = if line.ends_with('\n') {
             line.to_string()
@@ -474,10 +486,12 @@ impl BridgeState {
 
         if let Err(error) = live.writer.write_all(payload.as_bytes()) {
             self.alive.store(false, Ordering::SeqCst);
+            let _ = live.writer.shutdown(Shutdown::Both);
             return Err(format!("写入失败: {error}"));
         }
         if let Err(error) = live.writer.flush() {
             self.alive.store(false, Ordering::SeqCst);
+            let _ = live.writer.shutdown(Shutdown::Both);
             return Err(format!("flush 失败: {error}"));
         }
 
@@ -487,7 +501,7 @@ impl BridgeState {
 
     pub fn send_json(&self, value: &serde_json::Value) -> Result<(), String> {
         let line = serde_json::to_string(value).map_err(|e| e.to_string())?;
-        self.send_line(&line)
+        self.send_line(&line, value.get("deviceId").and_then(|id| id.as_str()))
     }
 
     pub fn send_json_wait_ack(
@@ -495,6 +509,61 @@ impl BridgeState {
         value: &serde_json::Value,
         timeout: Duration,
     ) -> Result<serde_json::Value, String> {
+        let guard = self.lifecycle.lock().map_err(|e| e.to_string())?;
+        let (id, rx) = self.start_request(value)?;
+        drop(guard);
+        let ack = self.wait_response(&id, rx, timeout)?;
+        if crate::protocol::response_ok(&ack) {
+            Ok(ack)
+        } else {
+            let detail = ["/payload/error", "/payload/message"].into_iter()
+                .filter_map(|path| ack.pointer(path).and_then(|value| value.as_str()))
+                .find(|detail| !detail.trim().is_empty())
+                .unwrap_or("Android 执行失败");
+            Err(detail.to_owned())
+        }
+    }
+
+    pub fn request_verified_text(
+        &self,
+        selected_device: Option<&str>,
+        phone: &str,
+        text: &str,
+        confirm_sent: bool,
+    ) -> Result<(String, Result<serde_json::Value, String>), String> {
+        let guard = self.lifecycle.lock().map_err(|e| e.to_string())?;
+        let info = self.snapshot();
+        if !info.connected {
+            return Err("未连接 Android Bridge".into());
+        }
+        let hello = info.last_hello.as_ref().ok_or("未收到手机身份，请重新连接 Android Bridge")?;
+        if hello.pointer("/payload/verifiedTextSend").and_then(|value| value.as_bool()) != Some(true) {
+            return Err("请更新手机端 Bridge 后再发送文本".into());
+        }
+        if confirm_sent && hello.pointer("/payload/phoneSentConfirmation").and_then(|value| value.as_bool()) != Some(true) {
+            return Err("请更新手机端 Bridge 后再使用真机群发".into());
+        }
+        let device_id = info.devices.first().map(|device| device.id.as_str())
+            .ok_or("无法核验已连接手机的身份")?;
+        if selected_device.is_some_and(|selected| selected != device_id) {
+            return Err("所选手机与实际连接的手机不匹配".into());
+        }
+        let request = make_envelope(
+            "wa.open_and_send",
+            Some(device_id),
+            serde_json::json!({ "phoneE164": phone, "text": text, "confirmSent": confirm_sent }),
+        );
+        let started = self.start_request(&request);
+        drop(guard);
+        let timeout = Duration::from_secs(if confirm_sent { 10 } else { 7 });
+        let response = started.and_then(|(id, rx)| self.wait_response(&id, rx, timeout));
+        Ok((device_id.to_owned(), response))
+    }
+
+    fn start_request(
+        &self,
+        value: &serde_json::Value,
+    ) -> Result<(String, mpsc::Receiver<serde_json::Value>), String> {
         let id = value
             .get("id")
             .and_then(|id| id.as_str())
@@ -513,9 +582,18 @@ impl BridgeState {
             return Err(error);
         }
 
-        let ack = rx.recv_timeout(timeout).map_err(|error| {
+        Ok((id, rx))
+    }
+
+    fn wait_response(
+        &self,
+        id: &str,
+        rx: mpsc::Receiver<serde_json::Value>,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, String> {
+        rx.recv_timeout(timeout).map_err(|error| {
             if let Ok(mut pending) = self.pending.lock() {
-                pending.remove(&id);
+                pending.remove(id);
             }
             match error {
                 mpsc::RecvTimeoutError::Disconnected => {
@@ -525,32 +603,7 @@ impl BridgeState {
                     format!("等待 Android ACK 超时（{} 秒）", timeout.as_secs())
                 }
             }
-        })?;
-        if ack
-            .get("payload")
-            .and_then(|p| p.get("ok"))
-            .and_then(|ok| ok.as_bool())
-            == Some(true)
-        {
-            Ok(ack)
-        } else {
-            // Android 失败信封是 {refId, code, message}（无 ok/error 键）；
-            // 兼容读取 error → message，避免具体失败原因被笼统文案覆盖。
-            let payload = ack.get("payload");
-            let detail = payload
-                .and_then(|p| p.get("error"))
-                .and_then(|e| e.as_str())
-                .filter(|s| !s.trim().is_empty())
-                .or_else(|| {
-                    payload
-                        .and_then(|p| p.get("message"))
-                        .and_then(|m| m.as_str())
-                })
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or("Android 执行失败")
-                .to_string();
-            Err(detail)
-        }
+        })
     }
 
     pub fn drain_events(&self) -> Vec<serde_json::Value> {
@@ -604,14 +657,14 @@ mod tests {
         let state = BridgeState::default();
         for host in ["192.168.1.10", "8.8.8.8", "[2001:4860:4860::8888]"] {
             assert!(state
-                .connect(host, 17890, "test-token")
+                .connect(host, 17890, "test-token", None)
                 .unwrap_err()
                 .contains("仅允许"));
         }
     }
 
     #[test]
-    fn waits_for_matching_ack() {
+    fn verified_text_rejects_wrong_device_and_waits_for_matching_ack() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         std::thread::spawn(move || {
@@ -629,15 +682,16 @@ mod tests {
                 r#"{{"type":"ack","payload":{{"refId":"{auth_id}","ok":true,"status":"authenticated"}}}}"#
             )
             .unwrap();
-            writeln!(socket, r#"{{"type":"device.hello","payload":{{}}}}"#).unwrap();
+            writeln!(socket, r#"{{"type":"device.hello","deviceId":"phone-b","payload":{{"verifiedTextSend":true}}}}"#).unwrap();
             let mut line = String::new();
             BufReader::new(socket.try_clone().unwrap())
                 .read_line(&mut line)
                 .unwrap();
-            let id = serde_json::from_str::<serde_json::Value>(&line).unwrap()["id"]
-                .as_str()
-                .unwrap()
-                .to_string();
+            let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["type"], "wa.open_and_send");
+            assert_eq!(request["deviceId"], "phone-b");
+            assert_eq!(request["payload"]["phoneE164"], "+33600000000");
+            let id = request["id"].as_str().unwrap();
             writeln!(
                 socket,
                 r#"{{"type":"device.status","payload":{{"online":true}}}}"#
@@ -645,17 +699,24 @@ mod tests {
             .unwrap();
             writeln!(
                 socket,
-                r#"{{"type":"ack","payload":{{"refId":"{id}","ok":true}}}}"#
+                r#"{{"type":"ack","payload":{{"refId":"{id}","ok":true,"status":"clicked"}}}}"#
             )
             .unwrap();
         });
 
         let state = BridgeState::default();
-        state.connect("127.0.0.1", port, "test-token").unwrap();
-        let message = make_envelope("wa.open_and_send", None, serde_json::json!({}));
-        assert!(state
-            .send_json_wait_ack(&message, Duration::from_secs(1))
-            .is_ok());
+        state.connect("127.0.0.1", port, "test-token", None).unwrap();
+        assert!(state.connect("192.0.2.1", port, "test-token", None).is_err());
+        assert!(state.snapshot().connected);
+        let wrong_device = make_envelope("wa.open_chat", Some("phone-a"), serde_json::json!({}));
+        assert!(state.send_json(&wrong_device).unwrap_err().contains("不匹配"));
+        let mismatch = state.request_verified_text(Some("phone-a"), "+33600000000", "hello", false);
+        assert!(mismatch.unwrap_err().contains("不匹配"));
+        assert!(state.request_verified_text(Some("phone-b"), "+33600000000", "hello", true)
+            .unwrap_err().contains("更新手机端"));
+        let (device, ack) = state.request_verified_text(None, "+33600000000", "hello", false).unwrap();
+        assert_eq!(device, "phone-b");
+        assert_eq!(ack.unwrap()["payload"]["status"], "clicked");
         assert_eq!(state.drain_events().len(), 2);
         assert!(state.drain_events().is_empty());
     }
@@ -664,36 +725,45 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = std::thread::spawn(move || {
-            for i in 0..10 {
+            let clients: Vec<_> = (0..10).map(|i| {
                 let (mut socket, _) = listener.accept().unwrap();
-                socket
-                    .set_read_timeout(Some(Duration::from_secs(5)))
-                    .unwrap();
-                let mut reader = BufReader::new(socket.try_clone().unwrap());
-                let mut line = String::new();
-                reader.read_line(&mut line).unwrap();
-                writeln!(socket, r#"{{"type":"ack","payload":{{"ok":true}}}}"#).unwrap();
-                writeln!(socket, r#"{{"type":"device.hello","payload":{{}}}}"#).unwrap();
-                line.clear();
-                if i == 9 {
+                std::thread::spawn(move || {
+                    socket
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut reader = BufReader::new(socket.try_clone().unwrap());
+                    let mut line = String::new();
                     reader.read_line(&mut line).unwrap();
-                    let value: serde_json::Value = serde_json::from_str(&line).unwrap();
-                    let id = value["id"].as_str().unwrap();
-                    writeln!(
-                        socket,
-                        r#"{{"type":"ack","payload":{{"refId":"{id}","ok":true}}}}"#
-                    )
-                    .unwrap();
+                    let auth: serde_json::Value = serde_json::from_str(&line).unwrap();
+                    let id = auth["id"].as_str().unwrap();
+                    writeln!(socket, r#"{{"type":"ack","payload":{{"refId":"{id}","ok":true,"status":"authenticated"}}}}"#).unwrap();
+                    writeln!(socket, r#"{{"type":"device.hello","payload":{{"id":"legacy-phone"}}}}"#).unwrap();
                     line.clear();
-                }
-                assert_eq!(reader.read_line(&mut line).unwrap(), 0);
+                    if i == 9 {
+                        reader.read_line(&mut line).unwrap();
+                        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+                        let id = value["id"].as_str().unwrap();
+                        writeln!(
+                            socket,
+                            r#"{{"type":"ack","payload":{{"refId":"{id}","ok":true}}}}"#
+                        )
+                        .unwrap();
+                        line.clear();
+                    }
+                    assert_eq!(reader.read_line(&mut line).unwrap(), 0);
+                })
+            }).collect();
+            for client in clients {
+                client.join().unwrap();
             }
         });
         let state = BridgeState::default();
         for _ in 0..10 {
-            assert!(state.connect("127.0.0.1", port, "token").unwrap().connected);
+            assert!(state.connect("127.0.0.1", port, "token", None).unwrap().connected);
             assert!(state.snapshot().connected);
         }
+        assert!(state.request_verified_text(None, "+33600000000", "hello", false)
+            .unwrap_err().contains("更新手机端"));
         let message = make_envelope("wa.open_and_send", None, serde_json::json!({}));
         assert!(state
             .send_json_wait_ack(&message, Duration::from_secs(1))

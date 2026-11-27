@@ -15,6 +15,7 @@ import {
   Radio,
   Save,
   ShieldBan,
+  Shield,
   TableProperties,
   Workflow,
   Zap,
@@ -25,8 +26,12 @@ import { cn } from "@/lib/utils";
 import { SettingsConnectionPanel } from "./SettingsConnectionPanel";
 import { SettingsMessagingPanel } from "./SettingsMessagingPanel";
 import { SettingsAiPanel } from "./SettingsAiPanel";
+import { SettingsAiPrivacyPanel } from "./SettingsAiPrivacyPanel";
 import { AiUsagePanel } from "./AiUsagePanel";
 import { PlaybookLibrary } from "./PlaybookLibrary";
+import { SettingsPromptPlansPanel } from "./SettingsPromptPlansPanel";
+import { SettingsPromptLibraryPanel } from "./SettingsPromptLibraryPanel";
+import { usesPromptPlans } from "@/lib/promptPlans";
 import { SettingsTranslationPanel } from "./SettingsTranslationPanel";
 import { SettingsAutoReplyPanel } from "./SettingsAutoReplyPanel";
 import { SettingsQuickRepliesPanel } from "./SettingsQuickRepliesPanel";
@@ -47,8 +52,11 @@ const CATEGORIES = [
   { id: "notifications", labelKey: "settings.notifications", icon: Bell },
   { id: "blocklist", labelKey: "settings.blocklist", icon: ShieldBan },
   { id: "ai", labelKey: "settings.ai", icon: Bot },
+  { id: "ai-privacy", labelKey: "aiPrivacy.title", icon: Shield, parentId: "ai" },
   { id: "auto-reply", labelKey: "settings.autoReply", icon: Workflow, parentId: "ai" },
   { id: "ai-usage", labelKey: "aiUsage.title", icon: Activity, parentId: "ai" },
+  { id: "prompt-library", labelKey: "aiLibrary.title", icon: BookOpen, parentId: "ai" },
+  { id: "prompt-plans", labelKey: "promptPlan.title", icon: BookOpen, parentId: "ai" },
   { id: "playbook", labelKey: "playbook.library", icon: BookOpen, parentId: "ai" },
   { id: "translation", labelKey: "settingsTranslation.title", icon: MessageSquareText },
   { id: "local-speech", labelKey: "settings.localSpeech", icon: AudioLines },
@@ -69,7 +77,7 @@ const GROUP_LABELS: Partial<Record<CategoryId, TranslationKey>> = {
   "google-sheets": "settings.group.data",
   appearance: "settings.group.application",
 };
-const AUTO_SAVE_CATEGORIES: CategoryId[] = ["connection", "messaging", "notifications", "ai", "translation", "local-speech", "auto-reply", "quick-replies", "appearance"];
+const AUTO_SAVE_CATEGORIES: CategoryId[] = ["connection", "messaging", "notifications", "ai", "ai-privacy", "translation", "local-speech", "auto-reply", "quick-replies", "appearance"];
 const MANUAL_SAVE_CATEGORIES: CategoryId[] = ["google-sheets", "cloud-images"];
 
 const PANEL_COMPONENTS: Record<CategoryId, ComponentType> = {
@@ -77,7 +85,10 @@ const PANEL_COMPONENTS: Record<CategoryId, ComponentType> = {
   messaging: SettingsMessagingPanel,
   blocklist: SettingsBlocklistPanel,
   ai: SettingsAiPanel,
+  "ai-privacy": SettingsAiPrivacyPanel,
   "ai-usage": AiUsagePanel,
+  "prompt-library": SettingsPromptLibraryPanel,
+  "prompt-plans": SettingsPromptPlansPanel,
   playbook: PlaybookLibrary,
   translation: SettingsTranslationPanel,
   "local-speech": SettingsSpeechPanel,
@@ -101,8 +112,9 @@ const KeepAlivePanel = memo(function KeepAlivePanel({
   Panel: ComponentType;
   onCloseGuardChange: (guard: SheetCloseGuard | null) => void;
 }) {
+  if (Panel === SettingsAiPrivacyPanel && !active) return null;
   return (
-    <div hidden={!active} aria-hidden={!active}>
+    <div hidden={!active} aria-hidden={!active} className={(Panel === SettingsPromptPlansPanel || Panel === SettingsPromptLibraryPanel) && active ? "flex min-h-0 flex-1 flex-col" : undefined}>
       {Panel === SettingsGoogleSheets ? <SettingsGoogleSheets onCloseGuardChange={onCloseGuardChange} /> : <Panel />}
     </div>
   );
@@ -114,8 +126,14 @@ export function SettingsModal() {
   const setOpen = useAppStore((state) => state.setSettingsOpen);
   const secretSaveStatus = useAppStore(state => state.secretSaveStatus);
   const retrySecretSave = useAppStore(state => state.retrySecretSave);
-  const category = useAppStore((state) => state.settingsCategory) as CategoryId;
-  const museProvider = useAppStore((state) => state.settings?.aiProvider === "muse");
+  const requestedCategory = useAppStore((state) => state.settingsCategory) as CategoryId;
+  const provider = useAppStore((state) => state.settings?.aiProvider);
+  const visibleCategories = CATEGORIES.filter(item => {
+    if (item.id === "playbook") return provider === "muse";
+    if (item.id === "prompt-library" || item.id === "prompt-plans") return usesPromptPlans(provider);
+    return true;
+  });
+  const category = visibleCategories.some(item => item.id === requestedCategory) ? requestedCategory : "ai";
   const setCategory = useAppStore((state) => state.setSettingsCategory);
   const [visited, setVisited] = useState(() => new Set<CategoryId>([category]));
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -139,7 +157,9 @@ export function SettingsModal() {
   }, [category]);
   useEffect(() => { if (closePrompt) keepEditingRef.current?.focus(); }, [closePrompt]);
   useEffect(() => { setVisited(current => current.has(category) ? current : new Set(current).add(category)); }, [category]);
-  useEffect(() => { if (category === "playbook" && !museProvider) setCategory("ai"); }, [category, museProvider, setCategory]);
+  useEffect(() => {
+    if (category !== requestedCategory) setCategory(category);
+  }, [category, requestedCategory, setCategory]);
   const requestClose = () => {
     if (closeGuard?.dirty || closeGuard?.busy) setClosePrompt(true);
     else setOpen(false);
@@ -176,7 +196,6 @@ export function SettingsModal() {
   };
 
   if (!open) return null;
-  const visibleCategories = CATEGORIES.filter((item) => item.id !== "playbook" || museProvider);
 
   return (
     <div
@@ -222,7 +241,7 @@ export function SettingsModal() {
           </div>
         </nav>
 
-        <main ref={contentRef} className="min-w-0 flex-1 overflow-y-auto p-6">
+        <main ref={contentRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto p-6">
           {secretSaveStatus === "failed" && <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-400"><p>{t("settings.secretSaveFailed")}</p><button type="button" className="ui-btn-secondary" onClick={() => void retrySecretSave()}>{t("settings.retrySecretSave")}</button></div>}
           {secretSaveStatus === "saving" && <p role="status" className="mb-3 text-xs text-zinc-500">{t("settings.secretSaving")}</p>}
           {AUTO_SAVE_CATEGORIES.includes(category) && <div role="note" className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-xs leading-5">
@@ -233,11 +252,11 @@ export function SettingsModal() {
             <span className="inline-flex shrink-0 items-center gap-1.5 font-medium text-amber-400"><Save className="h-3.5 w-3.5" />{t("settings.saveMode.manual")}</span>
             <span className="text-zinc-400">{t("settings.manualSaveHint")}</span>
           </div>}
-          {CATEGORIES.map((item) =>
+          {visibleCategories.map((item) =>
             visited.has(item.id) || category === item.id ? (
               <KeepAlivePanel
                 key={item.id}
-                active={category === item.id && (item.id !== "playbook" || museProvider)}
+                active={category === item.id}
                 Panel={PANEL_COMPONENTS[item.id]}
                 onCloseGuardChange={setCloseGuard}
               />

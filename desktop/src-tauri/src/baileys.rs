@@ -13,7 +13,7 @@ use tauri::{AppHandle, Manager};
 const MAX_BRIDGE_LOG_BYTES: u64 = 5 * 1024 * 1024;
 
 fn sync_cache_key(auth_dir: &std::path::Path) -> Result<String, String> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         use ring::rand::SecureRandom;
         let name=auth_dir.file_name().and_then(|name|name.to_str()).ok_or("同步缓存账号无效")?;
@@ -21,9 +21,11 @@ fn sync_cache_key(auth_dir: &std::path::Path) -> Result<String, String> {
         let key=match std::fs::read(&path) {
             Ok(protected)=>crate::commands::unprotect_secrets(&protected)?,
             Err(error) if error.kind()==std::io::ErrorKind::NotFound=>{
-                // A missing key must never silently replace the key of an encrypted backlog.
+                // A missing key must never silently replace the key of an encrypted backlog or auth state.
                 let cache=auth_dir.with_file_name(format!("{name}-sync-events"));
-                if cache.exists() { return Err("同步缓存密钥缺失，已保留缓存，拒绝生成新密钥".into()); }
+                let has_encrypted_auth = std::fs::read(auth_dir.join("creds.json"))
+                    .is_ok_and(|bytes| bytes.starts_with(b"WAP-AUTH-1\0"));
+                if cache.exists() || has_encrypted_auth { return Err("同步或会话加密密钥缺失，已保留原数据，拒绝生成新密钥".into()); }
                 let mut bytes=[0u8;32];ring::rand::SystemRandom::new().fill(&mut bytes).map_err(|_|"无法生成同步加密密钥")?;
                 let protected=crate::commands::protect_secrets(&bytes)?;
                 match std::fs::OpenOptions::new().write(true).create_new(true).open(&path){
@@ -38,7 +40,7 @@ fn sync_cache_key(auth_dir: &std::path::Path) -> Result<String, String> {
         if key.len()!=32{return Err("同步加密密钥无效".into());}
         return Ok(key.iter().map(|byte|format!("{byte:02x}")).collect());
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     { let _=auth_dir;Err("安全同步缓存需要 Windows DPAPI".into()) }
 }
 
@@ -98,6 +100,15 @@ fn resolve_baileys_bin() -> Result<(Command, String), String> {
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()));
     if let Some(dir) = exe_dir {
+        #[cfg(target_os = "macos")]
+        {
+            let path = dir.join("wap-plus-baileys");
+            if path.is_file() {
+                let label = path.display().to_string();
+                return Ok((Command::new(path), label));
+            }
+        }
+        #[cfg(windows)]
         if let Ok(entries) = std::fs::read_dir(&dir) {
             let mut matches: Vec<PathBuf> = entries
                 .flatten()
@@ -247,6 +258,22 @@ fn spawn_account(app: &AppHandle, account_id: &str) -> Result<BaileysProcess, St
             std::env::current_exe()
                 .map_err(|e| e.to_string())?
                 .with_file_name("ffmpeg.exe")
+        };
+        command.env("WAP_FFMPEG_PATH", ffmpeg);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let ffmpeg = if cfg!(debug_assertions) {
+            let name = if cfg!(target_arch = "aarch64") {
+                "ffmpeg-aarch64-apple-darwin"
+            } else {
+                "ffmpeg-x86_64-apple-darwin"
+            };
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries").join(name)
+        } else {
+            std::env::current_exe()
+                .map_err(|error| error.to_string())?
+                .with_file_name("ffmpeg")
         };
         command.env("WAP_FFMPEG_PATH", ffmpeg);
     }

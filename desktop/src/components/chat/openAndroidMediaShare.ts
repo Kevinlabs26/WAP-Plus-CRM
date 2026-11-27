@@ -1,4 +1,5 @@
 import { bridgeInvoke } from "@/lib/bridge";
+import { ANDROID_MEDIA_MAX_BYTES } from "@shared/protocol";
 
 type OpenAndroidMediaShareDeps = {
   file: File;
@@ -15,6 +16,9 @@ export async function openAndroidMediaShare({
   phoneE164,
   selectedPhoneId,
 }: OpenAndroidMediaShareDeps) {
+  if (file.size === 0 || file.size > ANDROID_MEDIA_MAX_BYTES) {
+    throw new Error("手机分享文件不能为空，且上限为 14 MiB");
+  }
   const result = await bridgeInvoke<{ opened?: boolean; note?: string }>(
     "send_whatsapp_media",
     {

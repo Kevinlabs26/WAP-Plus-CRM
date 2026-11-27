@@ -12,8 +12,12 @@ import { useI18n } from "@/i18n";
 import { TimeZoneSelect } from "@/components/ui/TimeZoneSelect";
 import { systemTimeZone } from "@/lib/timeZone";
 import { isChatModel, type ModelPurpose } from "@/lib/modelCapabilities";
-import { VertexAiFields } from "./VertexAiFields";
 import { MuseWebFields } from "./MuseWebFields";
+import { geminiGenerate } from "@/lib/gemini";
+import {
+  listVertexModels, packVertexCredentials, parseVertexServiceAccount, unpackVertexCredentials,
+  VERTEX_CREDENTIAL_LIMIT, VERTEX_DEFAULT_MODEL, type VertexCredentials,
+} from "@/lib/vertexAi";
 
 export function SettingsAiPanel() {
   const { t } = useI18n();
@@ -56,7 +60,7 @@ export function AiServiceFields({ settings, updateSettings, showMockHint = true,
               <option value="groq">Groq</option>
               <option value="openrouter">OpenRouter</option>
               <option value="gemini">Gemini</option>
-              <option value="vertex">Gemini · Vertex AI</option>
+              <option value="vertex">Gemini Vertex AI</option>
               {allowMuse&&<option value="muse">Muse · {t("muse.web")}</option>}
               <option value="custom">{t("settingsAi.provider.custom")}</option>
               <option value="ollama">{t("settingsAi.provider.ollama")}</option>
@@ -80,7 +84,7 @@ export function AiServiceFields({ settings, updateSettings, showMockHint = true,
           {settings.aiProvider === "gemini" && (
             <SecretInput full label="Gemini API Key" value={settings.geminiKey} placeholder="AIza…" onChange={(value) => updateSettings({ geminiKey: value })} />
           )}
-          {settings.aiProvider==="vertex"&&<VertexAiFields settings={settings} updateSettings={updateSettings}/>}
+          {settings.aiProvider === "vertex" && <VertexFields settings={settings} updateSettings={updateSettings} />}
           {settings.aiProvider==="muse"&&<MuseWebFields/>}
           {settings.aiProvider === "custom" && (
             <>
@@ -136,6 +140,115 @@ export function AiServiceFields({ settings, updateSettings, showMockHint = true,
 
         </div>
   );
+}
+
+function VertexFields({ settings, updateSettings }: { settings: AppSettings; updateSettings: (patch: Partial<AppSettings>) => void }) {
+  const { t } = useI18n();
+  const credential = settings.vertexCredential?.trim() || "";
+  const credentials = unpackVertexCredentials(credential);
+  const { apiKey, serviceAccountJson, mode } = credentials;
+  const updateCredentials = (patch: Partial<VertexCredentials>) =>
+    updateSettings({ vertexCredential: packVertexCredentials({ ...credentials, ...patch }) });
+  const model = settings.aiModel.trim() || VERTEX_DEFAULT_MODEL;
+  const fileInput = useRef<HTMLInputElement>(null);
+  const pending = useRef<AbortController>();
+  const [action, setAction] = useState<"import" | "models" | "verify">();
+  const busy = !!action;
+  const [models, setModels] = useState<string[] | null>(null);
+  const [status, setStatus] = useState<{ text: string; error?: boolean }>();
+
+  useEffect(() => setModels(null), [credential]);
+  useEffect(() => {
+    setStatus(undefined);
+    setAction(undefined);
+    return () => pending.current?.abort();
+  }, [credential, model]);
+
+  async function run(kind: NonNullable<typeof action>, work: (signal: AbortSignal) => Promise<void>) {
+    pending.current?.abort();
+    const request = new AbortController();
+    pending.current = request;
+    setAction(kind);
+    setStatus(undefined);
+    try {
+      await work(request.signal);
+    } catch (error) {
+      if (!request.signal.aborted) setStatus({ text: error instanceof Error ? error.message : t("settingsAi.vertexFailed"), error: true });
+    } finally {
+      if (!request.signal.aborted) setAction(undefined);
+    }
+  }
+
+  return <>
+    <SecretInput full label="Vertex Express API Key" value={apiKey} placeholder="AQ.… / AIza…" onChange={apiKey => updateCredentials({ apiKey })} />
+    <div className="col-span-2">
+      <p className="text-2xs text-zinc-500">{t("settingsAi.vertexImport")}</p>
+      <input ref={fileInput} type="file" accept=".json,application/json" className="hidden" onChange={event => {
+        const file = event.target.files?.[0];
+        event.target.value = "";
+        if (!file) return;
+        void run("import", async signal => {
+          const raw = file.size <= VERTEX_CREDENTIAL_LIMIT ? await file.text() : "";
+          signal.throwIfAborted();
+          try {
+            updateCredentials({ serviceAccountJson: JSON.stringify(parseVertexServiceAccount(raw)) });
+          } catch {
+            throw Error(t("settingsAi.vertexInvalidJson"));
+          }
+        });
+      }} />
+      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+        <button type="button" className="ui-control px-2.5 disabled:opacity-50" disabled={busy} onClick={() => fileInput.current?.click()}>
+          {t("contactImport.chooseFile")}
+        </button>
+        {serviceAccountJson && <>
+          <span className="text-zinc-500">{t("settingsAi.vertexImported")}</span>
+          <button type="button" className="ui-control px-2.5" disabled={busy} onClick={() => updateCredentials({ serviceAccountJson: "" })}>{t("settingsAi.vertexRemove")}</button>
+        </>}
+      </div>
+    </div>
+    {apiKey && serviceAccountJson && (
+      <label className="col-span-2 block text-2xs text-zinc-500">
+        {t("settingsAi.vertexAuthMethod")}
+        <select
+          className="ui-control mt-1 w-full px-2.5 text-[13px]"
+          value={mode}
+          onChange={event => updateCredentials({ mode: event.target.value === "service_account" ? "service_account" : "express" })}
+        >
+          <option value="express">Vertex Express API Key</option>
+          <option value="service_account">{t("settingsAi.vertexServiceAccount")}</option>
+        </select>
+      </label>
+    )}
+    <div className="col-span-2 flex items-end gap-2">
+      <label className="block min-w-0 flex-1 text-2xs text-zinc-500">
+        {t("settingsAi.chatModel")}
+        <select
+          className="ui-control mt-1 w-full px-2.5 text-[13px]"
+          value={models?.includes(model) ? model : ""}
+          disabled={busy || !models?.length}
+          onChange={event => updateSettings({ aiModel: event.target.value })}
+        >
+          {(!models || !models.includes(model)) && (
+            <option value="" disabled>{models ? t(models.length ? "settingsAi.vertexChooseModel" : "settingsAi.vertexNoModels") : model}</option>
+          )}
+          {models?.map(id => <option key={id} value={id}>{id}</option>)}
+        </select>
+      </label>
+      <button type="button" className="ui-control shrink-0 px-2.5 text-xs disabled:opacity-50" disabled={busy || !credential} onClick={() => void run("models", async signal => {
+        const available = await listVertexModels(credential, model, signal);
+        signal.throwIfAborted();
+        setModels(available);
+      })}>{t(action === "models" ? "settingsAi.vertexLoadingModels" : "settingsAi.vertexLoadModels")}</button>
+    </div>
+    <div className="col-span-2 flex items-center gap-2">
+      <button type="button" className="ui-control px-2.5 disabled:opacity-50" disabled={busy || !credential || !isChatModel(model) || (models !== null && !models.includes(model))} onClick={() => void run("verify", async signal => {
+        await geminiGenerate({ vertexCredential: credential, model, user: "Reply with OK.", maxOutputTokens: 512, signal });
+        if (!signal.aborted) setStatus({ text: t("settingsAi.vertexVerified") });
+      })}>{action === "verify" ? "…" : t("settingsAi.vertexVerify")}</button>
+      <p role="status" className={cn("text-xs", status?.error ? "text-amber-300" : "text-emerald-400")}>{status?.text}</p>
+    </div>
+  </>;
 }
 
 function SecretInput({

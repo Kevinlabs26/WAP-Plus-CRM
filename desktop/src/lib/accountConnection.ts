@@ -28,6 +28,11 @@ export function isWaAccountConnected(
   );
 }
 
+export function canBatchSendWithAccount(state: Pick<import("@/store/types").AppState,"settings"|"baileysUi">, id: string) {
+  const {settings,baileysUi} = state;
+  return !settings.sendPausedAccountIds?.includes(id) && isWaAccountConnected(settings.waAccounts,id,settings.liveBaileysAccountId,baileysUi?.connection);
+}
+
 /**
  * 解析出站消息的实际账号：兼容旧数据里的别名，但不跨已知账号发送。
  * 只有请求账号不存在且当前恰好一个账号在线时，才自动修正到该账号。

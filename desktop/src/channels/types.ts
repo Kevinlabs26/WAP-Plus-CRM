@@ -41,6 +41,8 @@ export const CHANNEL_META: Record<
 };
 
 export interface SendTextInput {
+  confirmPhoneSend?: boolean;
+  imageDataUrl?: string;
   text: string;
   phoneE164: string;
   displayName?: string;
@@ -70,6 +72,8 @@ export interface SendTextResult {
   status: "local" | "queued" | "sent" | "failed" | "unsupported";
   message: string;
   error?: string;
+  deliveryUncertain?: boolean;
+  deviceId?: string;
   raw?: unknown;
   /** 建议多久后重试（限速等） */
   retryAfterMs?: number;

@@ -58,7 +58,7 @@ export async function gatedMediaSend<T>(
     send,
     requiredMinGapSec
   );
-  for (let attempt = 0; !out.ok && attempt < MAX_AUTO_RETRIES; attempt++) {
+  for (let attempt = 0; requiredMinGapSec === undefined && !out.ok && attempt < MAX_AUTO_RETRIES; attempt++) {
     if (canSend && !canSend()) throw new MediaGateBlockedError("发送任务已暂停或取消", "send_paused");
     const waitMs = out.gate.retryAfterMs;
     if (

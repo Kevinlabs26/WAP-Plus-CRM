@@ -4,10 +4,10 @@ import {
   Image,
   Loader2,
   Link2,
+  Mic,
   Paperclip,
   Plus,
   Reply,
-  ShoppingBag,
   Smile,
   X,
   Zap,
@@ -60,9 +60,11 @@ import { VOICE_INPUT_LANGUAGES } from "@/lib/voiceInputLanguage";
 import { getChatDraftValue, MAX_CHAT_DRAFT_LENGTH } from "@/lib/chatDrafts";
 import { toggleComposerBold } from "@/lib/composerFormatting";
 import { useI18n } from "@/i18n";
-import { onQuickReplyMedia, quickReplyMediaToFile } from "@/lib/quickReplyMedia";
+import { emitQuickReplyMedia, onQuickReplyMedia, quickReplyMediaToFile } from "@/lib/quickReplyMedia";
 import { ContactVcfDialog } from "./ContactVcfDialog";
 import { ContactLinksDialog } from "./ContactLinksDialog";
+import { ComposerQuickShelf } from "./ComposerQuickShelf";
+import { getQuickReplyCategories } from "@/lib/quickReplies";
 
 const TYPING_DEBUG_ENABLED = isTypingDiagnosticsEnabled();
 const EmojiStickerGifPanel = lazy(() =>
@@ -103,6 +105,7 @@ type Props = {
   voicePaused: boolean;
   recordSec: number;
   onSend: () => void | Promise<void>;
+  onSendQuickReply: (reply: AppSettings["quickReplies"][number], body: string) => boolean | void | Promise<boolean | void>;
   /** ↑ 空输入框时编辑最近一条自己发送的文字消息。 */
   onEditLatest?: () => boolean;
   onSendImage: (file: File, caption?: string) => boolean | Promise<boolean>;
@@ -115,7 +118,6 @@ type Props = {
   onImportStickerFiles: (files: File[]) => Promise<void>;
   onRemoveFavoriteSticker: (dataUrl: string) => void;
   onSendFile: (file: File, caption?: string) => boolean | Promise<boolean>;
-  onOpenCatalog: () => void;
   onOpenContactPicker: () => void;
   onBeginVoice: () => void | Promise<void>;
   readVoiceLevel: () => number;
@@ -159,6 +161,7 @@ function ComposerInner({
   voicePaused,
   recordSec,
   onSend,
+  onSendQuickReply,
   onEditLatest,
   onSendImage,
   onSendAudio,
@@ -170,7 +173,6 @@ function ComposerInner({
   onImportStickerFiles,
   onRemoveFavoriteSticker,
   onSendFile,
-  onOpenCatalog,
   onOpenContactPicker,
   onBeginVoice,
   readVoiceLevel,
@@ -192,6 +194,12 @@ function ComposerInner({
       backTranslate: s.settings.backTranslate,
       emojiEnabled: s.settings.emojiEnabled,
       voiceInputLang: s.settings.voiceInputLang,
+      quickReplies: s.settings.quickReplies,
+      quickReplyCustomCategories: s.settings.quickReplyCustomCategories,
+      quickReplyRemovedCategories: s.settings.quickReplyRemovedCategories,
+      quickReplyCategoryLabels: s.settings.quickReplyCategoryLabels,
+      quickReplyCategoryOrder: s.settings.quickReplyCategoryOrder,
+      composerQuickAccessTabs: s.settings.composerQuickAccessTabs,
     }))
   );
   const crmPanelCollapsed = useAppStore((s) => s.crmPanelCollapsed);
@@ -216,6 +224,7 @@ function ComposerInner({
     const state = useAppStore.getState();
     return getChatDraftValue(state.draftReplyByChatId, resetKey);
   })();
+  const composerCategories = useMemo(() => getQuickReplyCategories(settingsUi.quickReplyCustomCategories || [], settingsUi.quickReplyRemovedCategories || [], settingsUi.quickReplyCategoryLabels || {}, settingsUi.quickReplyCategoryOrder || []), [settingsUi.quickReplyCustomCategories, settingsUi.quickReplyRemovedCategories, settingsUi.quickReplyCategoryLabels, settingsUi.quickReplyCategoryOrder]);
   const [dragOver, setDragOver] = useState(false);
   const [attachmentOpen, setAttachmentOpen] = useState(false);
   const [vcfOpen, setVcfOpen] = useState(false);
@@ -264,6 +273,7 @@ function ComposerInner({
   const autoTranslateTimerRef = useRef<number | null>(null);
   const resizeTimerRef = useRef<number | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const audioInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const gifInputRef = useRef<HTMLInputElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -979,6 +989,57 @@ function ComposerInner({
     emitComposing();
   };
 
+  const quickReplyBody = (reply: AppSettings["quickReplies"][number]) =>
+    reply.translation?.trim() || reply.body.trim();
+
+  const quickReplySendLockRef = useRef(false);
+  const insertComposerQuickReply = (reply: AppSettings["quickReplies"][number]) => {
+    if (sending || recording || inputLocked || editingId || mediaSendingIndex >= 0) return;
+    const body = quickReplyBody(reply);
+    if (reply.media) {
+      const accepted = emitQuickReplyMedia({ ...reply.media, caption: body, token: `${reply.id}-${Date.now()}`, target: "main", chatId: resetKey || undefined });
+      if (!accepted) { pushToast(t("quickShelf.insertUnavailable"), "info"); return; }
+      pushToast(t("quickShelf.mediaInserted"), "success");
+    } else {
+      if (!body) return;
+      const current = readDraft().trim();
+      const next = current ? `${current}\n${body}` : body;
+      if (next.length > MAX_CHAT_DRAFT_LENGTH) { pushToast(t("links.longDraft"), "error"); return; }
+      setDraftLocal(next);
+      flushDraftNow(next);
+      setTranslateOriginal(null);
+      setTranslatedDraft(null);
+      setBackTranslation(null);
+      backTranslationRequestRef.current++;
+      setBackTranslating(false);
+      if (translatingRef.current) {
+        translationRequestRef.current++;
+        translatingRef.current = false;
+        pendingSendAfterTranslationRef.current = false;
+        setTranslating(false);
+      }
+      emitComposing();
+      pushToast(t("crmPanel.appended"), "success");
+    }
+    useAppStore.getState().recordQuickReplyUsage(reply.id);
+    requestAnimationFrame(() => textareaRef.current?.focus({ preventScroll: true }));
+  };
+
+  const sendComposerQuickReply = async (reply: AppSettings["quickReplies"][number]) => {
+    if (quickReplySendLockRef.current || sending || recording || inputLocked || editingId || mediaSendingIndex >= 0) return;
+    const body = quickReplyBody(reply);
+    if (!reply.media && !body) return;
+    quickReplySendLockRef.current = true;
+    try {
+      const sent = await onSendQuickReply(reply, body);
+      if (sent !== false) useAppStore.getState().recordQuickReplyUsage(reply.id);
+    } catch (error) {
+      pushToast(error instanceof Error ? error.message : t("runtime.sendFailed"), "error");
+    } finally {
+      quickReplySendLockRef.current = false;
+    }
+  };
+
   return (
     <div
       ref={containerRef}
@@ -1034,6 +1095,18 @@ function ComposerInner({
         }}
       />
       <input
+        ref={audioInputRef}
+        type="file"
+        accept="audio/*,.m4a,.aac,.mp3,.wav,.flac,.ogg,.oga,.opus,.webm"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          const files = Array.from(e.target.files || []);
+          e.target.value = "";
+          stageMedia(files, "audio");
+        }}
+      />
+      <input
         ref={fileInputRef}
         type="file"
         multiple
@@ -1057,6 +1130,10 @@ function ComposerInner({
           if (f) stageMedia([f], "gif");
         }}
       />
+      <ComposerQuickShelf tabs={settingsUi.composerQuickAccessTabs || []} quickReplies={settingsUi.quickReplies} categories={composerCategories} chatId={resetKey} canSendReply={!sending && !recording && !inputLocked && !editingId && mediaSendingIndex < 0} onToggleTab={tab => {
+        const tabs = useAppStore.getState().settings.composerQuickAccessTabs || [];
+        useAppStore.getState().updateSettings({ composerQuickAccessTabs: tabs.includes(tab) ? tabs.filter(item => item !== tab) : [...tabs, tab] });
+      }} onInsertReply={insertComposerQuickReply} onSendReply={sendComposerQuickReply} />
       {pendingMedia.length > 0 && (
         <MediaSendPreview
           items={pendingMedia}
@@ -1161,23 +1238,22 @@ function ComposerInner({
                     className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-zinc-200 hover:bg-zinc-800"
                     onClick={() => {
                       setAttachmentOpen(false);
+                      audioInputRef.current?.click();
+                    }}
+                  >
+                    <Mic className="h-4 w-4 text-emerald-400" />
+                    {t("composer.audio")}
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-zinc-200 hover:bg-zinc-800"
+                    onClick={() => {
+                      setAttachmentOpen(false);
                       fileInputRef.current?.click();
                     }}
                   >
                     <Paperclip className="h-4 w-4 text-violet-400" />
                     {t("composer.file")}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!isBaileys || !baileysConnected}
-                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
-                    onClick={() => {
-                      setAttachmentOpen(false);
-                      onOpenCatalog();
-                    }}
-                  >
-                    <ShoppingBag className="h-4 w-4 text-emerald-400" />
-                    {t("composer.product")}
                   </button>
                   <button
                     type="button"

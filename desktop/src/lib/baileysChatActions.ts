@@ -47,31 +47,79 @@ export const baileysChatModify = (
     }),
   }, target.accountId);
 
+export type BaileysSaveContactsProgress = {
+  completed: number;
+  total: number;
+  saved: number;
+  failed: number;
+};
+
 export async function baileysSaveContacts(
   accountId: string | null | undefined,
-  contacts: Array<{ name: string; phoneE164: string }>
+  contacts: Array<{ name: string; phoneE164: string }>,
+  options?: {
+    chunkSize?: number;
+    onProgress?: (progress: BaileysSaveContactsProgress) => void;
+  }
 ) {
-  const totals = { saved: 0, failed: 0, savedPhones: [] as string[] };
-  for (let start = 0; start < contacts.length; start += 500) {
+  const totals = {
+    saved: 0,
+    failed: 0,
+    savedPhones: [] as string[],
+    failedDetails: [] as Array<{ name: string; phoneE164: string; error: string }>,
+  };
+  const defaultChunkSize = options?.onProgress
+    ? contacts.length <= 50
+      ? 1
+      : 5
+    : 500;
+  const chunkSize = Math.max(1, Math.min(500, options?.chunkSize ?? defaultChunkSize));
+  const totalCount = contacts.length;
+  options?.onProgress?.({ completed: 0, total: totalCount, saved: 0, failed: 0 });
+
+  for (let start = 0; start < totalCount; start += chunkSize) {
+    const batch = contacts.slice(start, start + chunkSize);
     const result = await request<{
-      items?: Array<{ status?: "saved" | "failed" }>;
+      items?: Array<{ status?: "saved" | "failed"; error?: string }>;
     }>(
       "/contacts/save_batch",
       {
         method: "POST",
         signal: AbortSignal.timeout(120_000),
-        body: JSON.stringify({ items: contacts.slice(start, start + 500) }),
+        body: JSON.stringify({ items: batch }),
       },
       accountId
     );
-    for (const [index, item] of (result.items || []).slice(0, Math.min(500, contacts.length - start)).entries()) {
-      if (item.status === "saved") { totals.saved += 1; totals.savedPhones.push(contacts[start + index]!.phoneE164); }
-      else totals.failed += 1;
+    const returnedItems = (result.items || []).slice(0, batch.length);
+    for (const [index, item] of returnedItems.entries()) {
+      const target = batch[index]!;
+      if (item.status === "saved") {
+        totals.saved += 1;
+        totals.savedPhones.push(target.phoneE164);
+      } else {
+        totals.failed += 1;
+        totals.failedDetails.push({
+          name: target.name,
+          phoneE164: target.phoneE164,
+          error: item.error || "Unknown error",
+        });
+      }
     }
-    totals.failed += Math.max(
-      0,
-      Math.min(500, contacts.length - start) - (result.items?.length || 0)
-    );
+    for (let missingIdx = returnedItems.length; missingIdx < batch.length; missingIdx++) {
+      const target = batch[missingIdx]!;
+      totals.failed += 1;
+      totals.failedDetails.push({
+        name: target.name,
+        phoneE164: target.phoneE164,
+        error: "No status returned",
+      });
+    }
+    options?.onProgress?.({
+      completed: Math.min(totalCount, start + batch.length),
+      total: totalCount,
+      saved: totals.saved,
+      failed: totals.failed,
+    });
   }
   return totals;
 }

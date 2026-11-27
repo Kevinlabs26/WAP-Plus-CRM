@@ -29,11 +29,12 @@ export function MultiWindowReplyControls({ chat, contact, messages, accountId, c
   const { status, scope } = multiWindowReplyStatus(settings, chat, contact, messages, accountId, channelConnected, Date.now(), runtime);
   const label = t(`multi.replyStatus.${status}`);
   const source = scope.source === "folder" ? t("autoReplyScope.folderSource", { name: scope.folderName || "" }) : t(`autoReplyScope.source.${scope.source}`);
-  const forcedManual = !!(chat.isGroup || contact?.isGroup || chat.localOnly);
+  const isGroup = !!(chat.isGroup || contact?.isGroup);
+  const forcedManual = !!(chat.localOnly || isGroup && settings.sendChannel !== "baileys");
   const mode = scope.source === "paused" || forcedManual ? "manual" : scope.mode;
   const canSwitchMode = scope.source !== "paused" && !forcedManual;
   const description = t("multi.replyStateDetails", { mode: t(mode === "auto" ? "autoReplyScope.auto" : "autoReplyScope.manual"), source, status: label });
-  const restriction = chat.isGroup || contact?.isGroup ? t("autoReplyScope.privateOnly") : chat.localOnly ? t("multi.localManual") : "";
+  const restriction = isGroup ? t(settings.sendChannel === "baileys" ? "autoReplyScope.groupJudges" : "autoReplyScope.groupNeedsBaileys") : chat.localOnly ? t("multi.localManual") : "";
   const details = restriction ? `${description} · ${restriction}` : description;
   const progress = runtime?.inboundId === messages.filter(message => message.direction === "in").at(-1)?.id && (!runtime?.accountId || runtime.accountId === accountId) ? runtime : undefined;
   const stateDetails = [workStatus ? `${details} · ${t(`multi.workStatus.${workStatus}`)}` : details,
@@ -41,7 +42,7 @@ export function MultiWindowReplyControls({ chat, contact, messages, accountId, c
   const stateText = (status === "auto" || status === "manual") && workStatus ? t(`multi.workStatus.${workStatus}`) : label;
   const setMode = (nextMode: "auto" | "manual") => {
     const state = useAppStore.getState();
-    if (resolveAutoReplyScope(state.settings, chat.id).source === "paused") return;
+    if (resolveAutoReplyScope(state.settings, chat.id, isGroup).source === "paused") return;
     const modes = { ...state.settings.aiAutoReplyModeByChatId, [chat.id]: nextMode };
     state.updateSettings({
       aiAutoReplyModeByChatId: modes,

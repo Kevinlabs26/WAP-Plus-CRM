@@ -10,11 +10,10 @@ import {
   RefreshCw,
   ShoppingCart,
   Sparkles,
-  TableProperties,
   X,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent } from "react";
 import { useAppStore } from "@/store/appStore";
 import { cn, contactTagColorClass, displayContactLabel, displayPhone, resolveSendTarget } from "@/lib/utils";
 import {
@@ -24,14 +23,15 @@ import {
 } from "@/lib/baileys";
 import { generateSuggestions, getSuggestionContextKey, hasRealAiKey, type GenerateSuggestionsResult } from "@/lib/aiSuggest";
 import { generateContactConversationSummary, getAiConversationSummaryStatus, subscribeAiConversationSummary } from "@/lib/aiConversationSummary";
-import { generateContactReport, type ContactReportProgress } from "@/lib/aiContactReport";
-import { createSuggestionCache, isManualSuggestionContext, SUGGESTION_MAX_AGE_MS } from "@/lib/aiSuggestionCache";
-import { resolveAiReplyProfile } from "@/lib/aiPromptScope";
+import { createSuggestionCache, SUGGESTION_MAX_AGE_MS } from "@/lib/aiSuggestionCache";
+import { resolveAiReplyProfile, resolveChatPromptPlan } from "@/lib/aiPromptScope";
 import { PlaybookBinding } from "./PlaybookBinding";
+import { ChatPromptPlan } from "./ChatPromptPlan";
+import { usesPromptPlans } from "@/lib/promptPlans";
 import type { Message, WhatsAppLabel } from "@/types/crm";
-import type { AiReportTemplate } from "@/store/settingsDefaults";
+import type { ComposerQuickAccessTab } from "@/store/settingsDefaults";
 import { ContactAvatar } from "./ContactAvatar";
-import { GoogleSheetInfo, GoogleSheetPrimaryTag } from "./GoogleSheetInfo";
+import { GoogleSheetInfo } from "./GoogleSheetInfo";
 import { ContactLocalTime } from "./ContactLocalTime";
 import { Button, SectionLabel } from "@/components/ui/primitives";
 import { ContactTagsNotesEditor } from "./ContactTagsNotesEditor";
@@ -45,11 +45,13 @@ import { formatAccountDisplay } from "@/lib/accountLabels";
 import { QuickReplyBrowser } from "@/components/chat/QuickReplyBrowser";
 import { useI18n } from "@/i18n";
 import { emitQuickReplyMedia } from "@/lib/quickReplyMedia";
+import { requestQuickReplySend } from "@/lib/quickReplySend";
 import { ImageLibraryPanel } from "@/components/chat/ImageLibraryPanel";
+import { QuickMediaManager } from "@/components/chat/QuickMediaManager";
 import { AiSuggestionCard } from "./AiSuggestionCard";
 import { AiSuggestionReadingControl } from "./AiSuggestionReadingControl";
 import { resolveMyLang } from "@/lib/translateDraft";
-import { AiSheetExtractDialog } from "./AiSheetExtractDialog";
+import { AiLocalAgentPanel } from "./AiLocalAgentPanel";
 import {MuseQueueStatus} from "@/components/settings/MuseQueueStatus";
 
 function threadForContact(
@@ -91,6 +93,7 @@ export function CrmAiPanel() {
   const setSelectedChat = useAppStore((state) => state.setSelectedChat);
   const aiSuggestions = useAppStore((state) => state.aiSuggestions);
   const settings = useAppStore((state) => state.settings);
+  const composerQuickAccessTabs = settings.composerQuickAccessTabs || [];
   const baileysUi = useAppStore((state) => state.baileysUi);
   const applyAiSuggestion = useAppStore((state) => state.applyAiSuggestion);
   const toggleFollowUp = useAppStore((state) => state.toggleFollowUp);
@@ -109,50 +112,57 @@ export function CrmAiPanel() {
   const panelTab = useAppStore((s) => s.crmPanelTab);
   const setPanelTab = useAppStore((s) => s.setCrmPanelTab);
   const updateContact = useAppStore((s) => s.updateContact);
-  const updateSettings = useAppStore((s) => s.updateSettings);
-  const requestConfirm = useAppStore((s) => s.requestConfirm);
   const setCollapsed = setCrmPanelCollapsed;
   // 未选会话：收起右侧，中间欢迎区更宽（对齐官方空白主区）
   useLayoutEffect(() => {
     if (!selectedChatId && !selectedContactId) setCrmPanelCollapsed(true);
   }, [selectedChatId, selectedContactId, setCrmPanelCollapsed]);
   const [tagsOpen, setTagsOpen] = useState(false);
+  const [mediaLibraryTab, setMediaLibraryTab] = useState<"images" | "clips">("images");
   const [sheetInfoOpen, setSheetInfoOpen] = useState(false);
   const [moreDetailsOpen, setMoreDetailsOpen] = useState(false);
   const [followSchedulerOpen, setFollowSchedulerOpen] = useState(false);
   const [followDate, setFollowDate] = useState("");
   const [followTime, setFollowTime] = useState("10:00");
   const [followNote, setFollowNote] = useState("");
+  const [aiChatInstructionsDraft, setAiChatInstructionsDraft] = useState(() => contacts.find(item => item.id === selectedContactId)?.aiChatInstructions ?? "");
   const [loading, setLoading] = useState(false);
   const [aiSource, setAiSource] = useState<string>(settings.aiProvider);
   const [aiError, setAiError] = useState("");
-  const [sheetExtractOpen, setSheetExtractOpen] = useState(false);
-  const [reportTemplateId, setReportTemplateId] = useState("");
-  const [reportTemplateDraft, setReportTemplateDraft] = useState<AiReportTemplate | null>(null);
-  const [reportText, setReportText] = useState("");
-  const [reportBusy, setReportBusy] = useState(false);
-  const [reportProgress, setReportProgress] = useState<ContactReportProgress | null>(null);
-  const [reportError, setReportError] = useState("");
   const [readingLanguage, setReadingLanguage] = useState("");
   const [readingTarget, setReadingTarget] = useState<string | null>(null);
   const [suggestionExpansion,setSuggestionExpansion]=useState<{key:string;open:boolean}|null>(null);
   const generation = useRef(0);
   const [suggestionCache] = useState(createSuggestionCache);
   const visibleSuggestionExpiry = useRef<{ key: string; expiresAt: number } | null>(null);
+  const [composerTabMenu, setComposerTabMenu] = useState<{ tab: ComposerQuickAccessTab; x: number; y: number } | null>(null);
+  const composerTabMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!composerTabMenu) return;
+    const outside = (event: PointerEvent) => {
+      if (event.target instanceof Node && !composerTabMenuRef.current?.contains(event.target)) setComposerTabMenu(null);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setComposerTabMenu(null); }
+    };
+    const blur = () => setComposerTabMenu(null);
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("keydown", escape, true);
+    window.addEventListener("blur", blur);
+    return () => {
+      document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("keydown", escape, true);
+      window.removeEventListener("blur", blur);
+    };
+  }, [composerTabMenu]);
+  useEffect(() => {
+    if (composerTabMenu) composerTabMenuRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+  }, [composerTabMenu]);
 
   const contact = contacts.find((item) => item.id === selectedContactId);
-  const reportTemplates = settings.aiReportTemplates || [];
-  const selectedReportTemplate = reportTemplates.find(item => item.id === reportTemplateId);
-  useEffect(() => {
-    setReportText(contact?.aiReport || "");
-    setReportError("");
-    setReportTemplateDraft(null);
-    setReportTemplateId(contact?.aiReportTemplateId && reportTemplates.some(item => item.id === contact.aiReportTemplateId)
-      ? contact.aiReportTemplateId : reportTemplates[0]?.id || "");
-  }, [selectedContactId]);
-  useEffect(() => {
-    if (!reportTemplates.some(item => item.id === reportTemplateId)) setReportTemplateId(reportTemplates[0]?.id || "");
-  }, [reportTemplates, reportTemplateId]);
+  const savedAiChatInstructions = contact?.aiChatInstructions ?? "";
+  const aiChatInstructionsDirty = aiChatInstructionsDraft !== savedAiChatInstructions;
+  useEffect(() => setAiChatInstructionsDraft(savedAiChatInstructions), [selectedContactId, savedAiChatInstructions]);
   const summaryStatus = useSyncExternalStore(subscribeAiConversationSummary,
     () => getAiConversationSummaryStatus(selectedContactId || ""), () => null);
   const threadAccountId =
@@ -170,6 +180,15 @@ export function CrmAiPanel() {
   const quickReplyIdentity = settings.sendChannel === "android_bridge"
     ? t("quickShelf.device", { device: phones?.find(phone => phone.id === quickReplyChat?.phoneId)?.name || quickReplyChat?.phoneId || t("quickShelf.unknownAccount") })
     : quickReplyAccount ? formatAccountDisplay(quickReplyAccount) : quickReplyAccountId;
+  const openComposerTabMenu = (event: MouseEvent<HTMLButtonElement>, tab: ComposerQuickAccessTab) => {
+    event.preventDefault(); event.stopPropagation();
+    setComposerTabMenu({ tab, x: event.type === "contextmenu" ? event.clientX : event.currentTarget.getBoundingClientRect().left, y: event.type === "contextmenu" ? event.clientY : event.currentTarget.getBoundingClientRect().bottom });
+  };
+  const toggleComposerQuickAccessTab = (tab: ComposerQuickAccessTab) => {
+    const tabs = useAppStore.getState().settings.composerQuickAccessTabs || [];
+    useAppStore.getState().updateSettings({ composerQuickAccessTabs: tabs.includes(tab) ? tabs.filter(item => item !== tab) : [...tabs, tab] });
+    setComposerTabMenu(null);
+  };
   const thread = useMemo(() => {
     // 用 messagesByChatId 索引桶（已按 chatId 分组 + sentAt 排序），避免全量扫 messages
     if (!threadBucket?.length) return [];
@@ -232,16 +251,47 @@ export function CrmAiPanel() {
   const replyScope = resolveAutoReplyScope(settings, selectedChatId || "");
 
   const aiProfile = resolveAiReplyProfile(settings, aiAccountId, selectedChatId || undefined);
+  const promptPlansEnabled = usesPromptPlans(settings.aiProvider);
+  const chatPromptPlan = promptPlansEnabled ? resolveChatPromptPlan(settings, aiAccountId, selectedChatId || undefined) : {};
   const needsHuman=replyScope.mode==="auto"&&autoRuntime?.phase==="human"&&autoRuntime.inboundId===lastIn?.id&&(!autoRuntime.accountId||autoRuntime.accountId===aiAccountId);
   const expansionKey=JSON.stringify([selectedChatId,aiAccountId,replyScope.mode,needsHuman?lastIn?.id:""]);
   const suggestionsOpen=suggestionExpansion?.key===expansionKey?suggestionExpansion.open:replyScope.mode!=="auto"||needsHuman;
   const [planClock,setPlanClock]=useState(0);
-  useEffect(()=>{if(!settings.aiPlaybookPlans?.length)return;const timer=window.setInterval(()=>setPlanClock(Date.now()),30000);return()=>window.clearInterval(timer);},[settings.aiPlaybookPlans?.length]);
-  const baseSuggestionKey=useMemo(()=>getSuggestionContextKey(contact,thread,settings,aiAccountId,{chatId:selectedChatId||undefined}),[selectedChatId,selectedContactId,contact,thread,settings,aiAccountId,planClock]);
+  const watchPlan = promptPlansEnabled ? chatPromptPlan.plan?.mode === "rotation" : !!settings.aiPlaybookPlans?.length;
+  useEffect(() => {
+    if (!watchPlan) return;
+    const timer = window.setInterval(() => setPlanClock(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [watchPlan]);
   const suggestionKey = useMemo(() => getSuggestionContextKey(contact, thread, settings, aiAccountId, { chatId: selectedChatId || undefined,count:1 }),
     [selectedChatId, selectedContactId, contact, thread, settings, aiAccountId,planClock]);
   const latestSuggestionKey = useRef(suggestionKey);
   latestSuggestionKey.current = suggestionKey;
+  const previousSuggestionKey = useRef(suggestionKey);
+  useEffect(() => {
+    if (previousSuggestionKey.current === suggestionKey) return;
+    generation.current++;
+    suggestionCache.cancelPending(previousSuggestionKey.current);
+    previousSuggestionKey.current = suggestionKey;
+    const cached = suggestionCache.get(suggestionKey);
+    visibleSuggestionExpiry.current = cached?.result?.suggestions.length ? { key: suggestionKey, expiresAt: cached.expiresAt } : null;
+    useAppStore.setState({ aiSuggestions: cached?.result?.suggestions || [] });
+    if (cached?.result) setAiSource(cached.result.source);
+    setLoading(false);
+    setAiError("");
+  }, [suggestionKey, suggestionCache]);
+
+  useEffect(() => () => {
+    generation.current++;
+    suggestionCache.cancelPending(latestSuggestionKey.current);
+  }, [suggestionCache]);
+
+  useEffect(() => {
+    if (!collapsed) return;
+    generation.current++;
+    suggestionCache.cancelPending(suggestionKey);
+    setLoading(false);
+  }, [collapsed, suggestionKey, suggestionCache]);
 
   useEffect(() => {
     if (!aiSuggestions.length || collapsed || panelTab !== "customer") return;
@@ -263,8 +313,10 @@ export function CrmAiPanel() {
     return () => window.clearTimeout(timer);
   }, [aiSuggestions, suggestionKey, collapsed, panelTab, suggestionCache, settings.uiLanguage]);
 
-  const requestSuggestions = (key: string, force = false, onProgress?: (result: GenerateSuggestionsResult) => void) => suggestionCache.request(key,
-    (publish, signal) => generateSuggestions(contact, thread, settings, { accountId: aiAccountId, chatId: selectedChatId || undefined, count:1, onProgress: publish, signal }), force, onProgress);
+  const saveAiChatInstructions = () => {
+    if (!contact || !aiChatInstructionsDirty) return;
+    updateContact(contact.id, { aiChatInstructions: aiChatInstructionsDraft || undefined });
+  };
 
   const showProgress = (key: string, request: number) => (result: GenerateSuggestionsResult) => {
     const entry = suggestionCache.get(key);
@@ -331,7 +383,6 @@ export function CrmAiPanel() {
     setFollowSchedulerOpen(false);
     setFollowNote("");
     setAiError("");
-    useAppStore.setState({ aiSuggestions: [] });
   }, [selectedChatId, selectedContactId]);
 
   const cancelAi = () => {
@@ -346,57 +397,6 @@ export function CrmAiPanel() {
     void generateContactConversationSummary(contact.id, selectedChatId || undefined);
   };
 
-  function startReportTemplateEdit(template?: AiReportTemplate) {
-    setReportTemplateDraft(template ? { ...template } : { id: "", name: "", body: "" });
-  }
-
-  function saveReportTemplate() {
-    if (!reportTemplateDraft?.name.trim() || !reportTemplateDraft.body.trim()) return;
-    const id = reportTemplateDraft.id || crypto.randomUUID();
-    const nextTemplate = { id, name: reportTemplateDraft.name.trim(), body: reportTemplateDraft.body.trim() };
-    const exists = reportTemplates.some(item => item.id === id);
-    if (!exists && reportTemplates.length >= 50) return;
-    updateSettings({ aiReportTemplates: exists
-      ? reportTemplates.map(item => item.id === id ? nextTemplate : item)
-      : [...reportTemplates, nextTemplate] });
-    setReportTemplateId(id);
-    setReportTemplateDraft(null);
-  }
-
-  async function deleteReportTemplate(template: AiReportTemplate) {
-    if (!await requestConfirm({ title: t("contact.aiReportDeleteTitle", { name: template.name }), description: t("contact.aiReportDeleteHint"),
-      confirmLabel: t("common.delete"), cancelLabel: t("common.cancel"), tone: "danger" })) return;
-    const next = reportTemplates.filter(item => item.id !== template.id);
-    updateSettings({ aiReportTemplates: next });
-    if (reportTemplateId === template.id) setReportTemplateId(next[0]?.id || "");
-    if (reportTemplateDraft?.id === template.id) setReportTemplateDraft({ id: "", name: "", body: "" });
-  }
-
-  async function generateReportNow() {
-    if (!contact || !selectedReportTemplate || reportBusy) return;
-    const contactId = contact.id, template = selectedReportTemplate, controller = new AbortController();
-    setReportBusy(true); setReportError(""); setReportProgress({ stage: "analyzing", completed: 0, total: 0 });
-    try {
-      const report = await generateContactReport(contactId, template, controller.signal, setReportProgress);
-      if (useAppStore.getState().selectedContactId === contactId) setReportText(report);
-    } catch (error) {
-      setReportError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setReportBusy(false); setReportProgress(null);
-    }
-  }
-
-  function saveReportNow() {
-    if (!contact || !reportText.trim()) return;
-    updateContact(contact.id, { aiReport: reportText, aiReportAt: new Date().toISOString() });
-  }
-
-  async function copyReportNow() {
-    if (!reportText.trim()) return;
-    try { await navigator.clipboard.writeText(reportText); pushToast(t("contact.aiReportCopied"), "success"); }
-    catch { pushToast(t("contact.aiReportCopyFailed"), "error"); }
-  }
-
   const refreshAi = async () => {
     if (!contact) return pushToast("\u8bf7\u5148\u9009\u62e9\u4f1a\u8bdd", "info");
     if (!aiReady) {
@@ -404,18 +404,29 @@ export function CrmAiPanel() {
       setAiSource("unconfigured");
       return;
     }
+    const key = watchPlan ? getSuggestionContextKey(contact, thread, settings, aiAccountId, {
+      chatId: selectedChatId || undefined, count: 1,
+    }) : suggestionKey;
+    if (key !== suggestionKey) {
+      suggestionCache.cancelPending(suggestionKey);
+      previousSuggestionKey.current = key;
+      latestSuggestionKey.current = key;
+      useAppStore.setState({ aiSuggestions: [] });
+      setPlanClock(Date.now());
+    }
     const request = ++generation.current;
-    const key = suggestionKey;
+    setSuggestionExpansion({key:expansionKey,open:true});
     setLoading(true);
     setAiError("");
     try {
-      const result = await requestSuggestions(key, true, showProgress(key, request));
+      const result = await suggestionCache.request(key,
+        (publish, signal) => generateSuggestions(contact, thread, settings, { accountId: aiAccountId, chatId: selectedChatId || undefined, count:1, onProgress: publish, signal }),
+        true, showProgress(key, request));
       if (request !== generation.current || latestSuggestionKey.current !== key) return;
       if (result.suggestions.length) visibleSuggestionExpiry.current = { key, expiresAt: suggestionCache.get(key)?.expiresAt || Date.now() + SUGGESTION_MAX_AGE_MS };
       useAppStore.setState({ aiSuggestions: result.suggestions });
       setAiSource(result.source);
       setAiError(result.error || "");
-      setSuggestionExpansion({key:expansionKey,open:true});
       pushToast(
         result.fallback ? result.error || "API \u4e0d\u53ef\u7528" : "\u5df2\u751f\u6210\u56de\u590d\u5efa\u8bae",
         result.fallback ? "error" : "success"
@@ -429,66 +440,6 @@ export function CrmAiPanel() {
     }
   };
 
-  useEffect(() => {
-    const request = ++generation.current;
-    const key = suggestionKey;
-    if(visibleSuggestionExpiry.current?.key!==key){useAppStore.setState({ aiSuggestions: [] });setAiError("");}
-    if (collapsed || panelTab !== "customer" || !contact || !aiReady || !suggestionsOpen || replyScope.mode==="auto") {
-      setLoading(false);
-      return () => { generation.current++; suggestionCache.cancelPending(key); };
-    }
-    const entry = suggestionCache.get(key);
-    const cached = entry?.result;
-    if (cached) {
-      useAppStore.setState({ aiSuggestions: cached.suggestions });
-      setAiSource(cached.source);
-      setAiError("");
-      setLoading(false);
-      return () => { generation.current++; suggestionCache.cancelPending(key); };
-    }
-    if(visibleSuggestionExpiry.current?.key===key&&!entry&&useAppStore.getState().aiSuggestions.length){setLoading(false);return()=>{generation.current++;suggestionCache.cancelPending(key);};}
-    if (isManualSuggestionContext(baseSuggestionKey)) {
-      setLoading(false);
-      return () => { generation.current++; suggestionCache.cancelPending(key); };
-    }
-    let cancelled = false;
-    setLoading(true);
-    setAiError("");
-    const timer = window.setTimeout(() => {
-      if (request !== generation.current || latestSuggestionKey.current !== key) return;
-      if (isManualSuggestionContext(baseSuggestionKey)) { setLoading(false); return; }
-      void requestSuggestions(key, false, showProgress(key, request))
-        .then((result) => {
-          if (cancelled || request !== generation.current || latestSuggestionKey.current !== key) return;
-          if (result.suggestions.length) visibleSuggestionExpiry.current = { key, expiresAt: suggestionCache.get(key)?.expiresAt || Date.now() + SUGGESTION_MAX_AGE_MS };
-          useAppStore.setState({ aiSuggestions: result.suggestions });
-          setAiSource(result.source);
-          setAiError(result.error || "");
-          setLoading(false);
-        })
-        .catch((error) => {
-          if (!cancelled && request === generation.current && latestSuggestionKey.current === key) {
-            setAiError(error instanceof Error ? error.message : t("crmPanel.suggestionError", { error: String(error) }));
-            setLoading(false);
-          }
-        });
-    }, suggestionCache.get(key) ? 0 : 500);
-    return () => {
-      cancelled = true;
-      generation.current++;
-      window.clearTimeout(timer);
-      suggestionCache.cancelPending(key);
-    };
-    // 已发出的消息也更新下一句建议；未发出的内容不改变上下文或重复请求。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    collapsed,
-    panelTab,
-    suggestionKey,
-    aiReady,
-    suggestionsOpen,
-    replyScope.mode,
-  ]);
 
   const refreshLabels = async () => {
     if (!labelAccountId) return;
@@ -595,7 +546,7 @@ export function CrmAiPanel() {
       </div>
 
       <div
-        className="grid grid-cols-3 gap-1 border-b border-zinc-800/90 p-1.5"
+        className="grid grid-cols-4 gap-1 border-b border-zinc-800/90 p-1.5"
         role="tablist"
         aria-label={t("crmPanel.title")}
       >
@@ -617,6 +568,7 @@ export function CrmAiPanel() {
           type="button"
           role="tab"
           aria-selected={panelTab === "quick-replies"}
+          title={t(composerQuickAccessTabs.includes("quick-replies") ? "composerShelf.hidePanel" : "composerShelf.showPanel", { panel: t("crmPanel.quickReplies") })}
           className={cn(
             "rounded-lg px-2 py-1.5 text-[11px] transition-colors",
             panelTab === "quick-replies"
@@ -624,13 +576,28 @@ export function CrmAiPanel() {
               : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300"
           )}
           onClick={() => setPanelTab("quick-replies")}
+          onContextMenu={event => openComposerTabMenu(event, "quick-replies")}
+          onKeyDown={event => {
+            if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+            event.preventDefault();
+            const rect = event.currentTarget.getBoundingClientRect();
+            setComposerTabMenu({ tab: "quick-replies", x: rect.left, y: rect.bottom });
+          }}
         >
           {t("crmPanel.quickReplies")}
         </button>
-        <button type="button" role="tab" aria-selected={panelTab === "images"} className={cn("rounded-lg px-2 py-1.5 text-[11px] transition-colors", panelTab === "images" ? "bg-zinc-800 text-brand" : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300")} onClick={() => setPanelTab("images")}>{t("gallery.title")}</button>
+        <button type="button" role="tab" aria-selected={panelTab === "images"} title={t(composerQuickAccessTabs.includes("images") ? "composerShelf.hidePanel" : "composerShelf.showPanel", { panel: t("quickMedia.title") })} className={cn("rounded-lg px-2 py-1.5 text-[11px] transition-colors", panelTab === "images" ? "bg-zinc-800 text-brand" : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300")} onClick={() => setPanelTab("images")} onContextMenu={event => openComposerTabMenu(event, "images")} onKeyDown={event => { if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return; event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); setComposerTabMenu({ tab: "images", x: rect.left, y: rect.bottom }); }}>{t("quickMedia.title")}</button>
+        <button type="button" role="tab" aria-selected={panelTab === "agent"} className={cn("rounded-lg px-2 py-1.5 text-[11px] transition-colors", panelTab === "agent" ? "bg-zinc-800 text-brand" : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300")} onClick={() => setPanelTab("agent")}>{t("crmPanel.agent")}</button>
       </div>
 
-      {panelTab === "images" ? <ImageLibraryPanel chatId={selectedChatId} contextKey={[selectedChatId, quickReplyAccountId, settings.sendChannel, quickReplyChat?.phoneId].join(":")} /> : panelTab === "customer" ? (
+      {panelTab === "images" ? <>
+        <div className="flex shrink-0 gap-1 border-b border-zinc-800 px-2 py-1" role="group" aria-label={t("quickMedia.title")}>
+          {(["images", "clips"] as const).map(tab => <button key={tab} type="button" aria-pressed={mediaLibraryTab === tab}
+            className={cn("rounded px-2 py-1 text-xs", mediaLibraryTab === tab ? "bg-zinc-800 text-brand" : "text-zinc-500 hover:text-zinc-200")}
+            onClick={() => setMediaLibraryTab(tab)}>{t(tab === "images" ? "quickMedia.image" : "quickMedia.audioVideo")}</button>)}
+        </div>
+        {mediaLibraryTab === "images" ? <ImageLibraryPanel chatId={selectedChatId} contextKey={[selectedChatId, quickReplyAccountId, settings.sendChannel, quickReplyChat?.phoneId].join(":")} /> : <QuickMediaManager />}
+      </> : panelTab === "agent" ? <AiLocalAgentPanel selectedChatId={selectedChatId} /> : panelTab === "customer" ? (
         <>
       <section className="min-h-0 flex-1 overflow-y-auto p-3">
         {!contact ? (
@@ -674,7 +641,7 @@ export function CrmAiPanel() {
                 </Button>
               </div>
               {contact.aiSummary?.trim()
-                ? <p className="max-h-36 overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-4 text-zinc-300">{contact.aiSummary}</p>
+                ? <p className="max-h-36 overflow-y-auto whitespace-pre-wrap break-words text-[11px] leading-4 text-zinc-300">{contact.aiSummary.replaceAll("客户", "对方")}</p>
                 : <p className="text-[11px] leading-4 text-zinc-600">{t("contact.aiSummaryAutoHint")}</p>}
               {summaryStatus?.state === "failed"&&<p role="alert" className="mt-1 text-[10px] text-rose-400">
                 {t(summaryStatus.error === "no_history" ? "contact.aiSummaryNoHistory" : "contact.aiSummaryFailed")}
@@ -684,65 +651,31 @@ export function CrmAiPanel() {
               </time>}
             </section>
             <section className="border-t border-zinc-800/80 pt-2.5">
-              <label className="block text-[11px] font-medium text-zinc-400">
-                {t("contact.aiChatInstructions")}
-                <textarea
-                  value={contact.aiChatInstructions ?? ""}
-                  onChange={(event) =>
-                    updateContact(contact.id, {
-                      aiChatInstructions: event.target.value || undefined,
-                    })
-                  }
-                  rows={3}
-                  maxLength={4000}
-                  placeholder={t("contact.aiChatInstructionsPlaceholder")}
-                  className="ui-control mt-1 w-full resize-y px-2.5 py-2 text-[11px] leading-4"
-                />
-              </label>
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="contact-ai-chat-instructions" className="text-[11px] font-medium text-zinc-400">
+                  {t("contact.aiChatInstructions")}
+                </label>
+                {aiChatInstructionsDirty && <Button variant="ghost" size="xs" className="!p-1.5" aria-label={t("dialog.save")} title={t("dialog.save")} onClick={saveAiChatInstructions}>
+                  <Check className="h-3.5 w-3.5" />
+                </Button>}
+              </div>
+              <textarea
+                id="contact-ai-chat-instructions"
+                value={aiChatInstructionsDraft}
+                onChange={(event) => setAiChatInstructionsDraft(event.target.value)}
+                rows={3}
+                maxLength={4000}
+                placeholder={t("contact.aiChatInstructionsPlaceholder")}
+                className="ui-control mt-1 w-full resize-y px-2.5 py-2 text-[11px] leading-4"
+              />
               <p className="mt-1 text-[10px] leading-4 text-zinc-600">
                 {t("contact.aiChatInstructionsHint")}
               </p>
             </section>
-            <section className="space-y-2 border-t border-zinc-800/80 pt-2.5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-[11px] font-medium text-zinc-400">{t("contact.aiReport")}</span>
-                <Button variant="ghost" size="xs" disabled={reportBusy} onClick={() => setReportTemplateDraft(current => current ? null : { id: "", name: "", body: "" })}>
-                  {t(reportTemplateDraft ? "contact.aiReportCloseTemplates" : reportTemplates.length ? "contact.aiReportManageTemplates" : "contact.aiReportNewTemplate")}
-                </Button>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <select aria-label={t("contact.aiReportTemplate")} className="ui-control min-w-0 flex-1 px-2 py-1.5 text-[11px]" value={reportTemplateId}
-                  onChange={event => setReportTemplateId(event.target.value)} disabled={!reportTemplates.length || reportBusy}>
-                  {!reportTemplates.length && <option value="">{t("contact.aiReportNoTemplates")}</option>}
-                  {reportTemplates.map(template => <option key={template.id} value={template.id}>{template.name}</option>)}
-                </select>
-                <Button variant="secondary" size="xs" disabled={!selectedReportTemplate || reportBusy} onClick={() => void generateReportNow()}>
-                  {reportBusy ? <><Loader2 className="h-3 w-3 animate-spin" />{t("contact.aiReportGenerating")}</> : t("contact.aiReportGenerate")}
-                </Button>
-              </div>
-              {reportBusy && reportProgress && <p role="status" className="text-[10px] text-zinc-500">
-                {reportProgress.stage === "analyzing"
-                  ? reportProgress.total ? t("contact.aiReportAnalyzing", { done: reportProgress.completed, total: reportProgress.total }) : t("contact.aiReportStarting")
-                  : reportProgress.stage === "compressing"
-                    ? t("contact.aiReportCompressing", { done: reportProgress.completed, total: reportProgress.total })
-                    : t("contact.aiReportWriting")}
-              </p>}
-              {reportError && <p role="alert" className="text-[10px] text-rose-400">
-                {reportError === "no_history" || reportError === "no_text_history" ? t("contact.aiReportNoHistory")
-                  : reportError === "ai_unconfigured" ? t("contact.aiReportNeedsAi")
-                    : reportError === "report_stale" ? t("contact.aiReportStale") : t("contact.aiReportFailed")}
-              </p>}
-              {reportText && <>
-                <textarea aria-label={t("contact.aiReportResult")} disabled={reportBusy} className="ui-control min-h-32 w-full resize-y whitespace-pre-wrap px-2.5 py-2 text-[11px] leading-4" rows={7}
-                  value={reportText} onChange={event => setReportText(event.target.value)} />
-                {contact.aiReportAt && <time className="block text-[10px] text-zinc-600" dateTime={contact.aiReportAt}>{t("contact.aiReportUpdated", { time: new Date(contact.aiReportAt).toLocaleString() })}</time>}
-                <div className="flex gap-2">
-                  <Button variant="secondary" size="xs" disabled={reportBusy || reportText === (contact.aiReport || "")} onClick={saveReportNow}>{t("contact.aiReportSave")}</Button>
-                  <Button variant="secondary" size="xs" onClick={() => void copyReportNow()}>{t("contact.aiReportCopy")}</Button>
-                </div>
-              </>}
-            </section>
-            {selectedChatId && <PlaybookBinding accountId={aiAccountId} chatId={selectedChatId}/>}
+            {selectedChatId && settings.aiProvider === "muse" && <PlaybookBinding accountId={aiAccountId} chatId={selectedChatId} />}
+            {selectedChatId && aiAccountId && promptPlansEnabled && <ChatPromptPlan
+              key={JSON.stringify([aiAccountId, selectedChatId])} accountId={aiAccountId} chatId={selectedChatId}
+              inherited={resolveChatPromptPlan(settings, aiAccountId, selectedChatId, true)} />}
 
             {activeOrder && contact.stage !== "won" && contact.stage !== "after_sales" && (
               <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-2.5">
@@ -1012,7 +945,6 @@ export function CrmAiPanel() {
                 </div>
               </div>
               <div className="flex min-h-[2rem] flex-wrap content-start gap-1">
-                <GoogleSheetPrimaryTag contact={contact} chatId={selectedChatId} />
                 {!tagsOpen && (contact.tags.length ? (
                   contact.tags.slice(0, 10).map((tag) => (
                     <span
@@ -1050,7 +982,6 @@ export function CrmAiPanel() {
           {aiReady?<Button variant="ghost" size="xs" className="shrink-0 gap-1 !px-1.5" aria-label={loading?t("crmPanel.generating"):aiSuggestions.length?t("crmPanel.regenerate"):t("crmPanel.generateReply")} disabled={loading} onClick={()=>void refreshAi()}>
             {!loading&&<RefreshCw className="h-3 w-3" />}{t(aiSuggestions.length?"crmPanel.regenerate":"crmPanel.generateReply")}
           </Button>:<Button variant="ghost" size="xs" onClick={()=>setSettingsOpen(true,"ai")}>{t("crmPanel.configureApi")}</Button>}
-          {contact&&selectedChatId&&<Button variant="ghost" size="xs" className="shrink-0 !px-1.5" title="整理聊天到 Google 表格" aria-label="整理聊天到 Google 表格" onClick={()=>setSheetExtractOpen(true)}><TableProperties className="h-3.5 w-3.5" /></Button>}
         </div>
         {suggestionsOpen&&<div id="crm-reply-suggestion" className="min-h-0 overflow-y-auto">
           {!aiReady?<p className="mt-1 text-[11px] text-zinc-500">{t("crmPanel.noAi")}</p>:<>
@@ -1112,6 +1043,10 @@ export function CrmAiPanel() {
             onTogglePin={toggleQuickReplyPin}
             onUsed={recordQuickReplyUsage}
             disabled={!quickReplyChat}
+            onSend={(reply, body) => {
+              if (!selectedChatId || useAppStore.getState().selectedChatId !== selectedChatId) return false;
+              return requestQuickReplySend(selectedChatId, reply, body);
+            }}
             onInsert={reply => {
               if (!selectedChatId || useAppStore.getState().selectedChatId !== selectedChatId) return false;
               if (reply.media) {
@@ -1124,55 +1059,9 @@ export function CrmAiPanel() {
           />
         </section>
       )}
-      {sheetExtractOpen&&contact&&<AiSheetExtractDialog contact={contact} messages={thread} accountId={aiAccountId} settings={settings} onClose={()=>setSheetExtractOpen(false)} onWritten={()=>pushToast("已写入 Google 表格","success")} />}
-      {reportTemplateDraft && createPortal(
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm" onPointerDown={() => setReportTemplateDraft(null)}>
-          <section role="dialog" aria-modal="true" aria-label={t("contact.aiReportTemplates")}
-            className="flex max-h-[90dvh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 text-zinc-100 shadow-2xl"
-            onPointerDown={event => event.stopPropagation()}
-            onKeyDown={event => {
-              if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setReportTemplateDraft(null); }
-              if (event.key !== "Tab") return;
-              const controls = [...event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),textarea:not(:disabled)')].filter(item => item.getClientRects().length);
-              const first = controls[0], last = controls.at(-1);
-              if (!event.currentTarget.contains(document.activeElement) || (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
-                event.preventDefault(); (event.shiftKey ? last : first)?.focus();
-              }
-            }}>
-            <header className="flex shrink-0 items-start justify-between gap-3 border-b border-zinc-800 px-5 py-4">
-              <div><h2 className="text-base font-semibold">{t("contact.aiReportTemplates")}</h2><p className="mt-1 text-xs text-zinc-500">{t("contact.aiReportTemplateHint")}</p></div>
-              <button type="button" aria-label={t("common.close")} onClick={() => setReportTemplateDraft(null)} className="rounded-md p-1 text-zinc-400 hover:bg-zinc-800"><X className="h-4 w-4" /></button>
-            </header>
-            <div className="grid min-h-0 gap-4 overflow-y-auto p-5 md:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2"><span className="text-xs font-medium text-zinc-300">{t("contact.aiReportTemplates")}</span>
-                  <Button variant="secondary" size="xs" disabled={reportTemplates.length >= 50} onClick={() => startReportTemplateEdit()}>{t("contact.aiReportNewTemplate")}</Button></div>
-                {reportTemplates.map(template => <div key={template.id} className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 ${reportTemplateDraft.id === template.id ? "border-brand/40 bg-brand/10" : "border-zinc-800"}`}>
-                  <span className="min-w-0 flex-1 truncate text-xs">{template.name}</span>
-                  <Button variant="ghost" size="xs" onClick={() => startReportTemplateEdit(template)}>{t("contact.aiReportEditTemplate")}</Button>
-                  <Button variant="ghost" size="xs" onClick={() => void deleteReportTemplate(template)}>{t("common.delete")}</Button>
-                </div>)}
-                {!reportTemplates.length && <p className="rounded-lg border border-dashed border-zinc-700 p-3 text-xs text-zinc-500">{t("contact.aiReportNoTemplates")}</p>}
-              </div>
-              <div className="space-y-3 md:border-l md:border-zinc-800 md:pl-4">
-                <label className="block text-xs text-zinc-400">{t("contact.aiReportTemplateName")}
-                  <input autoFocus className="ui-control mt-1 w-full px-3 py-2 text-sm" maxLength={120} value={reportTemplateDraft.name}
-                    onChange={event => setReportTemplateDraft(current => current && { ...current, name: event.target.value })} />
-                </label>
-                <label className="block text-xs text-zinc-400">{t("contact.aiReportTemplateBody")}
-                  <textarea className="ui-control mt-1 min-h-48 w-full resize-y px-3 py-2 text-sm leading-5" rows={8} maxLength={12000}
-                    placeholder={t("contact.aiReportTemplatePlaceholder")} value={reportTemplateDraft.body}
-                    onChange={event => setReportTemplateDraft(current => current && { ...current, body: event.target.value })} />
-                </label>
-                <div className="flex justify-end gap-2">
-                  <Button variant="secondary" onClick={() => setReportTemplateDraft(null)}>{t("common.cancel")}</Button>
-                  <Button variant="primary" disabled={!reportTemplateDraft.name.trim() || !reportTemplateDraft.body.trim() || reportTemplateDraft.body.length > 12000 || (!reportTemplateDraft.id && reportTemplates.length >= 50)} onClick={saveReportTemplate}>{t("contact.aiReportTemplateSave")}</Button>
-                </div>
-              </div>
-            </div>
-          </section>
-        </div>, document.body
-      )}
+      {composerTabMenu && createPortal(<div ref={composerTabMenuRef} role="menu" aria-label={t("composerShelf.menuLabel")} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); }} className="fixed z-50 w-64 rounded-lg border border-zinc-700 bg-zinc-900 p-1.5 text-xs shadow-xl" style={{ left: Math.max(4, Math.min(composerTabMenu.x, (window.innerWidth || 320) - 260)), top: Math.max(4, Math.min(composerTabMenu.y, (window.innerHeight || 768) - 64)) }}>
+        <button type="button" role="menuitem" className="w-full rounded px-2.5 py-2 text-left text-zinc-200 hover:bg-zinc-800" onClick={() => toggleComposerQuickAccessTab(composerTabMenu.tab)}>{t(composerQuickAccessTabs.includes(composerTabMenu.tab) ? "composerShelf.hidePanel" : "composerShelf.showPanel", { panel: t(composerTabMenu.tab === "quick-replies" ? "crmPanel.quickReplies" : "quickMedia.title") })}</button>
+      </div>, document.body)}
     </aside>
   );
 }

@@ -5,6 +5,7 @@ import { loadGroupMembers } from "./loadGroupMembers";
 
 type UseGroupMembersOptions = {
   selectedChatId: string | null;
+  latestMembershipEventId?: string;
   selectedContactId: string | null;
   isBaileys: boolean;
   liveBaileysAccountId: string | null | undefined;
@@ -26,10 +27,13 @@ export function useGroupMembers(opts: UseGroupMembersOptions) {
   );
 
   useEffect(() => {
-    let cancelled = false;
     setGroupMembers([]);
     setGroupMemberDetails([]);
     opts.onChatChange?.();
+  }, [opts.selectedChatId, opts.selectedContactId, opts.isBaileys, opts.liveBaileysAccountId, opts.activeAccountId]);
+
+  useEffect(() => {
+    let cancelled = false;
     void loadGroupMembers({
       contacts: useAppStore.getState().contacts,
       chats: useAppStore.getState().chats,
@@ -51,6 +55,7 @@ export function useGroupMembers(opts: UseGroupMembersOptions) {
     opts.isBaileys,
     opts.liveBaileysAccountId,
     opts.activeAccountId,
+    opts.latestMembershipEventId,
   ]);
 
   return { groupMembers, groupMemberDetails };

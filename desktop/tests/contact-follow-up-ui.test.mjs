@@ -23,7 +23,8 @@ const mocks = {
   '@/components/ui/Avatar': 'export const Avatar = () => null;',
   '@/components/crm/ActivityTimeline': 'export const ActivityTimeline = () => null;',
   '@/components/crm/ContactTagsNotesEditor': 'export const ContactTagsNotesEditor = () => null;',
-  '@/components/chat/speakMessage': 'export const SPEECH_LANG_OPTIONS = [];',
+  '@/components/chat/speakMessage': 'export const speechLanguageOptions = () => [];',
+  '@/lib/useSystemVoices': 'export const useSystemVoices = () => [];',
   'lucide-react': 'export const CalendarPlus = () => null; export const MessageSquare = () => null; export const CalendarClock = () => null; export const X = () => null;',
 };
 const built = await build({

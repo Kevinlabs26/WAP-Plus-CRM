@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createMuseChatRedactor, museChatMessages} from '../src/lib/museChatPrivacy.ts';
+import {
+  createMuseChatRedactor,
+  museChatMessages,
+  musePrivacyGateError,
+  museTrainingDisabledConfirmed,
+  setMusePrivacySettingsProvider,
+} from '../src/lib/museChatPrivacy.ts';
 
 test('chat text hides known identities, contact links, email and formatted phones, while retaining dates and short quantities',()=>{
   const redact=createMuseChatRedactor([{name:'Élodie Dupont',phone:'+33612345678'},{label:'1: Alexandre',userName:'Alex',phoneE164:'+12025550101'}]);
@@ -37,4 +43,15 @@ test('large directories reuse rules and invalidate on identity changes',()=>{
  identities[0].name='New Private Identity';
  const next=createMuseChatRedactor(identities);assert.notEqual(next,first);
  assert.equal(next('New Private Identity'),'[person omitted]');
+});
+
+test('muse privacy gate reports missing provider vs unconfirmed account id clearly',()=>{
+  const registryKey = Symbol.for('wapPlusCrm.museChatPrivacyProviders');
+  delete globalThis[registryKey];
+  assert.equal(museTrainingDisabledConfirmed('primary'), false);
+  assert.match(musePrivacyGateError('primary').message, /本机隐私状态未初始化/);
+  setMusePrivacySettingsProvider(() => ({ primary: { trainingDisabledConfirmedAt: 1700000000000 } }));
+  assert.equal(museTrainingDisabledConfirmed('primary'), true);
+  assert.equal(museTrainingDisabledConfirmed('secondary'), false);
+  assert.match(musePrivacyGateError('secondary').message, /账号 ID：secondary/);
 });

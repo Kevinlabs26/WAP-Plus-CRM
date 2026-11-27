@@ -1,5 +1,6 @@
 export type QuickReplyMediaSelection = {
   dataUrl: string;
+  file?: File;
   fileName: string;
   mimeType: string;
   kind: "image" | "audio" | "video" | "file";
@@ -28,6 +29,7 @@ export function emitQuickReplyMedia(selection: QuickReplyMediaSelection) {
 }
 
 export function quickReplyMediaToFile(selection: QuickReplyMediaSelection): File | null {
+  if (selection.file) return selection.file;
   const match = /^data:([^;,]+)?(?:;[^,]*)?,(.*)$/s.exec(selection.dataUrl || "");
   if (!match) return null;
   try {

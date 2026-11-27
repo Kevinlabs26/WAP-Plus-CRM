@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import { createBaileysRequestHandler } from '../baileys-bridge/httpServer.mjs';
+import { BAILEYS_BRIDGE_PROTOCOL_VERSION } from '../baileys-bridge/protocol.mjs';
 
 // Fictional phone fixtures: NANPA reserves 555-0100–0199, https://www.nanpa.com/numbering/555-line-numbers.
 
@@ -16,8 +17,9 @@ const mocks = {
 const built = await build({
   stdin: { contents: `export * from './src/lib/baileysCore.ts';
     export { baileysRestart, baileysLogout } from './src/lib/baileysChatActions.ts';
+    export { baileysPairingCode } from './src/lib/baileys.ts';
     export { resolveAccountIdentity, reconcileAccountLogin } from './src/lib/accountIdentity.ts';
-    export { ensureAccounts } from './src/lib/accounts.ts';
+    export { ensureAccounts, healSingleSessionOwnership, applyChatAccountReplacements } from './src/lib/accounts.ts';
     export { applyMessagesSync } from './src/store/messagesIngest.ts';
     export { buildPersonThreadRows } from './src/lib/personThreads.ts';
     export { collapseAllAccountFolderChats } from './src/components/layout/folderChatDisplay.ts';
@@ -111,6 +113,22 @@ test('duplicate logins and partially swapped slots cannot keep swapping ownershi
   assert.throws(()=>mod.reconcileAccountLogin([...accounts,{id:'wa-empty'}],'wa-empty',b,bothB),/已有历史账号/);
 });
 
+test('orphan chat ownership repair carries matching messages and preserves other account history', () => {
+  const healed = mod.healSingleSessionOwnership({
+    contacts: [], chats: [{id:'orphan', accountId:'wa-removed', phoneId:'wa-removed'}, {id:'current', accountId:'wa-live'}],
+    folders: [], accounts: [{id:'wa-live'}], liveAccountId:'wa-live', activeAccountId:'wa-live',
+  });
+  assert.deepEqual(healed.chatAccountReplacements, [{chatId:'orphan', fromAccountId:'wa-removed', toAccountId:'wa-live'}]);
+  const messages = mod.applyChatAccountReplacements([
+    {id:'old', chatId:'orphan', accountId:'wa-removed'},
+    {id:'legacy', chatId:'orphan'},
+    {id:'foreign', chatId:'orphan', accountId:'wa-other'},
+  ], healed.chatAccountReplacements);
+  assert.equal(messages[0].accountId, 'wa-live');
+  assert.equal(messages[1].accountId, 'wa-live');
+  assert.equal(messages[2].accountId, 'wa-other');
+});
+
 test('changing a session during a read drops the old response', async () => {
   const started=deferred(),response=deferred(); let session='wa-left';
   mod.setBaileysSessionResolver(()=>({sessionAccountId:session,phoneE164:'+12025550101'}));
@@ -163,6 +181,40 @@ test('new QR resets the selected process and never asks the old process to reuse
   globalThis.fetch = async () => { throw new Error('old process must not be called'); };
   await mod.baileysRestart(true, 'wa-reset-test');
   assert.deepEqual(calls, [['baileys_reset_account', {accountId: 'wa-reset-test'}]]);
+});
+test('phone pairing restarts only the logged-out slot after validating the number', async () => {
+  const calls = [];
+  let runtime = 0;
+  globalThis.sessionTestInvoke = async (command, { accountId }) => {
+    calls.push([command, accountId]);
+    if (command === 'baileys_runtime') {
+      return { accountId, token: 'test-token', baseUrl: `http://127.0.0.1:${++runtime}` };
+    }
+  };
+  globalThis.fetch = async (url, init) => {
+    const { pathname, port } = new URL(url);
+    calls.push([pathname, port]);
+    if (pathname === '/status') {
+      return Response.json({
+        connection: port === '1' ? 'logged_out' : 'starting',
+        signedIn: false,
+        protocolVersion: BAILEYS_BRIDGE_PROTOCOL_VERSION,
+      });
+    }
+    assert.equal(init.headers['X-Wap-Account-Id'], port === '2' ? 'wa-pair-logout' : 'wa-pair-starting');
+    assert.deepEqual(JSON.parse(init.body), { phoneNumber: '12025550101' });
+    return Response.json({ ok: true, code: '12345678' });
+  };
+  await assert.rejects(mod.baileysPairingCode('invalid', 'wa-pair-logout'), /手机号/);
+  assert.deepEqual(calls, []);
+  assert.equal((await mod.baileysPairingCode('+1 (202) 555-0101', 'wa-pair-logout')).code, '12345678');
+  await mod.baileysPairingCode('+12025550101', 'wa-pair-starting');
+  assert.deepEqual(calls, [
+    ['baileys_runtime', 'wa-pair-logout'], ['/status', '1'],
+    ['baileys_reset_account', 'wa-pair-logout'],
+    ['baileys_runtime', 'wa-pair-logout'], ['/pairing-code', '2'],
+    ['baileys_runtime', 'wa-pair-starting'], ['/status', '3'], ['/pairing-code', '3'],
+  ]);
 });
 test('reads wait for reset, while responses already in flight are discarded', async () => {
   const oldResponse = deferred(), fetchStarted = deferred(), resetting = deferred();
@@ -230,4 +282,17 @@ test('the bridge blocks sync and send if the session has the wrong number or no 
       {setHeader(){},writeHead(v){status=v;},end(v){body=JSON.parse(v);}});
     assert.equal(status,409); assert.match(body.error,/号码不一致/);
   }
+});
+
+test('merged account rows follow the latest actual message even when cached previews disagree', () => {
+  const bothActive = chats.slice(0, 2).map(chat => ({ ...chat, hasMessageHistory: true }));
+  const contactsById = new Map(contacts.map(contact => [contact.id, contact]));
+  const activity = new Map([
+    ['chat-a', '2026-10-20T21:26:00Z'],
+    ['chat-b', '2026-10-19T08:04:00Z'],
+  ]);
+  const [row] = mod.collapseAllAccountFolderChats(bothActive, contactsById, activity);
+  assert.equal(row.chat.id, 'chat-a');
+  assert.equal(row.accountCount, 2);
+  assert.deepEqual(row.memberChatIds, ['chat-a', 'chat-b']);
 });

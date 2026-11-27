@@ -46,3 +46,40 @@ test("formatParticipantUpdateBody", () => {
   assert.match(body, /Alice/);
   assert.match(body, /加入/);
 });
+
+test("membership previews never display an unknown LID as a phone number", () => {
+  const body = formatParticipantUpdateBody({
+    action: "add",
+    participants: ["123456789001@lid"],
+    author: "12025550123@s.whatsapp.net",
+  });
+  assert.doesNotMatch(body, /123456789001/);
+  assert.match(body, /\+12025550123/);
+});
+
+test("removed members use the event phone, cached identity or stored LID mapping", async () => {
+  const { attachGroupParticipantEvents } = await import("../baileys-bridge/groupEvents.mjs");
+  const { EventEmitter } = await import("node:events");
+  const ev = new EventEmitter();
+  const sync = new Promise((resolve) => {
+    attachGroupParticipantEvents({ ev, groupMetadata: async () => undefined }, {
+      contacts: new Map(),
+      messages: new Map(),
+      upsertContact: () => null,
+      getCachedParticipants: () => [{ id: "2@lid", phoneNumber: "12025550102@s.whatsapp.net" }],
+      resolvePnJid: async (jid) => jid === "3@lid" ? "12025550103@s.whatsapp.net" : "",
+      push: (_event, payload) => resolve(payload.items[0]),
+    });
+  });
+  ev.emit("group-participants.update", {
+    id: "120363@g.us",
+    action: "remove",
+    participants: [{ id: "1@lid", phoneNumber: "12025550101@s.whatsapp.net" }, "2@lid", "3@lid", "4@lid"],
+    author: "5@lid",
+    authorPn: "12025550105@s.whatsapp.net",
+  });
+  const message = await sync;
+  assert.deepEqual(message.systemParticipants, ["12025550101@s.whatsapp.net", "12025550102@s.whatsapp.net", "12025550103@s.whatsapp.net", "4@lid"]);
+  assert.equal(message.systemAuthor, "12025550105@s.whatsapp.net");
+  assert.match(message.body, /\+12025550101/);
+});

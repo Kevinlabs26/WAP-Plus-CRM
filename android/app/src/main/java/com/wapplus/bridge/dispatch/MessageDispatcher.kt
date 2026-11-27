@@ -1,6 +1,7 @@
 package com.wapplus.bridge.dispatch
 
 import android.content.ClipData
+import android.app.KeyguardManager
 import android.content.ContentProviderOperation
 import android.content.Context
 import android.content.Intent
@@ -13,6 +14,7 @@ import android.util.Log
 import android.util.Base64
 import androidx.core.content.FileProvider
 import androidx.core.content.ContextCompat
+import com.wapplus.bridge.BridgeApp
 import com.wapplus.bridge.a11y.WaAssistService
 import com.wapplus.bridge.overlay.CustomerCardOverlay
 import org.json.JSONArray
@@ -29,7 +31,6 @@ import java.io.File
  *
  * 组合命令：
  * - wa.open_chat
- * - wa.type_text / wa.send
  * - wa.open_and_send { phoneE164, text } 一键打开并发送
  */
 class MessageDispatcher(
@@ -38,14 +39,17 @@ class MessageDispatcher(
 ) {
     private val main = Handler(Looper.getMainLooper())
 
-    fun handle(raw: String, reply: (String) -> Unit) {
+    fun handle(raw: String, isConnected: () -> Boolean, reply: (String) -> Unit) {
+        if (!isConnected()) return
         try {
             val root = JSONObject(raw)
             val id = root.optString("id")
             val type = root.optString("type")
             val payload = root.optJSONObject("payload") ?: JSONObject()
-            Log.i(TAG, "dispatch type=$type")
-
+            val requestedDevice = root.optString("deviceId")
+            if (!root.isNull("deviceId") && requestedDevice != BridgeApp.deviceId(context)) {
+                return reply(error(id, "device_mismatch", "所选手机与实际连接的手机不匹配"))
+            }
             when (type) {
                 "contacts.save" -> {
                     val name = payload.optString("name").trim()
@@ -78,6 +82,7 @@ class MessageDispatcher(
                     var okCount = 0
                     var failedCount = 0
                     for (index in 0 until items.length()) {
+                        if (!isConnected()) return
                         val item = items.optJSONObject(index) ?: JSONObject()
                         val name = item.optString("name").trim()
                         val phone = item.optString("phoneE164").trim()
@@ -108,57 +113,48 @@ class MessageDispatcher(
                 }
                 "wa.open_chat" -> {
                     val phone = payload.optString("phoneE164")
-                    if (phone.isBlank()) return reply(error(id, "invalid_payload", "手机号为空"))
+                    if (!phone.matches(INTERNATIONAL_PHONE)) return reply(error(id, "invalid_payload", "需要完整国际手机号"))
                     val svc = requireA11y(id, reply) ?: return
                     main.post {
-                        if (svc.openChat(phone)) reply(ack(id))
+                        if (!isConnected()) return@post
+                        if (phoneLocked()) reply(error(id, "phone_locked", "请先解锁手机"))
+                        else if (svc.whatsappBusy) reply(error(id, "whatsapp_busy", "手机正在操作 WhatsApp"))
+                        else if (svc.openChat(phone)) reply(ack(id))
                         else reply(error(id, "whatsapp_not_installed", "WhatsApp 未安装或手机号无效"))
                     }
                 }
                 "wa.type_text" -> {
-                    val text = payload.optString("text")
-                    if (text.isBlank()) return reply(error(id, "invalid_payload", "消息为空"))
-                    val svc = requireA11y(id, reply) ?: return
-                    main.post {
-                        svc.typeText(text) { ok, message ->
-                            reply(if (ok) ack(id) else error(id, "ui_element_not_found", message ?: "输入失败"))
-                        }
-                    }
+                    reply(error(id, "unsupported_message_type", "请通过已核验号码的文本发送命令操作"))
                 }
                 "wa.send" -> {
-                    val text = payload.optString("text")
-                    val svc = requireA11y(id, reply) ?: return
-                    val send = {
-                        svc.clickSend { ok, message ->
-                            reply(if (ok) ack(id, status = "clicked") else error(id, "ui_element_not_found", message ?: "发送失败"))
-                        }
-                    }
-                    main.post {
-                        if (text.isBlank()) send()
-                        else svc.typeText(text) { ok, message ->
-                            if (ok) send()
-                            else reply(error(id, "ui_element_not_found", message ?: "输入失败"))
-                        }
-                    }
+                    reply(error(id, "unsupported_message_type", "请通过已核验号码的文本发送命令操作"))
                 }
                 "wa.open_and_send" -> {
+                    val deviceId = BridgeApp.deviceId(context)
+                    if (id.isBlank() || deviceId == "android-bridge" || requestedDevice != deviceId) {
+                        return reply(error(id, "device_mismatch", "连接的手机与发送任务不匹配，请更新两端并核对手机"))
+                    }
                     val phone = payload.optString("phoneE164")
                     val text = payload.optString("text")
-                    if (phone.isBlank() || text.isBlank()) {
-                        reply(error(id, "invalid_payload", "手机号或消息为空"))
+                    if (!phone.matches(INTERNATIONAL_PHONE) || text.isBlank()) {
+                        reply(error(id, "invalid_payload", "需要完整国际手机号及非空消息"))
                         return
                     }
                     val svc = requireA11y(id, reply) ?: return
                     main.post {
-                        svc.openChatAndType(phone, text, send = true) { ok, message ->
-                            reply(if (ok) ack(id, status = "clicked") else error(id, "ui_element_not_found", message ?: "发送失败"))
+                        if (svc !== WaAssistService.instance) {
+                            reply(error(id, "accessibility_disabled", "Accessibility 未开启"))
+                        } else if (isConnected()) svc.openChatAndType(phone, text, payload.optBoolean("confirmSent"), isConnected) { code, message, confirmed ->
+                            reply(if (confirmed) ack(id, status = "phone_sent")
+                            else if (code == null) ack(id, status = "clicked") else error(id, code, checkNotNull(message)))
                         }
                     }
                 }
                 "wa.sync_conversations" -> {
                     val svc = requireA11y(id, reply) ?: return
                     main.post {
-                        svc.syncConversations { ok, message, items ->
+                        if (!isConnected()) return@post
+                        svc.syncConversations(isConnected) { ok, message, items ->
                             reply(if (ok) ack(id, items) else error(id, "ui_element_not_found", message ?: "同步失败"))
                         }
                     }
@@ -169,7 +165,8 @@ class MessageDispatcher(
                         reply(error(id, "invalid_payload", "缺少消息 ID"))
                         return
                     }
-                    WaAssistService.prepareMediaShare(
+                    requireA11y(id, reply) ?: return
+                    val prepared = WaAssistService.prepareMediaShare(
                         messageId = messageId,
                         jid = payload.optString("jid"),
                         phoneE164 = payload.optString("phoneE164"),
@@ -177,15 +174,29 @@ class MessageDispatcher(
                         body = payload.optString("body"),
                         sentAt = payload.optLong("sentAt", System.currentTimeMillis()),
                     )
-                    reply(ack(id, status = "ready"))
+                    if (prepared) reply(ack(id, status = "ready"))
+                    else reply(error(id, "media_share_busy", "请先完成手机上待分享的语音，或等待该请求过期"))
                 }
                 "wa.send_media" -> {
+                    if (!payload.optString("phoneE164").matches(INTERNATIONAL_PHONE)) {
+                        return reply(error(id, "invalid_payload", "需要完整国际手机号"))
+                    }
+                    val svc = requireA11y(id, reply) ?: return
+                    if (phoneLocked()) return reply(error(id, "phone_locked", "请先解锁手机"))
                     val file = runCatching { prepareMedia(payload) }.getOrElse {
                         reply(error(id, "invalid_payload", it.message ?: "媒体文件无效"))
                         return
                     }
                     main.post {
-                        runCatching { openMediaShare(file, payload) }
+                        if (!isConnected()) return@post
+                        if (svc !== WaAssistService.instance) {
+                            return@post reply(error(id, "accessibility_disabled", "Accessibility 未开启"))
+                        }
+                        if (phoneLocked()) return@post reply(error(id, "phone_locked", "请先解锁手机"))
+                        if (svc.whatsappBusy) {
+                            return@post reply(error(id, "whatsapp_busy", "手机正在操作 WhatsApp"))
+                        }
+                        runCatching { openMediaShare(svc, file, payload) }
                             .onSuccess { reply(ack(id, status = "opened")) }
                             .onFailure {
                                 val code = if ((it.message ?: "").contains("WhatsApp"))
@@ -199,7 +210,8 @@ class MessageDispatcher(
                     if (query.isBlank()) return reply(error(id, "invalid_payload", "搜索名称为空"))
                     val svc = requireA11y(id, reply) ?: return
                     main.post {
-                        svc.searchContact(query) { ok, message, items, opened ->
+                        if (!isConnected()) return@post
+                        svc.searchContact(query, isConnected) { ok, message, items, opened ->
                             if (ok) reply(ack(id, items, if (opened) "opened" else "sent", opened))
                             else {
                                 val code = if (message?.startsWith("未找到完整名称") == true)
@@ -215,6 +227,7 @@ class MessageDispatcher(
                     if (!Settings.canDrawOverlays(context))
                         return reply(error(id, "overlay_permission_denied", "请开启悬浮窗权限"))
                     main.post {
+                        if (!isConnected()) return@post
                         runCatching {
                             requireNotNull(overlay).show(
                                 CustomerCardOverlay.Card(
@@ -230,6 +243,7 @@ class MessageDispatcher(
                     }
                 }
                 "overlay.hide" -> main.post {
+                    if (!isConnected()) return@post
                     overlay?.hide()
                     reply(ack(id))
                 }
@@ -238,8 +252,9 @@ class MessageDispatcher(
                 else -> reply(error(id, "unsupported_message_type", "不支持的消息类型：$type"))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "bad envelope", e)
-            reply(error("", "invalid_payload", e.message ?: "JSON envelope 无效"))
+            // Parser exceptions can include the original envelope.
+            Log.w(TAG, "Rejected bridge envelope: ${e.javaClass.simpleName}")
+            reply(error("", "invalid_payload", "JSON envelope 无效"))
         }
     }
 
@@ -278,6 +293,9 @@ class MessageDispatcher(
             null
         }
 
+    private fun phoneLocked(): Boolean = context.getSystemService(KeyguardManager::class.java).isKeyguardLocked
+
+    @Synchronized
     private fun saveContact(name: String, rawPhone: String): Boolean {
         val phone = "+" + rawPhone.filter(Char::isDigit)
         val lookupUri = android.net.Uri.withAppendedPath(
@@ -327,19 +345,25 @@ class MessageDispatcher(
             require(comma > 0 && dataUrl.substring(0, comma).contains(";base64")) {
                 "dataUrl 必须是 base64"
             }
-            // ponytail: base64 行协议限 14MB；需要大文件时改为分块流。
+            // shortcut: 单行协议限 14 MiB 原始数据，支持大文件时改为分块传输。
             val bytes = Base64.decode(dataUrl.substring(comma + 1), Base64.DEFAULT)
-            require(bytes.isNotEmpty() && bytes.size <= 14 * 1024 * 1024) { "文件为空或超过 14MB" }
-            return File(dir, safeName).apply { writeBytes(bytes) }
+            require(bytes.isNotEmpty() && bytes.size <= 14 * 1024 * 1024) { "文件为空或超过 14 MiB" }
+            val expiredBefore = System.currentTimeMillis() - java.util.concurrent.TimeUnit.DAYS.toMillis(1)
+            dir.listFiles { entry -> entry.isDirectory && entry.name.startsWith("out-") && entry.lastModified() < expiredBefore }
+                ?.forEach { it.deleteRecursively() }
+            val cache = java.nio.file.Files.createTempDirectory(dir.toPath(), "out-").toFile()
+            val name = safeName.takeUnless { it.isBlank() || it == "." || it == ".." } ?: "media"
+            return File(cache, name).apply { writeBytes(bytes) }
         }
         val local = File(payload.optString("localPath")).canonicalFile
-        require(local.path.startsWith(dir.canonicalPath + File.separator) && local.isFile) {
+        require(local.path.startsWith(dir.canonicalPath + File.separator) && local.isFile &&
+            local.length() in 1L..(14 * 1024 * 1024L)) {
             "手机缓存文件不存在"
         }
         return local
     }
 
-    private fun openMediaShare(file: File, payload: JSONObject) {
+    private fun openMediaShare(service: WaAssistService, file: File, payload: JSONObject) {
         val pkg = listOf("com.whatsapp.w4b", "com.whatsapp")
             .firstOrNull { context.packageManager.getLaunchIntentForPackage(it) != null }
             ?: throw IllegalStateException("WhatsApp 未安装")
@@ -355,7 +379,7 @@ class MessageDispatcher(
             clipData = ClipData.newRawUri("media", uri)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        context.startActivity(intent)
+        service.startActivity(intent)
     }
 
     private fun jsonArrayToList(arr: org.json.JSONArray?): List<String> {
@@ -366,6 +390,7 @@ class MessageDispatcher(
     }
 
     companion object {
+        private val INTERNATIONAL_PHONE = Regex("^\\+?[1-9][0-9]{6,14}$")
         private const val TAG = "MsgDispatch"
     }
 }

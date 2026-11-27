@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {build} from 'esbuild';
 import {fileURLToPath} from 'node:url';
 import {createContactActions} from '../src/store/contactActions.ts';
@@ -8,7 +9,7 @@ const mocks={
  react:'export const useState=i=>globalThis.contactHooks.state(i);export const useRef=i=>globalThis.contactHooks.ref(i);export const useEffect=()=>{};export const useMemo=f=>f();',
  'react/jsx-runtime':'export const Fragment="fragment";export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
  'react-virtuoso':'export const Virtuoso="list";',
- 'lucide-react':'export const Download="download",FilePlus2="import",Plus="add",Trash2="delete",MessageSquare="chat";',
+ 'lucide-react':'export const Download="download",FilePlus2="import",GitMerge="merge",Maximize2="expand",Plus="add",ShieldCheck="shield",Trash2="delete",MessageSquare="chat",X="close";',
  '@/store/appStore':'export const useAppStore=selector=>selector(globalThis.contactState);useAppStore.getState=()=>globalThis.contactState;export const flushPersist=async()=>globalThis.contactCalls.push(["flush"]);',
  '@/components/ui/primitives':'export const Button="button",Input="input";',
  '@/components/settings/ContactImportModal':'export const ContactImportModal="import-modal";',
@@ -70,4 +71,28 @@ test('WhatsApp batch results retain exactly the confirmed successful numbers acr
  const contacts=Array.from({length:501},(_,i)=>({name:'N'+i,phoneE164:'+1202555'+String(i).padStart(4,'0')}));
  const result=await saveBatch('b',contacts);assert.deepEqual(calls.map(call=>[call.account,call.count]),[['b',500],['b',1]]);
  assert.equal(result.saved,2);assert.equal(result.failed,499);assert.deepEqual(result.savedPhones,[contacts[0].phoneE164,contacts[500].phoneE164]);
+});
+
+test('contact management list fills available vertical flex space when populated and omits Virtuoso when empty',()=>{
+ const h=fixture();
+ const populated=h.render();
+ const rootClasses=populated[0].props.className.split(/\s+/);
+ assert.ok(rootClasses.includes('min-h-0'));
+ assert.ok(rootClasses.includes('flex-[1_1_0px]'));
+ const list=populated.find(node=>node.type==='list');
+ assert.ok(list);
+ const listClasses=list.props.className.split(/\s+/);
+ assert.ok(listClasses.includes('min-h-0'));
+ assert.ok(listClasses.includes('flex-[1_1_0px]'));
+ h.props.contacts=[];
+ const empty=h.render();
+ assert.equal(empty.find(node=>node.type==='list'),undefined);
+ assert.ok(empty.some(node=>node.type==='p'&&text(node)==='sidebar.noContacts'));
+});
+
+test('inactive chats sidebar tab hides via className and global CSS protects [hidden] from .flex override',()=>{
+ const sidebarSource=readFileSync(new URL('../src/components/layout/PhoneSidebar.tsx',import.meta.url),'utf8');
+ assert.match(sidebarSource,/className=\{listTab === "chats" \? "flex min-h-0 flex-1 flex-col" : "hidden"\}\s+hidden=\{listTab !== "chats"\}/);
+ const stylesSource=readFileSync(new URL('../src/styles.css',import.meta.url),'utf8');
+ assert.match(stylesSource,/\[hidden\]:not\(\[hidden="until-found"\]\)\s*\{\s*display:\s*none\s*!important;\s*\}/);
 });

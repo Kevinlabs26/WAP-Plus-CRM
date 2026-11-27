@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useAppStore, type ChatFolder } from "@/store/appStore";
 import { useI18n } from "@/i18n";
+import { canMoveChatFolderToParent } from "@/store/chatFolderActions";
+
+type FolderDrop = { id: string; mode: "inside" | "before" | "after" };
 
 type PointerDrag = {
   pointerId: number;
@@ -20,33 +23,42 @@ export function useChatFolderDrag({ chatFolders }: { chatFolders: ChatFolder[] }
   const suppressClick = useRef(false);
   const [drag, setDrag] = useState<PointerDrag | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
-  const [folderDropTarget, setFolderDropTarget] = useState<string | null>(null);
+  const [folderDrop, setFolderDrop] = useState<FolderDrop | null>(null);
 
   useEffect(() => {
     let frame = 0;
     let lastFrame = 0;
     const atPoint = (cur: PointerDrag) => document.elementFromPoint(cur.x, cur.y)
       ?.closest<HTMLElement>(cur.kind === "chat" ? "[data-chat-folder-drop]" : "[data-folder-reorder-target]");
-    const folderTarget = (cur: PointerDrag, element: HTMLElement | null | undefined) => {
-      if (cur.kind !== "folder") return null;
+    const folderTarget = (cur: PointerDrag, element: HTMLElement | null | undefined): FolderDrop | null => {
+      if (cur.kind !== "folder" || !element) return null;
       const folders = useAppStore.getState().settings.chatFolders || [];
       const source = folders.find(f => f.id === cur.folderId);
       const target = folders.find(f => f.id === element?.dataset.folderReorderTarget);
-      return source && target && source.id !== target.id && source.parentId === target.parentId
+      if (!source || !target || source.id === target.id || source.systemType || target.systemType) return null;
+      const rect = element.getBoundingClientRect();
+      const offset = (cur.y - rect.top) / rect.height;
+      if (offset >= 0.25 && offset <= 0.75) {
+        return canMoveChatFolderToParent(folders, source.id, target.id) ? { id: target.id, mode: "inside" } : null;
+      }
+      return source.parentId === target.parentId
         && source.scope?.type === target.scope?.type
         && (source.scope?.type !== "account" || (target.scope?.type === "account" && source.scope.accountId === target.scope.accountId))
-        ? target : null;
+        ? { id: target.id, mode: offset < 0.25 ? "before" : "after" } : null;
     };
     const updateTarget = (cur: PointerDrag) => {
       const element = atPoint(cur);
       if (cur.kind === "chat") setDropTarget(element?.dataset.chatFolderDrop || null);
-      else setFolderDropTarget(folderTarget(cur, element)?.id || null);
+      else {
+        const next = folderTarget(cur, element);
+        setFolderDrop(current => current?.id === next?.id && current?.mode === next?.mode ? current : next);
+      }
     };
     const reset = () => {
       session.current = null;
       setDrag(null);
       setDropTarget(null);
-      setFolderDropTarget(null);
+      setFolderDrop(null);
       window.cancelAnimationFrame(frame);
       frame = 0;
       lastFrame = 0;
@@ -97,10 +109,8 @@ export function useChatFolderDrag({ chatFolders }: { chatFolders: ChatFolder[] }
       const t = translateRef.current;
       if (cur.kind === "folder") {
         const target = folderTarget(cur, element);
-        if (target && element) {
-          const rect = element.getBoundingClientRect();
-          store.reorderChatFolder(cur.folderId, target.id, cur.y > rect.top + rect.height / 2);
-        }
+        if (target?.mode === "inside") store.moveChatFolderToParent(cur.folderId, target.id);
+        else if (target) store.reorderChatFolder(cur.folderId, target.id, target.mode === "after");
         return;
       }
       const id = element?.dataset.chatFolderDrop;
@@ -156,13 +166,16 @@ export function useChatFolderDrag({ chatFolders }: { chatFolders: ChatFolder[] }
       scroller: e.currentTarget.closest<HTMLElement>(".sidebar-chat-scroll") };
   };
   const targetName = chatFolders.find(f => f.id === dropTarget)?.name;
+  const folderTargetName = chatFolders.find(f => f.id === folderDrop?.id)?.name;
   return {
     dragChatId: drag?.kind === "chat" ? drag.chatId : null,
     dragFolderId: drag?.kind === "folder" ? drag.folderId : null,
     dropTarget,
-    folderDropTarget,
+    folderDropTarget: folderDrop?.id ?? null,
     dragHint: drag?.kind === "chat" ? dropTarget === "__ungrouped" ? t("folder.moveOut")
-      : targetName ? t("folder.dropInto", { name: targetName }) : t("folder.dragHelp") : null,
+      : targetName ? t("folder.dropInto", { name: targetName }) : t("folder.dragHelp")
+      : drag?.kind === "folder" ? folderDrop?.mode === "inside" && folderTargetName
+        ? t("folder.dropInto", { name: folderTargetName }) : t("folder.dragOrder") : null,
     startChatPointerDrag: (e: ReactPointerEvent, chatId: string, memberChatIds?: string[]) =>
       start(e, { kind: "chat", chatId, chatIds: [...new Set(memberChatIds?.length ? memberChatIds : [chatId])] }),
     startFolderPointerDrag: (e: ReactPointerEvent, folderId: string) => start(e, { kind: "folder", folderId }),

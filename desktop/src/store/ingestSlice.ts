@@ -1,5 +1,7 @@
 import { deferDuringRestore } from "./restoreGuard";
 import { remapPlaybookBindings } from "@/lib/aiPlaybooks";
+import { remapPromptPlanBindings } from "@/lib/promptPlans";
+import { buildGroupWelcomeQueue, groupWelcomePendingWrites } from "@/lib/groupWelcome";
 import type { AppState, SliceContext } from "./types";
 import {
   applyMessagesAck,
@@ -40,12 +42,15 @@ import {
 import {
   clearStoredRemoteMessages,
   updateStoredMessageAcks,
+  updateStoredMessageEdits,
   deleteStoredMessagesByKeys,
   registerChatMessageReplacements,
 } from "@/lib/storage";
 import { noteMainThreadWork, syncLog } from "@/lib/syncDebug";
 import { isComposerTypingBusy } from "@/lib/composerActivity";
 import type { BridgeEvent } from "@/lib/bridge";
+import type { MessageEditItem } from "@shared/protocol";
+import { androidVoiceAttachment } from "./androidVoiceAttachment";
 import { persist, scheduleStatsRecompute } from "./persist";
 import { notifyInboundMessages, type InboundNotifyItem } from "@/lib/inboundMessageNotify";
 import { emitLiveInboundMessages } from "@/lib/aiAutoReply";
@@ -145,8 +150,10 @@ export function createIngestSlice({
       if (deferDuringRestore(() => { get().ingestBridgeEvents(events).then(resolve, reject); })) return;
       const ingestStarted = performance.now();
       const mediaCacheEntries: { messageId: string; url: string }[] = [];
+      const voiceCacheEntries: { messageId: string; url: string }[] = [];
       for (const event of events) {
         const payload = ingestObject(event.payload) ?? {};
+        if (payload.source === "android-media-share") continue;
         const ownerAccountId =
           ingestString(
             (event as { accountId?: string }).accountId ??
@@ -211,6 +218,7 @@ export function createIngestSlice({
         { remoteJid: string; accountId: string; before?: string }
       >();
       const ackItemsByAccount = new Map<string, { id: string; ack: string }[]>();
+      const editsByAccount = new Map<string, MessageEditItem[]>();
       const deletedRemoteMessageKeys = new Map<string, Set<string>>();
       // 本批新增入站消息（用于桌面通知，set 之外触发）
       let inboundNotifies: InboundNotifyItem[] | null = null;
@@ -438,6 +446,30 @@ export function createIngestSlice({
             }
             continue;
           }
+          if (event.type === "messages.edit") {
+            const edits = editsByAccount.get(deviceId) || [];
+            for (const raw of items) {
+              const item = ingestObject(raw);
+              const id = ingestString(item?.id, 300);
+              const remoteJid = ingestString(item?.remoteJid, 300);
+              const body = typeof item?.body === "string" ? item.body.slice(0, 20_000) : "";
+              if (!id || !remoteJid || !body.trim() || typeof item?.fromMe !== "boolean" || typeof item.editedAt !== "number" || !Number.isFinite(item.editedAt) || item.editedAt < 0) continue;
+              const { fromMe, editedAt } = item;
+              edits.push({ id, remoteJid, body, fromMe, editedAt });
+              const index = messages.findIndex(message => (message.accountId || message.deviceId) === deviceId &&
+                (message.id === id || message.waMessageId === id || message.waKey?.id === id) &&
+                (!message.waKey?.remoteJid || message.waKey.remoteJid === remoteJid) && (message.direction === "out") === fromMe);
+              if (index < 0) continue;
+              const previous = messages[index];
+              if ((previous.remoteEditedAt ?? 0) > editedAt) continue;
+              messages[index] = { ...previous, body, edited: true, remoteEditedAt: editedAt,
+                ...(body !== previous.body ? { translation: undefined, translationLang: undefined } : {}) };
+              chats = chats.map(chat => chat.id === previous.chatId && chat.updatedAt === previous.sentAt && chat.lastMessage === previous.body
+                ? { ...chat, lastMessage: body } : chat);
+            }
+            editsByAccount.set(deviceId, edits);
+            continue;
+          }
           // 出站回执：送达 / 已读
           if (event.type === "messages.ack") {
             const activeChats = new Set<string>();
@@ -460,6 +492,19 @@ export function createIngestSlice({
             continue;
           }
 
+          if (event.type === "messages.sync" && payload.source === "android-media-share") {
+            for (const raw of items) {
+              const item = object(raw);
+              if (!item || !event.deviceId || !item.targetMessageId) continue;
+              const index = messages.findIndex((message) => message.id === item.targetMessageId);
+              if (index < 0) continue;
+              const patch = androidVoiceAttachment(messages[index], item, event.deviceId);
+              if (!patch) continue;
+              messages[index] = { ...messages[index], ...patch };
+              voiceCacheEntries.push({ messageId: messages[index].id, url: patch.mediaUrl });
+            }
+            continue;
+          }
           if (event.type === "messages.sync") {
             contactBag.contacts = contacts;
             contactBag.chats = chats;
@@ -624,6 +669,8 @@ export function createIngestSlice({
           }
           const aiPlaybookBindings = remapPlaybookBindings(state.settings.aiPlaybookBindings || {}, chatReplacements);
           if (aiPlaybookBindings !== state.settings.aiPlaybookBindings) settingsPatch = {...settingsPatch, aiPlaybookBindings};
+          const aiPromptPlanByChat = remapPromptPlanBindings(state.settings.aiPromptPlanByChat || {}, chatReplacements);
+          if (aiPromptPlanByChat !== state.settings.aiPromptPlanByChat) settingsPatch = { ...settingsPatch, aiPromptPlanByChat };
         }
         if (blocklist) {
           const byAcc = setAccountBlocklist(
@@ -756,6 +803,7 @@ export function createIngestSlice({
       // 全部块跑完后统一收尾（通知 / 统计 / 落盘），只跑一次
       const finish = async () => {
         const writes: Promise<void>[] = [];
+        if (voiceCacheEntries.length) writes.push(cacheMediaUrls(voiceCacheEntries));
         for (const target of clearedRemoteTargets.values()) {
           writes.push(clearStoredRemoteMessages(target.remoteJid, target.accountId, target.before));
         }
@@ -765,8 +813,34 @@ export function createIngestSlice({
         for (const [accountId, items] of ackItemsByAccount) {
           writes.push(updateStoredMessageAcks(items, accountId));
         }
+        for (const [accountId, items] of editsByAccount) {
+          writes.push(updateStoredMessageEdits(items, accountId));
+        }
         try { if (writes.length) await Promise.all(writes); }
         catch (error) { get().pushToast(error instanceof Error ? error.message : "同步落盘失败", "error"); throw error; }
+        const welcome = buildGroupWelcomeQueue(get(), events);
+        if (welcome?.capacitySkipped) get().pushToast(`入群欢迎队列已满，${welcome.capacitySkipped} 次入群未安排发送`, "error");
+        if (welcome?.added.length) {
+          const ids = new Set(welcome.added.map(task => task.id));
+          ids.forEach(id => groupWelcomePendingWrites.add(id));
+          set(state => ({
+            scheduledMessages: welcome.tasks,
+            settings: { ...state.settings, scheduledMessages: welcome.tasks, groupWelcomeSeen: welcome.seen },
+          }));
+          try {
+            await persist(get, true);
+          } catch (error) {
+            set(state => {
+              const scheduledMessages = state.settings.scheduledMessages.filter(task => !ids.has(task.id));
+              const groupWelcomeSeen = { ...state.settings.groupWelcomeSeen };
+              ids.forEach(id => delete groupWelcomeSeen[id]);
+              return { scheduledMessages, settings: { ...state.settings, scheduledMessages, groupWelcomeSeen } };
+            });
+            throw error;
+          } finally {
+            ids.forEach(id => groupWelcomePendingWrites.delete(id));
+          }
+        }
         if (!ingestChanged) { resolve(); return; }
         // 桌面通知（入站新消息）：复用已入库的 chats 构建静音表
         const notifyItems: InboundNotifyItem[] = inboundNotifies
@@ -809,6 +883,7 @@ export function createIngestSlice({
           event.type === "messages.sync" ||
           event.type === "messages.delete" ||
           event.type === "messages.ack" ||
+          event.type === "messages.edit" ||
           event.type === "chats.delete"
         );
         if (mergedChatHistory) await persist(get, true);

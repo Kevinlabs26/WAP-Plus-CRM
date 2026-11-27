@@ -1,4 +1,4 @@
-import { Ban, ImagePlus, Loader2, Send, X } from "lucide-react";
+import { Ban, Loader2 } from "lucide-react";
 import { useAppStore, type AppState } from "@/store/appStore";
 import { ScheduledPlanDialog } from "./ScheduledPlanDialog";
 import { useShallow } from "zustand/react/shallow";
@@ -14,11 +14,9 @@ import {
   buildSenderMemberLookup,
   openOrBuildDmContact,
   presentGroupSender,
+  type SenderPresentation,
 } from "@/lib/groupSenderDisplay";
-import {
-  SAVED_MESSAGES_CHAT_ID,
-  type Contact,
-} from "@/types/crm";
+import { type Contact } from "@/types/crm";
 import { formatAccountDisplay } from "@/lib/accountLabels";
 import {
   isWaAccountConnected,
@@ -58,12 +56,12 @@ import {
   baileysSendContact,
 } from "@/lib/baileys";
 import { applyChatPreference } from "@/lib/chatPreferences";
-import { Button } from "@/components/ui/primitives";
 import { type ChannelId } from "@/channels";
 import { gatedMediaSend } from "@/channels/mediaGate";
 
 import { syncLog } from "@/lib/syncDebug";
 import { Composer } from "./Composer";
+import { SavedMessagesComposer } from "./SavedMessagesComposer";
 import { ChatSearchBar } from "./ChatSearchBar";
 import { ForwardMessageModal } from "./ForwardMessageModal";
 import {
@@ -76,7 +74,6 @@ import { ImagePreviewDialog } from "./ImagePreviewDialog";
 import { useVoiceRecording } from "./useVoiceRecording";
 import { useSavedMessages } from "./useSavedMessages";
 import { useChatSearch } from "./useChatSearch";
-import { useCatalog } from "./useCatalog";
 import { useGroupMembers } from "./useGroupMembers";
 import { useMediaSend } from "./useMediaSend";
 import { useTextSend } from "./useTextSend";
@@ -85,12 +82,6 @@ import { useSaveContact } from "./useSaveContact";
 import { useForwardMessage } from "./useForwardMessage";
 import { useMessageActions } from "./useMessageActions";
 import { useAiMessageReply } from "./useAiMessageReply";
-const ProductPicker = lazy(() =>
-  import("./ProductPicker").then((m) => ({ default: m.ProductPicker }))
-);
-const ProductManager = lazy(() =>
-  import("./ProductManager").then((m) => ({ default: m.ProductManager }))
-);
 import { usePeerPresence } from "./usePeerPresence";
 import { retryMessage as retryMessageAction } from "./retryMessageAction";
 import { reloadMedia as reloadMediaAction } from "./reloadMediaAction";
@@ -100,6 +91,9 @@ import { compareMessageOrder } from "@/store/messageOrdering";
 import { toggleBlock } from "./toggleBlockAction";
 import { createStickerFavoriteActions } from "./stickerFavoriteActions";
 import { loadStickerFavorites, mergeStickerFavoritesFromMessages, normalizeStickerFavorites, saveStickerFavorites } from "@/lib/stickerFavorites";
+import { quickReplyMediaToFile } from "@/lib/quickReplyMedia";
+import { onQuickReplySend } from "@/lib/quickReplySend";
+import type { SettingsQuickReply } from "@/store/settingsDefaults";
 import { workflowForStage } from "@/lib/contactWorkflow";
 import {
   imageToStickerDataUrl,
@@ -119,8 +113,6 @@ import { useI18n } from "@/i18n";
 import { resolveActiveSalesStage } from "@/lib/contactWorkflow";
 
 const EMPTY_MESSAGES: Message[] = [];
-const SELF_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
-const SELF_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 /** 非群聊时的发送者映射（稳定引用） */
 const EMPTY_SENDER_MAP = {} as Record<string, undefined>;
 /** 非群聊时传给 Composer 的空成员列表（稳定引用，避免击穿 memo） */
@@ -150,7 +142,8 @@ function shallowSenderSame(
     a.avatarUrl === b.avatarUrl &&
     a.avatarFullUrl === b.avatarFullUrl &&
     a.subtitle === b.subtitle &&
-    a.dmTarget === b.dmTarget
+    a.dmTarget === b.dmTarget &&
+    a.groupEvent === b.groupEvent
   );
 }
 
@@ -397,7 +390,7 @@ export function ChatPanel() {
     setShowScreen,
     screenUrl,
     screenError,
-  } = usePhoneScreenPolling();
+  } = usePhoneScreenPolling(selectedPhoneId);
   const [imagePreview, setImagePreview] = useState<{
     src: string;
     alt: string;
@@ -545,7 +538,18 @@ export function ChatPanel() {
   );
   const isBaileys = channelId === "baileys";
 
+  const latestMembershipEventId = useMemo(() => {
+    for (let index = chatMessages.length - 1; index >= 0; index--) {
+      const message = chatMessages[index];
+      if (message.systemKind === "group_participants" &&
+        (message.systemAction === "add" || message.systemAction === "remove")) {
+        return message.id;
+      }
+    }
+    return undefined;
+  }, [chatMessages]);
   const { groupMembers, groupMemberDetails } = useGroupMembers({
+    latestMembershipEventId,
     selectedChatId,
     selectedContactId,
     isBaileys,
@@ -557,20 +561,6 @@ export function ChatPanel() {
   });
 
   const localOnlyChat = Boolean(activeChat?.localOnly);
-  const [savedDraftImage, setSavedDraftImage] = useState<{ file: File; previewUrl: string } | null>(null);
-  const [savingSelfImage, setSavingSelfImage] = useState(false);
-  const savedDraftImageRef = useRef(savedDraftImage);
-  savedDraftImageRef.current = savedDraftImage;
-  const savedImagePickerRef = useRef<HTMLInputElement>(null);
-  const savedImageSendLockRef = useRef(false);
-  const stageSavedDraftImage = (file: File) => {
-    if (!SELF_IMAGE_TYPES.has(file.type)) { pushToast(t("runtime.selectImage"), "error"); return; }
-    if (file.size > SELF_IMAGE_MAX_BYTES) { pushToast(t("runtime.imageTooLarge"), "error"); return; }
-    setSavedDraftImage({ file, previewUrl: URL.createObjectURL(file) });
-  };
-  useEffect(() => () => {
-    if (savedDraftImage?.previewUrl) URL.revokeObjectURL(savedDraftImage.previewUrl);
-  }, [savedDraftImage?.previewUrl]);
   const {
     savedDraft,
     setSavedDraft,
@@ -589,8 +579,6 @@ export function ChatPanel() {
     clearSavedSelection,
     resetSaved,
   } = useSavedMessages({ chatMessages, localOnlyChat });
-  const savedDraftValueRef = useRef(savedDraft);
-  savedDraftValueRef.current = savedDraft;
   const activePhone = phones.find((p) => p.id === selectedPhoneId);
   const chatAccount = settings.waAccounts?.find(
     (account) => account.id === chatAccountId
@@ -609,38 +597,70 @@ export function ChatPanel() {
   );
 
   // A chat preview can arrive from WhatsApp before its transcript does (for
-  // example after sending from the official app). Request one history sync so
-  // opening that chat does not leave the center panel on the empty state.
+  // example after sending from the official app). Retry once if the transcript
+  // is still missing after the initial history request.
   const emptyHistoryRequestRef = useRef(new Set<string>());
+  const emptyHistoryRetryRef = useRef(new Set<string>());
+  const emptyHistoryRetryTimerRef = useRef(new Map<string, number>());
   useEffect(() => {
     if (
       !isBaileys ||
       !selectedChatId ||
       !chatConnected ||
-      chatMessages.length > 0 ||
       !activeChat
     ) {
       return;
     }
     if (!(activeChat.lastMessage || activeChat.updatedAt)) return;
     const requestKey = `${chatAccountId}:${selectedChatId}`;
-    if (emptyHistoryRequestRef.current.has(requestKey)) return;
-    emptyHistoryRequestRef.current.add(requestKey);
-    void baileysSync(chatAccountId, { requestHistory: true }).catch((error) => {
-      emptyHistoryRequestRef.current.delete(requestKey);
-      syncLog("ui.chat", "empty chat history sync failed", {
-        chatId: selectedChatId,
-        accountId: chatAccountId,
-        error: String(error),
+    if (chatMessages.length > 0) {
+      const timer = emptyHistoryRetryTimerRef.current.get(requestKey);
+      if (timer !== undefined) window.clearTimeout(timer);
+      emptyHistoryRetryTimerRef.current.delete(requestKey);
+      return;
+    }
+    if (!emptyHistoryRequestRef.current.has(requestKey)) {
+      emptyHistoryRequestRef.current.add(requestKey);
+      void baileysSync(chatAccountId, { requestHistory: true }).catch((error) => {
+        emptyHistoryRequestRef.current.delete(requestKey);
+        syncLog("ui.chat", "empty chat history sync failed", {
+          chatId: selectedChatId,
+          accountId: chatAccountId,
+          error: String(error),
+        });
       });
-    });
+    }
+    if (emptyHistoryRetryRef.current.has(requestKey) || emptyHistoryRetryTimerRef.current.has(requestKey)) return;
+    emptyHistoryRetryTimerRef.current.set(requestKey, window.setTimeout(() => {
+      emptyHistoryRetryTimerRef.current.delete(requestKey);
+      const latest = useAppStore.getState();
+      const currentChat = latest.chats.find(chat => chat.id === selectedChatId);
+      const currentMessages = filterMessagesForAccount(
+        latest.messagesByChatId[selectedChatId] || latest.messages.filter(message => message.chatId === selectedChatId),
+        chatAccountId,
+        latest.settings.liveBaileysAccountId,
+      );
+      if (latest.selectedChatId !== selectedChatId || !currentChat || currentMessages.length > 0 ||
+          !isWaAccountConnected(latest.settings.waAccounts, chatAccountId, latest.settings.liveBaileysAccountId, latest.baileysUi.connection)) return;
+      // One bounded retry per account and chat; Bridge queues it behind the account-wide cooldown.
+      emptyHistoryRetryRef.current.add(requestKey);
+      void baileysSync(chatAccountId, { requestHistory: true }).catch(error => {
+        syncLog("ui.chat", "empty chat history retry failed", {
+          chatId: selectedChatId,
+          accountId: chatAccountId,
+          error: String(error),
+        });
+      });
+    }, 30_000));
   }, [
-    activeChat,
+    activeChat?.lastMessage,
+    activeChat?.updatedAt,
     chatAccountId,
     chatConnected,
     chatMessages.length,
     isBaileys,
     selectedChatId,
+    settings.liveBaileysAccountId,
   ]);
 
   const { exportingChat, exportChat } = useChatExport({
@@ -832,19 +852,28 @@ export function ChatPanel() {
     const contactLookup = buildSenderContactLookup(contacts, aid);
     const memberLookup = buildSenderMemberLookup(groupMemberDetails);
     let anyChanged = false;
-    const senderMessages =
-      chatMessages.length > MESSAGE_INITIAL_RENDER_COUNT
-        ? chatMessages.slice(-MESSAGE_INITIAL_RENDER_COUNT)
-        : chatMessages;
-    for (const m of senderMessages) {
+    const recentStart = Math.max(0, chatMessages.length - MESSAGE_INITIAL_RENDER_COUNT);
+    const senderOptions = { accountId: aid, contacts, members: groupMemberDetails, contactLookup, memberLookup };
+    const presentMember = (jid: string) =>
+      presentGroupSender({
+        direction: "in",
+        senderJid: jid,
+        senderPhoneE164: /@(?:s\.whatsapp\.net|c\.us)$/.test(jid) ? jid.split(/[:@]/)[0] : undefined,
+      }, senderOptions);
+    for (const [index, m] of chatMessages.entries()) {
       if (m.direction !== "in" || !m.isGroup) continue;
-      const next = presentGroupSender(m, {
-        accountId: aid,
-        contacts,
-        members: groupMemberDetails,
-        contactLookup,
-        memberLookup,
-      });
+      const isGroupEvent = m.systemKind === "group_participants";
+      if (!isGroupEvent && index < recentStart) continue;
+      if (isGroupEvent && (m.accountId || m.deviceId || aid) !== aid) continue;
+      const next = presentGroupSender(m, senderOptions);
+      if (isGroupEvent && (m.systemParticipants?.length || m.systemAuthor)) {
+        next.groupEvent = {
+          participants: (m.systemParticipants || []).map(presentMember),
+          author: m.systemAuthor && !m.systemParticipants?.includes(m.systemAuthor)
+            ? presentMember(m.systemAuthor)
+            : undefined,
+        };
+      }
       const prev = prevMap?.[m.id];
       if (prev && shallowSenderSame(prev, next)) {
         map[m.id] = prev;
@@ -854,7 +883,7 @@ export function ChatPanel() {
       }
     }
     // 全部条目内容未变 → 复用整个旧 map 引用（MessageList memo 命中）
-    if (!anyChanged && prevMap) {
+    if (!anyChanged && prevMap && Object.keys(prevMap).length === Object.keys(map).length) {
       senderCacheRef.current = { map: prevMap };
       return prevMap;
     }
@@ -871,7 +900,7 @@ export function ChatPanel() {
     groupMemberDetails,
   ]);
 
-  const openGroupSenderDm = useEventCallback((m: Message) => {
+  const openGroupSenderDm = useEventCallback((m: Message, member?: SenderPresentation) => {
       const aid =
         chatAccountId ||
         activeContact?.accountId ||
@@ -880,7 +909,7 @@ export function ChatPanel() {
         settings.activeAccountId ||
         "wa-default";
       const presented =
-        senderByMessageId[m.id] ||
+        member || senderByMessageId[m.id] ||
         presentGroupSender(m, {
           accountId: aid,
           contacts: useAppStore.getState().contacts,
@@ -1292,31 +1321,6 @@ export function ChatPanel() {
     pushToast(t("chat.scheduleSaved"), "success");
   };
 
-  const {
-    catalogOpen,
-    setCatalogOpen,
-    catalogManageOpen,
-    setCatalogManageOpen,
-    catalogLoading,
-    products,
-    refreshCatalog,
-    openCatalog,
-    openProductManager,
-    handleSendProduct,
-  } = useCatalog({
-    isBaileys,
-    chatConnected,
-    chatAccountId,
-    channelId,
-    selectedPhoneId,
-    setSending,
-    enqueueOutgoingMessage,
-    patchMessage,
-    pushToast,
-    resolveRecipient,
-    guardBlockedSend,
-  });
-
   const handleSendContactCard = async (sharedContact: Contact) => {
     if (!guardBlockedSend()) return;
     if (!isBaileys) {
@@ -1496,6 +1500,14 @@ export function ChatPanel() {
   };
 
   const composerOnSend = useEventCallback(sendText);
+  const composerOnSendQuickReply = useEventCallback(async (reply: SettingsQuickReply, body: string) => {
+    if (!reply.media) { await sendText(body, true); return true; }
+    const file = quickReplyMediaToFile({ ...reply.media, caption: body, token: `${reply.id}-${Date.now()}` });
+    if (!file) { pushToast(t("settingsQuickReplies.mediaReadFailed"), "error"); return false; }
+    if (reply.media.kind === "image") return await sendImage(file, false, body, true);
+    if (reply.media.kind === "audio") return await sendAudio(file, body);
+    return await sendFile(file, body, true);
+  });
   const composerOnSendImage = useEventCallback((file: File, caption?: string) =>
     sendImage(file, false, caption)
   );
@@ -1507,7 +1519,6 @@ export function ChatPanel() {
   const composerOnRemoveFavoriteSticker = useEventCallback(removeFavoriteSticker);
   const composerOnSendFile = useEventCallback(sendFile);
   const composerOnSendAudio = useEventCallback(sendAudio);
-  const composerOnOpenCatalog = useEventCallback(openCatalog);
   const composerOnOpenContactPicker = useEventCallback(() =>
     setContactPickerOpen(true)
   );
@@ -1554,6 +1565,19 @@ export function ChatPanel() {
       accountId: chatAccountId,
     };
   });
+  useEffect(() => onQuickReplySend(request => {
+    if (useAppStore.getState().selectedChatId !== request.chatId) return false;
+    if (sending || recording || editingId) {
+      pushToast(t("quickShelf.sendBusy"), "info");
+      request.respond(false);
+      return true;
+    }
+    void composerOnSendQuickReply(request.reply, request.body).then(sent => request.respond(sent !== false)).catch(error => {
+      pushToast(error instanceof Error ? error.message : t("runtime.sendFailed"), "error");
+      request.respond(false);
+    });
+    return true;
+  }), [composerOnSendQuickReply, editingId, pushToast, recording, sending, t]);
 
   if (!selectedChatId || !activeChat) {
     return (
@@ -1632,7 +1656,7 @@ export function ChatPanel() {
           onToggleScreen={() => setShowScreen((v) => !v)}
         />
 
-        {!activeChat.localOnly&&!activeChat.isGroup&&!activeContact?.isGroup&&<ChatAiStatusBar key={`${activeChat.id}:${requestedChatAccountId||chatAccountId}`} chatId={activeChat.id} accountId={requestedChatAccountId||chatAccountId} thread={chatMessages} recipient={resolveSendTarget({phone:activeContact?.phone,channelAddress:activeContact?.channelAddress,entityId:activeContact?.id})} connected={isBaileys?isWaAccountConnected(settings.waAccounts,requestedChatAccountId||chatAccountId,settings.liveBaileysAccountId,baileysUi.connection):bridgeConnected}/>}
+        {!activeChat.localOnly&&<ChatAiStatusBar key={`${activeChat.id}:${requestedChatAccountId||chatAccountId}`} chatId={activeChat.id} accountId={requestedChatAccountId||chatAccountId} thread={chatMessages} isGroup={!!(activeChat.isGroup||activeContact?.isGroup)} recipient={resolveSendTarget({phone:activeContact?.phone,channelAddress:activeContact?.channelAddress,entityId:activeContact?.id})} connected={isBaileys?isWaAccountConnected(settings.waAccounts,requestedChatAccountId||chatAccountId,settings.liveBaileysAccountId,baileysUi.connection):bridgeConnected}/>}
         <div className="flex min-h-0 flex-1">
         {showScreen && (
           <aside className="flex w-72 shrink-0 items-center justify-center overflow-hidden border-r border-zinc-800/90 bg-black">
@@ -1780,80 +1804,12 @@ export function ChatPanel() {
         />}
 
         {localOnlyChat ? (
-          <form className="border-t border-zinc-800/90 px-4 py-2" onSubmit={(event) => {
-            event.preventDefault();
-            const draftValue = savedDraft;
-            const body = draftValue.trim();
-            const image = savedDraftImage;
-            if ((!body && !image) || savedImageSendLockRef.current) return;
-            savedImageSendLockRef.current = true;
-            setSavingSelfImage(Boolean(image));
-            void (async () => {
-              try {
-                const mediaUrl = image ? await new Promise<string>((resolve, reject) => {
-                  const reader = new FileReader();
-                  reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error(t("runtime.imageReadFailed")));
-                  reader.onerror = () => reject(new Error(t("runtime.imageReadFailed")));
-                  reader.readAsDataURL(image.file);
-                }) : undefined;
-                const id = enqueueOutgoingMessage({
-                  body: body || t("media.image"),
-                  chatId: SAVED_MESSAGES_CHAT_ID,
-                  contactId: "",
-                  channelId: "local",
-                  deliveryStatus: "sent",
-                  ...(image ? { mediaType: "image", mediaUrl, mediaMime: image.file.type, mediaFileName: image.file.name || t("media.image"), mediaCaption: body || undefined } : {}),
-                });
-                if (!id) return;
-                if (savedDraftValueRef.current === draftValue) setSavedDraft("");
-                if (image && savedDraftImageRef.current === image) setSavedDraftImage(null);
-              } catch (error) {
-                pushToast(error instanceof Error ? error.message : t("runtime.imageReadFailed"), "error");
-              } finally {
-                savedImageSendLockRef.current = false;
-                setSavingSelfImage(false);
-              }
-            })();
-          }}>
-            {savedDraftImage && <div className="mb-2 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 p-1.5">
-              <img src={savedDraftImage.previewUrl} alt={savedDraftImage.file.name || t("media.image")} className="h-12 w-12 rounded object-cover" />
-              <span className="min-w-0 flex-1 truncate text-xs text-zinc-400">{savedDraftImage.file.name || t("media.image")}</span>
-              <button type="button" disabled={savingSelfImage} aria-label={t("common.close")} className="rounded p-1 text-zinc-400 hover:bg-zinc-800" onClick={() => setSavedDraftImage(null)}><X className="h-4 w-4" /></button>
-            </div>}
-            <input ref={savedImagePickerRef} type="file" hidden accept="image/png,image/jpeg,image/gif,image/webp" onChange={event => {
-              const file = event.currentTarget.files?.[0];
-              event.currentTarget.value = "";
-              if (!file) return;
-              stageSavedDraftImage(file);
-            }} />
-            <div className="flex items-center gap-2">
-            <button type="button" aria-label={t("composer.image")} title={t("composer.image")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-zinc-800 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" onClick={() => savedImagePickerRef.current?.click()}><ImagePlus className="h-4 w-4" /></button>
-            <input
-              value={savedDraft}
-              onChange={(event) => setSavedDraft(event.target.value)}
-              onPaste={event => {
-                const items = Array.from(event.clipboardData.items || []);
-                const file = items.find(item => item.kind === "file" && item.type.startsWith("image/"))?.getAsFile()
-                  || Array.from(event.clipboardData.files || []).find(candidate => candidate.type.startsWith("image/"));
-                if (!file) return;
-                event.preventDefault();
-                stageSavedDraftImage(file);
-              }}
-              placeholder={t("chat.selfDraft")}
-              className="h-9 min-w-0 flex-1 rounded-lg border border-zinc-800 bg-zinc-900 px-3 text-[14px] text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-brand/60"
-              aria-label={t("tooltip.selfMessage")}
-            />
-            <Button
-              type="submit"
-              variant="primary"
-              className="!h-9 !min-h-9 !w-9 rounded-lg !px-0"
-              disabled={savingSelfImage || !savedDraft.trim() && !savedDraftImage}
-              aria-label={t("tooltip.selfMessage")}
-            >
-              <Send className="h-3.5 w-3.5" />
-            </Button>
-            </div>
-          </form>
+          <SavedMessagesComposer
+            draft={savedDraft}
+            onDraftChange={setSavedDraft}
+            onEnqueueMessage={enqueueOutgoingMessage}
+            onPushToast={pushToast}
+          />
         ) : <Composer
           resetKey={selectedChatId}
           sendAccountId={chatAccountId}
@@ -1874,6 +1830,7 @@ export function ChatPanel() {
           voicePaused={voicePaused}
           recordSec={recordSec}
           onSend={composerOnSend}
+          onSendQuickReply={composerOnSendQuickReply}
           onEditLatest={editLatestMessage}
           onSendImage={composerOnSendImage}
           onSendSticker={composerOnSendSticker}
@@ -1885,7 +1842,6 @@ export function ChatPanel() {
           onRemoveFavoriteSticker={composerOnRemoveFavoriteSticker}
           onSendAudio={composerOnSendAudio}
           onSendFile={composerOnSendFile}
-          onOpenCatalog={composerOnOpenCatalog}
           onOpenContactPicker={composerOnOpenContactPicker}
           onBeginVoice={composerOnBeginVoice}
           readVoiceLevel={composerReadVoiceLevel}
@@ -1902,25 +1858,6 @@ export function ChatPanel() {
         </div>
         </div>
       </div>
-      {catalogOpen && (
-        <ProductPicker
-          products={products}
-          loading={catalogLoading}
-          onClose={() => setCatalogOpen(false)}
-          onRefresh={() => void refreshCatalog()}
-          onSend={handleSendProduct}
-          onManageProducts={openProductManager}
-        />
-      )}
-      {catalogManageOpen && (
-        <ProductManager
-          products={products}
-          loading={catalogLoading}
-          accountId={chatAccountId}
-          onClose={() => setCatalogManageOpen(false)}
-          onRefresh={refreshCatalog}
-        />
-      )}
       {contactPickerOpen && (
         <ContactCardPicker
           contacts={useAppStore.getState().contacts}

@@ -79,15 +79,28 @@ export async function getAppInfo(): Promise<AppInfo> {
   return bridgeInvoke<AppInfo>("get_app_info");
 }
 
+let connectingBridge: Promise<BridgeStatus> | undefined;
+
 export async function connectBridge(
   host: string,
   port: number,
-  token: string
+  token: string,
+  automatic = false
 ): Promise<BridgeStatus> {
-  return bridgeInvoke<BridgeStatus>("bridge_connect", { host, port, token });
+  const previous = connectingBridge;
+  if (automatic && previous) return previous;
+  const current = Promise.resolve(previous).catch(() => undefined)
+    .then(() => bridgeInvoke<BridgeStatus>("bridge_connect", { host, port, token }));
+  connectingBridge = current;
+  try {
+    return await current;
+  } finally {
+    if (connectingBridge === current) connectingBridge = undefined;
+  }
 }
 
 export async function disconnectBridge(): Promise<void> {
+  await connectingBridge?.catch(() => undefined);
   await bridgeInvoke("bridge_disconnect");
 }
 
@@ -113,8 +126,15 @@ export async function detachBridgeEventListener(generation: number): Promise<voi
   await bridgeInvoke("bridge_detach_event_listener", { generation });
 }
 
-export async function adbForward(port: number): Promise<string> {
-  return bridgeInvoke<string>("adb_forward", { port });
+export type AdbDevice = { serial: string; state: string };
+
+export async function adbInstallBridge(serial?: string): Promise<boolean> {
+  return bridgeInvoke<boolean>("adb_install_bridge", { serial });
+}
+
+export async function adbForward(port: number, serial?: string): Promise<string> {
+  if (!isTauri()) throw new Error("请在桌面应用中操作 Android Bridge");
+  return bridgeInvoke<string>("adb_forward", { port, serial });
 }
 
 export async function showOverlayCard(

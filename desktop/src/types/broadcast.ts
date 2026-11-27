@@ -27,7 +27,13 @@ export interface BroadcastItem {
   variantId?: string;
   mediaId?: string;
   status: BroadcastItemStatus;
+  deliveryUncertain?: boolean;
+  /** Machine-readable reason for the latest non-successful attempt. */
+  errorCode?: string;
   error?: string;
+  /** Latest send attempt start time, including attempts that failed or were blocked. */
+  attemptedAt?: string;
+  retryAt?: string;
   sentAt?: string;
   /** 本地出站消息 id */
   messageId?: string;
@@ -43,7 +49,7 @@ export interface BroadcastMedia {
   kind: BroadcastMediaKind;
   mime: string;
   fileName?: string;
-  /** Recorded audio is sent as a voice note; existing uploads keep file behavior. */
+  /** Send audio as a playable voice note. Older attachments may omit this flag. */
   voiceNote?: boolean;
 }
 
@@ -65,6 +71,7 @@ export interface BroadcastTheme {
 
 export interface BroadcastCampaign {
   id: string;
+  channelId?: "android_bridge";
   accountId: string;
   title?: string;
   /** 原始模板，含 {name} {company}；渲染后作为纯文本正文或媒体 caption */

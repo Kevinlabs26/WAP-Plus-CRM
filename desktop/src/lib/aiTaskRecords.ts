@@ -1,5 +1,6 @@
 import type { AutoReplyRuntime } from "./autoReplyRuntime";
 import type { Message } from "@/types/crm";
+import { normalizeAiDecisionDetails } from "./aiDecisionDetails.ts";
 
 export type AiReplyTaskRecord=Omit<AutoReplyRuntime,"phase">&{id:string;chatId:string;phase:AutoReplyRuntime["phase"]|"ended";at:string;messageId?:string};
 export function normalizeAiReplyTaskRecords(raw:unknown):AiReplyTaskRecord[]{
@@ -11,6 +12,7 @@ export function normalizeAiReplyTaskRecords(raw:unknown):AiReplyTaskRecord[]{
     records.set(id,{id,chatId:row.chatId,inboundId:row.inboundId,phase:row.phase,at:row.at,
       accountId:typeof row.accountId==="string"?row.accountId.slice(0,200):undefined,
       reason:typeof row.reason==="string"?row.reason.slice(0,500):undefined,
+      decisionDetails:normalizeAiDecisionDetails(row.decisionDetails),
       retryAt:typeof row.retryAt==="number"&&Number.isFinite(row.retryAt)?row.retryAt:undefined,
       messageId:typeof row.messageId==="string"?row.messageId.slice(0,200):undefined});
   }
@@ -27,7 +29,7 @@ export function updateAiReplyTaskRecords(records:AiReplyTaskRecord[],current:Rec
     if(previous[chatId]&&current[chatId]?.inboundId!==previous[chatId].inboundId){
       const old=previous[chatId],id=`runtime:${chatId}:${old.inboundId}`;
       const reply=messages.find(message=>message.chatId===chatId&&message.systemKind==="ai_auto_reply"&&message.aiReplyInboundId===old.inboundId);
-      byId.set(id,{...old,id,chatId,phase:"ended",reason:undefined,retryAt:undefined,at:new Date().toISOString(),messageId:reply?.id});
+      byId.set(id,{...old,id,chatId,phase:"ended",reason:!reply&&old.phase==="human"?old.reason:undefined,retryAt:undefined,at:new Date().toISOString(),messageId:reply?.id});
     }
     if(current[chatId]){const id=`runtime:${chatId}:${task.inboundId}`;byId.set(id,{...task,id,chatId,at:new Date().toISOString()});}
   }

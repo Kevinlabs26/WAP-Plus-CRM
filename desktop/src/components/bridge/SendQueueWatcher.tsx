@@ -6,7 +6,7 @@ import {
 } from "@/channels";
 import { useAppStore } from "@/store/appStore";
 import type { Message } from "@/types/crm";
-import { isRetryableOutgoing } from "@/store/outgoingRetry";
+import { isQueuedAiReplyImage, isQueuedWelcomeImage, isRetryableOutgoing } from "@/store/outgoingRetry";
 import {
   isWaAccountConnected,
   resolveWaSendAccountId,
@@ -14,12 +14,14 @@ import {
 import { getAutoReplySendError, canSendAutoReply } from "@/lib/aiSafety";
 import { canSendAiAutoFollowUp } from "@/lib/aiAutoReply";
 import { currentAutoReplyContext, inspectAutoReplyContext, hashAiReplyContext } from "@/lib/aiReplyContext";
-import { currentOutreachContext, isOutreachPaused } from "@/lib/aiOutreachContext";
+import { currentOutreachContext, isOutreachMessageExpired, isOutreachPaused } from "@/lib/aiOutreachContext";
 import { hydrateOutreachHistory } from "@/lib/aiOutreachHistory";
 import { translateCurrent } from "@/i18n";
 import { scheduledMessageExpired } from "@/lib/scheduledMessageExpiry";
 import { isAppLockActive } from "@/lib/appLockRuntime";
+import { groupWelcomeBlockedStatus, normalizeWelcomeImage } from "@/lib/groupWelcome";
 import { refreshAiConversationSummary } from "@/lib/aiConversationSummary";
+import { alternateSendAccounts } from "@/lib/alternateSendAccounts";
 
 const MAX_AUTO_RETRIES = 5;
 
@@ -33,12 +35,13 @@ function isTransientError(result: {
   error?: string;
   message?: string;
   status?: string;
+  deliveryUncertain?: boolean;
 }): boolean {
   const err = `${result.error || ""} ${result.message || ""}`.toLowerCase();
   if (result.error === "rate_limited") return true;
   if (result.error === "overheated" || result.error === "send_paused")
     return false;
-  if (result.error === "baileys_delivery_unknown") return false;
+  if (result.deliveryUncertain || result.error === "baileys_delivery_unknown") return false;
   if (result.error === "baileys_not_connected") return true;
   if (result.status === "queued") return true;
   return (
@@ -61,6 +64,8 @@ function isTransientError(result: {
 export function SendQueueWatcher() {
   const inflightAccounts = useRef(new Set<string>());
   const inflight = useRef(new Set<string>());
+  const proactiveInFlight = useRef(false);
+  const previousProactiveAccount = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     let cancelled = false;
@@ -74,6 +79,7 @@ export function SendQueueWatcher() {
     );
 
     const flushOne = async (queued: Message) => {
+      if (cancelled || isAppLockActive()) return;
       // 前一条的网络请求期间，用户可能取消、删除或推迟了本条消息。
       let state = useAppStore.getState();
       let msg = state.messages.find((item) => item.id === queued.id);
@@ -82,21 +88,28 @@ export function SendQueueWatcher() {
         (task) => task.messageId === queued.id && task.status === "cancelled"
       )) return;
       if (inflight.current.has(msg.id)) return;
-      if (!msg.phoneE164 || !msg.body) return;
+      if (!msg.phoneE164) return;
       // 媒体由聊天面板按原 data URL 重试，不能退化成占位文本发送。
-      if (msg.mediaType) return;
+      if (msg.mediaType && !isQueuedWelcomeImage(msg) && !isQueuedAiReplyImage(msg)) return;
 
       let settings = state.settings;
-      if(msg.systemKind==="ai_auto_reply"&&settings.aiAutoReplyPaused)return;
+      if(msg.systemKind==="ai_auto_reply"&&(settings.aiAutoReplyPaused||settings.aiAutoReplyDisabled))return;
       const scheduled = settings.scheduledMessages?.find(task => task.messageId === msg!.id);
-      if (scheduled && scheduledMessageExpired(scheduled)) {
-        const error = translateCurrent("scheduled.expired");
-        state.updateScheduledMessage(scheduled.id, { status: "expired", error });
+      const welcomeStatus = scheduled && groupWelcomeBlockedStatus(settings, scheduled);
+      if (scheduled && (welcomeStatus || scheduledMessageExpired(scheduled))) {
+        const error = translateCurrent(welcomeStatus ? "groupWelcome.stopped" : "scheduled.expired");
+        state.updateScheduledMessage(scheduled.id, { status: welcomeStatus || "expired", error });
         state.updateMessageDelivery(msg.id, { deliveryStatus: "failed", lastError: error, retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined });
         return;
       }
       const proactive=msg.systemKind==="ai_proactive";
+      const expireOutreachMessage=(currentState:typeof state,message:Message)=>{
+        if(!proactive||!isOutreachMessageExpired(currentState.settings,message.id))return false;
+        currentState.updateMessageDelivery(message.id,{deliveryStatus:"failed",retryCount:MAX_AUTO_RETRIES,nextAttemptAt:undefined,lastError:translateCurrent("outreachReason.expired")});
+        return true;
+      };
       if(proactive){
+        if(expireOutreachMessage(state,msg))return;
         if(isOutreachPaused(settings,msg.id))return;
         try{await hydrateOutreachHistory(msg.chatId);}catch{
           state.updateMessageDelivery(msg.id,{deliveryStatus:"queued",lastError:"聊天历史尚未读取，稍后重新检查",nextAttemptAt:new Date(Date.now()+30_000).toISOString()});return;
@@ -105,6 +118,7 @@ export function SendQueueWatcher() {
         state=useAppStore.getState();const current=state.messages.find(item=>item.id===queued.id);
         if(!current||!isRetryableOutgoing(current))return;
         msg=current;settings=state.settings;
+        if(expireOutreachMessage(state,msg))return;
         if(isOutreachPaused(settings,msg.id))return;
       }
       const aiContextKey = proactive ? currentOutreachContext(state,msg) : msg.systemKind === "ai_auto_reply" ? currentAutoReplyContext(state, msg) : null;
@@ -121,12 +135,13 @@ export function SendQueueWatcher() {
         if (cancelled) return;
         const latest = useAppStore.getState();
         const current = latest.messages.find((item) => item.id === queued.id);
-        if(proactive&&isOutreachPaused(latest.settings,queued.id))return;
         // 摘要校验会让出执行权；不能复活期间取消、删除或推迟的消息。
         if (!current || !isRetryableOutgoing(current) || current.body !== msg.body ||
             current.phoneE164 !== msg.phoneE164 || current.accountId !== msg.accountId || current.channelId !== msg.channelId ||
+            current.aiReplyImageAssetId !== msg.aiReplyImageAssetId ||
             current.aiReplyContextHash !== msg.aiReplyContextHash ||
             latest.settings.scheduledMessages?.some(task => task.messageId === current.id && task.status === "cancelled")) return;
+        if(expireOutreachMessage(latest,current)||proactive&&isOutreachPaused(latest.settings,queued.id))return;
         if (!verified || (proactive?currentOutreachContext(latest,current):currentAutoReplyContext(latest, current)) !== aiContextKey) {
           latest.updateMessageDelivery(current.id, {
             deliveryStatus: "failed", retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined,
@@ -141,6 +156,27 @@ export function SendQueueWatcher() {
       const channelId = normalizeChannelId(
         msg.channelId || settings.sendChannel
       ) as ChannelId;
+      const androidScheduled = scheduled?.channelId === "android_bridge" ||
+        (channelId === "android_bridge" && msg.systemKind === "scheduled_message");
+      const scheduledDeviceId = androidScheduled ? scheduled?.deviceId : undefined;
+      const waitingForPhone = "等待原定时发送的 Android 手机连接";
+      if (androidScheduled) {
+        if (channelId !== "android_bridge" || scheduled?.channelId !== "android_bridge" ||
+            scheduled.status !== "queued" || !scheduledDeviceId?.trim() || msg.deviceId !== scheduledDeviceId) {
+          state.updateMessageDelivery(msg.id, {
+            deliveryStatus: "failed", retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined,
+            lastError: "定时消息的 Android 手机绑定无法核对，请重新创建",
+          });
+          return;
+        }
+        if (!state.bridge.connected || state.bridge.deviceId !== scheduledDeviceId) {
+          state.updateScheduledMessage(scheduled.id, { error: waitingForPhone });
+          state.updateMessageDelivery(msg.id, {
+            deliveryStatus: "queued", lastError: waitingForPhone, nextAttemptAt: new Date(Date.now() + 5000).toISOString(),
+          });
+          return;
+        }
+      }
       if (msg.accountId && channelId === "baileys" &&
           !settings.waAccounts.some((account) => account.id === msg.accountId)) {
         state.updateMessageDelivery(msg.id, {
@@ -175,9 +211,30 @@ export function SendQueueWatcher() {
         return;
       }
 
-      if (!msg.phoneE164 || !msg.body) return;
+      if (!msg.phoneE164) return;
+      let imageDataUrl = isQueuedWelcomeImage(msg) ? normalizeWelcomeImage(scheduled?.imageDataUrl) : undefined;
+      if (isQueuedWelcomeImage(msg) && (!imageDataUrl || channelId !== "baileys")) {
+        state.updateMessageDelivery(msg.id, { deliveryStatus: "failed", retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined });
+        return;
+      }
+      if (isQueuedAiReplyImage(msg)) {
+        if (channelId !== "baileys" || !msg.aiReplyImageAssetId) {
+          state.updateMessageDelivery(msg.id, { deliveryStatus: "failed", retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined, lastError: "自动回复图片只能通过 Baileys 发送" });
+          return;
+        }
+        try {
+          const {readLibraryImage} = await import("@/lib/imageLibrary");
+          imageDataUrl = await readLibraryImage(msg.aiReplyImageAssetId);
+          if (!/^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+=*$/.test(imageDataUrl)) throw new Error("图片素材格式无效");
+        } catch (error) {
+          state.updateMessageDelivery(msg.id, { deliveryStatus: "failed", retryCount: MAX_AUTO_RETRIES, nextAttemptAt: undefined, lastError: error instanceof Error ? `自动回复图片素材不可用：${error.message}` : "自动回复图片素材不可用，请重新生成" });
+          return;
+        }
+      }
+      if (cancelled || isAppLockActive()) return;
       inflight.current.add(msg.id);
       const attempt = (msg.retryCount ?? 0) + 1;
+      let blockedByLock = false;
       state.updateMessageDelivery(msg.id, {
         deliveryStatus: "pending",
         lastError: undefined,
@@ -188,28 +245,36 @@ export function SendQueueWatcher() {
         const result = await dispatchSendText(
           {
             text: msg.body,
+            imageDataUrl,
             phoneE164: msg.phoneE164,
             contactId: msg.contactId,
-            deviceId: msg.deviceId ?? state.selectedPhoneId,
+            deviceId: androidScheduled ? scheduledDeviceId : msg.deviceId ?? state.selectedPhoneId,
             accountId,
+            ...(androidScheduled ? {confirmPhoneSend:true} : {}),
             ...(msg.quoted?.remoteJid ? { quoted: msg.quoted } : {}),
           },
           {
             channelId,
             requiredMinGapSec: msg.systemKind === "scheduled_message"||proactive ? 20 : undefined,
             canSend: () => {
+              blockedByLock ||= isAppLockActive();
+              if (blockedByLock) return false;
               const latest = useAppStore.getState();
               const message = latest.messages.find((item) => item.id === msg.id);
               const task = latest.settings.scheduledMessages?.find(item => item.messageId === msg.id);
-              if (task?.status === "queued" && scheduledMessageExpired(task)) {
-                latest.updateScheduledMessage(task.id, { status: "expired", error: translateCurrent("scheduled.expired") });
+              const welcomeStatus = task && groupWelcomeBlockedStatus(latest.settings, task);
+              if (task?.status === "queued" && (welcomeStatus || scheduledMessageExpired(task))) {
+                latest.updateScheduledMessage(task.id, { status: welcomeStatus || "expired", error: translateCurrent(welcomeStatus ? "groupWelcome.stopped" : "scheduled.expired") });
                 return false;
               }
               return !!message && message.deliveryStatus === "pending" &&
                 (!task || (task.status === "queued" && !scheduledMessageExpired(task))) &&
+                (!androidScheduled || (task?.channelId === "android_bridge" && task.deviceId === scheduledDeviceId &&
+                  message.deviceId === scheduledDeviceId && latest.bridge.connected && latest.bridge.deviceId === scheduledDeviceId)) &&
                 (!proactive||currentOutreachContext(latest,message)===aiContextKey) &&
                 (msg.systemKind !== "ai_auto_reply" || (currentAutoReplyContext(latest, message) === aiContextKey &&
                   canSendAutoReply(latest.settings, latest.messages, message,message.aiReplyInboundId) &&
+                  message.aiReplyImageAssetId === msg.aiReplyImageAssetId &&
                   canSendAiAutoFollowUp(latest.settings, latest.messages, message)));
             },
             rateLimitEnabled: settings.rateLimitEnabled !== false,
@@ -229,6 +294,18 @@ export function SendQueueWatcher() {
 
         if (cancelled) return;
 
+        if (blockedByLock && !result.ok && !result.deliveryUncertain && result.error === "automation_cancelled") {
+          const latest = useAppStore.getState();
+          const current = latest.messages.find(item => item.id === msg.id);
+          const task = latest.settings.scheduledMessages?.find(item => item.messageId === msg.id);
+          if (current?.deliveryStatus === "pending" && (!task || task.status === "queued")) {
+            latest.updateMessageDelivery(msg.id, {
+              deliveryStatus: "queued", retryCount: msg.retryCount ?? 0, lastError: msg.lastError, nextAttemptAt: msg.nextAttemptAt,
+            });
+          }
+          return;
+        }
+
         if (result.ok) {
           const waId = (() => {
             const raw = result.raw as { id?: string } | undefined;
@@ -239,6 +316,7 @@ export function SendQueueWatcher() {
               result.status === "local" ? "local" : "sent",
             lastError: undefined,
             nextAttemptAt: undefined,
+            ...(result.deviceId ? { deviceId: result.deviceId } : {}),
             ...(waId ? { waMessageId: waId } : {}),
           });
           if (msg.systemKind === "ai_auto_reply" && msg.aiAutoFollowUpRootId && result.status !== "local") {
@@ -248,23 +326,42 @@ export function SendQueueWatcher() {
           return;
         }
 
-        if(proactive&&result.error==="automation_cancelled") {
+        if (androidScheduled && result.error === "automation_cancelled" && !result.deliveryUncertain) {
+          const latest = useAppStore.getState();
+          const task = latest.settings.scheduledMessages?.find(item => item.messageId === msg.id);
+          const message = latest.messages.find(item => item.id === msg.id);
+          if (task?.status === "queued" && task.channelId === "android_bridge" &&
+              task.deviceId === scheduledDeviceId && message?.deviceId === scheduledDeviceId &&
+              message?.deliveryStatus === "pending" &&
+              (!latest.bridge.connected || latest.bridge.deviceId !== scheduledDeviceId)) {
+            latest.updateScheduledMessage(task.id, { error: waitingForPhone });
+            latest.updateMessageDelivery(msg.id, {
+              deliveryStatus: "queued", lastError: waitingForPhone, retryCount: attempt - 1,
+              nextAttemptAt: new Date(Date.now() + 5000).toISOString(),
+            });
+            return;
+          }
+        }
+
+        if(proactive&&(result.error==="automation_cancelled"||result.error==="rate_limited")) {
           const latest=useAppStore.getState(),current=latest.messages.find(item=>item.id===msg.id);
+          if(current?.deliveryStatus==="pending"&&expireOutreachMessage(latest,current))return;
           const run=latest.settings.aiOutreachRuns.find(item=>item.messageId===msg.id);
           // The final gate rejected before transport; a pause can safely retain this exact message.
-          if(current?.deliveryStatus==="pending"&&run?.status==="queued"&&isOutreachPaused(latest.settings,msg.id)) {
+          if(result.error==="automation_cancelled"&&current?.deliveryStatus==="pending"&&run?.status==="queued"&&isOutreachPaused(latest.settings,msg.id)) {
             latest.updateMessageDelivery(msg.id,{deliveryStatus:"queued",retryCount:Math.max(0,attempt-1),lastError:undefined,nextAttemptAt:new Date(Date.now()+5000).toISOString()});
             return;
           }
         }
         const rateLimited = result.error === "rate_limited";
-        const transient = isTransientError(result);
+        const transient = channelId !== "android_bridge" && isTransientError(result);
         // 冷却/限速本身就是可恢复状态，不消耗普通瞬时错误的重试额度。
         const canRetry = rateLimited || (transient && attempt < MAX_AUTO_RETRIES);
         const wait = backoffMs(attempt, result.retryAfterMs);
         useAppStore.getState().updateMessageDelivery(msg.id, {
           deliveryStatus: canRetry ? "queued" : "failed",
-          deliveryUncertain: result.error === "baileys_delivery_unknown",
+          deliveryUncertain: result.deliveryUncertain || result.error === "baileys_delivery_unknown",
+          ...(result.deviceId ? { deviceId: result.deviceId } : {}),
           lastError:
             result.message || result.error || translateCurrent("runtime.sendFailed"),
           ...(rateLimited ? { retryCount: Math.max(0, attempt - 1) } : {}),
@@ -295,21 +392,38 @@ export function SendQueueWatcher() {
       if (cancelled || isAppLockActive()) return;
       const state = useAppStore.getState();
       const due = state.listRetryableOutgoing().filter(msg =>
-        !msg.mediaType && isRetryableOutgoing(msg) &&
+        (!msg.mediaType || isQueuedWelcomeImage(msg) || isQueuedAiReplyImage(msg)) && isRetryableOutgoing(msg) &&
         !state.settings.scheduledMessages?.some(task => task.messageId === msg.id && task.status === "cancelled")
       ).sort((a, b) => a.sentAt.localeCompare(b.sentAt));
-      for (const msg of due) {
+      const accountKey = (msg: Message) => accountFor(msg, state) || msg.deviceId || "legacy";
+      const proactive = alternateSendAccounts(
+        due.filter(msg => msg.systemKind === "ai_proactive" && !isOutreachPaused(state.settings,msg.id)),
+        accountKey,
+        previousProactiveAccount.current,
+      ).values();
+      for (const entry of due) {
         if (cancelled || inflightAccounts.current.size >= 3) break;
-        const account = accountFor(msg, state) || msg.deviceId || "legacy";
+        const isProactive = entry.systemKind === "ai_proactive";
+        if (isProactive && proactiveInFlight.current) continue;
+        const msg = isProactive ? proactive.next().value : entry;
+        if (!msg) continue;
+        const account = accountKey(msg);
         if (inflightAccounts.current.has(account) || inflight.current.has(msg.id)) continue;
         inflightAccounts.current.add(account);
+        if (isProactive) proactiveInFlight.current = true;
         // 同号保序；慢账号不占住其它账号的重试，发送仍经过统一限速门闸。
         void flushOne(msg).catch(error => {
           if (!cancelled) useAppStore.getState().pushToast(String(error), "error");
         }).finally(() => {
           inflightAccounts.current.delete(account);
+          const current = useAppStore.getState().messages.find(item => item.id === msg.id);
+          if (isProactive) {
+            proactiveInFlight.current = false;
+            if (current && (current.deliveryUncertain || ["sent","server","delivered","read","played"].includes(current.deliveryStatus || ""))) {
+              previousProactiveAccount.current = account;
+            }
+          }
           if (!cancelled) {
-            const current = useAppStore.getState().messages.find(item => item.id === msg.id);
             if (!current || !isRetryableOutgoing(current)) tick();
           }
         });

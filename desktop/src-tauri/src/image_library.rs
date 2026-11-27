@@ -13,6 +13,8 @@ const MAX_TOTAL: i64 = 1024 * 1024 * 1024;
 #[serde(tag = "action", rename_all = "camelCase")]
 pub enum Request {
     List,
+    ListMetadata,
+    Thumbnail { id: String },
     ListCategories,
     CreateCategory {
         name: String,
@@ -401,8 +403,14 @@ fn execute(conn: &Connection, dir: &Path, request: Request) -> Result<Value, Str
             }
             Ok(json!({"id":next}))
         }
-        Request::List => {
-            let mut stmt = conn.prepare("SELECT id,title,category,mime,size,thumbnail,pinned,used_at,created_at,caption,sort_order FROM image_library ORDER BY sort_order,pinned DESC,created_at DESC,id").map_err(|e| e.to_string())?;
+        Request::Thumbnail { id } => {
+            valid_id(&id)?;
+            let thumbnail: String = conn.query_row("SELECT thumbnail FROM image_library WHERE id=?1", [&id], |row| row.get(0)).map_err(|e| e.to_string())?;
+            Ok(json!(thumbnail))
+        }
+        Request::List | Request::ListMetadata => {
+            let thumbnail = if matches!(request, Request::List) { "thumbnail" } else { "''" };
+            let mut stmt = conn.prepare(&format!("SELECT id,title,category,mime,size,{thumbnail},pinned,used_at,created_at,caption,sort_order FROM image_library ORDER BY sort_order,pinned DESC,created_at DESC,id")).map_err(|e| e.to_string())?;
             let rows = stmt.query_map([], |r| Ok(json!({"id":r.get::<_,String>(0)?,"title":r.get::<_,String>(1)?,"category":r.get::<_,String>(2)?,"mime":r.get::<_,String>(3)?,"size":r.get::<_,i64>(4)?,"thumbnail":r.get::<_,String>(5)?,"pinned":r.get::<_,bool>(6)?,"usedAt":r.get::<_,i64>(7)?,"createdAt":r.get::<_,i64>(8)?,"caption":r.get::<_,String>(9)?,"sortOrder":r.get::<_,i64>(10)?}))).map_err(|e| e.to_string())?;
             Ok(Value::Array(
                 rows.collect::<Result<Vec<_>, _>>()
@@ -620,6 +628,11 @@ mod tests {
         assert_eq!(list[0]["caption"], "Keep this caption");
         assert_eq!(list[0]["usedAt"], 123);
         assert_eq!(list[0]["pinned"], true);
+        let metadata = execute(&conn, &dir, Request::ListMetadata).unwrap();
+        assert_eq!(metadata[0]["id"], list[0]["id"]);
+        assert_eq!(metadata[0]["caption"], list[0]["caption"]);
+        assert_eq!(metadata[0]["thumbnail"], "");
+        assert_eq!(execute(&conn, &dir, Request::Thumbnail { id: a.clone() }).unwrap(), list[0]["thumbnail"]);
         execute(
             &conn,
             &dir,

@@ -1,0 +1,126 @@
+name: macOS build and DMG verification
+
+on:
+  workflow_call:
+    inputs:
+      notarize:
+        type: boolean
+        default: false
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: macOS (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - name: Set up Java for the Android Bridge
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - name: Install dependencies
+        run: |
+          test "$(uname -m)" = "${{ matrix.arch }}"
+          npm ci
+      - name: Prepare Android Bridge APK
+        run: npm run android:bridge:prepare
+      - name: Build and test the native tools
+        env:
+          FFMPEG_SOURCE_BUNDLE: ${{ runner.temp }}/ffmpeg-source-${{ matrix.arch }}.tar.gz
+        run: |
+          bash tools/build-ffmpeg-macos.sh
+          npm run build:macos -w wap-plus-baileys
+          target=$(rustc -vV | awk '/^host:/ {print $2}')
+          tools="$PWD/desktop/src-tauri/binaries"
+          "$tools/ffmpeg-$target" -v error -f lavfi -i sine=duration=0.1 -c:a libopus "${RUNNER_TEMP}/voice.ogg"
+          test -s "${RUNNER_TEMP}/voice.ogg"
+          node tools/mock-bridge-smoke.test.mjs
+      - name: Test frontend and Rust
+        timeout-minutes: 30
+        run: |
+          set -o pipefail
+          status=0
+          if ! npm test 2>&1 | tee "$RUNNER_TEMP/macos-node-tests.log"; then
+            grep -m 10 '^not ok ' "$RUNNER_TEMP/macos-node-tests.log" |
+              while IFS= read -r line; do printf '::error::%s\n' "${line//%/%25}"; done || true
+            status=1
+          fi
+          keychain="$RUNNER_TEMP/bridgecrm-tests.keychain-db"
+          previous=$(security default-keychain -d user | xargs)
+          password=$(openssl rand -hex 24)
+          trap 'if [[ -n "$previous" ]]; then security default-keychain -d user -s "$previous"; fi; security delete-keychain "$keychain" || true' EXIT
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security default-keychain -d user -s "$keychain"
+          if ! cargo test --locked --lib --tests --manifest-path desktop/src-tauri/Cargo.toml 2>&1 | tee "$RUNNER_TEMP/macos-rust-tests.log"; then
+            grep -m 10 -E '^error|^test .*FAILED' "$RUNNER_TEMP/macos-rust-tests.log" |
+              while IFS= read -r line; do printf '::error::%s\n' "${line//%/%25}"; done || true
+            status=1
+          fi
+          exit "$status"
+      - name: Prepare production Google OAuth configuration
+        if: ${{ github.ref_type == 'tag' }}
+        env:
+          GOOGLE_DESKTOP_CLIENT_JSON: ${{ secrets.GOOGLE_DESKTOP_CLIENT_JSON }}
+        run: node --experimental-strip-types .github/scripts/prepare-google-client.mjs
+      - name: Build test DMG
+        if: ${{ github.ref_type != 'tag' }}
+        run: npm run tauri -- build --debug --bundles dmg --config '{"bundle":{"createUpdaterArtifacts":false,"macOS":{"signingIdentity":"-","minimumSystemVersion":"13.0"}}}'
+      - name: Build unsigned release DMG
+        if: ${{ github.ref_type == 'tag' && inputs.notarize != true }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri -- build --bundles app,dmg --config '{"bundle":{"macOS":{"signingIdentity":"-","minimumSystemVersion":"13.0"}}}'
+      - name: Sign and notarize release DMG
+        if: ${{ github.ref_type == 'tag' && inputs.notarize == true }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          : "${APPLE_CERTIFICATE:?Missing APPLE_CERTIFICATE}"
+          : "${APPLE_CERTIFICATE_PASSWORD:?Missing APPLE_CERTIFICATE_PASSWORD}"
+          : "${APPLE_SIGNING_IDENTITY:?Missing APPLE_SIGNING_IDENTITY}"
+          : "${APPLE_ID:?Missing APPLE_ID}"
+          : "${APPLE_PASSWORD:?Missing APPLE_PASSWORD}"
+          : "${APPLE_TEAM_ID:?Missing APPLE_TEAM_ID}"
+          npm run tauri -- build --bundles app,dmg --config '{"bundle":{"macOS":{"minimumSystemVersion":"13.0"}},"plugins":{"updater":{"endpoints":["https://raw.githubusercontent.com/Kevinlabs26/WAP-Plus-CRM/macos-updates/latest-signed.json"]}}}'
+      - name: Verify the DMG and bundled executables
+        env:
+          ARCH: ${{ matrix.arch }}
+          PUBLISH: ${{ inputs.notarize == true }}
+          RELEASE_BUILD: ${{ github.ref_type == 'tag' }}
+        run: bash tools/verify-macos-dmg.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-${{ matrix.arch }}
+          path: ${{ runner.temp }}/macos-release/*
+          if-no-files-found: error

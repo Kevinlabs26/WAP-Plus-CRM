@@ -258,7 +258,8 @@ export async function withSendGate<T>(
           (result as { ok?: boolean }).ok !== false) &&
         // Android 预览可能 ok=true 但 delivered=false，不能计入出站统计。
         (!("delivered" in (result as object)) ||
-          (result as { delivered?: boolean }).delivered !== false));
+          (result as { delivered?: boolean }).delivered !== false ||
+          ("status" in result && result.status === "sent")));
     if (succeeded) {
       recordOutboundSend(input, config, gate.effectiveLimits, true);
     }

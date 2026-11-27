@@ -5,7 +5,7 @@ export type SheetSchedule =
   | { kind: "interval"; minutes: number }
   | { kind: "daily"; time: string };
 
-export type SheetColumn = { heading: string } | { position: number };
+export type SheetColumn = { heading: string } | { position: number; expectedHeading?: string };
 // A batch has room for 100 ranges; phone numbers and the header reserve two.
 export const MAX_SHEET_DISPLAY_COLUMNS = 98;
 
@@ -31,7 +31,9 @@ export function sheetColumnIndex(headers: readonly string[], heading: string): n
 
 export function resolveSheetColumn(headers: readonly string[], column: SheetColumn): number | null {
   if ("heading" in column) return sheetColumnIndex(headers, column.heading);
-  return Number.isInteger(column.position) && column.position >= 0 ? column.position : null;
+  if (!Number.isInteger(column.position) || column.position < 0) return null;
+  if (column.expectedHeading !== undefined && headers[column.position] !== column.expectedHeading) return null;
+  return column.position;
 }
 
 export function matchingSheetRows(rows: readonly (readonly string[])[], phoneColumn: number, phone: string, region?: CountryCode): number[] {

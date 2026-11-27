@@ -1,3 +1,4 @@
+import { isGroupWelcomeTask } from "../lib/groupWelcome.ts";
 import type { Message } from "@/types/crm";
 
 /** 兼容旧快照中只有中/英/法错误提示、没有结构化标记的未知结果。 */
@@ -22,12 +23,20 @@ export function isRateLimitedMessage(message: Message) {
   );
 }
 
+export function isQueuedWelcomeImage(message: Message) {
+  return message.systemKind === "scheduled_message" && isGroupWelcomeTask(message.id) && message.mediaType === "image";
+}
+
+export function isQueuedAiReplyImage(message: Message) {
+  return message.systemKind === "ai_auto_reply" && message.mediaType === "image" && Boolean(message.aiReplyImageAssetId);
+}
+
 export function isRetryableOutgoing(message: Message, now = Date.now()) {
   if (message.direction !== "out") return false;
   if (isDeliveryUncertain(message)) return false;
   if (message.systemKind === "broadcast_campaign" || message.systemKind === "scheduled_plan") return false;
   if (message.deliveryStatus !== "queued" && message.deliveryStatus !== "failed") return false;
-  if (!message.phoneE164 || !message.body) return false;
+  if (!message.phoneE164 || (!message.body && !isQueuedWelcomeImage(message) && !isQueuedAiReplyImage(message))) return false;
   if ((message.retryCount ?? 0) >= 5 && !isRateLimitedMessage(message)) return false;
   if (message.deliveryStatus === "failed" && !message.nextAttemptAt) {
     // 硬失败（watcher 清除了计划时间）：只允许手动重试。

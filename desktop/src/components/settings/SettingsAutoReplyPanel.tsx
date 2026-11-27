@@ -11,7 +11,6 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 import { AiPromptLibrary } from "./AiPromptLibrary";
 import { SettingsNumberInput } from "./SettingsNumberInput";
-import { MAX_EFFECTIVE_PROMPT_CHARS } from "@/lib/aiPromptScope";
 
 /**
  * AI 自动回复设置：回复模式、自动回复行为、聊天身份与偏好。
@@ -89,6 +88,18 @@ export function SettingsAutoReplyPanel() {
     updateSettings({ aiAutoReplyPolicyByAccountId: next });
   };
 
+  const enableDefaultAutoReply = async () => {
+    if (settings.aiReplyMode === "auto") return;
+    if (!await useAppStore.getState().requestConfirm({
+      title: t("settingsAutoReply.autoConfirmTitle"),
+      description: t("settingsAutoReply.autoConfirmDescription"),
+      confirmLabel: t("settingsAutoReply.autoConfirmButton"),
+      cancelLabel: t("common.cancel"),
+      tone: "danger",
+    })) return;
+    updateSettings({ aiReplyMode: "auto" });
+  };
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <header>
@@ -139,7 +150,7 @@ export function SettingsAutoReplyPanel() {
           </button>
           <button
             type="button"
-            onClick={() => updateSettings({ aiReplyMode: "auto" })}
+            onClick={() => void enableDefaultAutoReply()}
             className={cn(
               "flex flex-col items-start gap-1 rounded-lg border px-3 py-3 text-left transition-colors",
               settings.aiReplyMode === "auto"
@@ -189,14 +200,16 @@ export function SettingsAutoReplyPanel() {
             <SectionLabel>{t("settingsAutoReply.followUpTitle")}</SectionLabel>
             <p className="mt-1 text-2xs text-zinc-500">{t("settingsAutoReply.followUpHint")}</p>
           </div>
-          <Switch
-            checked={settings.aiAutoFollowUpEnabled}
-            aria-label={t("settingsAutoReply.followUpTitle")}
-            disabled={!settings.aiAutoFollowUpEnabled && !followUpConfigured}
-            onChange={event => updateSettings(event.target.checked
-              ? { aiAutoFollowUpEnabled: true, aiAutoFollowUpEnabledAt: Date.now() }
-              : { aiAutoFollowUpEnabled: false })}
-          />
+          <label className="inline-flex cursor-pointer">
+            <Switch
+              checked={settings.aiAutoFollowUpEnabled}
+              aria-label={t("settingsAutoReply.followUpTitle")}
+              disabled={!settings.aiAutoFollowUpEnabled && !followUpConfigured}
+              onChange={event => updateSettings(event.target.checked
+                ? { aiAutoFollowUpEnabled: true, aiAutoFollowUpEnabledAt: Date.now() }
+                : { aiAutoFollowUpEnabled: false })}
+            />
+          </label>
         </div>
         <div className="mt-3 divide-y divide-zinc-800/70">
           {followUpDelays.map((minutes, index) => (
@@ -279,7 +292,6 @@ export function SettingsAutoReplyPanel() {
         <Textarea
           value={accountPrompt}
           onChange={(event) => updateAccountPrompt(event.target.value)}
-          aria-invalid={accountPrompt.trim().length > MAX_EFFECTIVE_PROMPT_CHARS}
           className="mt-2 min-h-24 w-full"
           placeholder={
             profileAccountId && settings.aiSystemPrompt
@@ -287,8 +299,8 @@ export function SettingsAutoReplyPanel() {
               : t("settingsAutoReply.identityPlaceholder")
           }
         />
-        <p role={accountPrompt.trim().length > MAX_EFFECTIVE_PROMPT_CHARS ? "alert" : undefined} className="mt-2 text-xs text-zinc-500">
-          {t("settingsAutoReply.promptLength", { count: accountPrompt.trim().length, max: MAX_EFFECTIVE_PROMPT_CHARS })}
+        <p className="mt-2 text-xs text-zinc-500">
+          {t("settingsAutoReply.promptLength", { count: accountPrompt.trim().length })}
         </p>
       </section>
 

@@ -7,6 +7,9 @@
 #[path = "../src/db.rs"] mod db;
 #[cfg(windows)]
 #[path = "../src/clipboard.rs"] mod clipboard;
+#[cfg(target_os = "macos")]
+#[path = "../src/clipboard_macos.rs"]
+mod clipboard_macos;
 #[path = "../src/commands.rs"] mod commands;
 fn show_main_window(_: &tauri::AppHandle) {}
 

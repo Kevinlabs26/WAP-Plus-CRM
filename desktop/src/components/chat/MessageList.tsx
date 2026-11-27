@@ -58,7 +58,7 @@ type Props = {
   onRetry: (id: string) => void;
   onReloadMedia: (m: Message, quiet?: boolean) => void;
   onPreview: (src: string, alt: string) => void;
-  onSenderClick?: (m: Message) => void;
+  onSenderClick?: (m: Message, member?: SenderPresentation) => void;
   onQuoteClick?: (messageId: string) => void;
   selectable?: boolean;
   selectedMessageIds?: ReadonlySet<string>;

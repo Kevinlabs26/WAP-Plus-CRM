@@ -9,7 +9,7 @@ export function hasRealtimeIngestEvents(events: BridgeEvent[]): boolean {
         !["history", "snapshot", "sync"].includes(String(payload?.source || "")));
     }
     if (event.type === "contacts.sync") return payload?.source === "message";
-    return ["messages.ack", "messages.delete", "chats.delete"].includes(event.type);
+    return ["messages.ack", "messages.edit", "messages.delete", "chats.delete"].includes(event.type);
   });
 }
 

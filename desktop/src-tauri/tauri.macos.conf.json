@@ -1,0 +1,9 @@
+{
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://raw.githubusercontent.com/Kevinlabs26/WAP-Plus-CRM/macos-updates/latest-unsigned.json"
+      ]
+    }
+  }
+}

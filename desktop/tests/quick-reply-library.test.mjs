@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
-import { parseQuickReplyTable, quickReplyRowsToTsv, quickReplySheetRows } from '../src/lib/quickReplyImport.ts';
+import { parseQuickReplyTable, parseQuickReplyTextFile, quickReplyRowsToTsv, quickReplySheetRows } from '../src/lib/quickReplyImport.ts';
+import * as XLSX from "xlsx";
+import { readQuickReplyWorkbook } from '../src/lib/quickReplyWorkbook.ts';
 import { flattenQuickReplyCategories, quickReplyCategoryDescendants, quickReplyPreviewText } from '../src/lib/quickReplies.ts';
 
 test('spreadsheet replies preserve quoted multiline bodies and detect actual separators', () => {
@@ -60,12 +62,27 @@ test('list previews omit repeated headings and preserve the rest of long replies
  assert.equal(quickReplyPreviewText('Greeting','Different text'),'Different text');
 });
 test('import rejects malformed and overlong rows instead of silently truncating', () => {
-  assert.deepEqual(parseQuickReplyTable('A\t\nB\tOK\n'+ 'x'.repeat(41)+'\tBody').invalidRows,[1,3]);
+  const longName = 'x'.repeat(140);
+  const parsed = parseQuickReplyTable('A\t\nB\tOK\n'+ longName+'\tBody\t'+longName);
+  assert.deepEqual(parsed.invalidRows,[1]);
+  assert.equal(parsed.rows[1].title,longName);
+  assert.equal(parsed.rows[1].category,longName);
   assert.throws(()=>parseQuickReplyTable('A\t"unclosed'));
-  assert.throws(()=>parseQuickReplyTable('A\tB\n'.repeat(1002)));
-  assert.throws(()=>parseQuickReplyTable('A\tB\n'.repeat(1001)));
-  assert.equal(parseQuickReplyTable('Title\tBody\n'+'A\tB\n'.repeat(1000)).rows.length,1000);
+  assert.equal(parseQuickReplyTable('Title\tBody\n'+'A\tB\n'.repeat(1200)).rows.length,1200);
+  const data = Array.from({length:1200}, (_, i) => [`Reply ${i}`, "Translation"]);
+  assert.equal(parseQuickReplyTable(JSON.stringify({tabs:{one:{workname:"Imported",data}}})).rows.length,1200);
   assert.throws(()=>parseQuickReplyTable('x'.repeat(3_000_001)));
+});
+
+test("a streamed CSV larger than 3 MB retains the last row and quoted multiline content", async () => {
+ const body = '你好'.repeat(220) + '\nEmbedded "quote"';
+ const rows = Array.from({length:3000},(_,index)=>[`Title ${index}`,body,'Full category '.repeat(10).trimEnd()]);
+ const file = new File([quickReplyRowsToTsv(rows)],"large.csv");
+ assert.ok(file.size > 3_000_000);
+ const result = await parseQuickReplyTextFile(file);
+ assert.equal(result.invalidRows.length,0);
+ assert.equal(result.rows.length,3000);
+ assert.deepEqual(result.rows.at(-1),{title:"Title 2999",body,category:rows[0][2]});
 });
 
 const mocks = {
@@ -79,15 +96,16 @@ const mocks = {
  '@/lib/quickReplySheetSync': 'export const scheduleQuickReplySheetSync=(id)=>globalThis.quickState.syncIds?.push(id);export const cancelQuickReplySheetSync=()=>{};export const removeQuickReplySheetRow=async(link)=>globalThis.quickState.removeSheetRow?.(link);export const restoreQuickReplySheetRow=async()=>{};',
  '@/lib/googleSheetErrors': 'export const sheetErrorHint=()=>"sheets.error.other";',
   '@/lib/accountConnection': 'export const isWaAccountConnected=()=>globalThis.quickState.connected;',
+  '@/lib/quickReplyWorkbookImport': 'export const readQuickReplyWorkbookInWorker=file=>globalThis.quickState.readWorkbook(file);',
   '@/lib/baileys': 'export const baileysRemoveQuickReply=async()=>{await globalThis.quickState.removeRemote?.();};export const baileysSyncQuickReplies=async items=>{globalThis.quickState.synced=items;return {synced:items.length};};',
 };
-const result = await build({stdin:{contents:`export {SettingsQuickRepliesPanel} from './src/components/settings/SettingsQuickRepliesPanel.tsx';export {normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {buildSettingsSafe,parseBackupJson} from './src/lib/exportData.ts';export {getQuickReplyCategories} from './src/lib/quickReplies.ts';`,resolveDir:fileURLToPath(new URL('../',import.meta.url))},
+const result = await build({stdin:{contents:`export {SettingsQuickRepliesPanel} from './src/components/settings/SettingsQuickRepliesPanel.tsx';export {normalizeLoadedSettings} from './src/store/settingsDefaults.ts';export {buildSettingsSafe,parseBackupJson} from './src/lib/exportData.ts';export {getQuickReplyCategories} from './src/lib/quickReplies.ts';export {buildQuickReplyBackup,mergeQuickReplyBackup} from './src/lib/quickReplyBackup.ts';`,resolveDir:fileURLToPath(new URL('../',import.meta.url))},
  bundle:true,write:false,format:'esm',platform:'browser',jsx:'automatic',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},
  plugins:[{name:'quick-reply-boundaries',setup(b){
  b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);
  b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));
  }}]});
-const {SettingsQuickRepliesPanel,normalizeLoadedSettings,buildSettingsSafe,parseBackupJson,getQuickReplyCategories}=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].text+'\n//# sourceURL=quick-replies-panel.test-bundle.js').toString('base64'));
+const {SettingsQuickRepliesPanel,normalizeLoadedSettings,buildSettingsSafe,parseBackupJson,getQuickReplyCategories,buildQuickReplyBackup,mergeQuickReplyBackup}=await import('data:text/javascript;base64,'+Buffer.from(result.outputFiles[0].text+'\n//# sourceURL=quick-replies-panel.test-bundle.js').toString('base64'));
 const nodes=tree=>Array.isArray(tree)?tree.flatMap(nodes):tree?.props?[tree,...nodes(tree.props.children)]:[];
 const reply=(id,extra={})=>({id,title:id,body:'Body '+id,category:'other',...extra});
 const media={dataUrl:'data:image/png;base64,AA==',fileName:'photo.png',mimeType:'image/png',kind:'image',size:1};
@@ -120,7 +138,7 @@ function harness(replies=[reply('a')], openEditor=true, props={}) {
    source().props.onPointerMove({pointerId:1,clientX:0,clientY:after==='inside'?30:after?39:21,currentTarget,preventDefault(){}});h.render();
    source().props.onPointerUp({pointerId:1,clientX:0,clientY:after==='inside'?30:after?39:21,currentTarget});h.render();
   }finally{globalThis.document=originalDocument;}
- }, upload(file){h.nodes().find(n=>n.props.type==='file').props.onChange({target:{files:[file]},currentTarget:{value:'file'}});h.render();},
+ }, upload(file){h.nodes().find(n=>n.props["aria-label"]==='settingsQuickReplies.addMedia' && n.props.type==='file').props.onChange({target:{files:[file]},currentTarget:{value:'file'}});h.render();},
  close(){for(const f of cleanups)f();for(const timer of timers)clearTimeout(timer);globalThis.setTimeout=originalTimeout;}
  };
  h.render();
@@ -341,7 +359,7 @@ test('default categories can be deleted by right click, while All and Other rema
  const h=harness([reply('a',{category:'opening',media})]);try{
  h.state.requestConfirm=async()=>true;h.render();
  const category=label=>h.nodes().find(n=>n.type==='button'&&Array.isArray(n.props.children)&&n.props.children[0]?.props?.children===label);
- assert.equal(category('starred.all').props.onContextMenu,undefined);assert.equal(category('quickReply.category.other').props.onContextMenu,undefined);
+ assert.equal(category('starred.all').props.onContextMenu,undefined);assert.equal(category('quickReply.category.other'),undefined);
  category('quickReply.category.opening').props.onClick();h.render();
  category('quickReply.category.opening').props.onContextMenu({preventDefault(){}});await new Promise(setImmediate);h.render();
  assert.ok(h.find('quickLibrary.deleteCategoryOnly'));
@@ -428,6 +446,62 @@ test('selected sheet tabs import directly with their chosen columns and keep sou
  }finally{h.close();}
 });
 
+test("Google Sheets import pages through row 1201 in column AA and reimports without duplicates", async () => {
+ const h=harness([]);
+ try {
+  const originals=Array.from({length:1200},(_,i)=>`Original ${i}`);
+  const translations=originals.map((_,i)=>`Translation ${i}`);
+  const requested=[];
+  h.state.email='test@example.com';
+  h.state.readSheet=async(_id,ranges)=>{
+   if (!ranges) return {properties:{title:'Book'},sheets:[{properties:{title:'Tab',gridProperties:{rowCount:1201}}}]};
+   requested.push(ranges);
+   const match=/!(?:A)(\d+):A(\d+)$/.exec(ranges[0]);
+   const start=Number(match[1])-1,end=Number(match[2]);
+   return {valueRanges:[{values:[['原文',...originals].slice(start,end)]},{values:[['译文',...translations].slice(start,end)]}]};
+  };
+  h.render();h.click('quickLibrary.import');h.type('quickLibrary.sheetUrl','https://docs.google.com/spreadsheets/d/sheet/');
+  h.click('quickLibrary.fetchTabs');await new Promise(setImmediate);h.render();
+  h.type('quickLibrary.translationColumn','AA');
+  h.click('quickLibrary.importSelectedTabs'+JSON.stringify({count:1}));await new Promise(setImmediate);h.render();
+  assert.deepEqual(requested,[["'Tab'!A1:A1000","'Tab'!AA1:AA1000"],["'Tab'!A1001:A1201","'Tab'!AA1001:AA1201"]]);
+  assert.equal(h.state.settings.quickReplies.length,1200);
+  const last=h.state.settings.quickReplies.find(reply=>reply.body==='Original 1199');
+  assert.equal(last.translation,'Translation 1199');
+  assert.equal(last.sheetLink.row,1201);
+  assert.equal(last.sheetLink.translationColumn,26);
+  h.click('quickLibrary.import');
+  h.click('quickLibrary.importSelectedTabs'+JSON.stringify({count:1}));await new Promise(setImmediate);h.render();
+  assert.equal(h.state.settings.quickReplies.length,1200);
+ } finally {h.close();}
+});
+
+test("Excel file input previews and imports 1200 rows, then reload retains the final reply", async () => {
+ const h=harness([]);
+ h.state.readWorkbook = readQuickReplyWorkbook;
+ try {
+  const workbook=XLSX.utils.book_new();
+  const data=Array.from({length:1200},(_,i)=>[`Title ${i}`,`Original ${i}`,`Translation ${i}`]);
+  XLSX.utils.book_append_sheet(workbook,XLSX.utils.aoa_to_sheet([['Title','Original','Translation'],...data]),'Excel');
+  const file=new File([XLSX.write(workbook,{type:'buffer',bookType:'xlsx'})],'replies.xlsx');
+  h.click('quickLibrary.import');
+  h.nodes().find(node=>node.props["aria-label"]==='quickLibrary.importFile' && node.type==='input').props.onChange({currentTarget:{files:[file],value:'replies.xlsx'}});
+  await new Promise(setImmediate);h.render();
+  await h.click('quickLibrary.confirmImport');
+  const saved=normalizeLoadedSettings(JSON.parse(JSON.stringify(h.state.settings)));
+  assert.equal(saved.quickReplies.length,1200);
+  const last=saved.quickReplies.find(reply=>reply.title==='Title 1199');
+  assert.equal(last.body,'Original 1199');
+  assert.equal(last.translation,'Translation 1199');
+ } finally {h.close();}
+});
+
+test("folder names longer than the former cap survive settings reload", () => {
+ const name="长文件夹名".repeat(25);
+ const settings=normalizeLoadedSettings({chatFolders:[{id:'imported',name,chatIds:[]}]});
+ assert.equal(settings.chatFolders.find(folder=>folder.id==='imported').name,name);
+});
+
 test('media copy preserves attachment and uploading preserves edits made during read',async()=>{
  const h=harness([reply('a',{media})]);const original=globalThis.FileReader;let readers=[];
  globalThis.FileReader=class{constructor(){readers.push(this);}readAsDataURL(){} };
@@ -456,15 +530,22 @@ test('last attachment selection wins and deletion during read cannot recreate a 
  }finally{h.close();globalThis.FileReader=original;}
 });
 
-test('imports atomically create categories, skip duplicates and respect the 1000 reply bound',()=>{
+test('imports create categories, skip duplicates and survive reload above 1000 replies',()=>{
  const h=harness();try{
  h.click('quickLibrary.import');h.type('quickLibrary.import','Title\tBody\tCategory\nWelcome\tBonjour\tAccueil\nWelcome\tBonjour\tAccueil');
  h.click('quickLibrary.confirmImport');assert.equal(h.state.settings.quickReplies.length,2);
  assert.equal(h.state.settings.quickReplyCustomCategories[0].label,'Accueil');
  assert.equal(h.state.settings.quickReplies[1].category,h.state.settings.quickReplyCustomCategories[0].id);
- h.state.settings.quickReplies=Array.from({length:1000},(_,i)=>reply('r'+i));h.render();
- h.click('quickLibrary.import');h.type('quickLibrary.import','Another\tBody\tNew category');h.click('quickLibrary.confirmImport');
- assert.equal(h.state.settings.quickReplies.length,1000);assert.equal(h.state.settings.quickReplyCustomCategories.length,1);
+ const rows=Array.from({length:1200},(_,i)=>`Imported ${i}\tMessage ${i}\tNew category\tTranslation ${i}`);
+ h.click('quickLibrary.import');h.type('quickLibrary.import',rows.join('\n'));h.click('quickLibrary.confirmImport');
+ assert.equal(h.state.settings.quickReplies.length,1202);assert.equal(h.state.settings.quickReplyCustomCategories.length,2);
+ const loaded=normalizeLoadedSettings(JSON.parse(JSON.stringify(h.state.settings)));
+ const loadedRows=loaded.quickReplies.filter(item=>item.title.startsWith('Imported '));
+ assert.equal(loadedRows.length,1200);
+ assert.deepEqual(loadedRows.map(item=>[item.title,item.body,item.translation]),rows.map(row=>{
+  const [title,body,,translation]=row.split('\t');
+  return [title,body,translation];
+ }));
  }finally{h.close();}
 });
 
@@ -516,4 +597,30 @@ test('oversized attachments, full media capacity and read failures preserve the 
  assert.ok(h.state.toasts.some(([key])=>key==='settingsQuickReplies.mediaReadFailed'));
  assert.deepEqual(h.state.settings.quickReplies[0].media,media);
  }finally{h.close();globalThis.FileReader=original;}
+});
+
+test("portable reply backup merges conflicts and restores translation, hierarchy, pins and attachment without duplicates", () => {
+  const media = { dataUrl:"data:image/png;base64,AA==", fileName:"sample.png", mimeType:"image/png", kind:"image", size:1 };
+  const source = normalizeLoadedSettings({
+    quickReplies: [{ id:"same", title:"Greeting", body:"Original", translation:"Translated", category:"child", media }],
+    quickReplyCustomCategories: [{ id:"parent", label:"Parent" }, { id:"child", label:"Child", parentId:"parent" }],
+    quickReplyPinnedIds:["same"],
+  });
+  const local = normalizeLoadedSettings({
+    quickReplies: [{ id:"same", title:"Local", body:"Keep this", category:"other" }],
+    quickReplyCustomCategories: [{ id:"parent", label:"Unrelated local category" }],
+  });
+  const backup = JSON.parse(JSON.stringify(buildQuickReplyBackup(source)));
+  const first = mergeQuickReplyBackup(local, backup);
+  const saved = normalizeLoadedSettings(JSON.parse(JSON.stringify({ ...local, ...first.patch })));
+  const again = mergeQuickReplyBackup(saved, backup);
+  assert.equal(again.added, 0);
+  const imported = again.patch.quickReplies.find(reply => reply.title === "Greeting");
+  assert.equal(imported.body, "Original");
+  assert.equal(imported.translation, "Translated");
+  assert.deepEqual(imported.media, media);
+  assert.ok(again.patch.quickReplyPinnedIds.includes(imported.id));
+  const child = again.patch.quickReplyCustomCategories.find(category => category.id === imported.category);
+  assert.equal(again.patch.quickReplyCustomCategories.find(category => category.id === child.parentId).label, "Parent");
+  assert.equal(again.patch.quickReplies.find(reply => reply.id === "same").body, "Keep this");
 });

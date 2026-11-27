@@ -16,8 +16,37 @@ async function command<T>(request: Record<string, unknown>): Promise<T> {
   return invoke<T>("image_library", { request });
 }
 function changed() { window.dispatchEvent(new Event("wap:image-library")); }
-export const listLibraryImages = () => command<LibraryImage[]>({ action: "list" });
-export const listLibraryCategories = () => command<string[]>({ action: "listCategories" });
+let pendingImages: { event?: Event; result: Promise<LibraryImage[]> } | undefined;
+export function listLibraryImages(metadataOnly = false, event?: Event) {
+  if (!metadataOnly) return command<LibraryImage[]>({ action: "list" });
+  if (pendingImages && (!event || pendingImages.event === event)) return pendingImages.result;
+  const result = command<LibraryImage[]>({ action: "listMetadata" }).finally(() => {
+    if (pendingImages?.result === result) pendingImages = undefined;
+  });
+  pendingImages = { event, result };
+  return result;
+}
+let pendingCategories: { event?: Event; result: Promise<string[]> } | undefined;
+export function listLibraryCategories(event?: Event) {
+  if (pendingCategories && (!event || pendingCategories.event === event)) return pendingCategories.result;
+  const result = command<string[]>({ action: "listCategories" }).finally(() => {
+    if (pendingCategories?.result === result) pendingCategories = undefined;
+  });
+  pendingCategories = { event, result };
+  return result;
+}
+const thumbnails = new Map<string, Promise<string>>();
+export function readLibraryThumbnail(id: string) {
+  const cached = thumbnails.get(id);
+  if (cached) { thumbnails.delete(id); thumbnails.set(id, cached); return cached; }
+  const result = command<string>({ action: "thumbnail", id }).catch(error => {
+    if (thumbnails.get(id) === result) thumbnails.delete(id);
+    throw error;
+  });
+  thumbnails.set(id, result);
+  if (thumbnails.size > 256) thumbnails.delete(thumbnails.keys().next().value!);
+  return result;
+}
 export const createLibraryCategory = (name: string) => command<void>({ action: "createCategory", name: name.trim() });
 export const deleteLibraryCategory = (name: string) => command<void>({ action: "deleteCategory", name: name.trim() });
 export const renameLibraryCategory = (name:string,newName:string)=>command<void>({action:"renameCategory",name,new_name:newName.trim()});
@@ -32,6 +61,7 @@ export async function editLibraryImage(image: Pick<LibraryImage, "id" | "title" 
 }
 export async function deleteLibraryImages(ids: string[]) {
   await command({ action: "delete", ids });
+  for (const id of ids) thumbnails.delete(id);
 }
 
 export async function prepareLibraryImage(file: File) {
@@ -89,11 +119,29 @@ export function moveLibraryCategory(names:string[],source:string,target:string,a
 }
 
 export async function exportImageLibrary(images: LibraryImage[], categories = [...new Set(images.map(image => image.category).filter(Boolean))]) {
-  // Bound JSON memory; large libraries can be exported as several selections.
-  if (images.reduce((sum, image) => sum + image.size * 4 / 3 + 1024 + new TextEncoder().encode(JSON.stringify(image.caption || "")).length, 0) > BACKUP_LIMIT) throw new Error("Backup exceeds 128 MB; select fewer images and export in batches");
-  const items = [];
-  for (const image of images) items.push({ title: image.title, category: image.category, caption: image.caption || "", pinned: image.pinned, usedAt: image.usedAt, data: await readLibraryImage(image.id) });
-  downloadJson(`wap-image-library-${new Date().toISOString().slice(0, 10)}.json`, { app: "WAP Plus CRM Image Library", version: 1, categories, items });
+  const encoder = new TextEncoder();
+  const base = { app: "WAP Plus CRM Image Library", version: 1, categories };
+  const capacity = BACKUP_LIMIT - encoder.encode(JSON.stringify(base, null, 2)).length - 128;
+  const volumes: LibraryImage[][] = [[]];
+  let bytes = 0;
+  for (const image of images) {
+    const estimate = Math.ceil(image.size / 3) * 4 + encoder.encode(JSON.stringify([image.title, image.category, image.caption])).length + 1024;
+    if (bytes + estimate > capacity && volumes.at(-1)!.length) { volumes.push([]); bytes = 0; }
+    volumes.at(-1)!.push(image);
+    bytes += estimate;
+  }
+  const stamp = new Date().toISOString().slice(0, 10);
+  for (const [index, images] of volumes.entries()) {
+    const items = [];
+    for (const image of images) {
+      try {
+        items.push({ title: image.title, category: image.category, caption: image.caption || "", pinned: image.pinned, usedAt: image.usedAt, data: await readLibraryImage(image.id) });
+      } catch (error) { throw new Error(`${image.title}: ${String(error)}`); }
+    }
+    const suffix = volumes.length > 1 ? `-part-${index + 1}-of-${volumes.length}` : "";
+    downloadJson(`wap-image-library-${stamp}${suffix}.json`, { ...base, items });
+  }
+  return volumes.length;
 }
 
 export function parseImageLibraryBackup(input: unknown): { title: string; category: string; caption: string; data: string; pinned: boolean; usedAt: number }[] {
@@ -108,23 +156,41 @@ export function parseImageLibraryBackup(input: unknown): { title: string; catego
   });
 }
 
-export async function restoreImageLibrary(file: File, onProgress: (done: number, total: number) => void) {
+export async function restoreImageLibrary(file: File, onProgress: (done: number, total: number) => void, onFailures?: (failures: string[]) => void) {
   if (file.size > BACKUP_LIMIT) throw new Error("Backup exceeds 128 MB");
   const backup = JSON.parse(await file.text());
   const items = parseImageLibraryBackup(backup);
   const categories: unknown = backup.categories ?? [];
   if (!Array.isArray(categories) || categories.length > 3000 || categories.some(name => typeof name !== "string" || !name.trim() || name.trim() === "*" || name.length > 60)) throw new Error("Invalid image library categories");
-  for (const name of categories) await createLibraryCategory(name);
+  const failures: string[] = [];
+  const failure = (label: string, error: unknown) => failures.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+  for (const name of categories) {
+    try { await createLibraryCategory(name); }
+    catch (error) { failure(name, error); }
+  }
   let added = 0;
   const ordered=new Map<string,string[]>();
   for (let index = 0; index < items.length; index++) {
     const item = items[index]!;
-    const file = quickReplyMediaToFile({ dataUrl: item.data, fileName: item.title, mimeType: /^data:([^;,]+)/.exec(item.data)![1]!, kind: "image", token: "restore" });
-    if (!file) throw new Error("Invalid image in library backup");
-    const result = await addLibraryImage(file, item.category, item.title); added += Number(result.added);
-    if (result.added) {await editLibraryImage({ ...item, id: result.id });const ids=ordered.get(item.category)||[];ids.push(result.id);ordered.set(item.category,ids);}
+    try {
+      const file = quickReplyMediaToFile({ dataUrl: item.data, fileName: item.title, mimeType: /^data:([^;,]+)/.exec(item.data)![1]!, kind: "image", token: "restore" });
+      if (!file) throw new Error("Invalid image in library backup");
+      const result = await addLibraryImage(file, item.category, item.title);
+      await editLibraryImage({ ...item, id: result.id });
+      added += Number(result.added);
+      const ids = ordered.get(item.category) || [];
+      if (!ids.includes(result.id)) ids.push(result.id);
+      ordered.set(item.category, ids);
+    } catch (error) { failure(item.title, error); }
     onProgress(index + 1, items.length);
   }
-  for(const [category,ids] of ordered)await moveLibraryImages(ids,category);
+  for (const [category, ids] of ordered) {
+    try { await moveLibraryImages(ids, category); }
+    catch (error) { failure(category || "—", error); }
+  }
+  if (failures.length) {
+    if (!onFailures) throw new Error(failures.join("\n"));
+    onFailures(failures);
+  }
   return added;
 }

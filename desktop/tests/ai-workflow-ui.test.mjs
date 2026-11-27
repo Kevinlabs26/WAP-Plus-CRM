@@ -5,7 +5,7 @@ import {fileURLToPath} from 'node:url';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const mocks={
- react:'export default {};export const Fragment="fragment";export const useState=initial=>globalThis.aiUiHooks.state(initial);export const useEffect=()=>{};export const useMemo=fn=>fn();',
+ react:'export default {};export const Fragment="fragment";export const useState=initial=>globalThis.aiUiHooks.state(initial);export const useEffect=()=>{};export const useMemo=fn=>fn();export const useSyncExternalStore=(_subscribe,getSnapshot)=>getSnapshot();',
  './AiAutoReplyTasks':'export const AiAutoReplyTasks="reply-tasks";',
  '@/components/ui/Avatar':'export const Avatar="avatar";',
  'zustand/react/shallow':'export const useShallow=selector=>selector;',
@@ -18,18 +18,18 @@ const mocks={
  './AiOutreachControls':'export const AiOutreachControls="outreach-controls";',
  './AiOutreachPreview':'export const AiOutreachPreview="outreach-preview";',
  '@/components/layout/FolderAiPromptDialog':'export const FolderAiPromptDialog="folder-editor";',
- '@/lib/aiOutreach':'export const stopOutreachTask=async()=>{};export const getOutreachSchedulerStatus=()=>({at:0,phase:"idle",error:""});export const tickAiOutreach=async()=>{};export const queueOutreachDraft=async()=>{throw Error("unexpected send")};export const retryAiOutreach=async()=>{throw Error("unexpected AI call")};',
+ '@/lib/aiOutreach':'export const stopOutreachTask=async()=>{};export const cancelOutreachRounds=async()=>{};export const outreachFolderDismissal=id=>`outreach-folder:${id}`;export const subscribeOutreachScheduler=()=>()=>{};export const getOutreachSchedulerStatus=()=>({at:0,phase:"idle",error:"",checks:new Map()});export const tickAiOutreach=async()=>{};export const queueOutreachDraft=async()=>{throw Error("unexpected send")};export const retryAiOutreach=async()=>{throw Error("unexpected AI call")};',
 };
 const built=await build({stdin:{contents:`export {AiOutreachTasks} from './src/components/settings/AiOutreachTasks.tsx';export {ChatAiStatusBar} from './src/components/chat/ChatAiStatusBar.tsx';`,resolveDir:root},bundle:true,write:false,platform:'node',format:'esm',jsx:'automatic',alias:{'@':root+'src'},plugins:[{name:'ui-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
 const {AiOutreachTasks,ChatAiStatusBar}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text+'\n//# sourceURL=ai-workflow-ui.js').toString('base64'));
-const nodes=tree=>Array.isArray(tree)?tree.flatMap(nodes):tree?.props?[tree,...nodes(tree.props.children)]:[];
+const nodes=tree=>Array.isArray(tree)?tree.flatMap(nodes):tree?.props?[tree,...nodes(tree.type?.name==='People'?tree.props.render(30):tree.props.children)]:[];
 const text=tree=>Array.isArray(tree)?tree.map(text).join(''):tree?.props?text(tree.props.children):typeof tree==='string'||typeof tree==='number'?String(tree):'';
 function fixture(){
  let slots=[],cursor=0;const calls=[];
- globalThis.aiUiHooks={state(initial){const i=cursor++;if(!(i in slots))slots[i]=typeof initial==='function'?initial():initial;return [slots[i],value=>slots[i]=value];}};
+ globalThis.aiUiHooks={state(initial){const i=cursor++;if(!(i in slots))slots[i]=typeof initial==='function'?initial():initial;return [slots[i],value=>slots[i]=typeof value==='function'?value(slots[i]):value];}};
  const rule={enabled:true,mode:'auto',trigger:'both',time:'09:00',timeZone:'UTC',dailyLimit:10,minIdleHours:12,goal:'Say hello'};
  const day=new Date().toISOString().slice(0,10);
- globalThis.aiUiState={settings:{aiReplyMode:'auto',aiOutreachPaused:false,aiOutreachExcludedRecipients:[],customAiKey:'fixture',aiSystemPrompt:'BASE',aiSystemPromptByAccountId:{},aiAutoReplyManualChatIds:[],aiAutoReplyModeByChatId:{},aiPromptTemplates:[{id:'t',name:'Shared template',prompt:'PROMPT'}],
+ globalThis.aiUiState={settings:{aiReplyMode:'auto',aiOutreachPaused:false,aiOutreachExcludedRecipients:[],aiTaskDismissedIds:[],customAiKey:'fixture',aiSystemPrompt:'BASE',aiSystemPromptByAccountId:{},aiAutoReplyManualChatIds:[],aiAutoReplyModeByChatId:{},aiPromptTemplates:[{id:'t',name:'Shared template',prompt:'PROMPT'}],
   chatFolders:[{id:'f',name:'Folder A',scope:{type:'account',accountId:'a'},chatIds:['chat'],aiPromptTemplateId:'t',aiOutreach:{...rule}},{id:'other',name:'Folder B',scope:{type:'account',accountId:'b'},chatIds:[],aiOutreach:{...rule}}],waAccounts:[{id:'a',label:'Account A'}],
 aiOutreachRuns:[{id:'q',folderId:'f',chatId:'chat',accountId:'a',day,at:new Date().toISOString(),status:'queued'},{id:'sent',folderId:'f',chatId:'chat',accountId:'a',day,at:new Date().toISOString(),status:'sent'},{id:'failed',folderId:'other',chatId:'chat',accountId:'b',day,at:new Date().toISOString(),status:'failed',error:'Network'}]},
   contacts:[],chats:[{id:'chat',contactName:'Person'}],messagesByChatId:{chat:[]},
@@ -38,14 +38,15 @@ return {calls,render(Component=AiOutreachTasks){cursor=0;if(Component===ChatAiSt
 }
 
 test('outreach page filters progress by folder, opens its editor and pauses only that folder without losing tasks',async()=>{
- const h=fixture();let tree=h.render();assert.equal(tree.filter(node=>node.type==='article').length,3);
- tree.find(node=>node.type==='select').props.onChange({target:{value:'f'}});tree=h.render();assert.equal(tree.filter(node=>node.type==='article').length,2);
+ const h=fixture();let tree=h.render();assert.equal(tree.filter(node=>node.type==='article').length,2);
+ tree.find(node=>node.type==='select').props.onChange({target:{value:'f'}});tree=h.render();assert.equal(tree.filter(node=>node.type==='article').length,1);
  tree.find(node=>node.type==='button'&&text(node)==='aiTasks.configure').props.onClick();tree=h.render();assert.equal(tree.find(node=>node.type==='folder-editor').props.folderId,'f');
- tree.find(node=>node.type==='details').props.onToggle({currentTarget:{open:true}});tree=h.render();
- await tree.find(node=>node.type==='button'&&text(node)==='aiTasks.pause').props.onClick();tree=h.render();
+ tree.find(node=>node.type==='button'&&text(node)==='aiTasks.pause').props.onClick();
+ await new Promise(resolve=>setImmediate(resolve));tree=h.render();
  assert.equal(h.state.settings.chatFolders[0].aiOutreach.paused,true);assert.equal(h.state.settings.chatFolders[0].aiOutreach.enabled,true);assert.equal(h.state.settings.chatFolders[1].aiOutreach.paused,undefined);assert.equal(h.state.settings.aiOutreachRuns[0].status,'queued');
- await tree.find(node=>node.type==='button'&&text(node)==='aiTasks.resume').props.onClick();assert.equal(h.state.settings.chatFolders[0].aiOutreach.paused,false);
- tree=h.render();tree.find(node=>node.type==='button'&&text(node)==='aiTasks.sent 1').props.onClick();assert.equal(h.render().filter(node=>node.type==='article').length,1);
+ tree.find(node=>node.type==='button'&&text(node)==='aiOutreach.folder.resume').props.onClick();
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(h.state.settings.chatFolders[0].aiOutreach.paused,false);
+ tree=h.render();assert.ok(tree.some(node=>node.type==='summary'&&text(node)==='aiOutreach.round.sent · 1'));
 });
 
 test('chat header provides direct reply mode choices and folder editing without duplicate mode labels',()=>{
@@ -91,18 +92,23 @@ test('default restores inheritance for this chat only, preserving other override
 });
 
 test('outreach progress follows delivery immediately without waiting for the ledger tick',()=>{
- const h=fixture();h.state.settings.aiOutreachRuns[0].messageId='out';h.state.messagesByChatId.chat=[{id:'out',deliveryStatus:'sent'}];
- let tree=h.render();assert.ok(tree.some(node=>node.type==='button'&&text(node)==='aiTasks.sent 2'));assert.ok(tree.some(node=>node.type==='button'&&text(node)==='aiOutreach.queue 0'));
- h.state.messagesByChatId.chat=[{id:'out',deliveryStatus:'failed',lastError:'Delivery unknown',deliveryUncertain:true}];tree=h.render();assert.ok(tree.some(node=>node.props.role==='alert'&&text(node)==='Delivery unknown'));assert.equal(h.state.settings.aiOutreachRuns[0].status,'queued');
+ const h=fixture();h.state.settings.aiOutreachRuns[0].messageId='out';h.state.messagesByChatId.chat=[{id:'out',deliveryStatus:'sent',sentAt:new Date().toISOString()}];
+ let tree=h.render();tree.find(node=>node.type==='select').props.onChange({target:{value:'f'}});tree=h.render();
+ assert.ok(tree.some(node=>node.type==='summary'&&text(node)==='aiOutreach.round.sent · 2'));assert.ok(tree.some(node=>node.type==='h3'&&text(node)==='aiOutreach.folder.pending · 0'));
+ h.state.messagesByChatId.chat=[{id:'out',deliveryStatus:'failed',lastError:'Delivery unknown',deliveryUncertain:true}];tree=h.render();assert.ok(tree.some(node=>node.type==='p'&&text(node)==='Delivery unknown'));assert.equal(h.state.settings.aiOutreachRuns[0].status,'queued');
 });
 
-test('immediate round targets the selected folder and preserves its recurring time and quota',async()=>{
+test('immediate round switches the selected folder to one-time mode and preserves other folders',async()=>{
  const h=fixture();let tree=h.render();
  assert.equal(tree.find(node=>node.type==='button'&&text(node)==='aiOutreach.runNow').props.disabled,true);
  tree.find(node=>node.type==='select').props.onChange({target:{value:'f'}});tree=h.render();
+ assert.equal(tree.find(node=>node.type==='button'&&text(node)==='aiOutreach.runNow').props.disabled,true);
+ h.state.settings.aiOutreachRuns[0].status='sent';tree=h.render();
  tree.find(node=>node.type==='button'&&text(node)==='aiOutreach.runNow').props.onClick();
  await new Promise(resolve=>setImmediate(resolve));
  assert.ok(h.state.settings.chatFolders[0].aiOutreach.runNowAt);
+ assert.equal(h.state.settings.chatFolders[0].aiOutreach.startMode,'immediate');
+ assert.equal(h.state.settings.chatFolders[0].aiOutreach.scheduleStartAt,undefined);
  assert.equal(h.state.settings.chatFolders[0].aiOutreach.time,'09:00');
  assert.equal(h.state.settings.chatFolders[0].aiOutreach.dailyLimit,10);
  assert.equal(h.state.settings.chatFolders[1].aiOutreach.runNowAt,undefined);

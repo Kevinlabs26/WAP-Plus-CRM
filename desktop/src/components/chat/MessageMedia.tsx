@@ -208,7 +208,8 @@ export const MessageMedia = memo(function MessageMedia({
     );
   }
 
-  if ((t === "image" || t === "sticker") && m.mediaUrl) {
+  const imageSrc = m.mediaUrl || m.mediaThumbUrl;
+  if ((t === "image" || t === "sticker") && imageSrc) {
     // 图片按原比例撑开气泡；固定高度仅用于贴纸。
     const box =
       t === "sticker"
@@ -225,11 +226,11 @@ export const MessageMedia = memo(function MessageMedia({
         )}
         onClick={(e) => {
           e.stopPropagation();
-          onPreview?.(m.mediaUrl!, m.mediaCaption || m.body || i18n("media.image"));
+          onPreview?.(imageSrc, m.mediaCaption || m.body || i18n("media.image"));
         }}
       >
         <img
-          src={m.mediaUrl}
+          src={imageSrc}
           alt={m.mediaCaption || m.body || i18n("media.image")}
           className={cn(
             t === "sticker"

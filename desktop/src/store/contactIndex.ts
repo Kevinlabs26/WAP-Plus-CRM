@@ -11,10 +11,12 @@ export type ContactMatchKeys = {
 };
 
 export type ContactLookup = {
+  source: Contact[];
   /** 等价于原 findIndex(matchContact)，但批内 O(1) 命中；未命中返回 -1 */
   matchIndex: (keys: ContactMatchKeys) => number;
   /** id 精确查找 */
   idIndex: (id: string) => number;
+  invalidate: () => void;
 };
 
 function ownerOf(c: Contact): string {
@@ -40,24 +42,26 @@ function contactMatch(c: Contact, keys: ContactMatchKeys): boolean {
 }
 
 /**
- * 批内联系人索引：contacts 在批内只 push/splice/替换元素（引用不变），
- * 因此按「长度版本」惰性重建即可。命中后会二次校验，防止替换引用后的假阳性；
- * 未命中返回 -1，由调用方回退线性扫描，保证与原有 matchContact 语义完全一致。
+ * 批内按追加量更新索引。合并或身份字段变化时，请让索引失效。
  */
 export function createContactLookup(
   contacts: Contact[]
 ): ContactLookup {
-  let byId = new Map<string, number>();
-  let byChannel = new Map<string, number>();
-  let byPhone = new Map<string, number>();
-  let builtForLength = -1;
+  const byId = new Map<string, number>();
+  const byChannel = new Map<string, number>();
+  const byPhone = new Map<string, number>();
+  let indexedLength = 0;
+
+  const invalidate = () => {
+    byId.clear();
+    byChannel.clear();
+    byPhone.clear();
+    indexedLength = 0;
+  };
 
   const ensureBuilt = () => {
-    if (contacts.length === builtForLength) return;
-    byId = new Map<string, number>();
-    byChannel = new Map<string, number>();
-    byPhone = new Map<string, number>();
-    for (let i = 0; i < contacts.length; i++) {
+    if (contacts.length < indexedLength) invalidate();
+    for (let i = indexedLength; i < contacts.length; i++) {
       const c = contacts[i];
       if (!c) continue;
       const owner = ownerOf(c);
@@ -70,7 +74,7 @@ export function createContactLookup(
         if (n && n !== c.phone) byPhone.set(`${p}ph:${n}`, i);
       }
     }
-    builtForLength = contacts.length;
+    indexedLength = contacts.length;
   };
 
   const matchIndex = (keys: ContactMatchKeys): number => {
@@ -99,28 +103,29 @@ export function createContactLookup(
     return i == null ? -1 : i;
   };
 
-  return { matchIndex, idIndex };
+  return { source: contacts, matchIndex, idIndex, invalidate };
 }
 
 export type ChatIdLookup = {
-  /** 按 chatId 查找索引；chats 引用/长度变化时自动重建 */
+  /** 按 chatId 查找索引；追加时只索引尾部。 */
   idx: (chats: ChatPreview[], chatId: string) => number;
 };
 
 export function createChatIdLookup(): ChatIdLookup {
   let ref: ChatPreview[] | null = null;
-  let len = -1;
-  let byId = new Map<string, number>();
+  let indexedLength = 0;
+  const byId = new Map<string, number>();
   const idx = (chats: ChatPreview[], chatId: string): number => {
-    if (ref !== chats || len !== chats.length) {
+    if (ref !== chats || chats.length < indexedLength) {
       ref = chats;
-      len = chats.length;
-      byId = new Map<string, number>();
-      for (let i = 0; i < chats.length; i++) {
-        const c = chats[i];
-        if (c?.id) byId.set(c.id, i);
-      }
+      indexedLength = 0;
+      byId.clear();
     }
+    for (let i = indexedLength; i < chats.length; i++) {
+      const c = chats[i];
+      if (c?.id) byId.set(c.id, i);
+    }
+    indexedLength = chats.length;
     return byId.get(chatId) ?? -1;
   };
   return { idx };

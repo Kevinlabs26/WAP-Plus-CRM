@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { translate } from "../src/i18n/core.ts";
 
 const mocks = {
-  "@/lib/googleSheets": "export const sheetConnections=()=>[];export const useGoogleSheets=()=>({});",
+  "@/lib/googleSheets": "export const DEFAULT_SHEET_ID='default';export const refreshSheets=async()=>{};export const sheetConnections=()=>[];export const useGoogleSheets=()=>({});export const primarySheetTagForPhone=()=>null;",
   "@/lib/googleDrive": "export const openAvatarCloudMenu=()=>{};",
   "emoji-picker-react": "export default ()=>null;export const Theme={LIGHT:'light',DARK:'dark'},EmojiStyle={NATIVE:'native'};",
   react: "export const useState=v=>globalThis.dragHooks.state(v); export const useRef=v=>globalThis.dragHooks.ref(v); export const useEffect=(f,d)=>globalThis.dragHooks.effect(f,d); export const useLayoutEffect=()=>{}; export const useMemo=f=>f(); export const memo=f=>f;",
@@ -14,7 +14,7 @@ const mocks = {
   "@/store/appStore": "export const useAppStore=Object.assign(f=>f(globalThis.dragStore),{getState:()=>globalThis.dragStore});",
   "zustand/react/shallow": "export const useShallow=f=>f;",
   "@/i18n": "export const useI18n=()=>({t:(k,p)=>globalThis.dragTranslate(k,p)});",
-  "lucide-react": ["CornerDownRight", "UserRoundPlus", "Clock3", "Check", "BellOff", "Copy", "MoreVertical", "Pin", "ChevronDown", "ChevronRight", "Folder", "FolderPlus", "Link2", "GripVertical", "LayoutGrid", "MoreHorizontal", "Pencil", "Trash2", "Upload", "Users", "UserRoundX", "Archive", "CalendarDays", "Inbox"].map(n=>`export const ${n}=()=>null;`).join(""),
+  "lucide-react": ["CornerDownRight", "UserRoundPlus", "Clock3", "Check", "BellOff", "Copy", "MoreVertical", "Pin", "ChevronDown", "ChevronRight", "Folder", "FolderPlus", "Link2", "GripVertical", "LayoutGrid", "MoreHorizontal", "Pencil", "Phone", "Trash2", "Upload", "Users", "UserRoundX", "Archive", "CalendarDays", "Inbox", "Star"].map(n=>`export const ${n}=()=>null;`).join(""),
   "@/components/ui/Avatar": "export const Avatar=()=>null;",
   "@/components/chat/Ticks": "export const Ticks=()=>null;",
   "@/components/ui/primitives": "export const Badge='badge', ListRow='button';",
@@ -37,7 +37,7 @@ const nodes = tree => Array.isArray(tree) ? tree.flatMap(nodes) : tree?.props ? 
 
 function fixture() {
   const originalWindow=globalThis.window, originalDocument=globalThis.document;
-  const cells=[], effects=[], listeners=new Map(), frames=new Map(), moves=[], toasts=[], reorders=[];
+  const cells=[], effects=[], listeners=new Map(), frames=new Map(), moves=[], toasts=[], reorders=[], folderMoves=[];
   let cursor=0, frameId=0, hit=null;
   globalThis.window={
     addEventListener(name,fn) { const list=listeners.get(name)||[]; list.push(fn); listeners.set(name,list); },
@@ -47,21 +47,21 @@ function fixture() {
   };
   globalThis.document={elementFromPoint:()=>hit};
   globalThis.dragHooks={
-    state(initial) {const i=cursor++; cells[i]??={value:initial}; return [cells[i].value,v=>{cells[i].value=v;}];},
+    state(initial) {const i=cursor++; cells[i]??={value:initial}; return [cells[i].value,v=>{cells[i].value=typeof v==="function"?v(cells[i].value):v;}];},
     ref(initial) {return cells[cursor++]??={current:initial};},
     effect(fn,deps) {const i=cursor++; if(cells[i])return; cells[i]={}; effects.push(()=>{cells[i].cleanup=fn();});},
   };
   globalThis.dragTranslate=(key,params)=>translate("zh-CN",key,params);
   const folders=[{id:"a",name:"A",chatIds:["one"],scope:{type:"all"}}, {id:"b",name:"B",chatIds:[],scope:{type:"all"}}];
   globalThis.dragStore={settings:{leadInbox:{enabled:false,collectedChatIds:[],dismissedChatIds:[],dateGrouping:"none"},chatFolders:folders},chats:[{id:"one"},{id:"two"}],peerPresenceByKey:{},baileysUi:{labelsByAccountId:{}},
-    moveChatToFolder:(...args)=>moves.push(args),pushToast:(...args)=>toasts.push(args),reorderChatFolder:(...args)=>reorders.push(args)};
+    moveChatToFolder:(...args)=>moves.push(args),pushToast:(...args)=>toasts.push(args),reorderChatFolder:(...args)=>reorders.push(args),moveChatFolderToParent:(...args)=>folderMoves.push(args)};
   const rect={left:0,right:280,top:100,bottom:500,height:400};
   const scroller={scrollTop:0,isConnected:true,getBoundingClientRect:()=>rect};
   const event=(extra={})=>({pointerId:1,isPrimary:true,button:0,buttons:1,clientX:100,clientY:200,currentTarget:{closest:()=>scroller},preventDefault(){this.defaultPrevented=true;},stopImmediatePropagation(){this.stopped=true;},...extra});
   const dispatch=(name,extra={})=>{const e=event(extra); for(const fn of [...listeners.get(name)||[]])fn(e);return e;};
   const render=()=>{cursor=0;const value=useChatFolderDrag({chatFolders:dragStore.settings.chatFolders});while(effects.length)effects.shift()();return value;};
   render();
-  return {moves,toasts,reorders,frames,scroller,render,event,dispatch,
+  return {moves,toasts,reorders,folderMoves,frames,scroller,render,event,dispatch,
     target(id,{header=false}={}) {const element={dataset:{chatFolderDrop:id,...(header?{folderReorderTarget:id}:{})},getBoundingClientRect:()=>({top:250,height:40})};
       hit=id?{closest:selector=>selector==="[data-chat-folder-drop]"||header?element:null}:null;},
     start(ids) {dispatch("pointerdown");render().startChatPointerDrag(event(),"one",ids);},
@@ -137,6 +137,26 @@ test("folder reordering stays within the same parent and account scope",()=>{
     ui.render().startFolderPointerDrag(ui.event(),"a");ui.target("b",{header:true});ui.move({clientY:285});ui.up({clientY:285});assert.deepEqual(ui.reorders,[["a","b",true]]);
     dragStore.settings.chatFolders[1].scope={type:"account",accountId:"wa-b"};ui.reorders.length=0;
     ui.render().startFolderPointerDrag(ui.event(),"a");ui.move();ui.up();assert.deepEqual(ui.reorders,[]);
+  }finally{ui.close();}
+});
+
+test("dropping on a folder center nests it across levels and rejects descendants",()=>{
+  const ui=fixture();try {
+    const [a,b]=dragStore.settings.chatFolders;
+    b.parentId="parent";
+    const drop=()=>{
+      ui.dispatch("pointerdown");
+      ui.render().startFolderPointerDrag(ui.event(),"a");
+      ui.target("b",{header:true});
+      ui.move({clientY:270});
+      ui.up({clientY:270});
+    };
+    drop();
+    assert.deepEqual(ui.folderMoves,[["a","b"]]);
+    assert.deepEqual(ui.reorders,[]);
+    b.parentId=a.id;
+    drop();
+    assert.deepEqual(ui.folderMoves,[["a","b"]]);
   }finally{ui.close();}
 });
 

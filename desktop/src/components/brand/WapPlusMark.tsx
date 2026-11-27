@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import iconUrl from "@/assets/wap-plus-crm-trimmed.svg";
+import iconUrl from "@/assets/wap-plus-crm-mark.png";
 
 type Props = {
   className?: string;

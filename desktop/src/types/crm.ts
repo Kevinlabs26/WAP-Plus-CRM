@@ -1,4 +1,5 @@
 import type { SalesStage } from "@shared/protocol";
+import type { AiDecisionDetails } from "@/lib/aiDecisionDetails";
 
 export type { SalesStage };
 
@@ -10,6 +11,7 @@ export interface PhoneDevice {
   online: boolean;
   battery: number;
   charging?: boolean;
+  phoneLocked?: boolean;
   whatsappInstalled?: boolean;
   accessibilityEnabled?: boolean;
   overlayEnabled?: boolean;
@@ -54,11 +56,6 @@ export interface Contact {
   aiSuggestedStage?: SalesStage;
   /** 洞察上次生成时间 ISO */
   aiInsightAt?: string;
-  /** 最近一次 AI 汇报（可手动编辑） */
-  aiReport?: string;
-  aiReportTemplateId?: string;
-  aiReportTemplateName?: string;
-  aiReportAt?: string;
   /** 永久绑定的手机 id — 核心壁垒功能 */
   boundPhoneId?: string;
   lastMessageAt?: string;
@@ -117,6 +114,8 @@ export interface GroupDetails {
 }
 
 export interface ChatPreview {
+  /** SQLite found conflicting history owners. Leave this chat out of automatic merges. */
+  historyRemapBlocked?: boolean;
   id: string;
   contactId: string;
   contactName: string;
@@ -252,13 +251,26 @@ export interface Message {
   systemKind?: string;
   /** 自动回复生成上下文的 SHA-256；排队/重启后复核，不含聊天正文或密钥。 */
   aiReplyContextHash?: string;
+  /** 本地图片库引用；出队时才读取原图，不把 Base64 存入消息。 */
+  aiReplyImageAssetId?: string;
   aiReplyInboundId?: string;
+  /** 本机收到自动回复任务的 Unix 毫秒时间戳。 */
+  aiAutoReplyReceivedAt?: number;
+  aiReplyStartedAt?: number;
+  /** 本机接收入站消息的 Unix 毫秒时间戳。 */
+  aiReplyReceivedAt?: number;
+  aiReplyDurationMs?: number;
+  aiReplyMuseAccountId?: string;
+  aiReplyMuseAccountName?: string;
+  aiDecisionDetails?: AiDecisionDetails;
   aiAutoFollowUpRootId?: string;
   aiAutoFollowUpStep?: number;
   aiAutoFollowUpSentAt?: number;
   aiAutoFollowUpAttemptAt?: number;
   aiAutoFollowUpCancelled?: boolean;
   systemAction?: string;
+  systemParticipants?: string[];
+  systemAuthor?: string;
   /** 被 @ 的成员 jid */
   mentionedJids?: string[];
   /** 群消息是否明确 @ 了当前登录账号 */
@@ -308,6 +320,7 @@ export interface Message {
   };
   /** 是否编辑过 */
   edited?: boolean;
+  remoteEditedAt?: number;
   /** 本地星标（CRM 收藏，非 WhatsApp 协议星标） */
   starred?: boolean;
   /** 星标时间 ISO */
@@ -349,6 +362,7 @@ export interface ScheduledMessage {
   contactName: string;
   recipient: string;
   text: string;
+  imageDataUrl?: string;
   dueAt: string;
   channelId: string;
   deviceId?: string | null;

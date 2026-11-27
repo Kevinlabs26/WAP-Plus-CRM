@@ -31,6 +31,17 @@ function page({fetchMedia=async()=>new Response('image',{headers:{'Content-Type'
 }
 
 const referenceImage={mimeType:'image/jpeg',dataUrl:'data:image/jpeg;base64,aW1hZ2U='};
+test('a submitted reply is recovered after page reload only in its original conversation',()=>{
+ const p=page(),owner='a'.repeat(64);
+ p.api.start('job-1','Hello',null,owner);
+ p.api.poll('job-1');p.reply('Recovered reply');p.finish();p.reload();
+ assert.equal(p.api.recover('job-1',true,{owner,path:'/thread/another'}).state,'error');
+ assert.equal(p.api.recover('job-1',true,{owner:'b'.repeat(64),path:p.location.pathname}).state,'error');
+ assert.equal(p.api.recover('job-1',true,{owner,path:p.location.pathname}).state,'generating');
+ p.tick(2000);
+ assert.equal(p.api.poll('job-1').text,'Recovered reply');
+ assert.equal(p.clicks,1);
+});
 test('two input photos are confirmed in order with batch and sequential file inputs',()=>{
  for(const multiple of [true,false]){
   const p=page({fileInput:true,attachmentMode:'multi',multiple});
@@ -50,7 +61,7 @@ test('a sibling image card is collected only between the assistant reply and the
 });
 test('a hanging media download has a bounded stage timeout',()=>{
  const p=page({fetchMedia:()=>new Promise(()=>{})});p.api.start('job-1','Draw',null,null,null,true);p.api.poll('job-1');p.image();p.finish();p.api.poll('job-1');p.tick(35_001);
- assert.match(p.api.poll('job-1').error,/图片已定位.*读取附件超时/);assert.equal(p.clicks,1);
+ assert.match(p.api.poll('job-1').error,/媒体已定位.*读取附件超时/);assert.equal(p.clicks,1);
 });
 
 test('oversized media is cancelled before buffering the complete response, including missing or false lengths',async()=>{
@@ -254,9 +265,45 @@ test('handoff context can accompany the full original prompt without truncating 
 
 const root=fileURLToPath(new URL('../',import.meta.url));
 const bundled=await build({stdin:{contents:`export {generateSuggestions} from './src/lib/aiSuggest.ts';export {extractChatSheetFields} from './src/lib/aiCustomerCard.ts';export {defaultSettings} from './src/store/settingsDefaults.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',alias:{'@':root+'src'},plugins:[{name:'muse-boundary',setup(b){
- b.onResolve({filter:/museWeb\.ts$/},()=>({path:'muse',namespace:'mock'}));b.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:'export const museWebAccounts=async()=>({accounts:[],selectedId:"",primaryId:""});export const nextMuseAutoReplyAccount=async()=>"";export const readyMuseAutoReplyAccounts=async()=>[];export const generateMuseWeb=(...args)=>globalThis.museTest(...args);'}));
+b.onResolve({filter:/museWeb\.ts$/},()=>({path:'muse',namespace:'mock'}));b.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:'export const museWebAccounts=async()=>({accounts:[{id:"primary",name:"Primary"}],selectedId:"primary",primaryId:"primary"});export const nextMuseAutoReplyAccount=async()=>"primary";export const readyMuseAutoReplyAccounts=async()=>["primary"];export const generateMuseWeb=(...args)=>globalThis.museTest(...args);'}));
 }}]});
 const ai=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text).toString('base64'));
+test('proactive contact uses its pinned Muse account and keeps ungrounded output as a draft',async()=>{
+ const settings={...ai.defaultSettings,aiProvider:'muse',aiOutreachMuseAccountId:'primary'};
+ const contact={id:'customer',name:'Client'};
+ const history=[
+  {id:'in',chatId:'chat',direction:'in',body:'Please contact me next week',sentAt:'2026-11-07T12:00:00Z'},
+  {id:'out',chatId:'chat',direction:'out',body:'Your payment is confirmed',sentAt:'2026-11-07T12:01:00Z'},
+ ];
+ const opts={auto:true,outreach:'Contact this customer if requested',outreachDecision:true};
+ for(const [evidence,action] of [['Please contact me next week','send'],['Your payment is confirmed','draft'],['Invented confirmation','draft']]){
+  globalThis.museTest=async(_prompt,_signal,_key,_context,_priority,_onStart,account)=>{
+   assert.equal(account,'primary');return JSON.stringify({action:'send',text:'Bonjour !',reason:'The customer requested contact',evidence});
+  };
+  const result=await ai.generateSuggestions(contact,history,settings,opts);
+  assert.equal(result.outreachDecision?.action,action);
+  assert.equal(result.decisionDetails?.museAccountId,'primary');
+  assert.equal(result.decisionDetails?.evidence,action==='send'?evidence:undefined);
+ }
+});
+test('Muse automatic replies do not retry a generation that may have been submitted',async()=>{
+ const settings={...ai.defaultSettings,aiProvider:'muse'};
+ const contact={id:'test',name:'Alice'};
+ const history=[{id:'m1',chatId:'test',direction:'in',body:'Salut',sentAt:'2026-11-07T12:00:00Z'}];
+ globalThis.museTest=async()=>{throw Object.assign(new Error('Muse 生成超时'),{museSubmissionUncertain:true});};
+ assert.equal((await ai.generateSuggestions(contact,history,settings,{auto:true})).retryable,false);
+ globalThis.museTest=async()=>{throw new Error('Muse 后台连接超时');};
+ assert.equal((await ai.generateSuggestions(contact,history,settings,{auto:true})).retryable,true);
+});
+test('Muse recovery never clicks Send for a request still being prepared',()=>{
+ const p=page();
+ assert.equal(p.api.start('job-1','Reply').state,'preparing');
+ assert.equal(p.api.recover('job-1',true).state,'error');
+ assert.equal(p.clicks,0);
+ assert.equal(p.api.poll('job-1').state,'generating');
+ assert.equal(p.api.recover('job-1',true).state,'generating');
+ assert.equal(p.clicks,1);
+});
 test('Muse reuses configured prompts, context, JSON parsing and output constraints without an API key',async()=>{
  let prompt,context;globalThis.museTest=async(value,signal,key,current)=>{prompt=value;context=current;return '[{"text":"Bonjour !","tone":"warm"}]';};
  const settings={...ai.defaultSettings,aiProvider:'muse',aiSystemPrompt:'Reply in French. Do not promise anything.'};
@@ -322,11 +369,13 @@ test('Muse supplies bounded structured history with exactly the same full contex
  assert.match(context.profile,/Complete profile stays intact/);assert.doesNotMatch(context.prefix,/Complete profile stays intact/);assert.match(context.suffix,/Runtime clock/);assert.doesNotMatch(prompt,/Unsent draft/);
 });
 
-const clientBuild=await build({stdin:{contents:`export * from './src/lib/museWeb.ts';export {setMusePrivacyIdentityProvider} from './src/lib/museChatPrivacy.ts';export {getAiUsageSnapshot} from './src/lib/aiUsage.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',plugins:[{name:'native-boundary',setup(b){
+const clientBuild=await build({stdin:{contents:`export * from './src/lib/museWeb.ts';export {setMusePrivacyIdentityProvider,setMusePrivacySettingsProvider,setMusePrivacyGateMessageProvider} from './src/lib/museChatPrivacy.ts';export {getAiUsageSnapshot} from './src/lib/aiUsage.ts';`,resolveDir:root},bundle:true,write:false,format:'esm',platform:'node',plugins:[{name:'native-boundary',setup(b){
  b.onResolve({filter:/bridge\.ts$/},()=>({path:'bridge',namespace:'native-mock'}));b.onResolve({filter:/^@tauri-apps\/api\/core$/},()=>({path:'tauri',namespace:'native-mock'}));
  b.onLoad({filter:/.*/,namespace:'native-mock'},args=>({contents:args.path==='bridge'?'export const isTauri=()=>true;':'export const invoke=(cmd,...args)=>cmd==="muse_web_accounts"&&!globalThis.museUseCustomPool?Promise.resolve({accounts:[{id:"primary",name:"Primary",selected:true,primary:true}],selectedId:"primary",primaryId:"primary"}):globalThis.museNative(cmd,...args);'}));
 }}]});
 const client=await import('data:text/javascript;base64,'+Buffer.from(clientBuild.outputFiles[0].text).toString('base64'));
+client.setMusePrivacySettingsProvider(()=>({primary:{trainingDisabledConfirmedAt:1}}));
+client.setMusePrivacyGateMessageProvider(()=> 'Privacy training confirmation required');
 client.setMusePrivacyIdentityProvider(()=>{
  if(globalThis.musePrivacyFailure)throw Error('Privacy state unavailable');
  const state=globalThis.musePrivacyState||{contacts:[],settings:{waAccounts:[]}};
@@ -352,22 +401,53 @@ test('a missing local privacy context fails closed before sending anything to Mu
  try{await assert.rejects(client.generateMuseWeb('text',undefined,'key',{profile:'',prefix:'',history:[{id:'m',text:'text'}],suffix:''}),/Privacy state unavailable/);assert.equal(calls,0);}
  finally{delete globalThis.musePrivacyFailure;}
 });
+test('duplicate and invalid local history IDs keep their text and reach the native Muse adapter',async()=>{
+ let submitted;
+ globalThis.museNative=async(_cmd,args)=>{submitted=args;return {text:'Bonjour'};};
+ const history=[{id:'same',text:'First'},{id:'same',text:'Second'},{id:'bad\nkey',text:'Third'},{id:'é'.repeat(257),text:'Fourth'}];
+ const context={profile:'',prefix:'Chat:\n',history,suffix:'\nEnd'};
+ const prompt=context.prefix+history.map(item=>item.text).join('\n')+context.suffix;
+ await client.generateMuseWeb(prompt,undefined,'key',context);
+ assert.equal(submitted.prompt,prompt);
+ assert.deepEqual(submitted.context.history.map(item=>item.text),history.map(item=>item.text));
+ const ids=submitted.context.history.map(item=>item.id);
+ assert.equal(new Set(ids).size,history.length);
+ assert.equal(ids[0],'same');
+ for(const id of ids.slice(1)) assert.match(id,/^history:[a-f0-9]{64}:\d+$/);
+});
+test('Muse rebuilds a stale prompt and fits long history before a single native submission',async()=>{
+ const calls=[];
+ globalThis.museNative=async(_cmd,args)=>{calls.push(args);return{text:'Bonjour'};};
+ const history=Array.from({length:42},(_,i)=>({id:`m${i}`,text:`History ${i}: ${'x'.repeat(1000)}`}));
+ const context={profile:'a'.repeat(25_000),prefix:'Rules\n',suffix:'\nCurrent task',history};
+ await client.generateMuseWeb('Old prompt',undefined,'key',context);
+ assert.equal(calls.length,1);
+ const [{prompt,context:sent}]=calls;
+ assert.equal(sent.profile,context.profile);
+ assert.ok(sent.history.length<40);
+ assert.equal(sent.history.at(-1).id,'m41');
+ assert.equal(prompt,sent.prefix+sent.history.map(item=>item.text).join('\n')+sent.suffix);
+ assert.doesNotMatch(prompt,/Old prompt/);
+ await assert.rejects(client.generateMuseWeb('Old prompt',undefined,'key',{...context,profile:'x '.repeat(29_100)}),/合计过长/);
+ assert.equal(calls.length,1);
+});
 test('retrieving existing media invokes only the collect command',async()=>{
  const calls=[];globalThis.museNative=async(cmd)=>{calls.push(cmd);return{mimeType:'image/png',dataUrl:'data:image/png;base64,aW1hZ2U='};};
  assert.equal((await client.collectMuseWebMedia()).data,'aW1hZ2U=');assert.deepEqual(calls,['muse_web_collect_media']);
 });
 test('media requests refuse an old desktop backend before submitting another generation',async()=>{
  const calls=[];globalThis.museNative=async(cmd,args)=>{calls.push([cmd,args]);return {ready:true,state:'ready',message:'Connected'};};
- await assert.rejects(client.generateMuseWebOutput('Draw',undefined,undefined,undefined,undefined,true),/旧版 Muse.*未提交生图/);
+ await assert.rejects(client.generateMuseWebOutput('Draw',undefined,undefined,undefined,undefined,true),/旧版 Muse.*未提交媒体任务/);
  assert.deepEqual(calls.map(([cmd])=>cmd),['muse_web_status']);
 });
 test('media requests pass the explicit wait flag and preserve the returned media',async()=>{
- const calls=[];globalThis.museNative=async(cmd,args)=>{calls.push([cmd,args]);return cmd==='muse_web_status'?{ready:true,mediaProtocol:7,parallelMedia:true}:{text:'Here it is',media:{mimeType:'image/png',dataUrl:'data:image/png;base64,aW1hZ2U='},error:null,summaryRequests:0};};
+ const calls=[];globalThis.museNative=async(cmd,args)=>{calls.push([cmd,args]);return cmd==='muse_web_status'?{ready:true,mediaProtocol:8,parallelMedia:true}:{text:'Here it is',media:{mimeType:'image/png',dataUrl:'data:image/png;base64,aW1hZ2U='},error:null,summaryRequests:0};};
  const result=await client.generateMuseWebOutput('Draw',undefined,undefined,undefined,undefined,true);
  assert.equal(result.media.data,'aW1hZ2U=');assert.equal(calls[0][1].media,true);assert.equal(calls[1][0],'muse_web_generate');assert.equal(calls[1][1].expectMedia,true);
+ assert.equal(calls[0][1].accountId,'primary');assert.equal(calls[1][1].accountId,calls[0][1].accountId);
 });
 test('the native adapter passes both reference images without collapsing the subject and style',async()=>{
- let submitted;globalThis.museNative=async(cmd,args)=>{if(cmd==='muse_web_status')return{ready:true,mediaProtocol:7,parallelMedia:true};submitted=args;return{text:null,media:{mimeType:'image/png',dataUrl:'data:image/png;base64,aW1hZ2U='},error:null,summaryRequests:0};};
+ let submitted;globalThis.museNative=async(cmd,args)=>{if(cmd==='muse_web_status')return{ready:true,mediaProtocol:8,parallelMedia:true};submitted=args;return{text:null,media:{mimeType:'image/png',dataUrl:'data:image/png;base64,aW1hZ2U='},error:null,summaryRequests:0};};
  const subject={mimeType:'image/jpeg',dataUrl:'data:image/jpeg;base64,c3ViamVjdA=='},style={mimeType:'image/jpeg',dataUrl:'data:image/jpeg;base64,c3R5bGU='};
  await client.generateMuseWebOutput('Compose two images',undefined,undefined,undefined,[subject,style],true);
  assert.deepEqual(submitted.referenceImages,[subject,style]);assert.equal(submitted.referenceImage,null);
@@ -376,7 +456,7 @@ test('the native adapter passes both reference images without collapsing the sub
 test('the native adapter can finish a text reply while a media generation is still running',async()=>{
  let finishImage;const imageReady=new Promise(resolve=>{finishImage=resolve;});const calls=[];
  globalThis.museNative=async(cmd,args)=>{
-  calls.push([cmd,args]);if(cmd==='muse_web_status')return{ready:true,mediaProtocol:7,parallelMedia:true};
+  calls.push([cmd,args]);if(cmd==='muse_web_status')return{ready:true,mediaProtocol:8,parallelMedia:true};
   if(args.expectMedia){await imageReady;return{media:{mimeType:'image/png',dataUrl:'data:image/png;base64,aW1hZ2U='}};}
   return{text:'Text finished'};
  };
@@ -403,8 +483,23 @@ test('the native adapter serializes customers and aborts queued requests without
 test('cancelling an active adapter request is scoped and a late reply is never returned',async()=>{
  const calls=[];let resolve;
  globalThis.museNative=async(cmd,args)=>{calls.push([cmd,args]);if(cmd==='muse_web_generate')return new Promise(r=>resolve=r);};
- const controller=new AbortController();const result=client.generateMuseWeb('customer',controller.signal);await new Promise(r=>setImmediate(r));controller.abort();await new Promise(r=>setImmediate(r));
- assert.equal(calls[1][0],'muse_web_cancel');assert.equal(calls[1][1].requestId,calls[0][1].requestId);resolve('late reply');await assert.rejects(result,/abort/i);
+ const controller=new AbortController();const result=client.generateMuseWeb('customer',controller.signal);
+ const rejected=assert.rejects(result,/abort/i);
+ await new Promise(r=>setImmediate(r));controller.abort();await new Promise(r=>setImmediate(r));
+ assert.equal(calls[1][0],'muse_web_cancel');assert.equal(calls[1][1].requestId,calls[0][1].requestId);resolve('late reply');await rejected;
+});
+test('manual cancellation discards a late native success',async()=>{
+ let finish;
+ globalThis.museNative=async(cmd)=>cmd==='muse_web_generate'?new Promise(resolve=>finish=resolve):undefined;
+ const result=client.generateMuseWeb('test request');
+ const rejected=assert.rejects(result,{name:'AbortError'});
+ await new Promise(resolve=>setImmediate(resolve));
+ const [request]=client.getActiveMuseRequests();
+ assert.ok(request);
+ await client.cancelActiveMuseRequest(request.id);
+ finish('late success');
+ await rejected;
+ assert.equal(client.getActiveMuseRequests().length,0);
 });
 test('handoff generations are counted separately with unknown tokens, including failed summaries',async()=>{
  globalThis.museNative=async()=>({text:'New reply',error:null,summaryRequests:1,summaryFailed:false});
@@ -417,11 +512,11 @@ test('handoff generations are counted separately with unknown tokens, including 
  globalThis.museNative=async()=>({text:'Ordinary reply',error:null,summaryRequests:0,summaryFailed:false});
  assert.equal(await client.generateMuseWeb('No handoff'),'Ordinary reply');assert.equal(client.getAiUsageSnapshot().buckets.find(row=>row.feature==='context').requests,2);
 });
-test('the native adapter lists, adds, selects and checks individual Muse accounts',async()=>{
+test('adding a Muse account preserves the current account, and explicit selection changes it',async()=>{
  globalThis.museUseCustomPool=true;const calls=[];const pool={accounts:[{id:'one',name:'Muse 1',selected:true},{id:'two',name:'Muse 2',selected:false}],selectedId:'one'};
- globalThis.museNative=async(cmd,args)=>{calls.push([cmd,args]);if(cmd==='muse_web_accounts')return pool;if(cmd==='muse_web_account_add')return{...pool,accounts:[...pool.accounts,{id:'three',name:'Muse 3',selected:true}],selectedId:'three'};if(cmd==='muse_web_account_select')return{...pool,selectedId:args.accountId};if(cmd==='muse_web_status')return{opened:true,ready:args.accountId==='two',state:args.accountId==='two'?'ready':'login',message:'Sign in'};};
+ globalThis.museNative=async(cmd,args)=>{calls.push([cmd,args]);if(cmd==='muse_web_accounts')return pool;if(cmd==='muse_web_account_add')return{...pool,accounts:[...pool.accounts,{id:'three',name:'Muse 3',selected:false}],selectedId:'one'};if(cmd==='muse_web_account_select')return{...pool,selectedId:args.accountId};if(cmd==='muse_web_status')return{opened:true,ready:args.accountId==='two',state:args.accountId==='two'?'ready':'login',message:'Sign in'};};
  assert.equal((await client.museWebAccounts()).accounts.length,2);
- assert.equal((await client.addMuseWebAccount()).selectedId,'three');
+ assert.equal((await client.addMuseWebAccount()).selectedId,'one');
  assert.equal((await client.selectMuseWebAccount('two')).selectedId,'two');
  assert.equal((await client.museWebStatus(false,'two')).ready,true);
  assert.deepEqual(calls.map(([cmd])=>cmd),['muse_web_accounts','muse_web_account_add','muse_web_account_select','muse_web_status']);
@@ -437,4 +532,69 @@ test('account creation and selection refuse an active generation',async()=>{
  const commands=[];globalThis.museNative=async(cmd,args)=>{commands.push([cmd,args]);return{accounts:[],selectedId:args?.accountId||'new'};};
  await client.addMuseWebAccount();await client.selectMuseWebAccount('new');
  assert.deepEqual(commands.map(([cmd])=>cmd),['muse_web_account_add','muse_web_account_select']);
+});
+
+test('driver locates groupable user bubbles without hatch-user-bubble-bg and ignores empty decorative role children',()=>{
+  const createCustomDom = (makeEntries) => {
+    let now = 1000, running = false, clicks = 0, entries = [];
+    const location = { origin: 'https://muse.ai', hostname: 'muse.ai', href: 'https://muse.ai/thread/new?wapRequest=21b90bdd-6442-420b-97ad-e6ffc25f3e07', pathname: '/thread/new', search: '?wapRequest=21b90bdd-6442-420b-97ad-e6ffc25f3e07' };
+    class Textarea { get value() { return this.text || ''; } set value(v) { this.text = v; } dispatchEvent() {} offsetParent = {}; }
+    const field = new Textarea();
+    const send = { offsetParent: {}, disabled: false, getAttribute: k => k === 'aria-label' ? 'Send' : null, click() { clicks++; entries.push(...makeEntries(field.value)); field.value = ''; running = true; if (location.pathname === '/thread/new') location.pathname = '/thread/custom-1'; } };
+    const stop = { get offsetParent() { return running ? {} : null; }, click() { running = false; } };
+    const document = {
+      body: { get innerText() { return entries.map(n => n.innerText || '').join('\n'); } },
+      querySelector(sel) { if (sel.includes('hydration')) return { getAttribute: () => 'hydrated' }; if (sel.includes('stop-button')) return running ? stop : null; return null; },
+      querySelectorAll(sel) { if (sel.includes('stop-button')) return running ? [stop] : []; if (sel === 'textarea') return [field]; if (sel.startsWith('button')) return [send]; if (sel.includes('groupable-bubble')) return entries; return []; },
+    };
+    const context = vm.createContext({ window: {}, document, location, HTMLTextAreaElement: Textarea, Event: class { constructor(type) { this.type = type; } }, URLSearchParams, URL, AbortSignal, Date: { now: () => now } });
+    vm.runInContext(driver, context);
+    return { api: context.window.__wapMuse, entries, location, tick: ms => { now += ms; }, finish: () => { running = false; }, get clicks() { return clicks; }, reload: () => { delete context.window.__wapMuse; vm.runInContext(driver, context); } };
+  };
+  const makeNode = (text, className, children = [], parentElement = null) => ({
+    innerText: text, textContent: text, className, parentElement,
+    querySelector: sel => sel.includes('hatch-agent-bubble-bg') ? children.find(c => (c.className || '').includes('hatch-agent-bubble-bg')) || null : null,
+    querySelectorAll: sel => sel === '.prose' && className.includes('hatch-agent-bubble-bg') && text ? [{ innerText: text }] : [],
+  });
+  // Case 1 & 3: user bubble without hatch-user-bubble-bg + non-agent tool card before agent reply.
+  const id = '21b90bdd-6442-420b-97ad-e6ffc25f3e07', owner = 'a'.repeat(64);
+  const dom1 = createCustomDom(prompt => [makeNode(prompt, 'hatch-chat-groupable-bubble')]);
+  assert.equal(dom1.api.start(id, 'Hello', null, owner).state, 'preparing');
+  assert.equal(dom1.api.poll(id).state, 'generating');
+  dom1.entries.push(makeNode('Searching knowledge base...', 'hatch-chat-groupable-bubble hatch-tool-card'));
+  dom1.entries.push(makeNode('Reply after tool card', 'hatch-chat-groupable-bubble hatch-agent-bubble-bg'));
+  dom1.finish(); dom1.api.poll(id); dom1.tick(2000);
+  const done1 = dom1.api.poll(id);
+  assert.equal(done1.state, 'done');
+  assert.equal(done1.text, 'Reply after tool card');
+  assert.equal(dom1.api.inspect('job-next', '/thread/custom-1', owner).matched, true);
+  dom1.reload();
+  assert.equal(dom1.api.collect().requestId, id);
+
+  // Case 2: outer bubble with empty decorative hatch-user-bubble-bg child is not dropped as wrapper.
+  const dom2 = createCustomDom(prompt => {
+    const outer = makeNode(prompt, 'hatch-chat-groupable-bubble');
+    const deco = makeNode('', 'hatch-user-bubble-bg', [], outer);
+    return [outer, deco];
+  });
+  assert.equal(dom2.api.start(id, 'Hello deco', null, owner).state, 'preparing');
+  dom2.api.poll(id);
+  dom2.entries.push(makeNode('Reply with deco', 'hatch-chat-groupable-bubble hatch-agent-bubble-bg'));
+  dom2.finish(); dom2.api.poll(id); dom2.tick(2000);
+  const done2 = dom2.api.poll(id);
+  assert.equal(done2.state, 'done');
+  assert.equal(done2.text, 'Reply with deco');
+});
+
+test('locate timeout error appends non-PII diagnostics while preserving Chinese message',()=>{
+  const p = page();
+  p.api.start('job-1', 'Customer message');
+  p.api.poll('job-1');
+  p.replaceThread();
+  p.finish();
+  p.api.poll('job-1');
+  p.tick(15_001);
+  const failed = p.api.poll('job-1');
+  assert.equal(failed.state, 'error');
+  assert.match(failed.error, /^Muse 暂时无法定位本次请求，请打开原对话查看本次回复；为避免重复，未再次生成 \[诊断: path=\/thread\/new-id, bubbles=2, users=1, agents=1, bodyMarker=false, draftLeft=false\]$/);
 });

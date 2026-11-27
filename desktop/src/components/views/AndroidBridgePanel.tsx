@@ -1,18 +1,25 @@
-import { Plug, Unplug } from "lucide-react";
+import { Download, Plug, Unplug } from "lucide-react";
 import { Button, Input } from "@/components/ui/primitives";
 import { useI18n } from "@/i18n";
+import { isTauri, type AdbDevice } from "@/lib/bridge";
+import { isMac, isWindows } from "@/lib/desktopPlatform";
 
 type Props = {
   host: string;
   port: number;
   lastError?: string | null;
   busy: boolean;
+  installing: boolean;
   connected: boolean;
   log: string;
   adb: string;
+  adbDevices: AdbDevice[];
+  adbSerial: string;
+  onAdbDeviceChange: (serial: string) => void;
   onHostChange: (value: string) => void;
   onPortChange: (value: number) => void;
   onConnect: () => void;
+  onInstall: () => void;
   onDisconnect: () => void;
   onScanAdb: () => void;
   onForward: () => void;
@@ -26,12 +33,17 @@ export function AndroidBridgePanel({
   port,
   lastError,
   busy,
+  installing,
   connected,
   log,
   adb,
+  adbDevices,
+  adbSerial,
+  onAdbDeviceChange,
   onHostChange,
   onPortChange,
   onConnect,
+  onInstall,
   onDisconnect,
   onScanAdb,
   onForward,
@@ -46,6 +58,17 @@ export function AndroidBridgePanel({
       </p>
 
       <div className="mt-3 flex flex-wrap items-end gap-2">
+        {isTauri() && (isWindows || isMac) && (
+          <Button
+            variant="secondary"
+            className="!min-h-8 gap-1 !px-3 text-2xs"
+            disabled={busy || installing}
+            onClick={onInstall}
+          >
+            <Download className="h-3.5 w-3.5" />
+            {t(installing ? "androidBridge.installing" : "androidBridge.install")}
+          </Button>
+        )}
         <label className="text-2xs text-zinc-500">
           Host
           <Input
@@ -66,7 +89,7 @@ export function AndroidBridgePanel({
         <Button
           variant="primary"
           className="!min-h-8 gap-1 !px-3 text-2xs"
-          disabled={busy || connected}
+          disabled={busy || installing || connected}
           onClick={onConnect}
         >
           <Plug className="h-3.5 w-3.5" />
@@ -75,7 +98,7 @@ export function AndroidBridgePanel({
         <Button
           variant="secondary"
           className="!min-h-8 gap-1 !px-3 text-2xs"
-          disabled={busy || !connected}
+          disabled={busy || installing || !connected}
           onClick={onDisconnect}
         >
           <Unplug className="h-3.5 w-3.5" />
@@ -96,10 +119,24 @@ export function AndroidBridgePanel({
             >
               {t("androidBridge.scanAdb")}
             </Button>
+            {adbDevices.length > 0 && (
+              <label className="flex items-center gap-1.5 text-2xs text-zinc-400">
+                ADB
+                <select className="rounded border border-zinc-700 bg-zinc-900 p-1.5" value={adbSerial}
+                  onChange={(event) => onAdbDeviceChange(event.target.value)}>
+                  <option value="">—</option>
+                  {adbDevices.map((device) => (
+                    <option key={device.serial} value={device.serial} disabled={device.state !== "device"}>
+                      {device.serial} · {device.state}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <Button
               variant="secondary"
               className="!min-h-8 !px-2.5 text-2xs"
-              disabled={busy}
+              disabled={busy || installing}
               onClick={onForward}
             >
               Forward :{port}
@@ -109,7 +146,7 @@ export function AndroidBridgePanel({
             <li>{t("androidBridge.step1")}</li>
             <li>
               <code className="text-zinc-400">
-                adb forward tcp:{port} tcp:{port}
+                adb {adbSerial ? `-s ${adbSerial} ` : ""}forward tcp:{port} tcp:17890
               </code>
             </li>
             <li>{t("androidBridge.step3")}</li>

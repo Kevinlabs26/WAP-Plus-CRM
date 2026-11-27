@@ -42,8 +42,13 @@ export function MediaSendPreview({
 
       <div className={compact ? "order-1 flex max-w-[50%] shrink-0 gap-2 overflow-x-auto" : "flex gap-2 overflow-x-auto pb-0.5"}>
         {items.map((item, index) => (
-          <div key={item.id} className={`relative flex shrink-0 items-center justify-center overflow-hidden rounded-xl border border-zinc-700 bg-zinc-950 ${compact ? "h-16 w-16" : "h-24 w-24 sm:h-28 sm:w-28"}`}>
-            {item.previewUrl ? (
+          <div key={item.id} className={`relative flex shrink-0 items-center justify-center overflow-hidden rounded-xl border border-zinc-700 bg-zinc-950 ${item.kind === "audio" ? compact ? "min-h-16 w-60" : "min-h-24 w-72" : compact ? "h-16 w-16" : "h-24 w-24 sm:h-28 sm:w-28"}`}>
+            {item.kind === "audio" && item.previewUrl ? (
+              <div className="w-full px-2 py-2">
+                <audio controls preload="metadata" src={item.previewUrl} className="w-full" aria-label={item.file.name} />
+                <div className="mt-1 truncate text-[10px] text-zinc-400" title={item.file.name}>{item.file.name}</div>
+              </div>
+            ) : item.previewUrl ? (
               <img src={item.previewUrl} alt={item.file.name} className="h-full w-full object-contain" />
             ) : (
               <div className="min-w-0 px-3 text-center">
@@ -52,7 +57,7 @@ export function MediaSendPreview({
                 <div className="mt-1 text-[9px] text-zinc-600">{Math.max(1, Math.ceil(item.file.size / 1024))} KB</div>
               </div>
             )}
-            <span
+            {item.kind !== "audio" && <span
               className="absolute bottom-1.5 left-1.5 rounded-md px-2 py-1 text-2xs font-bold leading-none text-white shadow-lg"
               style={{
                 backgroundColor: "#111827",
@@ -61,8 +66,8 @@ export function MediaSendPreview({
                 textShadow: "0 1px 2px rgba(0,0,0,.95)",
               }}
             >
-              {item.kind === "sticker" ? t("mediaPreview.sticker") : item.kind === "gif" ? t("mediaPreview.gif") : item.kind === "audio" ? t("mediaPreview.audio") : item.kind === "file" ? t("mediaPreview.file") : t("mediaPreview.image")}
-            </span>
+              {item.kind === "sticker" ? t("mediaPreview.sticker") : item.kind === "gif" ? t("mediaPreview.gif") : item.kind === "file" ? t("mediaPreview.file") : t("mediaPreview.image")}
+            </span>}
             {!sending && (
               <button type="button" onClick={() => onRemove(item.id)} className="absolute right-1.5 top-1.5 rounded-full p-1 text-white shadow-md hover:bg-rose-600" style={{ backgroundColor: "#111827", border: "1px solid rgba(255,255,255,.45)" }} aria-label={t("mediaPreview.remove")}>
                 <X className="h-3 w-3" />

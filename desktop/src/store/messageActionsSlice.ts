@@ -1,5 +1,6 @@
 import type { ChatPreview, Message, WaMessageKey } from "@/types/crm";
 import { remapPlaybookBindings } from "@/lib/aiPlaybooks";
+import { remapPromptPlanBindings } from "@/lib/promptPlans";
 import { getMessageFromDb, searchMessagesInDb } from "@/lib/storage";
 import { cacheMediaUrl, dropMediaCache } from "@/lib/mediaCache";
 import type { AppState, SliceContext } from "./types";
@@ -49,7 +50,8 @@ export function createMessageActionsSlice({
         input.accountId ||
         state.chats.find((chat) => chat.id === chatId)?.accountId ||
         state.contacts.find((contact) => contact.id === contactId)?.accountId;
-      const id = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const id = input.dedupeId || `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      if (input.dedupeId && state.messages.some(message => message.id === id)) return id;
       let latestAt = -Infinity;
       for (const message of state.messages) {
         const owner = message.accountId || message.deviceId;
@@ -74,6 +76,7 @@ export function createMessageActionsSlice({
         mediaMime: input.mediaMime,
         mediaFileName: input.mediaFileName,
         mediaCaption: input.mediaCaption,
+        mediaThumbUrl: input.mediaThumbUrl,
         lastError: input.lastError,
         retryCount: 0,
         nextAttemptAt: input.nextAttemptAt,
@@ -85,7 +88,13 @@ export function createMessageActionsSlice({
         accountPhoneE164: state.settings.waAccounts?.find(a => a.id === accountId)?.historyPhoneE164,
         systemKind: input.systemKind,
         aiReplyContextHash: input.aiReplyContextHash,
+        aiReplyImageAssetId: input.aiReplyImageAssetId,
         aiReplyInboundId: input.aiReplyInboundId,
+        aiReplyReceivedAt: input.aiReplyReceivedAt,
+        aiReplyDurationMs: input.aiReplyDurationMs,
+        aiReplyMuseAccountId: input.aiReplyMuseAccountId,
+        aiReplyMuseAccountName: input.aiReplyMuseAccountName,
+        aiDecisionDetails: input.aiDecisionDetails,
         aiAutoFollowUpRootId: input.aiAutoFollowUpRootId,
         aiAutoFollowUpStep: input.aiAutoFollowUpStep,
         aiAutoFollowUpSentAt: input.aiAutoFollowUpSentAt,
@@ -163,7 +172,12 @@ export function createMessageActionsSlice({
 
     updateMessageDelivery: (id, patch) => {
       const prev = get().messages.find((m) => m.id === id);
-      const applied = get().patchMessage(id, patch);
+      const completed = ["sent", "server", "delivered", "read", "played"].includes(patch.deliveryStatus || "");
+      const duration = prev?.systemKind === "ai_auto_reply" && !prev.aiAutoFollowUpStep &&
+        prev.aiReplyReceivedAt !== undefined && prev.aiReplyDurationMs === undefined && completed
+        ? { aiReplyDurationMs: Math.max(0, Date.now() - prev.aiReplyReceivedAt) }
+        : {};
+      const applied = get().patchMessage(id, { ...patch, ...duration });
       if (!applied) return;
       const next = get().messages.find((m) => m.id === id);
       if (next && isConversationOutgoing(next)) {
@@ -288,6 +302,7 @@ export function createMessageActionsSlice({
             chatFolders: folderRefs.folders,
             chatFolderClones: folderRefs.clones,
             aiPlaybookBindings: remapPlaybookBindings(state.settings.aiPlaybookBindings || {}, new Map([[chatId, null]])),
+            aiPromptPlanByChat: remapPromptPlanBindings(state.settings.aiPromptPlanByChat || {}, new Map([[chatId, null]])),
           },
         };
       });
@@ -364,6 +379,7 @@ export function createMessageActionsSlice({
         contactId,
         contactName: contact.name || contact.phone || contactId,
         lastMessage: "",
+        hasMessageHistory: false,
         unread: 0,
         updatedAt: new Date().toISOString(),
         phoneId:

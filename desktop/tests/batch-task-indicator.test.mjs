@@ -5,20 +5,19 @@ import {fileURLToPath} from 'node:url';
 const mocks={
  react:'export const useState=i=>globalThis.batchHooks.state(i),useRef=i=>globalThis.batchHooks.ref(i),useEffect=(f,d)=>globalThis.batchHooks.effect(f,d);',
  'react/jsx-runtime':'export const jsx=(type,props)=>({type,props}),jsxs=jsx;',
- 'lucide-react':'export const LoaderCircle="loading",Pause="pause",Play="play";',
+ 'lucide-react':'export const LoaderCircle="loading",Pause="pause",Play="play",Square="stop";',
  '@/components/ui/primitives':'export const Button="button";',
- '@/i18n':'export const useI18n=()=>({t:(k,p)=>k+(p?JSON.stringify(p):"")});',
- '@/store/appStore':'export const useAppStore=Object.assign(f=>f(globalThis.batchState),{getState:()=>globalThis.batchState});',
- '@/lib/scheduledPlanActions':'export const updateScheduledPlan=async(id,change)=>{const s=globalThis.batchState;s.settings.scheduledPlans=s.settings.scheduledPlans.map(p=>p.id===id?change(p):p);};',
+ '@/i18n':'export const useI18n=()=>({t:(k,p)=>k+(p?JSON.stringify(p):"")}); export const translateCurrent=k=>k;',
+ '@/store/appStore':'export const useAppStore=Object.assign(f=>f(globalThis.batchState),{getState:()=>globalThis.batchState}); export const flushPersist=async()=>{};',
 };
 const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/layout/BatchTaskIndicator.tsx',import.meta.url))],bundle:true,write:false,format:'esm',platform:'node',jsx:'automatic',alias:{'@':fileURLToPath(new URL('../src',import.meta.url))},plugins:[{name:'batch-boundaries',setup(b){b.onResolve({filter:/.*/},a=>mocks[a.path]?{path:a.path,namespace:'mock'}:undefined);b.onLoad({filter:/.*/,namespace:'mock'},a=>({contents:mocks[a.path]}));}}]});
 const {BatchTaskIndicator}=await import('data:text/javascript;base64,'+Buffer.from(built.outputFiles[0].text).toString('base64'));
 const nodes=t=>Array.isArray(t)?t.flatMap(nodes):t?.props?[t,...nodes(t.props.children)]:[];
 test('bulk progress opens automatically, pauses queued tasks and preserves the completion result',async()=>{
  const previousWindow=globalThis.window,previousDocument=globalThis.document;const listeners=new Map();
- globalThis.window={addEventListener:(k,f)=>listeners.set(k,f),removeEventListener:k=>listeners.delete(k),setInterval:()=>1,clearInterval(){}};
+ globalThis.window={addEventListener:(k,f)=>listeners.set(k,f),removeEventListener:k=>listeners.delete(k),setInterval:()=>1,clearInterval(){},setTimeout:()=>1,clearTimeout(){}};
  globalThis.document={addEventListener(){},removeEventListener(){}};
- const now=new Date().toISOString();const state={settings:{scheduledPlans:[],waAccounts:[{id:'a',label:'Account A'}]},broadcastCampaigns:[],pushToast(){},setSettingsOpen(...args){state.opened=args;}};
+ const now=new Date().toISOString();const state={settings:{scheduledPlans:[],waAccounts:[{id:'a',label:'Account A'}]},broadcastCampaigns:[],pushToast(){},setSettingsOpen(...args){state.opened=args;},updateSettings(patch){Object.assign(state.settings,patch);},async requestConfirm(){return state.confirmed;}};
  globalThis.batchState=state;let slots=[],cursor=0,tree;const effects=[],cleanups=[];
  globalThis.batchHooks={state(i){const at=cursor++;if(!(at in slots))slots[at]=typeof i==='function'?i():i;return[slots[at],v=>{slots[at]=typeof v==='function'?v(slots[at]):v;}];},ref(i){const at=cursor++;return slots[at]??(slots[at]={current:i});},effect(f,d){const at=cursor++;if(!slots[at]||d.some((v,j)=>v!==slots[at].deps[j])){slots[at]?.cleanup?.();slots[at]={deps:d};effects.push(()=>{const cleanup=f();slots[at].cleanup=cleanup;cleanups.push(cleanup);});}}};
  const render=()=>{cursor=0;tree=BatchTaskIndicator();while(effects.length)effects.shift()();};
@@ -37,5 +36,14 @@ test('bulk progress opens automatically, pauses queued tasks and preserves the c
   state.settings.scheduledPlans[0]={...state.settings.scheduledPlans[0],status:'done',items:[{id:'1',status:'sent'},{id:'2',status:'sent'}]};render();
   assert.ok(find('planQueue.status.done'));assert.equal(nodes(tree).find(n=>n.props.role==='progressbar').props['aria-valuenow'],2);
   find('planQueue.details').props.onClick();assert.deepEqual(state.opened,[true,'scheduled']);render();assert.equal(tree,null);
+  state.settings.scheduledPlans[0]={...state.settings.scheduledPlans[0],status:'paused',items:[{id:'1',status:'sent'},{id:'2',status:'unknown'}]};
+  listeners.get('wap:open-batch-progress')({detail:{planId:'p'}});render();
+  await find('planQueue.clearProgress').props.onClick();render();
+  assert.equal(state.settings.scheduledPlans[0].status,'paused');
+  state.confirmed=true;
+  await find('planQueue.clearProgress').props.onClick();render();
+  assert.equal(tree,null);
+  assert.equal(state.settings.scheduledPlans[0].status,'cancelled');
+  assert.deepEqual(state.settings.scheduledPlans[0].items.map(item=>item.status),['sent','unknown']);
  }finally{cleanups.forEach(f=>f?.());globalThis.window=previousWindow;globalThis.document=previousDocument;delete globalThis.batchState;delete globalThis.batchHooks;}
 });

@@ -1,7 +1,7 @@
 {
   "name": "wap-plus",
   "private": true,
-  "version": "0.1.76",
+  "version": "0.1.91",
   "packageManager": "npm@10.9.8",
   "type": "module",
   "description": "WAP Plus CRM monorepo (desktop + baileys sidecar)",
@@ -18,7 +18,8 @@
     "ffmpeg:prepare": "node -e \"if(process.platform==='win32') require('node:child_process').execFileSync('powershell.exe',['-NoProfile','-ExecutionPolicy','Bypass','-File','tools/prepare-ffmpeg.ps1'],{stdio:'inherit',windowsHide:true})\"",
     "bridge:smoke": "node tools/mock-bridge-smoke.test.mjs",
     "tauri": "npm run tauri -w wap-plus-crm --",
-    "release:win": "npm run ffmpeg:prepare && npm run baileys:build && npm run tauri -- build",
+    "android:bridge:prepare": "node tools/prepare-android-bridge.mjs",
+    "release:win": "npm run ffmpeg:prepare && npm run baileys:build && npm run android:bridge:prepare && npm run tauri -- build",
     "mock-bridge": "node tools/mock-bridge.mjs",
     "baileys:start": "npm run start -w wap-plus-baileys",
     "baileys:build": "npm run build -w wap-plus-baileys",

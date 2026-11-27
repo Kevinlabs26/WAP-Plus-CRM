@@ -100,3 +100,8 @@ pub(crate) fn unprotect_secrets(value: &[u8]) -> Result<Vec<u8>, String> {
     }
     Ok(bytes)
 }
+#[cfg(target_os = "macos")]
+#[path = "macos_keychain.rs"]
+mod macos_keychain;
+#[cfg(target_os = "macos")]
+pub(crate) use macos_keychain::{protect_secrets, unprotect_secrets};

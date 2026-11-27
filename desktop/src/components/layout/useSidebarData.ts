@@ -102,6 +102,7 @@ export function useSidebarData({
 
   const leadCandidates = useMemo(() => {
     const candidates = new Map<string, LeadCandidate>();
+    if (!leadInbox.enabled && !leadInbox.collectedChatIds?.length) return candidates;
     const dismissed = new Set(leadInbox.dismissedChatIds || []);
     const collected = new Set(leadInbox.collectedChatIds || []);
     const rangeStart =
@@ -248,6 +249,7 @@ export function useSidebarData({
       viewMode,
       filterFallback,
       filterLive,
+      messagesByChatId,
     ]
   );
 
@@ -413,6 +415,7 @@ export function useSidebarData({
         leadDateGroupByChatId,
         collapsedLeadDateIds,
         contactById,
+        lastMsgAtByChat,
         ungroupedCollapsed,
         query,
         folderDisplayName,
@@ -433,6 +436,7 @@ export function useSidebarData({
       leadInbox.mergeAccounts,
       collapsedLeadDateIds,
       contactById,
+      lastMsgAtByChat,
       ungroupedCollapsed,
       waAccounts,
       dataAccountId,

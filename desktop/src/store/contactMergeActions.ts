@@ -1,5 +1,8 @@
 import type { AppState, SliceContext } from "./types";
 import { persist, scheduleStatsRecompute } from "./persist";
+import { protectedGroupChatIds } from "./chatDuplicateMerge";
+import { findDuplicateContactGroups } from "@/lib/contactDeduplication";
+import { buildContactDeduplicationPatch } from "@/lib/contactDeduplicationPatch";
 import type { Contact } from "@/types/crm";
 
 /**
@@ -8,8 +11,62 @@ import type { Contact } from "@/types/crm";
 export function createContactMergeActions({
   set,
   get,
-}: SliceContext): Pick<AppState, "mergeContacts"> {
+}: SliceContext): Pick<AppState, "mergeContacts" | "dedupeAccountContacts"> {
   return {
+    dedupeAccountContacts(accountId?: string) {
+      const state = get();
+      const liveAccountId =
+        state.settings.liveBaileysAccountId || state.settings.activeAccountId;
+      const groups = findDuplicateContactGroups({
+        contacts: state.contacts,
+        chats: state.chats,
+        messages: state.messages,
+        accountId,
+        liveAccountId,
+      });
+      if (!groups.length) {
+        return { groupsMerged: 0, removedContacts: 0, removedEmptyChats: 0 };
+      }
+      const protectedChatIds = protectedGroupChatIds(
+        state.settings,
+        state.draftReplyByChatId
+      );
+      const patch = buildContactDeduplicationPatch(
+        {
+          contacts: state.contacts,
+          chats: state.chats,
+          messages: state.messages,
+          followUps: state.followUps,
+          activities: state.activities,
+          broadcastCampaigns: state.broadcastCampaigns as unknown as Array<{
+            id: string;
+            contactIds?: string[];
+            items?: Array<{ contactId?: string; contactName?: string; [key: string]: unknown }>;
+            [key: string]: unknown;
+          }>,
+          scheduledMessages: state.scheduledMessages,
+          selectedContactId: state.selectedContactId,
+          selectedChatId: state.selectedChatId,
+          protectedChatIds,
+        },
+        groups
+      );
+      set({
+        contacts: patch.contacts,
+        chats: patch.chats,
+        messages: patch.messages,
+        followUps: patch.followUps,
+        activities: patch.activities,
+        broadcastCampaigns:
+          patch.broadcastCampaigns as unknown as AppState["broadcastCampaigns"],
+        scheduledMessages: patch.scheduledMessages,
+        selectedContactId: patch.selectedContactId,
+        selectedChatId: patch.selectedChatId,
+      });
+      scheduleStatsRecompute(get);
+      persist(get);
+      return patch.summary;
+    },
     mergeContacts(keepId: string, dropIds: string[]): boolean {
       if (!keepId || !dropIds.length) return false;
       const dropSet = new Set(dropIds);
@@ -43,10 +100,6 @@ export function createContactMergeActions({
         aiIntent: keep.aiIntent || drops.find((d) => d.aiIntent)?.aiIntent,
         aiNextStep:
           keep.aiNextStep || drops.find((d) => d.aiNextStep)?.aiNextStep,
-        aiReport: keep.aiReport || drops.find((d) => d.aiReport)?.aiReport,
-        aiReportTemplateId: keep.aiReportTemplateId || drops.find((d) => d.aiReportTemplateId)?.aiReportTemplateId,
-        aiReportTemplateName: keep.aiReportTemplateName || drops.find((d) => d.aiReportTemplateName)?.aiReportTemplateName,
-        aiReportAt: keep.aiReportAt || drops.find((d) => d.aiReportAt)?.aiReportAt,
         tags: Array.from(
           new Set([...(keep.tags || []), ...drops.flatMap((d) => d.tags || [])])
         ),

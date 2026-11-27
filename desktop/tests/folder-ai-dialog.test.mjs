@@ -6,12 +6,15 @@ import { fileURLToPath } from 'node:url';
 const mocks = {
  'lucide-react':'export const X="close";',
   react: 'export const useEffect=()=>{};export const useState = initial => globalThis.folderAiHooks.state(initial);',
-  'react/jsx-runtime': 'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
+  'react/jsx-runtime': 'export const jsx=(type,props)=>({type,props});export const jsxs=jsx;export const Fragment="fragment";',
   '@/i18n': 'export const useI18n=()=>({t:key=>key});',
   '@/components/ui/primitives': 'export const Textarea="textarea";',
+  '@/components/ui/TimeZoneSelect': 'export const TimeZoneSelect="time-zone";',
   '@/components/settings/AiPromptLibrary':'export const AiPromptLibrary="prompt-library";',
   '@/components/settings/AiOutreachControls':'export const AiOutreachControls="outreach-controls";',
   '@/components/settings/AiOutreachPreview':'export const AiOutreachPreview="outreach-preview";',
+  '@/lib/aiOutreach':'export const tickAiOutreach=async()=>{};export const outreachFolderDismissal=id=>`outreach-folder:${id}`;',
+  '@/lib/aiOutreachContext':'export const outreachFolderChatIds=()=>[];',
   '@/store/appStore': 'export const flushPersist=async()=>{};export const useAppStore=selector=>selector(globalThis.folderAiState);useAppStore.getState=()=>globalThis.folderAiState;',
 };
 const built=await build({entryPoints:[fileURLToPath(new URL('../src/components/layout/FolderAiPromptDialog.tsx',import.meta.url))],
@@ -24,7 +27,7 @@ const {FolderAiPromptDialog}=await import('data:text/javascript;base64,'+Buffer.
 const nodes=tree=>Array.isArray(tree)?tree.flatMap(nodes):tree?.props?[tree,...nodes(tree.props.children)]:[];
 function harness(prompt,initialise=()=>{}) {
   let slots=[],cursor=0,tree,closed=0;
-  const settings={aiReplyMode:'semi',activeAccountId:'a',aiSystemPrompt:'GLOBAL',aiSystemPromptByAccountId:{a:'ACCOUNT'},chatFolders:[
+  const settings={aiReplyMode:'semi',activeAccountId:'a',aiSystemPrompt:'GLOBAL',aiSystemPromptByAccountId:{a:'ACCOUNT'},aiTaskDismissedIds:[],chatFolders:[
     {id:'parent',name:'Parent',chatIds:[],scope:{type:'account',accountId:'a'},aiSystemPrompt:'PARENT'},
     {id:'f',name:'Folder',chatIds:['chat'],parentId:'parent',scope:{type:'account',accountId:'a'},aiSystemPrompt:prompt},
   ]};
@@ -41,18 +44,50 @@ function harness(prompt,initialise=()=>{}) {
 
 test('folder dialog previews inheritance and saves an independent identity without enabling automation',()=>{
  const h=harness();assert.ok(JSON.stringify(h.render()).includes('PARENT'));
- h.select('custom');assert.equal(h.nodes().find(n=>n.type==='textarea').props.maxLength,6000);
+ h.select('custom');assert.equal(h.nodes().find(n=>n.type==='textarea').props.maxLength,undefined);
  assert.equal(h.nodes().find(n=>n.props.children==='dialog.save').props.disabled,true);
- h.type('  NEW FOLDER ROLE  ');
+ const longPrompt = 'NEW FOLDER ROLE '.repeat(1800).trim();
+ h.type('  ' + longPrompt + '  ');
  h.state.settings={...h.state.settings,chatFolders:h.state.settings.chatFolders.map(f=>f.id==='parent'?{...f,name:'Renamed elsewhere'}:f)};
  h.click('dialog.save');
- assert.equal(h.state.settings.chatFolders.find(f=>f.id==='f').aiSystemPrompt,'NEW FOLDER ROLE');
+ assert.equal(h.state.settings.chatFolders.find(f=>f.id==='f').aiSystemPrompt,longPrompt);
  assert.equal(h.state.settings.chatFolders[0].name,'Renamed elsewhere');
  assert.equal(h.state.settings.aiReplyMode,'semi');
  assert.equal(h.state.settings.chatFolders.find(f=>f.id==='f').autoReplyMode,undefined);
  assert.equal(h.state.settings.chatFolders.find(f=>f.id==='f').aiOutreach.mode,'auto');
  assert.equal(h.state.settings.chatFolders.find(f=>f.id==='f').aiOutreach.enabled,false);
  assert.equal(h.closed,1);
+});
+
+test('folder prompt plan is saved for non-Muse providers alongside its existing Muse settings', () => {
+ const h = harness('', state => {
+  state.settings.aiProvider = 'vertex';
+  state.settings.aiPromptTemplates = [{ id: 'a', name: 'Intro', prompt: 'First' }];
+  state.settings.aiPromptPlans = [{ id: 'daily', name: 'Daily', plan: { mode: 'rotation', templateIds: ['a'], loop: true } }];
+  state.settings.chatFolders[1].aiPlaybookId = 'old-muse-playbook';
+ });
+ const fields = () => h.nodes().find(node => node.type?.name === 'PromptPlanBindingFields');
+ const plan = { mode: 'saved', planId: 'daily', startDate: '2026-11-23', switchTime: '09:15', timeZone: 'Europe/Paris' };
+ fields().props.onChange(plan);
+ h.render();
+ h.click('dialog.save');
+ assert.deepEqual(h.state.settings.chatFolders[1].aiPromptPlan, plan);
+ assert.equal(h.state.settings.chatFolders[1].aiPlaybookId, 'old-muse-playbook');
+ h.state.settings.aiOutreachMuseAccountId = 'muse-account';
+ h.state.settings.aiPlaybookPlans = [{ id: 'muse-daily', name: 'Muse daily', days: ['old-muse-playbook'] }];
+ h.render();
+ assert.equal(h.nodes().find(node => node.type?.name === 'PlaybookScheduleFields'), undefined);
+ assert.ok(h.nodes().some(node => node.type === 'select' && node.props['aria-label'] === 'aiLibrary.choose'));
+ h.state.settings.aiProvider = 'muse';
+ h.render();
+ assert.equal(fields(), undefined);
+ assert.ok(!h.nodes().some(node => node.type === 'select' && node.props['aria-label'] === 'aiLibrary.choose'));
+ const schedule = { planId: 'muse-daily', startDate: plan.startDate, switchTime: plan.switchTime, timeZone: plan.timeZone };
+ h.nodes().find(node => node.type?.name === 'PlaybookScheduleFields').props.onChange(schedule);
+ h.render();
+ h.click('dialog.save');
+ assert.deepEqual(h.state.settings.chatFolders[1].aiPlaybookSchedule, schedule);
+ assert.deepEqual(h.state.settings.chatFolders[1].aiPromptPlan, plan);
 });
 
 test('chat entry hides folder reply-mode controls and saving cannot overwrite the folder mode',()=>{
@@ -117,9 +152,9 @@ test('choosing a template from inherited mode appends it without enabling automa
  assert.equal(folder.aiPromptMode,'append');assert.equal(folder.aiPromptTemplateId,'t');assert.equal(folder.autoReplyMode,undefined);assert.equal(folder.aiOutreach.enabled,false);
 });
 
-test('folder can save and start a round from its own dialog without changing its recurring schedule',async()=>{
+test('folder can save a one-time immediate round without showing its daily schedule',async()=>{
  const h=harness('',state=>{
-  state.settings.chatFolders[1].aiOutreach={enabled:true,mode:'auto',trigger:'both',time:'22:55',timeZone:'UTC',dailyLimit:10,minIdleHours:12,goal:''};
+  state.settings.chatFolders[1].aiOutreach={enabled:true,mode:'auto',startMode:'immediate',runNowAt:Date.now(),trigger:'both',time:'22:55',timeZone:'UTC',dailyLimit:10,minIdleHours:12,goal:''};
   state.pushToast=()=>{};
  });
  const button=()=>h.nodes().find(n=>n.type==='button'&&n.props.children==='aiOutreach.saveRunNow');
@@ -127,14 +162,14 @@ test('folder can save and start a round from its own dialog without changing its
  h.click('aiOutreach.saveRunNow');
  await new Promise(resolve=>setImmediate(resolve));
  const rule=h.state.settings.chatFolders[1].aiOutreach;
- assert.ok(rule.runNowAt);assert.equal(rule.time,'22:55');assert.equal(rule.goal,'');assert.equal(h.closed,1);
+ assert.ok(rule.runNowAt);assert.equal(rule.startMode,'immediate');assert.equal(rule.scheduleStartAt,undefined);assert.equal(rule.time,'22:55');assert.equal(rule.goal,'');assert.equal(h.closed,1);
  h.state.settings.aiOutreachPaused=true;h.render();assert.equal(button().props.disabled,true);
 });
 test('saving a prompt preserves the selected folder account scope and other folders',()=>{const h=harness('CURRENT');const scopes=h.state.settings.chatFolders.map(f=>f.scope);h.type('UPDATED');h.click('dialog.save');assert.deepEqual(h.state.settings.chatFolders.map(f=>f.scope),scopes);assert.equal(h.state.settings.chatFolders.find(f=>f.id==='f').aiSystemPrompt,'UPDATED');});
 
 
 test('folder plan schedules are saved explicitly without deleting the existing fixed binding',()=>{
- const h=harness('',state=>{state.settings.aiPlaybookPlans=[{id:'p',name:'Welcome',days:['one','two']}];state.settings.chatFolders[1].aiPlaybookId='fixed';});
+ const h=harness('',state=>{state.settings.aiProvider='muse';state.settings.aiPlaybookPlans=[{id:'p',name:'Welcome',days:['one','two']}];state.settings.chatFolders[1].aiPlaybookId='fixed';});
  const control=h.nodes().find(n=>typeof n.type==='function'&&n.type.name==='PlaybookScheduleFields');
  const schedule={planId:'p',startDate:'2026-11-11',timeZone:'Europe/Paris',switchTime:'09:00'};
  control.props.onChange(schedule);h.render();h.click('dialog.save');

@@ -8,7 +8,7 @@ const mocks={
  react:'export const lazy=()=>"quick-import";export const Suspense="suspense";export const useState=i=>globalThis.shelfHooks.state(i);export const useRef=i=>globalThis.shelfHooks.ref(i);export const useMemo=f=>f();export const useEffect=()=>{};export const useId=()=>"preview-title";',
  'react/jsx-runtime':'export const Fragment="fragment";export const jsx=(type,props)=>({type,props});export const jsxs=jsx;',
  'react-dom':'export const createPortal=children=>children;',
- 'lucide-react':'export const GripVertical="drag-icon",FileText="file-icon",Image="image-icon",Music2="audio-icon",Pin="pin-icon",Play="video-icon",Search="search-icon",Send="send-icon",X="close-icon",Zap="zap-icon";',
+ 'lucide-react':'export const GripVertical="drag-icon",FileText="file-icon",Image="image-icon",Music2="audio-icon",Pin="pin-icon",Play="video-icon",Search="search-icon",Send="send-icon",X="close-icon",Zap="zap-icon",Loader2="loader-icon",Trash2="trash-icon";',
  '@/components/ui/primitives':'export const Button="button",Input="input",Textarea="textarea";',
  '@/i18n':translations,
  '@/components/settings/SettingsQuickRepliesPanel':'export const SettingsQuickRepliesPanel="quick-import";',
@@ -26,7 +26,7 @@ function harness(component=QuickReplyBrowser,props={}){
  const h={props:{replies:[reply('one',{media})],categories:[],contextKey:'main:a',onInsert:r=>inserted.push(r),...props},inserted,
  render(){cursor=0;globalThis.shelfHooks={state(i){const at=cursor++;if(!(at in slots))slots[at]=typeof i==='function'?i():i;return [slots[at],v=>{slots[at]=typeof v==='function'?v(slots[at]):v;}];},ref(i){const at=cursor++;return slots[at]??(slots[at]={current:i});}};tree=component(h.props);return tree;},
  nodes:()=>nodes(tree),find(label){const matches=h.nodes().filter(n=>n.props['aria-label']===label||n.props.children===label);return matches.find(n=>n.props.onClick)||matches[0];},
- click(label){const n=h.find(label);assert.ok(n,'missing '+label);n.props.onClick();h.render();},preview:()=>h.nodes().find(n=>n.type===QuickReplyPreview)};
+ click(label){const n=h.find(label);assert.ok(n,'missing '+label);n.props.onClick();h.render();},openPreview(title){const n=h.find('quickShelf.insertNamed'+JSON.stringify({title}));assert.ok(n);n.props.onDoubleClick();h.render();},preview:()=>h.nodes().find(n=>n.type===QuickReplyPreview)};
  h.render();return h;
 }
 
@@ -58,16 +58,17 @@ test('a category can be added while drafting; empty categories are visible and t
  h.nodes().find(n=>n.type==='form').props.onSubmit({preventDefault(){}});h.render();
  assert.equal(store.settings.quickReplies.length,0);const category=store.settings.quickReplyCustomCategories[0];assert.equal(category.label,'Invitations');
  assert.equal(h.preview().props.reply.body,'Keep this draft');assert.equal(h.preview().props.reply.category,category.id);
- h.props.categories=store.settings.quickReplyCustomCategories;h.render();assert.ok(h.find('Invitations'),'new empty categories remain visible');
+ h.props.categories=store.settings.quickReplyCustomCategories;h.render();assert.ok(h.preview().props.categories.some(item=>item.id===category.id),'empty categories remain selectable in the editor');
  h.preview().props.onSave();h.render();assert.equal(store.settings.quickReplies[0].category,category.id);
  h.click('settingsQuickReplies.addCategory');h.find('settingsQuickReplies.categoryPlaceholder').props.onChange({target:{value:'invitations'}});h.render();h.nodes().find(n=>n.type==='form').props.onSubmit({preventDefault(){}});h.render();
  assert.equal(store.settings.quickReplyCustomCategories.length,1);assert.ok(store.toasts.some(([key])=>key==='settingsQuickReplies.categoryExists'));
 });
 
-test('quick creation respects current limits, handles a removed category and keeps Google Sheet linkage for new rows',()=>{
+test('quick creation works above 1000 replies, respects media limits and keeps Google Sheet linkage',()=>{
  const store=shelfStore(),h=harness(QuickReplyBrowser,{replies:[]});
  h.click('settingsQuickReplies.add');h.preview().props.onChange({body:'Saved later',category:'removed-category',media:{...media,size:2*1024*1024}});h.render();
- store.updateSettings({quickReplies:Array.from({length:1000},(_,i)=>reply(String(i)))});h.preview().props.onSave();h.render();assert.equal(store.settings.quickReplies.length,1000);assert.ok(h.preview());
+ store.updateSettings({quickReplies:Array.from({length:1000},(_,i)=>reply(String(i)))});h.preview().props.onSave();h.render();assert.equal(store.settings.quickReplies.length,1001);
+ h.click('settingsQuickReplies.add');h.preview().props.onChange({body:'Saved later',category:'removed-category',media:{...media,size:2*1024*1024}});h.render();
  store.updateSettings({quickReplies:[reply('large',{media:{...media,size:63*1024*1024}})]});h.preview().props.onSave();h.render();assert.equal(store.settings.quickReplies.length,1);assert.ok(h.preview());
  const link={spreadsheetId:'book',tab:'Tab',row:2,originalColumn:1,translationColumn:0,originalSnapshot:'Old',translationSnapshot:'Ancien'};
  store.updateSettings({quickReplies:[reply('linked',{sheetLink:link})]});globalThis.shelfSynced=[];
@@ -132,27 +133,27 @@ test('category plus controls stay independent so multiple nested categories can 
  h.click(categoryToggle('Workbook'));assert.ok(h.find('Reply greeting'));assert.ok(h.find('Reply followup'));
 });
 test('preview does not insert, and insertion uses the latest text and media rather than an old snapshot',()=>{
- const h=harness();h.click('quickShelf.previewNamed'+JSON.stringify({title:'Reply one'}));assert.equal(h.inserted.length,0);assert.equal(h.preview().props.reply.media.fileName,'invitation.png');
+ const h=harness();h.openPreview('Reply one');assert.equal(h.inserted.length,0);assert.equal(h.preview().props.reply.media.fileName,'invitation.png');
  h.props.replies=[reply('one',{body:'Updated text',media:{...media,fileName:'updated.png'}})];h.render();assert.equal(h.preview().props.reply.body,'Updated text');
  h.preview().props.onInsert();h.render();assert.equal(h.inserted.length,1);assert.equal(h.inserted[0].media.fileName,'updated.png');assert.equal(h.preview(),undefined);
 });
 test('changing the target chat or deleting a reply closes the old preview',()=>{
- const h=harness();h.click('quickShelf.previewNamed'+JSON.stringify({title:'Reply one'}));h.props.contextKey='main:b';h.render();assert.equal(h.preview(),undefined);
- h.click('quickShelf.previewNamed'+JSON.stringify({title:'Reply one'}));h.props.replies=[];h.render();assert.equal(h.preview(),undefined);assert.equal(h.inserted.length,0);
+ const h=harness();h.openPreview('Reply one');h.props.contextKey='main:b';h.render();assert.equal(h.preview(),undefined);
+ h.openPreview('Reply one');h.props.replies=[];h.render();assert.equal(h.preview(),undefined);assert.equal(h.inserted.length,0);
 });
 test('blocked media insertion keeps the preview open and disabled chat cannot insert',()=>{
- const h=harness(QuickReplyBrowser,{onInsert:()=>false});h.click('quickShelf.previewNamed'+JSON.stringify({title:'Reply one'}));h.preview().props.onInsert();h.render();assert.ok(h.preview());
- h.props.disabled=true;h.render();h.find('quickShelf.insertOriginal').props.onClick();assert.equal(h.inserted.length,0);assert.ok(h.find('quickShelf.chooseChat'));
+ const h=harness(QuickReplyBrowser,{onInsert:()=>false});h.openPreview('Reply one');h.preview().props.onInsert();h.render();assert.ok(h.preview());
+ h.props.disabled=true;h.render();h.find('quickShelf.insertOriginal'+JSON.stringify({title:'Reply one'})).props.onClick();assert.equal(h.inserted.length,0);assert.ok(h.find('quickShelf.chooseChat'));
 });
 test('a media-only reply remains insertable and carries its attachment',()=>{
- const h=harness(QuickReplyBrowser,{replies:[reply('one',{body:'',media})]});h.click('quickShelf.insertOriginal');assert.equal(h.inserted[0].body,'');assert.equal(h.inserted[0].media.dataUrl,media.dataUrl);
+ const h=harness(QuickReplyBrowser,{replies:[reply('one',{body:'',media})]});h.click('quickShelf.insertOriginal'+JSON.stringify({title:'Reply one'}));assert.equal(h.inserted[0].body,'');assert.equal(h.inserted[0].media.dataUrl,media.dataUrl);
 });
 
 test('bilingual cards display the translation and let the user insert either text',()=>{
  const h=harness(QuickReplyBrowser,{replies:[reply('one',{body:'Bonjour',translation:'Hello there'})]});
  assert.ok(h.nodes().some(n=>n.type==='span'&&n.props.children==='Hello there'));
- h.click('quickShelf.insertOriginal');assert.equal(h.inserted[0].body,'Bonjour');
- h.click('quickShelf.previewNamed'+JSON.stringify({title:'Reply one'}));h.preview().props.onInsert('Hello there');
+ h.click('quickShelf.insertOriginal'+JSON.stringify({title:'Reply one'}));assert.equal(h.inserted[0].body,'Bonjour');
+ h.openPreview('Reply one');h.preview().props.onInsert('Hello there');
  assert.equal(h.inserted[1].body,'Hello there');
 });
 
@@ -187,7 +188,7 @@ test('editing from the preview saves the changed reply to app settings immediate
  const state={settings:{quickReplies:[saved]},pushToast(){},updateSettings(patch){state.settings={...state.settings,...patch};}};
  globalThis.shelfState=state;
  try{
-  const h=harness(QuickReplyBrowser,{replies:[saved]});h.click('quickShelf.previewNamed'+JSON.stringify({title:'Reply one'}));
+  const h=harness(QuickReplyBrowser,{replies:[saved]});h.openPreview('Reply one');
   h.preview().props.onChange({body:'After'});assert.equal(state.settings.quickReplies[0].body,'After');
  }finally{if(original===undefined)delete globalThis.shelfState;else globalThis.shelfState=original;}
 });
@@ -226,14 +227,14 @@ test('pinned replies lead within groups; pinned and recent views respect search 
 test('previewing and refused insertion do not update recents; successful insertion records one use',()=>{
  const used=[];let accepted=false;const h=harness(QuickReplyBrowser,{onInsert:()=>accepted,onUsed:id=>used.push(id)});
  h.click('quickShelf.view.recent');assert.ok(h.find('quickShelf.empty.recent'));h.click('quickShelf.view.all');
- h.click('quickShelf.previewNamed'+JSON.stringify({title:'Reply one'}));assert.deepEqual(used,[]);h.preview().props.onInsert();h.render();assert.deepEqual(used,[]);
+ h.openPreview('Reply one');assert.deepEqual(used,[]);h.preview().props.onInsert();h.render();assert.deepEqual(used,[]);
  accepted=true;h.preview().props.onInsert();h.render();assert.deepEqual(used,['one']);assert.equal(h.preview(),undefined);
- h.props.disabled=true;h.render();h.click('quickShelf.insertOriginal');assert.deepEqual(used,['one']);
+ h.props.disabled=true;h.render();h.click('quickShelf.insertOriginal'+JSON.stringify({title:'Reply one'}));assert.deepEqual(used,['one']);
 });
 
 test('preview carries the current target chat and sending identity; account changes hide the old preview',()=>{
  const target={title:'Grace',account:'2: Alexandre'};const h=harness(QuickReplyBrowser,{target});
- h.click('quickShelf.previewNamed'+JSON.stringify({title:'Reply one'}));assert.deepEqual(h.preview().props.target,target);
+ h.openPreview('Reply one');assert.deepEqual(h.preview().props.target,target);
  h.props.contextKey='main:a:account-b';h.render();assert.equal(h.preview(),undefined);
  const original=globalThis.document;globalThis.document={body:{}};
  try{
