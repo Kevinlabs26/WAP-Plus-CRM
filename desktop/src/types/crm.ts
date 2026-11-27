@@ -320,6 +320,7 @@ export interface Message {
   };
   /** 是否编辑过 */
   edited?: boolean;
+  remoteEditedAt?: number;
   /** 本地星标（CRM 收藏，非 WhatsApp 协议星标） */
   starred?: boolean;
   /** 星标时间 ISO */

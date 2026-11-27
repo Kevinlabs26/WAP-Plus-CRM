@@ -218,7 +218,7 @@ export async function tickAiOutreach(now=Date.now(),force=false) {
     }
     const state=useAppStore.getState();
     if(isDataRestoreActive()||getDataRestoreGeneration()!==epoch)return;
-    const blocked=state.settings.aiAutoReplyPaused||state.settings.aiOutreachPaused||state.settings.sendChannel!=="baileys"||!hasRealAiKey(state.settings)&&!state.settings.aiOutreachMuseAccountId;
+    const blocked=state.settings.aiAutoReplyPaused||state.settings.aiOutreachPaused||state.settings.sendChannel!=="baileys"||!hasRealAiKey(state.settings);
     const folders=state.settings.chatFolders.filter(folder=>folder.aiOutreach?.enabled&&(isImmediateOutreach(folder.aiOutreach,now)||!blocked&&!folder.aiOutreach.paused));
     const checks=new Map([...scheduler.checks].filter(([id,report])=>state.settings.chatFolders.some(folder=>folder.id===id&&folder.aiOutreach?.runNowAt===report.at)));
     const lastRunByFolder=new Map<string,number>();
@@ -354,7 +354,7 @@ async function generateOutreach(folderId:string,chatId:string,id:string) {
   controller=new AbortController();
   try {
     const currentSettings=useAppStore.getState().settings;
-    const useDecision=candidate.rule.mode==="auto"||currentSettings.aiProvider==="muse"||!!currentSettings.aiOutreachMuseAccountId;
+    const useDecision=candidate.rule.mode==="auto"||currentSettings.aiProvider==="muse";
     const result=await generateSuggestions(candidate.contact,candidate.thread,currentSettings,
       {auto:true,accountId:candidate.accountId,chatId,outreach:outreachGoal(candidate.rule),outreachDecision:useDecision,firstContactVerified:candidate.rule.mode==="auto"&&candidate.firstContactVerified,allowSidebarData:candidate.rule.allowSidebarData===true,signal:controller.signal,
         beforeSubmit:()=>{

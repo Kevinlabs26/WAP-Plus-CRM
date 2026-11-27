@@ -6,7 +6,7 @@ import { useI18n, type TranslationKey } from "@/i18n";
 import { DuplicateScheduledPlanError, saveScheduledPlan } from "@/lib/scheduledPlanActions";
 import { parsePhoneEntries } from "@/lib/phoneEntries";
 import { PlanVoiceRecorder } from "./PlanVoiceRecorder";
-import { scheduledPlanHistoryAccounts, recipientKey, scheduledAudioMode, scheduledFolderChatIds, scheduledPlanTargets, MAX_SCHEDULED_PLAN_ITEMS, MIN_SCHEDULED_GAP_SEC, MAX_PLAN_STEPS, type ScheduledPlan, type ScheduledPlanStep } from "@/lib/scheduledPlans";
+import { scheduledPlanHistoryAccounts, recipientKey, scheduledAudioMode, scheduledFolderChatIds, inspectScheduledPlanTargets, MAX_SCHEDULED_PLAN_ITEMS, MIN_SCHEDULED_GAP_SEC, MAX_PLAN_STEPS, type ScheduledPlan, type ScheduledPlanStep } from "@/lib/scheduledPlans";
 
 function localTime() {
   const date = new Date(Date.now() + 5 * 60_000);
@@ -59,25 +59,9 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
   const folder = settings.chatFolders.find(item => item.id === folderId);
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const lastContacted = useMemo(() => scheduledPlanHistoryAccounts({chats, contacts, messages}), [chats, contacts, messages]);
-  const candidates = useMemo(() => {
-    let ids = folderId ? scheduledFolderChatIds(settings, folderId, includeChildren) : chatIds;
-    if (folder && folder.scope?.type !== "all") {
-      const sourceAccount = folder.scope?.accountId || settings.liveBaileysAccountId || settings.activeAccountId || "wa-default";
-      const chatsById = new Map(chats.map(chat => [chat.id, chat]));
-      const contactsById = new Map(contacts.map(contact => [contact.id, contact]));
-      ids = ids?.filter(id => {
-        const chat = chatsById.get(id);
-        return chat && (chat.accountId || contactsById.get(chat.contactId)?.accountId || "wa-default") === sourceAccount;
-      });
-    }
-    const all = scheduledPlanTargets({ settings, chats, contacts, messages }, ids, defaultAccountId);
-    if (!folder || folder.scope?.type === "all") return all;
-    const owner = folder.scope?.accountId || settings.liveBaileysAccountId || settings.activeAccountId || "wa-default";
-    return all.filter(item => {
-      const chat = chats.find(candidate => candidate.id === item.chatId);
-      const contact = contacts.find(candidate => candidate.id === item.contactId);
-      return (chat?.accountId || contact?.accountId || "wa-default") === owner;
-    });
+  const { items: candidates, blocked } = useMemo(() => {
+    const ids = folderId ? scheduledFolderChatIds(settings, folderId, includeChildren) : chatIds;
+    return inspectScheduledPlanTargets({ settings, chats, contacts, messages }, ids, defaultAccountId);
   }, [settings, chats, contacts, messages, chatIds, folderId, includeChildren, defaultAccountId]);
   const chosen = candidates.filter(item => selected.has(item.chatId));
   const defaultAccountCount = chosen.filter(item => !item.recipient.endsWith("@g.us") && !lastContacted.has(recipientKey("", item.recipient))).length;
@@ -185,6 +169,12 @@ export function ScheduledPlanDialog({ chatIds, folderId, initialText = "", initi
         </div>
         <aside className="flex min-h-0 min-w-0 flex-col gap-3 md:overflow-y-auto">
           <h3 className="text-sm font-medium text-zinc-200">{t("planQueue.targets", { count: chosen.length })} {folder ? "· " + folder.name : ""}</h3>
+          {!!blocked.length && <details open={!review} className="shrink-0 rounded bg-amber-500/10 p-2 text-xs text-amber-400">
+            <summary className="cursor-pointer">{t("planQueue.blockedTargets", { count: blocked.length })}</summary>
+            <ul className="mt-1 max-h-32 space-y-1 overflow-y-auto">
+              {blocked.map(item => <li key={item.chatId} className="break-words">{item.name} · {t(`planQueue.blocked.${item.reason}`)}</li>)}
+            </ul>
+          </details>}
           <label className="block space-y-1 text-xs text-zinc-400"><span>{t("planQueue.newContactAccount")}</span><select className="ui-control w-full px-2" value={defaultAccountId} onChange={event => setDefaultAccountId(event.target.value)}>{settings.waAccounts.map(account => <option key={account.id} value={account.id}>{account.label || account.id}</option>)}</select><span className="block">{t("planQueue.accountRoutingHint")}</span></label>
           <p className="text-xs text-zinc-500">{t("planQueue.accountRoutingSummary", { contacted: chosen.length - defaultAccountCount, new: defaultAccountCount })}</p>
           {folderId && !review && <label className="flex items-center gap-2 text-xs text-zinc-400"><input type="checkbox" aria-label={t("planQueue.includeChildren")} checked={includeChildren} onChange={event => {

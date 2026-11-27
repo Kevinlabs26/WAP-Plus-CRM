@@ -243,6 +243,7 @@ pub fn run() {
             commands::db_clear_remote_messages,
             commands::db_delete_messages_by_keys,
             commands::db_update_message_acks,
+            commands::db_update_message_edits,
             commands::db_info,
             commands::app_storage_usage,
             crm_backup::crm_backup_status,

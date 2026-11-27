@@ -1221,6 +1221,18 @@ pub fn db_update_message_acks(
 }
 
 #[tauri::command(async)]
+pub fn db_update_message_edits(
+    state: State<'_, DbState>,
+    items: Vec<serde_json::Value>,
+    account_id: String,
+) -> Result<(), String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::update_message_edits(&conn, &items, &account_id)?;
+    CHAT_HISTORY_CHANGED.notify_one();
+    Ok(())
+}
+
+#[tauri::command(async)]
 pub fn db_delete_messages_by_keys(
     state: State<'_, DbState>,
     keys: Vec<String>,

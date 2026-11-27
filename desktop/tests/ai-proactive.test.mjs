@@ -30,6 +30,7 @@ async function fixture(mode='auto',trigger='new'){
  globalThis.outreachMuse=async()=>{calls++;if(fetchGate)await fetchGate;return JSON.stringify({action:'send',text:'Bonjour, comment allez-vous ?',reason:'A catalog update was requested.',evidence:'Requested a catalog update'});};
  const settings=api.normalizeLoadedSettings({sendChannel:'baileys',aiProvider:'custom',customAiKey:'fixture',customAiModel:'fixture',customAiBaseUrl:'https://example.invalid',aiSystemPrompt:'Be brief and warm.',aiReplyMode:'semi',activeAccountId:'b',liveBaileysAccountId:'b',waAccounts:[{id:'a',label:'A',status:'connected'},{id:'b',label:'B',status:'connected'}],chatFolders:[{id:'folder',name:'Folder',sort:0,chatIds:['chat'],scope:{type:'account',accountId:'a'},aiOutreach:{enabled:true,mode,trigger,startMode:'scheduled',time:'09:00',timeZone:'UTC',dailyLimit:10,minIdleHours:12,goal:'Ask how the person is doing.'}}]});
  if(mode==='auto'){
+  settings.aiProvider='muse';
   settings.aiOutreachMuseAccountId='muse';
   settings.musePrivacyByAccountId={muse:{trainingDisabledConfirmedAt:now}};
   settings.chatFolders.find(folder=>folder.id==='folder').aiOutreach.allowSidebarData=true;
@@ -377,6 +378,7 @@ test('a folder pause at the final transport gate retains the unsent queue item f
 
 test('chat status explains configuration and connection blocks without calling AI',async()=>{
  const h=await fixture();try{
+  h.state.settings.aiProvider='custom';
   h.state.settings.aiReplyMode='auto';const status=()=>h.api.getChatAiStatus({settings:h.state.settings,chatId:'chat',accountId:'a',connected:true,thread:[],now:h.now});
   assert.equal(status().key,'ready');h.state.settings.aiAutoReplyPaused=true;assert.equal(status().key,'paused');
   h.state.settings.aiAutoReplyPaused=false;h.state.settings.aiAutoReplyModeByChatId={chat:'manual'};assert.equal(status().key,'manual');

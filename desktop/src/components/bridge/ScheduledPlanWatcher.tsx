@@ -22,9 +22,11 @@ export function ScheduledPlanWatcher() {
       availability: item => {
         if (item.retired) return "missing";
         const state = useAppStore.getState();
+        if (!state.settings.waAccounts.some(account => account.id === item.accountId)) return "missing";
+        if (!isWaAccountConnected(state.settings.waAccounts, item.accountId, state.settings.liveBaileysAccountId, state.baileysUi.connection)) return "offline";
         const target = scheduledPlanTargets(state, [item.chatId], item.accountId)[0];
         if (!target || target.accountId !== item.accountId || target.recipient !== item.recipient) return "missing";
-        return isWaAccountConnected(state.settings.waAccounts, item.accountId, state.settings.liveBaileysAccountId, state.baileysUi.connection) ? "ready" : "offline";
+        return "ready";
       },
       enqueue: (plan, item) => {
         const state = useAppStore.getState();

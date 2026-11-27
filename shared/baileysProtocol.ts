@@ -53,6 +53,7 @@ export type BaileysEventType =
   | "contacts.sync"
   | "messages.sync"
   | "messages.ack"
+  | "messages.edit"
   | "presence.update"
   | "group.join_request"
   | "messages.delete"

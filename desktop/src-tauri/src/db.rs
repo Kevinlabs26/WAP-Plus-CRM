@@ -681,6 +681,59 @@ pub fn update_message_acks(
     tx.commit().map_err(|e| e.to_string())
 }
 
+pub fn update_message_edits(conn: &Connection, items: &[Value], account_id: &str) -> Result<(), String> {
+    if account_id.is_empty() {
+        return Err("消息编辑缺少账号".into());
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let mut has_fts = fts_available(&tx);
+    for item in items {
+        let (Some(key), Some(jid), Some(body), Some(from_me), Some(edited_at)) = (
+            item["id"].as_str(), item["remoteJid"].as_str(), item["body"].as_str(),
+            item["fromMe"].as_bool(), item["editedAt"].as_f64(),
+        ) else { continue };
+        if key.is_empty() || jid.is_empty() || body.trim().is_empty() || body.encode_utf16().count() > 20_000 || edited_at < 0.0 {
+            continue;
+        }
+        let rows: Vec<(String, String)> = {
+            let mut stmt = tx.prepare(ACK_MESSAGE_ROWS_SQL).map_err(|e| e.to_string())?;
+            let rows = stmt.query_map(params![key, account_id], |r| Ok((r.get(0)?, read_json_text(r, 1)?)))
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?
+        };
+        for (id, json) in rows {
+            let mut message: Value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+            if (message["direction"].as_str() == Some("out")) != from_me
+                || message["waKey"]["remoteJid"].as_str().is_some_and(|stored| stored != jid)
+                || message["remoteEditedAt"].as_f64().unwrap_or(0.0) > edited_at {
+                continue;
+            }
+            if message["body"].as_str() != Some(body) {
+                if let Some(fields) = message.as_object_mut() {
+                    fields.remove("translation");
+                    fields.remove("translationLang");
+                }
+            }
+            message["body"] = Value::String(body.to_owned());
+            message["edited"] = Value::Bool(true);
+            message["remoteEditedAt"] = item["editedAt"].clone();
+            let updated = serde_json::to_string(&message).map_err(|e| e.to_string())?;
+            tx.execute("UPDATE messages SET json = ?1, content_hash = ?2 WHERE id = ?3",
+                params![updated, content_hash(&updated), id]).map_err(|e| e.to_string())?;
+            if has_fts {
+                let caption = message["mediaCaption"].as_str().unwrap_or("");
+                let filename = message["mediaFileName"].as_str().unwrap_or("");
+                if let Err(error) = upsert_message_fts(&tx, &id, body, caption, filename) {
+                    drop_fts(&tx).map_err(|e| e.to_string())?;
+                    has_fts = false;
+                    tracing::warn!(%error, "sqlite FTS5 write failed; search keeps LIKE fallback");
+                }
+            }
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())
+}
+
 pub fn save_snapshot(conn: &Connection, snap: &AppSnapshot) -> Result<(), String> {
     // dirty=None → 全量（兼容旧前端 / force 保存）。在事务前拒绝超限，保留原数据。
     let dirty = snap
@@ -3239,6 +3292,29 @@ mod tests {
             get_message_by_id(&conn, "b").unwrap().unwrap()["deliveryStatus"],
             "sent"
         );
+    }
+
+    #[test]
+    fn cold_message_edit_keeps_original_identity_and_account() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let a = json!({"id":"a", "waMessageId":"same", "accountId":"wa-a", "direction":"in", "body":"Original", "translation":"Old translation", "sentAt":"2026-11-26T18:30:00Z"});
+        let mut b = a.clone();
+        b["id"] = json!("b");
+        b["accountId"] = json!("wa-b");
+        save_snapshot(&conn, &AppSnapshot { messages: vec![a, b], ..Default::default() }).unwrap();
+        let edit = json!({"id":"same", "remoteJid":"123@s.whatsapp.net", "fromMe":false, "body":"Updated", "editedAt":2});
+        update_message_edits(&conn, &[edit.clone()], "wa-a").unwrap();
+        let mut stale = edit;
+        stale["body"] = json!("Stale");
+        stale["editedAt"] = json!(1);
+        update_message_edits(&conn, &[stale], "wa-a").unwrap();
+        let saved = get_message_by_id(&conn, "a").unwrap().unwrap();
+        assert_eq!(saved["body"], "Updated");
+        assert_eq!(saved["sentAt"], "2026-11-26T18:30:00Z");
+        assert_eq!(saved["edited"], true);
+        assert!(saved.get("translation").is_none());
+        assert_eq!(get_message_by_id(&conn, "b").unwrap().unwrap()["body"], "Original");
     }
 
     #[test]

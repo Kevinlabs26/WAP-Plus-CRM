@@ -45,6 +45,7 @@ const DURABLE_EVENT_TYPES = new Set([
   "messages.sync",
   "messages.delete",
   "messages.ack",
+  "messages.edit",
   "contacts.sync",
   "chats.delete",
   "history.sync_status",

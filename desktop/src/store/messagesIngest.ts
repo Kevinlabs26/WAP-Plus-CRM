@@ -284,7 +284,7 @@ export function applyMessagesSync(opts: {
       const mergeDetails = (prev: Message): Message => ({
         ...prev,
         accountPhoneE164: opts.accountPhoneE164 || prev.accountPhoneE164,
-        body: body || prev.body,
+        body: prev.edited ? prev.body : body || prev.body,
         sentAt: item.sentAt != null && Number.isFinite(sentTs) ? sentAt : prev.sentAt,
         mediaType: mediaType || prev.mediaType,
         mediaUrl: mediaUrl || prev.mediaUrl,

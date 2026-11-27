@@ -283,9 +283,9 @@ export function forgetMuseAccountPlaybookCopies(accountId: string, ids: string[]
 
 let active: Promise<number> | undefined;
 export const musePlaybookSyncActive = () => Boolean(active);
-export function shouldAutoSyncPlaybooks(settings: {aiProvider?: string; aiOutreachMuseAccountId?: string; aiPlaybooks?: AiPlaybook[]; aiPlaybookMuseWorkspaceLinked?: boolean; aiPlaybookAutoSync?: boolean; aiPlaybookMuseRoot?: string; aiPlaybookMuseFolder?: string; aiPlaybookMuseAttemptAt?: number}, now: number, visible: boolean, ready: boolean, queueIdle: boolean): boolean {
+export function shouldAutoSyncPlaybooks(settings: {aiProvider?: string; aiPlaybooks?: AiPlaybook[]; aiPlaybookMuseWorkspaceLinked?: boolean; aiPlaybookAutoSync?: boolean; aiPlaybookMuseRoot?: string; aiPlaybookMuseFolder?: string; aiPlaybookMuseAttemptAt?: number}, now: number, visible: boolean, ready: boolean, queueIdle: boolean): boolean {
   const last = settings.aiPlaybookMuseAttemptAt || 0;
-  return Boolean((settings.aiProvider === 'muse' || settings.aiOutreachMuseAccountId) && settings.aiPlaybookMuseWorkspaceLinked && settings.aiPlaybookAutoSync && settings.aiPlaybookMuseRoot && currentMuseFolder(settings) && visible && ready && queueIdle && (now - last >= 3_600_000 || last > now));
+  return Boolean(settings.aiProvider === 'muse' && settings.aiPlaybookMuseWorkspaceLinked && settings.aiPlaybookAutoSync && settings.aiPlaybookMuseRoot && currentMuseFolder(settings) && visible && ready && queueIdle && (now - last >= 3_600_000 || last > now));
 }
 export function syncMusePlaybooks(refreshSummaries = false, folderOverride?: string, signal?: AbortSignal): Promise<number> {
   if (active) return active;

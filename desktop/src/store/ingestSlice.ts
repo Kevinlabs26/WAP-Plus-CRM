@@ -42,12 +42,14 @@ import {
 import {
   clearStoredRemoteMessages,
   updateStoredMessageAcks,
+  updateStoredMessageEdits,
   deleteStoredMessagesByKeys,
   registerChatMessageReplacements,
 } from "@/lib/storage";
 import { noteMainThreadWork, syncLog } from "@/lib/syncDebug";
 import { isComposerTypingBusy } from "@/lib/composerActivity";
 import type { BridgeEvent } from "@/lib/bridge";
+import type { MessageEditItem } from "@shared/protocol";
 import { androidVoiceAttachment } from "./androidVoiceAttachment";
 import { persist, scheduleStatsRecompute } from "./persist";
 import { notifyInboundMessages, type InboundNotifyItem } from "@/lib/inboundMessageNotify";
@@ -216,6 +218,7 @@ export function createIngestSlice({
         { remoteJid: string; accountId: string; before?: string }
       >();
       const ackItemsByAccount = new Map<string, { id: string; ack: string }[]>();
+      const editsByAccount = new Map<string, MessageEditItem[]>();
       const deletedRemoteMessageKeys = new Map<string, Set<string>>();
       // 本批新增入站消息（用于桌面通知，set 之外触发）
       let inboundNotifies: InboundNotifyItem[] | null = null;
@@ -441,6 +444,30 @@ export function createIngestSlice({
                 contactBag as { _historyAccountId?: string }
               )._historyAccountId = aid;
             }
+            continue;
+          }
+          if (event.type === "messages.edit") {
+            const edits = editsByAccount.get(deviceId) || [];
+            for (const raw of items) {
+              const item = ingestObject(raw);
+              const id = ingestString(item?.id, 300);
+              const remoteJid = ingestString(item?.remoteJid, 300);
+              const body = typeof item?.body === "string" ? item.body.slice(0, 20_000) : "";
+              if (!id || !remoteJid || !body.trim() || typeof item?.fromMe !== "boolean" || typeof item.editedAt !== "number" || !Number.isFinite(item.editedAt) || item.editedAt < 0) continue;
+              const { fromMe, editedAt } = item;
+              edits.push({ id, remoteJid, body, fromMe, editedAt });
+              const index = messages.findIndex(message => (message.accountId || message.deviceId) === deviceId &&
+                (message.id === id || message.waMessageId === id || message.waKey?.id === id) &&
+                (!message.waKey?.remoteJid || message.waKey.remoteJid === remoteJid) && (message.direction === "out") === fromMe);
+              if (index < 0) continue;
+              const previous = messages[index];
+              if ((previous.remoteEditedAt ?? 0) > editedAt) continue;
+              messages[index] = { ...previous, body, edited: true, remoteEditedAt: editedAt,
+                ...(body !== previous.body ? { translation: undefined, translationLang: undefined } : {}) };
+              chats = chats.map(chat => chat.id === previous.chatId && chat.updatedAt === previous.sentAt && chat.lastMessage === previous.body
+                ? { ...chat, lastMessage: body } : chat);
+            }
+            editsByAccount.set(deviceId, edits);
             continue;
           }
           // 出站回执：送达 / 已读
@@ -786,6 +813,9 @@ export function createIngestSlice({
         for (const [accountId, items] of ackItemsByAccount) {
           writes.push(updateStoredMessageAcks(items, accountId));
         }
+        for (const [accountId, items] of editsByAccount) {
+          writes.push(updateStoredMessageEdits(items, accountId));
+        }
         try { if (writes.length) await Promise.all(writes); }
         catch (error) { get().pushToast(error instanceof Error ? error.message : "同步落盘失败", "error"); throw error; }
         const welcome = buildGroupWelcomeQueue(get(), events);
@@ -853,6 +883,7 @@ export function createIngestSlice({
           event.type === "messages.sync" ||
           event.type === "messages.delete" ||
           event.type === "messages.ack" ||
+          event.type === "messages.edit" ||
           event.type === "chats.delete"
         );
         if (mergedChatHistory) await persist(get, true);

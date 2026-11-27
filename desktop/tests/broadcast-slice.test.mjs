@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const result = await build({
-  stdin: { contents: `export {createBroadcastSlice} from './src/store/broadcastSlice.ts'; export {trimCampaigns,normalizeCampaigns} from './src/lib/broadcastCampaign.ts';`, resolveDir: join(dir, '..') },
+  stdin: { contents: `export {createBroadcastSlice} from './src/store/broadcastSlice.ts'; export {trimCampaigns,normalizeCampaigns} from './src/lib/broadcastCampaign.ts'; export {routeBroadcastAccounts} from './src/lib/broadcastAccountRouting.ts';`, resolveDir: join(dir, '..') },
   bundle: true,
   format: "esm",
   platform: "browser",
@@ -15,7 +15,7 @@ const result = await build({
   write: false,
   plugins:[{name:'broadcast-ui-boundary',setup(b){b.onResolve({filter:/^@\/i18n$/},()=>({path:'i18n',namespace:'mock'}));b.onLoad({filter:/.*/,namespace:'mock'},()=>({contents:'export const translateCurrent=(k,p)=>k+JSON.stringify(p||{});'}));}}],
 });
-const { createBroadcastSlice, trimCampaigns, normalizeCampaigns } = await import(
+const { createBroadcastSlice, trimCampaigns, normalizeCampaigns, routeBroadcastAccounts } = await import(
   `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text+'\n//# sourceURL=broadcast-slice-test.js').toString("base64")}`
 );
 
@@ -54,6 +54,15 @@ test("ordinary broadcast refuses unknown history and preserves original and genu
   ].map(chat => ({ ...chat, updatedAt: "2026-01-01T00:00:00Z" }));
   state.broadcastCampaigns = [];
   const draft = { accountId: "wa-2", template: "Hello" };
+  const preview = routeBroadcastAccounts(state, state.contacts.map(contact => contact.phone), draft.accountId);
+  assert.deepEqual(preview.blockedByPhone, {
+    "+12025550101": "unknownHistory", "+12025550102": "unknownHistory", "+12025550103": "unknownAccount",
+  });
+  assert.deepEqual(preview.accountByPhone, { "+12025550104": "wa-1", "+12025550105": "wa-2" });
+  const pending = routeBroadcastAccounts({ ...state, messages: [...state.messages, {
+    chatId: "known-chat", direction: "out", deliveryStatus: "queued",
+  }] }, ["+12025550104"], draft.accountId);
+  assert.deepEqual(pending.blockedByPhone, { "+12025550104": "pendingDelivery" });
   for (const id of ["orphan", "legacy", "ownerless"]) {
     const rejected = actions.createBroadcastCampaign({ ...draft, contactIds: [id] });
     assert.equal(rejected.ok, false, id);

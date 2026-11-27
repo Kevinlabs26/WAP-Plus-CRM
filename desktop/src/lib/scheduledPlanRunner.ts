@@ -22,6 +22,12 @@ export function createScheduledPlanRunner(deps: Dependencies) {
   const now = deps.now || Date.now;
   const iso = (time: number) => new Date(time).toISOString();
   const changeItem = (p: ScheduledPlan, id: string, patch: Partial<ScheduledPlanItem>) => ({ ...p, items: p.items.map(item => item.id === id ? { ...item, ...patch } : item) });
+  const markForReview = (p: ScheduledPlan, id: string) => {
+    const next = changeItem(p, id, { status: p.status === "cancelled" ? "cancelled" : "failed", error: "planQueue.missingTarget" });
+    return { ...next, offlineSince: undefined, nextAttemptAt: undefined,
+      status: p.status === "running" && !next.items.some(item => item.status === "pending") ? "done" as const : p.status,
+      error: "planQueue.missingTarget" };
+  };
   let receiptSource: Message[] | undefined;
   let receipts = new Map<string, Message>();
   const reconcile = (plan: ScheduledPlan) => {
@@ -75,34 +81,63 @@ export function createScheduledPlanRunner(deps: Dependencies) {
             items: p.items.map(item => item.status === "sending" ? { ...item, status: "unknown", error: "planQueue.interrupted" } : item) }));
           return;
         }
-        const item = plan.items.find(item => item.status === "pending");
-        if (!item) { await deps.update(plan.id, p => ({ ...p, status: "done", error: undefined })); return; }
+        const first = plan.items.find(item => item.status === "pending");
+        if (!first) { await deps.update(plan.id, p => ({ ...p, status: "done", error: undefined })); return; }
         const cooldown = Math.max(0, ...deps.plans().map(p => Date.parse(p.cooldownUntil || "") || 0));
         if (now() < cooldown || now() < (Date.parse(plan.nextAttemptAt || "") || 0)) return;
-        const availability = deps.availability(item);
-        if (plan.offlineSince && now() - Date.parse(plan.offlineSince) >= SCHEDULED_START_GRACE_MS) {
+        const firstAvailability = deps.availability(first);
+        if (firstAvailability === "missing") {
+          await deps.update(plan.id, p => markForReview(p, first.id)); return;
+        }
+        const offlineExpired = !!plan.offlineSince && at - Date.parse(plan.offlineSince) >= SCHEDULED_START_GRACE_MS;
+        const canUseAlternative = (candidate: ScheduledPlanItem) => candidate.status === "pending" &&
+          candidate.accountId !== first.accountId && deps.availability(candidate) === "ready";
+        const continuing = plan.offlineSince && plan.items.find(candidate => (candidate.stepIndex || 0) > 0 && canUseAlternative(candidate));
+        const waitingForOriginal = firstAvailability === "offline" || offlineExpired;
+        const item = continuing || (waitingForOriginal
+          ? plan.items.find(canUseAlternative)
+          : first);
+        if (!item && offlineExpired) {
           await deps.update(plan.id, p => ({ ...p, status: "paused", error: "planQueue.offlineExpired" })); return;
         }
-        if (availability !== "ready") {
-          await deps.update(plan.id, p => availability === "offline"
-            ? { ...p, offlineSince: p.offlineSince || iso(now()), error: "planQueue.offline", nextAttemptAt: iso(now() + 5000) }
-            : { ...changeItem(p, item.id, { status: "failed", error: "planQueue.missingTarget" }), status: "paused", error: "planQueue.missingTarget" });
+        if (!item) {
+          await deps.update(plan.id, p => ({ ...p, offlineSince: p.offlineSince || iso(now()), error: "planQueue.offline", nextAttemptAt: iso(now() + 5000) }));
           return;
         }
         const messageId = deps.enqueue(plan, item);
         if (!messageId) { await deps.update(plan.id, p => ({ ...p, status: "paused", error: "planQueue.cannotQueue" })); return; }
         attempt = { plan, item, messageId };
-        await deps.update(plan.id, p => ({ ...changeItem(p, item.id, { status: "sending", messageId, error: undefined, sequenceActivityAt: iso(now()) }), error: undefined, offlineSince: undefined, nextAttemptAt: undefined }));
+        const offlineSince = item !== first ? plan.offlineSince || iso(at) : undefined;
+        await deps.update(plan.id, p => ({ ...changeItem(p, item.id, { status: "sending", messageId, error: undefined, sequenceActivityAt: iso(now()) }), error: offlineSince ? "planQueue.offline" : undefined, offlineSince, nextAttemptAt: undefined }));
         let blockedByLock = false;
+        const preflight: { availability?: ReturnType<Dependencies["availability"]> } = {};
         const canSend = () => {
           blockedByLock ||= deps.isLocked?.() === true;
-          return !blockedByLock && !stopped && deps.ready() && deps.availability(item) === "ready" && !inQuietHours(plan,now()) && !(plan.endAt && Date.parse(plan.endAt) <= now()) && deps.plans().some(p => p.id === plan.id && p.status === "running" && p.items.some(i => i.id === item.id && i.status === "sending"));
+          if (blockedByLock || stopped || !deps.ready() || inQuietHours(plan,now()) || (plan.endAt && Date.parse(plan.endAt) <= now()) ||
+            !deps.plans().some(p => p.id === plan.id && p.status === "running" && p.items.some(i => i.id === item.id && i.status === "sending"))) return false;
+          preflight.availability = deps.availability(item);
+          return preflight.availability === "ready";
         };
         const started = canSend();
         const result: ScheduledPlanSendResult = started
           ? await deps.send(plan, { ...item, messageId }, canSend)
           : {ok:false, error:"automation_cancelled"};
         const deferredForLock = blockedByLock && !result.ok && !result.uncertain && result.error === "automation_cancelled";
+        if (!result.ok && !result.uncertain && result.error === "automation_cancelled" && !blockedByLock) {
+          if (preflight.availability === "missing") {
+            deps.finish(messageId, { ok: false, error: "planQueue.missingTarget" });
+            await deps.update(plan.id, p => markForReview(p, item.id));
+            return;
+          }
+          if (preflight.availability === "offline") {
+            deps.finish(messageId, { ok: false, error: "planQueue.offline" });
+            await deps.update(plan.id, p => ({
+              ...changeItem(p, item.id, { status: p.status === "cancelled" ? "cancelled" : "pending", error: "planQueue.offline" }),
+              offlineSince: p.offlineSince || iso(now()), error: "planQueue.offline",
+            }));
+            return;
+          }
+        }
         if (!started || deferredForLock) {
           const stillRunning = deps.plans().some(p => p.id === plan.id && p.status === "running");
           deps.finish(messageId, deferredForLock && stillRunning ? {ok:false, deferredForLock:true} : {ok:false, error:"planQueue.stopped"});
@@ -127,7 +162,7 @@ export function createScheduledPlanRunner(deps: Dependencies) {
           return { ...next, cooldownUntil: iso(finished + gap * 1000),
             nextAttemptAt: quiet ? iso(finished+60000) : cooling ? iso(finished + Math.max(gap * 1000, result.retryAfterMs || 5000)) : undefined,
             status: current.status !== "running" ? current.status : deadlineReached && hasPending ? "expired" : result.ok ? hasPending ? "running" : "done" : cooling || quiet ? "running" : "paused",
-            error: cancelled && result.uncertain ? "planQueue.cancelledUnknown" : deadlineReached && hasPending ? "planQueue.deadlineReached" : quiet ? "planQueue.quietNow" : result.ok ? undefined : result.message || result.error || "planQueue.failed",
+            error: cancelled && result.uncertain ? "planQueue.cancelledUnknown" : deadlineReached && hasPending ? "planQueue.deadlineReached" : quiet ? "planQueue.quietNow" : result.ok ? offlineSince && hasPending ? "planQueue.offline" : undefined : result.message || result.error || "planQueue.failed",
           };
         });
       } catch (error) {

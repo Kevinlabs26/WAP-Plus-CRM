@@ -3,7 +3,7 @@ import type { AppState } from "../store/types";
 import type { Message, ChatPreview, Contact } from "../types/crm";
 import { normalizeOutreachRule, outreachClock, outreachGoal } from "./aiOutreachRules.ts";
 import { resolveAiReplyProfile } from "./aiPromptScope.ts";
-import { getSuggestionContextKey, hasRealAiKey, outreachAiSettings } from "./aiSuggest.ts";
+import { getSuggestionContextKey, hasRealAiKey } from "./aiSuggest.ts";
 import { isWaAccountConnected } from "./accountConnection.ts";
 import { getAutoReplyOutputBlockReason, isWithinAutoReplyHours, resolveAutoReplyPolicy } from "./aiSafety.ts";
 import { resolveSendTarget } from "./utils.ts";
@@ -68,7 +68,7 @@ export function inspectOutreachCandidate(state: OutreachState, folderId: string,
   if(settings.aiAutoReplyPaused)return {candidate:null,reason:"all_paused"};
   if(settings.aiOutreachPaused)return {candidate:null,reason:"master_paused"};
   if(settings.sendChannel!=="baileys")return {candidate:null,reason:"unsupported_channel"};
-  if(!hasRealAiKey(settings)&&!settings.aiOutreachMuseAccountId)return {candidate:null,reason:"missing_ai"};
+  if(!hasRealAiKey(settings))return {candidate:null,reason:"missing_ai"};
   const rule=lookup?.rule||normalizeOutreachRule(folder.aiOutreach);
   const immediate=isImmediateOutreach(rule,now);
   if(rule.startMode==="immediate"&&!immediate)return {candidate:null,reason:"disabled"};
@@ -159,10 +159,9 @@ export function inspectOutreachCandidate(state: OutreachState, folderId: string,
     return item.day===clock.day;
   })) return {candidate:null,reason:"already_contacted"};
   if(historyChat.lastMessageDirection==="in"&&(!historyChat.replyHandledAt||historyChat.replyHandledAt<basisAt)||historyChat.replyPendingSince&&(!historyChat.replyHandledAt||historyChat.replyHandledAt<historyChat.replyPendingSince))return {candidate:null,reason:"unanswered"};
-  const routing=outreachAiSettings(settings,outreachGoal(rule));
-  let profile=resolveAiReplyProfile(routing,accountId,chatId,undefined,historyContact.aiChatInstructions);
-  if (profile.workspacePlaybook && profile.error && routing.aiPlaybookMuseMode !== "shared") {
-    profile=resolveAiReplyProfile(routing,accountId,chatId,undefined,historyContact.aiChatInstructions,true);
+  let profile=resolveAiReplyProfile(settings,accountId,chatId,undefined,historyContact.aiChatInstructions);
+  if (profile.workspacePlaybook && profile.error && settings.aiPlaybookMuseMode !== "shared") {
+    profile=resolveAiReplyProfile(settings,accountId,chatId,undefined,historyContact.aiChatInstructions,true);
   }
   if (profile.error||!profile.prompt) return {candidate:null,reason:"missing_prompt"};
   return {candidate:{chat,historyChatId:historyChat.id,contact:historyContact,accountId,recipient,rule,day:clock.day,basisAt,thread,policy,firstContactVerified,reviewOnly},reason:"ready"};
@@ -177,8 +176,8 @@ export function outreachContextKey(state: OutreachState, folderId:string,chatId:
   // Adding a different recipient to a scheduled plan does not invalidate this draft.
   delete rule.scheduledFirstContactAssignments;
   return JSON.stringify([folderId,chatId,candidate.accountId,candidate.recipient,candidate.day,candidate.basisAt,rule,
-    state.settings.aiOutreachMuseAccountId,
-    getSuggestionContextKey(candidate.contact,candidate.thread,state.settings,candidate.accountId,{auto:true,chatId,outreach:outreachGoal(candidate.rule),outreachDecision:candidate.rule.mode==="auto"||state.settings.aiProvider==="muse"||!!state.settings.aiOutreachMuseAccountId,allowSidebarData:candidate.rule.allowSidebarData===true}),
+    state.settings.aiProvider === "muse" ? state.settings.aiOutreachMuseAccountId : undefined,
+    getSuggestionContextKey(candidate.contact,candidate.thread,state.settings,candidate.accountId,{auto:true,chatId,outreach:outreachGoal(candidate.rule),outreachDecision:candidate.rule.mode==="auto"||state.settings.aiProvider==="muse",allowSidebarData:candidate.rule.allowSidebarData===true}),
     ...(candidate.firstContactVerified ? ["verified-first-contact"] : candidate.reviewOnly ? ["history-review"] : [])]);
 }
 

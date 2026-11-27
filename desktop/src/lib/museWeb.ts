@@ -160,7 +160,39 @@ function parseMedia(media:{mimeType:string;dataUrl:string}):MuseGeneratedMedia {
 export function collectMuseWebMedia(accountId?:string):Promise<MuseGeneratedMedia>{
   return enqueueMuseTask('media',async()=>parseMedia(await native<{mimeType:string;dataUrl:string}>('muse_web_collect_media',{accountId})));
 }
+
+function normalizeMuseHistoryIds(history: MuseWebContext["history"]) {
+  const encoder = new TextEncoder();
+  const reserved = new Set(history.map(item => item.id));
+  const used = new Set<string>();
+  return Promise.all(history.map(async (item, position) => {
+    if (item.id && !/[\u0000-\u001f\u007f-\u009f]/.test(item.id) && encoder.encode(item.id).length <= 512 && !used.has(item.id)) {
+      used.add(item.id);
+      return item;
+    }
+    const digest = await crypto.subtle.digest('SHA-256', encoder.encode(JSON.stringify([item.id, item.text])));
+    const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+    let id = `history:${hash}:${position}`;
+    while (reserved.has(id)) id += ':1';
+    return { ...item, id };
+  }));
+}
+
+function fitMuseContext(context: MuseWebContext) {
+  const encoder = new TextEncoder();
+  // Leave room for the native adapter's profile wrapper and thread summary.
+  const fits = (text: string) => Array.from(text).length <= 58_000 && encoder.encode(text).length <= 232_000;
+  const mandatory = context.profile + context.prefix + context.suffix;
+  if (!fits(mandatory)) throw Error('Muse 的提示词与本次任务说明合计过长，请缩短提示词或调整 Playbook 后重试；请求未提交');
+  const history = context.history.slice(-40);
+  const historyText = () => history.map(item => item.text).join('\n');
+  while (!fits(mandatory + historyText())) history.shift();
+  return { context: { ...context, history }, prompt: context.prefix + historyText() + context.suffix };
+}
+
 export async function generateMuseWebOutput(prompt:string,signal?:AbortSignal,conversationKey?:string,context?:MuseWebContext,referenceImage?:MuseReferenceImage | MuseReferenceImage[],expectMedia=false,priority=0,onStart?:()=>void|Promise<void>,accountId?:string):Promise<MuseWebOutput> {
+  // Snapshot the structured request before waiting in the Muse queue.
+  if (context) context = { ...context, history: context.history.map(item => ({ ...item })) };
   const targetAccount=accountId||(await museWebAccounts()).selectedId;
   if(!museTrainingDisabledConfirmed(targetAccount))throw musePrivacyGateError(targetAccount);
   return enqueueMuseTask(expectMedia?'media':'text',async(signal)=>{
@@ -169,14 +201,15 @@ export async function generateMuseWebOutput(prompt:string,signal?:AbortSignal,co
     if(context || conversationKey?.startsWith('["sheet-extract",') || conversationKey?.startsWith('["customer-insight",')){
       const redact=createMuseChatRedactor(musePrivacyIdentities());
       if(context){
-        if(prompt!==context.prefix+context.history.map(item=>item.text).join('\n')+context.suffix)throw Error('Muse 聊天上下文不一致，未发送');
         const redactKeepingPaths=(value:string)=>{
           const pathBlock=/<read_only_muse_workspace_files>[\s\S]*?<\/read_only_muse_workspace_files>/.exec(value)?.[0];
           const result=pathBlock?redact(value.replace(pathBlock,'__MUSE_WORKSPACE_PATHS__')).replace('__MUSE_WORKSPACE_PATHS__',pathBlock):redact(value);
           return redactAiContent(result)||'';
         };
-        context={...context,profile:redactKeepingPaths(context.profile||''),prefix:redactKeepingPaths(context.prefix),history:context.history.map(item=>({...item,text:redact(item.text)})),suffix:redact(context.suffix)};
-        prompt=context.prefix+context.history.map(item=>item.text).join('\n')+context.suffix;
+        const fitted = fitMuseContext({ ...context, profile: redactKeepingPaths(context.profile||''), prefix: redactKeepingPaths(context.prefix),
+          history: context.history.map(item => ({ ...item, text: redact(item.text) })), suffix: redact(context.suffix) });
+        context = { ...fitted.context, history: await normalizeMuseHistoryIds(fitted.context.history) };
+        prompt = fitted.prompt;
       }else prompt=redact(prompt);
       // Older threads and handoff summaries may still contain unredacted personal data.
       conversationKey=conversationKey?JSON.stringify(['private-chat-v1',conversationKey]):undefined;

@@ -36,16 +36,21 @@ function indexFirstContactChats(state: Pick<HistoryInput, "chats" | "contacts">)
     else chatsByRecipient.set(key,[chat]);
     const accountId = chat.accountId || contact.accountId || chat.phoneId;
     if (accountId) accounts.set(chat.id, accountId);
+    const legacyImportPlaceholder = contact.source === "分组导入" &&
+      chat.id === `bridge-chat-${contact.id}` && chat.lastMessage === "" &&
+      chat.unread === 0 && !contact.lastMessageAt && !chat.lastMessageDirection;
     if (chat.hasMessageHistory || chat.hasOutgoingHistory || chat.firstConversationMessage || chat.lastMessageDirection === "in" ||
         (chat.hasMessageHistory !== false && contact.lastMessageAt)) {
       rememberContact(known, key, chat.updatedAt, accountId);
-    } else if (chat.hasMessageHistory !== false && !chat.id.startsWith("chat-c-")) {
+    } else if (chat.historyRemapBlocked || (chat.hasMessageHistory !== false && !chat.id.startsWith("chat-c-") && !legacyImportPlaceholder)) {
       unknown.add(key);
     }
   }
   for (const contact of state.contacts) {
     if (contact.isGroup || !contact.lastMessageAt || !contact.phone) continue;
-    const key = recipientKey("", contact.phone);
+    const recipient = indexedContactRecipient(contact);
+    if (!recipient) continue;
+    const key = recipientKey("", recipient);
     if (!known.has(key)) unknown.add(key);
   }
   return { keys, accounts, known, unknown, chatsByRecipient, contacts };

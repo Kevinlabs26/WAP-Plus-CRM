@@ -30,7 +30,6 @@ export type PrepareMuseAccountPlaybookParams = {
   outreach?: string;
   usePrimaryPlaybook: boolean;
   signal?: AbortSignal;
-  applyOutreachSettings: (latestSettings: AppSettings) => AppSettings;
 };
 
 export type PreparedMusePlaybook = {
@@ -96,7 +95,7 @@ async function ensureSecondaryWorkspaceCopy(
   shouldTryPrimaryFallback: boolean;
   fallbackError?: unknown;
 }> {
-  const { accountId, chatId, contactInstructions, museAccountId, auto, outreach, usePrimaryPlaybook, signal, applyOutreachSettings } = params;
+  const { accountId, chatId, contactInstructions, museAccountId, auto, outreach, usePrimaryPlaybook, signal } = params;
   const existingCopy = resolveAiReplyProfile(activeSettings, accountId, chatId, museAccountId, contactInstructions);
   if (!existingCopy.error && existingCopy.readMuseFiles) {
     return { settings: activeSettings, useMuseWorkspacePlaybook: true, shouldTryPrimaryFallback: false };
@@ -105,14 +104,14 @@ async function ensureSecondaryWorkspaceCopy(
   const { useAppStore } = await import("@/store/appStore");
   try {
     await trainMuseAccountPlaybooks(museAccountId, activeProfile.museMaterials || [], signal);
-    const refreshedSettings = applyOutreachSettings(useAppStore.getState().settings);
+    const refreshedSettings = useAppStore.getState().settings;
     return { settings: refreshedSettings, useMuseWorkspacePlaybook: true, shouldTryPrimaryFallback: false };
   } catch (trainError) {
     if (signal?.aborted) throw trainError;
     if (auto && !outreach && !usePrimaryPlaybook) {
       return { settings: activeSettings, useMuseWorkspacePlaybook: false, shouldTryPrimaryFallback: true, fallbackError: trainError };
     }
-    const refreshedSettings = applyOutreachSettings(useAppStore.getState().settings);
+    const refreshedSettings = useAppStore.getState().settings;
     const inlineProfile = resolveAiReplyProfile(refreshedSettings, accountId, chatId, undefined, contactInstructions);
     if (inlineProfile.error || inlineProfile.readMuseFiles) {
       throw Error(inlineProfile.error || "主 Muse Playbook 原文尚未读取，无法交给副号使用");
@@ -128,7 +127,7 @@ async function ensureSecondaryWorkspaceCopy(
  * - Secondary accounts extract once from primary if needed, then reuse or train their own copy.
  */
 export async function prepareMuseAccountPlaybook(params: PrepareMuseAccountPlaybookParams): Promise<PreparedMusePlaybook> {
-  const { settings, profile, accountId, chatId, contactInstructions, museAccountId, primaryMuseId, usePrimaryPlaybook, signal, applyOutreachSettings } = params;
+  const { settings, profile, accountId, chatId, contactInstructions, museAccountId, primaryMuseId, usePrimaryPlaybook, signal } = params;
   const workspaceMode = settings.aiPlaybookMuseMode !== "shared";
   const isPrimarySourceAccount = Boolean(
     museAccountId &&
@@ -149,7 +148,7 @@ export async function prepareMuseAccountPlaybook(params: PrepareMuseAccountPlayb
     const { shareMusePlaybooks } = await import("./musePlaybookSync.ts");
     const { useAppStore } = await import("@/store/appStore");
     await shareMusePlaybooks(activeProfile.musePlaybookPaths || [], signal);
-    activeSettings = applyOutreachSettings(useAppStore.getState().settings);
+    activeSettings = useAppStore.getState().settings;
     activeProfile = resolveAiReplyProfile(activeSettings, accountId, chatId, undefined, contactInstructions);
   }
   if (workspaceMode && activeProfile.museMaterials?.length) {

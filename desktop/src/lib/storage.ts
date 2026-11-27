@@ -695,6 +695,16 @@ export function updateStoredMessageAcks(items: { id: string; ack: string }[], ac
   return run;
 }
 
+export function updateStoredMessageEdits(items: import("@shared/protocol").MessageEditItem[], accountId: string): Promise<void> {
+  if (!items.length) return Promise.resolve();
+  const run = saveQueue.then(async () => {
+    if (await resolveStorageEngine() !== "sqlite") return;
+    if (!await tryInvokeOk("db_update_message_edits", { items, accountId })) throw new Error("SQLite 消息编辑更新失败");
+  });
+  saveQueue = run.catch(() => undefined);
+  return run;
+}
+
 /** 删除未加载进内存的协议消息，兼容本地 id、waMessageId 和 waKey.id。 */
 export function deleteStoredMessagesByKeys(
   keys: string[],

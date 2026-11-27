@@ -87,6 +87,23 @@ test("non-Muse provider supports structured auto outreach send decision with gro
   assert.equal(result.suggestions.length, 1);
 });
 
+test("Gemini proactive contact ignores a saved Muse account and uses Gemini", async (t) => {
+  const fetch = t.mock.method(globalThis, "fetch", async (request) => {
+    assert.equal(new URL(String(request)).hostname, "generativelanguage.googleapis.com");
+    return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify({
+      action: "skip", reason: "No reason to contact the recipient.",
+    }) }] } }] });
+  });
+  const result = await generateSuggestions(undefined, [], {
+    ...createCustomSettings(), aiProvider: "gemini", geminiKey: "test-key",
+    aiModel: "gemini-test", aiOutreachMuseAccountId: "saved-muse",
+  }, { auto: true, outreach: "Check whether a follow-up is appropriate.", outreachDecision: true });
+  assert.equal(fetch.mock.callCount(), 1);
+  assert.equal(result.source, "gemini");
+  assert.equal(result.outreachDecision?.action, "skip");
+  assert.equal(result.decisionDetails?.museAccountId, undefined);
+});
+
 test("non-Muse provider supports structured skip decision and downgrades ungrounded or array responses to draft", async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => {

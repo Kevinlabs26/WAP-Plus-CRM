@@ -18,6 +18,7 @@ export function routeBroadcastAccounts(
     if (key) unresolved.add(key);
   }
   const accountByPhone: Record<string, string> = {};
+  const blockedByPhone: Record<string, "pendingDelivery" | "unknownAccount" | "unknownHistory"> = {};
   const remaining = Object.entries(quotas || {}).filter(([, count]) => Number.isInteger(count) && count > 0 && count <= BROADCAST_HARD_CAP);
   let contacted = 0;
   let unassigned = 0;
@@ -25,6 +26,7 @@ export function routeBroadcastAccounts(
   for (const phone of [...new Set(phones)].sort()) {
     const key = recipientKey("", phone);
     if (unresolved.has(key)) {
+      blockedByPhone[phone] = "pendingDelivery";
       unclear++;
       continue;
     }
@@ -33,6 +35,7 @@ export function routeBroadcastAccounts(
       accountByPhone[phone] = original;
       contacted++;
     } else if (known.has(key) || unknown.has(key)) {
+      blockedByPhone[phone] = known.has(key) ? "unknownAccount" : "unknownHistory";
       unclear++;
     } else if (!quotas) {
       accountByPhone[phone] = defaultAccount;
@@ -45,5 +48,5 @@ export function routeBroadcastAccounts(
       }
     }
   }
-  return {accountByPhone, contacted, unassigned, unclear};
+  return {accountByPhone, blockedByPhone, contacted, unassigned, unclear};
 }

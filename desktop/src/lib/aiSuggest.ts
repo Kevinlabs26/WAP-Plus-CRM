@@ -89,30 +89,29 @@ export function getSuggestionContextKey(
   accountId?: string,
   opts?: { auto?: boolean; count?: 1 | 3; replyTo?: Message; chatId?: string; outreach?: string; outreachDecision?: boolean; groupReplyDecision?: boolean; allowSidebarData?: boolean }
 ): string {
-  const routing = outreachAiSettings(settings, opts?.outreachDecision ? opts.outreach : undefined);
   const chatId = opts?.chatId || opts?.replyTo?.chatId || recent[0]?.chatId;
   const profile = resolveAiReplyProfile(
-    routing,
+    settings,
     accountId || contact?.accountId,
     chatId,
     undefined,
     contact?.aiChatInstructions
   );
   const stableProfile = profile.workspacePlaybook && profile.playbookVersion
-    ? resolveAiReplyProfile(routing, accountId || contact?.accountId, chatId, undefined, contact?.aiChatInstructions, true)
+    ? resolveAiReplyProfile(settings, accountId || contact?.accountId, chatId, undefined, contact?.aiChatInstructions, true)
     : profile;
   const prompt = stableProfile.prompt;
   const imageIds = opts?.auto && settings.sendChannel === "baileys" ? stableProfile.playbookImageAssetIds || [] : [];
   const imagePrompt = imageIds.length
     ? `\n<available_reply_images>${JSON.stringify(imageIds)}</available_reply_images> Select at most one imageAssetId from this list only when the image materially helps this reply; otherwise omit it. The IDs are opaque identifiers, not message text.`
     : "";
-  const usesMuse = routing.aiProvider === "muse";
+  const usesMuse = settings.aiProvider === "muse";
   return JSON.stringify([
     contact?.id || "", chatId || "", stableProfile.folderId || "", stableProfile.primaryFolderIds, stableProfile.error,
     imageIds,
     stableProfile.error ? stableProfile.museMaterials : undefined, resolveAiReplyConstraints(settings,accountId||contact?.accountId,chatId),
     accountId || contact?.accountId || "",
-    routing.aiProvider, settings.aiModel, settings.customAiModel, settings.sendChannel,
+    settings.aiProvider, settings.aiModel, settings.customAiModel, settings.sendChannel,
     profile.playbookName, profile.playbookVersion, settings.aiPlaybookMuseMode, settings.aiPlaybookMuseAccountId,
     profile.workspacePlaybook && settings.aiPlaybookMuseAttemptAt > settings.aiPlaybookMuseSyncedAt,
     opts?.auto && !opts.outreachDecision && usesMuse ? settings.museAutoReplyAccountIds : undefined,
@@ -124,11 +123,6 @@ export function getSuggestionContextKey(
     opts?.replyTo?.id || "",
     buildUserPrompt(contact, [...recent].sort((a, b) => a.sentAt.localeCompare(b.sentAt)), opts?.auto, opts?.replyTo, undefined, {count:opts?.count,outreach:opts?.outreach,outreachDecision:opts?.outreachDecision,groupReplyDecision:opts?.groupReplyDecision,compact:settings.aiContextMode === "compact"}),
   ]);
-}
-
-export function outreachAiSettings(settings: AppSettings, outreach?: string): AppSettings {
-  return outreach && settings.aiOutreachMuseAccountId && settings.aiProvider !== "muse"
-    ? {...settings, aiProvider: "muse"} : settings;
 }
 
 /**
@@ -147,7 +141,6 @@ export async function generateSuggestions(
   const outreachTask = verifiedFirstContact
     ? `${opts?.outreach || ""}\nProgram-provided CRM fact: ${VERIFIED_FIRST_CONTACT} If the configured rules permit a neutral first message and no additional required facts are missing, return action "send" with a reason. The CRM already has the verified first-contact fact and will record it directly. The absence of a chat, name, or gender by itself does not require review. If the configured rules require any unverified fact, return a draft. If a rule excludes this recipient, return skip.`
     : opts?.outreach;
-  settings = outreachAiSettings(settings, proactive ? opts?.outreach : undefined);
   const name = contact?.name ?? "there";
   const sorted = [...recent].sort((a, b) => a.sentAt.localeCompare(b.sentAt));
   const lastIn = [...sorted].reverse().find((m) => m.direction === "in");
@@ -200,7 +193,6 @@ export async function generateSuggestions(
         outreach: opts?.outreach,
         usePrimaryPlaybook,
         signal: opts?.signal,
-        applyOutreachSettings: (latestSettings) => outreachAiSettings(latestSettings, proactive ? opts?.outreach : undefined),
       });
       settings = prepared.settings;
       profile = prepared.profile;
@@ -347,12 +339,11 @@ export async function generateSuggestions(
                 !current.museAutoReplyAccountIds.includes(museAccountId)) {
               throw Error("该 Muse 账号已不再获准自动回复");
             }
-            if (proactive && current.aiOutreachMuseAccountId !== settings.aiOutreachMuseAccountId) {
-              throw Error("主动联系的 Muse 账号已变化，请重新生成");
+            if (proactive && (current.aiProvider !== "muse" || current.aiOutreachMuseAccountId !== settings.aiOutreachMuseAccountId)) {
+              throw Error("主动联系的 AI 服务或 Muse 账号已变化，请重新生成");
             }
             if (profile.workspacePlaybook) {
-              const currentRouting = outreachAiSettings(current, proactive ? opts.outreach : undefined);
-              const currentProfile = resolveAiReplyProfile(currentRouting, accountId, chatId, undefined, contact?.aiChatInstructions);
+              const currentProfile = resolveAiReplyProfile(current, accountId, chatId, undefined, contact?.aiChatInstructions);
               if (currentProfile.playbookVersion !== playbookVersion ||
                   current.aiPlaybookMuseAttemptAt > current.aiPlaybookMuseSyncedAt) {
                 throw Error("Playbook 版本或同步状态已变化，请重新生成");

@@ -25,6 +25,37 @@ test("scheduled plans reject unclear contact history even with a default account
   assert.equal(scheduledPlanTargets(state, [chat.id], "b")[0].accountId, "b");
 });
 
+test("legacy folder imports use the selected account only when the placeholder has no conflicting history", () => {
+  const contact = { id: "c", phone: "+12025550101", accountId: "a", source: "分组导入" };
+  const chat = { id: "bridge-chat-c", contactId: "c", accountId: "a", lastMessage: "", unread: 0 };
+  const state = { settings: { waAccounts: [{ id: "a" }, { id: "b" }] }, contacts: [contact], chats: [chat], messages: [] };
+  assert.equal(scheduledPlanTargets(state, [chat.id], "b")[0].accountId, "b");
+  assert.equal(scheduledPlanTargets({ ...state, messages: [{ chatId: chat.id, direction: "in", accountId: "a", sentAt: iso(origin) }] }, [chat.id], "b")[0].accountId, "a");
+  for (const chats of [
+    [{ ...chat, historyRemapBlocked: true }],
+    [chat, { ...chat, id: "unverified-duplicate" }],
+  ]) {
+    assert.deepEqual(scheduledPlanTargets({ ...state, chats }, [chat.id], "b"), []);
+  }
+  assert.deepEqual(scheduledPlanTargets({ ...state, contacts: [{ ...contact, source: "folder-backup" }] }, [chat.id], "b"), []);
+});
+
+test("folder placeholders recover the original account from a separate same-number chat", () => {
+  const contacts = [
+    { id: "imported", phone: "+12025550101", accountId: "b" },
+    { id: "original", phone: "+1 (202) 555-0101", channelAddress: "77777777777777@lid", accountId: "a" },
+  ];
+  const chats = [
+    { id: "bridge-chat-imported", contactId: "imported", accountId: "b", lastMessage: "" },
+    { id: "bridge-chat-original", contactId: "original", accountId: "a", hasMessageHistory: true,
+      lastSuccessfulOutgoing: { at: iso(origin), accountId: "a" } },
+  ];
+  const state = { contacts, chats, messages: [], settings: { waAccounts: [{ id: "a" }, { id: "b" }] } };
+  const [target] = scheduledPlanTargets(state, ["bridge-chat-imported"], "b");
+  assert.equal(target.accountId, "a");
+  assert.equal(target.recipient, "+12025550101");
+});
+
 test('a group keeps its conversation account even with a different default and successful history on that other account',()=>{
  const state={settings:{waAccounts:[{id:'a'},{id:'b'}]},contacts:[{id:'ga',channelAddress:'12345@g.us',accountId:'a',isGroup:true},{id:'gb',channelAddress:'12345@g.us',accountId:'b',isGroup:true}],
   chats:[{id:'chat-a',contactId:'ga',accountId:'a'},{id:'chat-b',contactId:'gb',accountId:'b',lastSuccessfulOutgoing:{accountId:'b',at:iso(origin)}}],messages:[]};
@@ -277,11 +308,58 @@ test('cooldown retries honor server delay and unknown results pause without auto
  assert.equal(h.plans[0].items[0].status,'unknown','continuing never silently retries uncertain items');
 });
 
-test('offline and missing original account never fall back to another account',async()=>{
- let availability='offline';const h=harness([plan('a')],{availability:()=>availability});await h.runner.tick();
- assert.equal(h.calls.length,0);assert.equal(h.plans[0].error,'planQueue.offline');
- availability='missing';h.advance(5000);await h.runner.tick();assert.equal(h.calls.length,0);
- assert.equal(h.plans[0].status,'paused');assert.equal(h.plans[0].items[0].status,'failed');
+test('an unavailable original route requires review only for the affected recipient',async()=>{
+ const h=harness([plan('a',[item('1'),item('2','b')])],{availability:i=>i.id==='1'?'missing':'ready'});
+ await h.runner.tick();
+ assert.equal(h.calls.length,0);assert.equal(h.plans[0].error,'planQueue.missingTarget');
+ assert.equal(h.plans[0].status,'running');assert.equal(h.plans[0].items[0].status,'failed');
+ assert.equal(h.plans[0].items[0].error,'planQueue.missingTarget');
+ await h.runner.tick();assert.deepEqual(h.calls.map(call=>call[1]),['2']);
+ assert.equal(h.plans[0].status,'done');
+});
+
+test('finished plan history beyond one hundred entries survives a reload',()=>{
+ const plans=Array.from({length:105},(_,i)=>plan(String(i),[{...item('1'),status:'sent'}],{status:'done'}));
+ const restored=normalizeScheduledPlans(JSON.parse(JSON.stringify(plans)));
+ assert.deepEqual(restored.map(p=>p.id),plans.map(p=>p.id));
+});
+
+test('a disconnect at the final send gate defers only that recipient and retains its original account',async()=>{
+ let offline=false;
+ const sent=[];
+ const h=harness([plan('a',[item('1'),item('2','b')])],{
+  availability:i=>i.accountId==='a'&&offline?'offline':'ready',
+  send:async(_p,i,gate)=>{
+   if(i.id==='1'&&!sent.length) offline=true;
+   if(!gate()) return {ok:false,error:'automation_cancelled'};
+   sent.push([i.id,i.accountId]);return {ok:true};
+  },
+ });
+ await h.runner.tick();
+ assert.equal(h.plans[0].items[0].status,'pending');
+ assert.equal(h.plans[0].error,'planQueue.offline');
+ await h.runner.tick();assert.deepEqual(sent,[['2','b']]);
+ offline=false;h.advance(30000);await h.runner.tick();
+ assert.deepEqual(sent,[['2','b'],['1','a']]);
+});
+
+test('offline recipients wait while other accounts send, then resume on the original account',async()=>{
+ let online=false;
+ const h=harness([plan('a',[item('1'),item('2','b'),item('3'),item('4','b')])],{
+  availability:i=>i.accountId==='a'&&!online?'offline':'ready',
+ });
+ await h.runner.tick();
+ assert.deepEqual(h.calls.map(call=>call[1]),['2']);
+ assert.equal(h.plans[0].error,'planQueue.offline');
+ h.advance(30000);await h.runner.tick();
+ assert.deepEqual(h.calls.map(call=>call[1]),['2','4']);
+ assert.deepEqual(h.plans[0].items.map(i=>i.status),['pending','sent','pending','sent']);
+ h.advance(30000);await h.runner.tick();
+ online=true;h.advance(5000);await h.runner.tick();
+ h.advance(30000);await h.runner.tick();
+ assert.deepEqual(h.calls.map(call=>call[1]),['2','4','1','3']);
+ assert.deepEqual(h.plans[0].items.map(i=>i.accountId),['a','b','a','b']);
+ assert.equal(h.plans[0].status,'done');
 });
 
 test('a long offline wait requires confirmation even after the account reconnects',async()=>{

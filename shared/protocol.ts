@@ -18,6 +18,7 @@ export const MESSAGE_TYPES = [
   "contacts.save_batch",
   "messages.sync",
   "messages.ack",
+  "messages.edit",
   "presence.update",
   "group.join_request",
   "messages.delete",
@@ -246,6 +247,14 @@ export interface MessageAckPayload {
   source?: string;
 }
 
+export interface MessageEditItem {
+  id: string;
+  remoteJid: string;
+  fromMe: boolean;
+  body: string;
+  editedAt: number;
+}
+
 export interface PresenceUpdateItem {
   jid: string;
   participant?: string;
@@ -409,6 +418,7 @@ export interface ProtocolPayloadMap {
   "contacts.save_batch": ContactSaveBatchPayload;
   "messages.sync": MessagesSyncPayload;
   "messages.ack": MessageAckPayload;
+  "messages.edit": { items: MessageEditItem[] };
   "presence.update": PresenceUpdatePayload;
   "group.join_request": GroupJoinRequestPayload;
   "messages.delete": MessagesDeletePayload;

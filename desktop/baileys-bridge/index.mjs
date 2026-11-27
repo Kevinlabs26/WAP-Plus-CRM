@@ -1297,8 +1297,16 @@ async function connectInternal(opts = {}) {
     sock.ev.on("messages.update", (updates) => {
       if (!Array.isArray(updates) || !updates.length) return;
       const items = [];
+      const edits = [];
       for (const u of updates) {
         const key = u?.key;
+        const edited = u?.update?.message?.editedMessage?.message;
+        const body = edited?.conversation ?? edited?.extendedTextMessage?.text;
+        if (key?.id && key.remoteJid && typeof body === "string" && body.trim()) {
+          const timestamp = Number(u.update.messageTimestamp);
+          const editedAt = Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0;
+          edits.push({ id: key.id, remoteJid: key.remoteJid, fromMe: Boolean(key.fromMe), body: body.slice(0, 20_000), editedAt });
+        }
         const st = u?.update?.status;
         if (!key?.id || st == null) continue;
         let ack = "sent";
@@ -1314,6 +1322,7 @@ async function connectInternal(opts = {}) {
           ack,
         });
       }
+      if (edits.length) push("messages.edit", { items: edits });
       if (items.length) {
         push("messages.ack", { items, source: "messages.update" });
       }

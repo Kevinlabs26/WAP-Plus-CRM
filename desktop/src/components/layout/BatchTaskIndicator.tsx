@@ -72,7 +72,10 @@ export function BatchTaskIndicator() {
         const accountId = current?.accountId || ("accountId" in task ? task.accountId : undefined);
         const accountLabel = accounts.find(account => account.id === accountId)?.label || accountId;
         const total = task.items.length;
-        const error = "error" in task ? task.error : undefined;
+        const error = task.kind === "plan" ? task.error : task.channelId !== "android_bridge" &&
+          ["running", "paused"].includes(task.status) && task.items.some(item =>
+            item.status === "pending" && !canBatchSendWithAccount(batchState, item.accountId || task.accountId))
+          ? "planQueue.offline" : undefined;
         const waitSec = task.kind === "plan" ? Math.max(0, Math.ceil((Math.max(cooldown, Date.parse(task.nextAttemptAt || "") || 0) - now) / 1000)) : 0;
         return <div key={task.id} className="flex items-center gap-2 border-b border-zinc-800 pb-2 last:border-0 last:pb-0">
           <div className="min-w-0 flex-1">

@@ -3,7 +3,7 @@ import test from "node:test";
 import { build } from "esbuild";
 import { fileURLToPath } from "node:url";
 const mocks = {
-  "@/lib/storage": "export const getStorageEngine = () => 'sqlite'; export const canPersistRowDeltas=()=>false; export const saveAppState = async (value) => { await globalThis.restoreBeforeSave?.(); if (globalThis.restoreFail) { globalThis.restoreFail = false; throw new Error('Disk full'); } globalThis.restoreSaved = value; }; export const loadAppState = async () => null; export const clearAppState = async () => { globalThis.auditClearCalls++; if(globalThis.auditClearFail) throw new Error('Clear failed'); }; export const registerChatMessageReplacements = () => {}; export const registerChatAccountReplacements = () => {}; export const clearStoredRemoteMessages = async () => {}; export const deleteStoredMessagesByKeys = async () => {}; export const updateStoredMessageAcks = async (items, accountId) => { globalThis.syncAckWritten = { items, accountId }; await globalThis.syncAckWait?.(); }; export const loadSecureSecrets = async () => null; export const saveSecureSecrets = async () => true;",
+  "@/lib/storage": "export const getStorageEngine = () => 'sqlite'; export const canPersistRowDeltas=()=>false; export const saveAppState = async (value) => { await globalThis.restoreBeforeSave?.(); if (globalThis.restoreFail) { globalThis.restoreFail = false; throw new Error('Disk full'); } globalThis.restoreSaved = value; }; export const loadAppState = async () => null; export const clearAppState = async () => { globalThis.auditClearCalls++; if(globalThis.auditClearFail) throw new Error('Clear failed'); }; export const registerChatMessageReplacements = () => {}; export const registerChatAccountReplacements = () => {}; export const clearStoredRemoteMessages = async () => {}; export const deleteStoredMessagesByKeys = async () => {}; export const updateStoredMessageEdits = async (items, accountId) => { globalThis.syncEditWritten = {items, accountId}; }; export const updateStoredMessageAcks = async (items, accountId) => { globalThis.syncAckWritten = { items, accountId }; await globalThis.syncAckWait?.(); }; export const loadSecureSecrets = async () => null; export const saveSecureSecrets = async () => true;",
 "@/lib/mediaCache": "export const cacheMediaUrls=async(items)=>{for(const item of items)await cacheMediaUrl(item.messageId,item.url);};export const bridgeMessageMediaCacheId = (id, accountId) => accountId + ':' + id; export const readMediaCache = async id => globalThis.restoreMedia.get(id); export const cacheMediaUrl = async (id, url) => { if (globalThis.restoreMediaFail) throw new Error('Media disk full'); globalThis.restoreMedia.set(id, url); }; export const dropMediaCache = async id => { globalThis.restoreMedia.delete(id); };",
   "@/lib/composerActivity": "export const isComposerTypingBusy = () => globalThis.restoreTyping === true;",
   "@/lib/syncDebug": "export const noteMainThreadWork = () => {}; export const syncLog = () => {}; export const isSyncDebugEnabled = () => false;",
@@ -235,6 +235,24 @@ test('cold ACK completion waits for database update and includes its account', a
   const done=get().ingestBridgeEvents([{type:'messages.ack',deviceId:'wa',payload:{items:[{id:'cold',status:4}]}}]).then(()=>{complete=true;});
   assert.deepEqual(globalThis.syncAckWritten,{accountId:'wa',items:[{id:'cold',ack:'read'}]});
   await Promise.resolve(); assert.equal(complete,false); release(); await done;
+});
+
+test('remote edits update the original message, isolate accounts and persist cold edits', async () => {
+  const {get,set}=setup();
+  const jid='123@s.whatsapp.net';
+  const original={id:'local',waMessageId:'remote',waKey:{id:'remote',remoteJid:jid},accountId:'wa',chatId:'chat',direction:'in',sentAt:'2026-10-01T00:00:00Z',body:'Old',translation:'旧译文',translationLang:'zh'};
+  set({messages:[original,{...original,id:'other',accountId:'wa-b'}]});
+  const edit={id:'remote',remoteJid:jid,fromMe:false,body:'New',editedAt:50};
+  await get().ingestBridgeEvents([{type:'messages.edit',deviceId:'wa',payload:{items:[edit,{...edit,body:'Stale',editedAt:40},{...edit,id:'cold'}]}}]);
+  const message=get().messages.find(item=>item.id==='local');
+  assert.equal(message.body,'New');
+  assert.equal(message.sentAt,original.sentAt);
+  assert.equal(message.edited,true);
+  assert.equal(message.translation,undefined);
+  assert.equal(get().messages.find(item=>item.id==='other').body,'Old');
+  assert.equal(get().messages.length,2);
+  assert.equal(globalThis.syncEditWritten.items.at(-1).id,'cold');
+  assert.equal(globalThis.syncEditWritten.accountId,'wa');
 });
 
 test('replayed clear preserves newer messages and isolates accounts', async () => {

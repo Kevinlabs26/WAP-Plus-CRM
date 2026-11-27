@@ -44,7 +44,8 @@ export async function saveScheduledPlan(input: Omit<ScheduledPlan, "id" | "creat
   const state = useAppStore.getState();
   if (isDataRestoreActive() || !state.hydrated || !state.uiReady) throw new Error(translateCurrent("planQueue.restoring"));
   const plans = state.settings.scheduledPlans || [];
-  if (!input.items.length || input.items.length > MAX_SCHEDULED_PLAN_ITEMS || plans.length >= MAX_SCHEDULED_PLANS) throw new Error(translateCurrent("planQueue.capacity"));
+  const activeCount = plans.filter(plan => ["pending", "running", "paused"].includes(plan.status)).length;
+  if (!input.items.length || input.items.length > MAX_SCHEDULED_PLAN_ITEMS || activeCount >= MAX_SCHEDULED_PLANS) throw new Error(translateCurrent("planQueue.capacity"));
   const dueAt = startNow ? new Date().toISOString() : input.dueAt;
   if ((!startNow && (!Number.isFinite(Date.parse(dueAt)) || Date.parse(dueAt) <= Date.now())) || !Number.isFinite(input.gapSec) || input.gapSec < MIN_SCHEDULED_GAP_SEC || input.gapSec > 3600) throw new Error(translateCurrent("planQueue.invalidTime"));
   if ((!input.text.trim() && !input.media) || input.text.length > 4000 || input.mediaUnavailable) throw new Error(translateCurrent("planQueue.invalidContent"));

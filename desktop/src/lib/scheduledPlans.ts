@@ -110,7 +110,9 @@ const indexedRecipients = new WeakMap<Contact, string | null>();
 
 export function indexedContactRecipient(contact: Contact): string | null {
   if (indexedRecipients.has(contact)) return indexedRecipients.get(contact) ?? null;
-  const recipient = resolveSendTarget({phone: contact.phone, channelAddress: contact.channelAddress, entityId: contact.id}) || null;
+  const phone = contact.phone?.trim();
+  const normalizedPhone = phone && /^\+?[\d ()-]+$/.test(phone) ? phone.replace(/[ ()-]/g, "") : phone;
+  const recipient = resolveSendTarget({phone: normalizedPhone, channelAddress: contact.channelAddress, entityId: contact.id}) || null;
   indexedRecipients.set(contact, recipient);
   return recipient;
 }
@@ -160,33 +162,48 @@ export function scheduledPlanHistoryAccounts(state: Pick<TargetState, "chats" | 
 }
 
 /** Preserve the conversation account, including when only the customer has sent a message. */
-export function scheduledPlanTargets(state: TargetState, chatIds?: string[], defaultAccountId?: string) {
+export function inspectScheduledPlanTargets(state: TargetState, chatIds?: string[], defaultAccountId?: string) {
   const contacts = new Map(state.contacts.map(contact => [contact.id, contact]));
   const selected = chatIds ? new Set(chatIds) : null;
   const seen = new Set<string>();
   const { known, unknown } = firstContactHistory({ ...state, messages: state.messages || [] });
   const items: ScheduledPlanItem[] = [];
+  const blocked: { chatId: string; name: string; reason: "address" | "account" | "history" | "duplicate" | "missing" }[] = [];
+  const found = new Set<string>();
+  const accounts = new Set(state.settings.waAccounts.map(account => account.id));
   for (const chat of state.chats) {
     if (selected && !selected.has(chat.id)) continue;
+    found.add(chat.id);
     const contact = contacts.get(chat.contactId);
-    if (!contact) continue;
-    const recipient = resolveSendTarget({ phone: contact.phone, channelAddress: contact.channelAddress, entityId: contact.id });
-    if (!recipient || (!/^\+?\d{7,15}$/.test(recipient) && !/^[\w.-]+@(g\.us|s\.whatsapp\.net|c\.us|lid)$/.test(recipient))) continue;
+    const name = contact?.name || chat.contactName || contact?.phone || chat.id;
+    if (!contact) { blocked.push({ chatId: chat.id, name, reason: "missing" }); continue; }
+    const recipient = indexedContactRecipient(contact);
+    if (!recipient || (!/^\+?\d{7,15}$/.test(recipient) && !/^[\w.-]+@(g\.us|s\.whatsapp\.net|c\.us|lid)$/.test(recipient))) {
+      blocked.push({ chatId: chat.id, name, reason: "address" }); continue;
+    }
     const isGroup = chat.isGroup || contact.isGroup || recipient.endsWith("@g.us");
     const contactAccountId = contact.accountId || contact.boundPhoneId;
-    if (isGroup && chat.accountId && contactAccountId && chat.accountId !== contactAccountId) continue;
+    if (isGroup && chat.accountId && contactAccountId && chat.accountId !== contactAccountId) {
+      blocked.push({ chatId: chat.id, name, reason: "account" }); continue;
+    }
     const key = recipientKey("", recipient);
     const original = known.get(key)?.accountId;
-    if (!isGroup && !original && (known.has(key) || unknown.has(key))) continue;
+    if (!isGroup && !original && (known.has(key) || unknown.has(key))) {
+      blocked.push({ chatId: chat.id, name, reason: known.has(key) ? "account" : "history" }); continue;
+    }
     const accountId = isGroup ? chat.accountId || contactAccountId || chat.phoneId
       : original || defaultAccountId || chat.accountId || contact.accountId || "wa-default";
-    if (!accountId) continue;
-    if (!state.settings.waAccounts.some(account => account.id === accountId)) continue;
-    if (seen.has(key)) continue;
+    if (!accountId || !accounts.has(accountId)) { blocked.push({ chatId: chat.id, name, reason: "account" }); continue; }
+    if (seen.has(key)) { blocked.push({ chatId: chat.id, name, reason: "duplicate" }); continue; }
     seen.add(key);
     items.push({ id: chat.id, chatId: chat.id, contactId: contact.id, contactName: contact.name || chat.contactName || recipient, recipient, accountId, status: "pending" });
   }
-  return items;
+  for (const chatId of selected || []) if (!found.has(chatId)) blocked.push({ chatId, name: chatId, reason: "missing" });
+  return { items, blocked };
+}
+
+export function scheduledPlanTargets(state: TargetState, chatIds?: string[], defaultAccountId?: string) {
+  return inspectScheduledPlanTargets(state, chatIds, defaultAccountId).items;
 }
 
 export function scheduledFolderChatIds(settings: TargetState["settings"], folderId: string, includeChildren: boolean) {
@@ -217,7 +234,7 @@ export function normalizeScheduledPlans(raw: unknown): ScheduledPlan[] {
   if (!Array.isArray(raw)) return [];
   let mediaBytes = 0;
   const planIds = new Set<string>();
-  return raw.slice(0, MAX_SCHEDULED_PLANS).flatMap(value => {
+  return raw.flatMap(value => {
     if (!value || typeof value !== "object") return [];
     const p = value as ScheduledPlan;
     if (typeof p.id !== "string" || !p.id || !Array.isArray(p.items)) return [];

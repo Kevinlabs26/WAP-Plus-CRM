@@ -269,7 +269,7 @@ b.onResolve({filter:/museWeb\.ts$/},()=>({path:'muse',namespace:'mock'}));b.onLo
 }}]});
 const ai=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text).toString('base64'));
 test('proactive contact uses its pinned Muse account and keeps ungrounded output as a draft',async()=>{
- const settings={...ai.defaultSettings,aiProvider:'openai',aiOutreachMuseAccountId:'primary'};
+ const settings={...ai.defaultSettings,aiProvider:'muse',aiOutreachMuseAccountId:'primary'};
  const contact={id:'customer',name:'Client'};
  const history=[
   {id:'in',chatId:'chat',direction:'in',body:'Please contact me next week',sentAt:'2026-11-07T12:00:00Z'},
@@ -400,6 +400,36 @@ test('a missing local privacy context fails closed before sending anything to Mu
  let calls=0;globalThis.museNative=async()=>{calls++;return{text:'Unexpected'};};globalThis.musePrivacyFailure=true;
  try{await assert.rejects(client.generateMuseWeb('text',undefined,'key',{profile:'',prefix:'',history:[{id:'m',text:'text'}],suffix:''}),/Privacy state unavailable/);assert.equal(calls,0);}
  finally{delete globalThis.musePrivacyFailure;}
+});
+test('duplicate and invalid local history IDs keep their text and reach the native Muse adapter',async()=>{
+ let submitted;
+ globalThis.museNative=async(_cmd,args)=>{submitted=args;return {text:'Bonjour'};};
+ const history=[{id:'same',text:'First'},{id:'same',text:'Second'},{id:'bad\nkey',text:'Third'},{id:'é'.repeat(257),text:'Fourth'}];
+ const context={profile:'',prefix:'Chat:\n',history,suffix:'\nEnd'};
+ const prompt=context.prefix+history.map(item=>item.text).join('\n')+context.suffix;
+ await client.generateMuseWeb(prompt,undefined,'key',context);
+ assert.equal(submitted.prompt,prompt);
+ assert.deepEqual(submitted.context.history.map(item=>item.text),history.map(item=>item.text));
+ const ids=submitted.context.history.map(item=>item.id);
+ assert.equal(new Set(ids).size,history.length);
+ assert.equal(ids[0],'same');
+ for(const id of ids.slice(1)) assert.match(id,/^history:[a-f0-9]{64}:\d+$/);
+});
+test('Muse rebuilds a stale prompt and fits long history before a single native submission',async()=>{
+ const calls=[];
+ globalThis.museNative=async(_cmd,args)=>{calls.push(args);return{text:'Bonjour'};};
+ const history=Array.from({length:42},(_,i)=>({id:`m${i}`,text:`History ${i}: ${'x'.repeat(1000)}`}));
+ const context={profile:'a'.repeat(25_000),prefix:'Rules\n',suffix:'\nCurrent task',history};
+ await client.generateMuseWeb('Old prompt',undefined,'key',context);
+ assert.equal(calls.length,1);
+ const [{prompt,context:sent}]=calls;
+ assert.equal(sent.profile,context.profile);
+ assert.ok(sent.history.length<40);
+ assert.equal(sent.history.at(-1).id,'m41');
+ assert.equal(prompt,sent.prefix+sent.history.map(item=>item.text).join('\n')+sent.suffix);
+ assert.doesNotMatch(prompt,/Old prompt/);
+ await assert.rejects(client.generateMuseWeb('Old prompt',undefined,'key',{...context,profile:'x '.repeat(29_100)}),/合计过长/);
+ assert.equal(calls.length,1);
 });
 test('retrieving existing media invokes only the collect command',async()=>{
  const calls=[];globalThis.museNative=async(cmd)=>{calls.push(cmd);return{mimeType:'image/png',dataUrl:'data:image/png;base64,aW1hZ2U='};};

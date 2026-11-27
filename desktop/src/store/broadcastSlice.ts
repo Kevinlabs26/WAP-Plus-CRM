@@ -68,7 +68,7 @@ export function createBroadcastSlice({
       const selectedContactIds = new Set(contactIds);
       const phones = contacts.flatMap(contact => selectedContactIds.has(contact.id) && contactSendablePhone(contact) || []);
       const routing: ReturnType<typeof routeBroadcastAccounts> = android
-        ? {accountByPhone: {}, contacted: 0, unclear: 0, unassigned: 0}
+        ? {accountByPhone: {}, blockedByPhone: {}, contacted: 0, unclear: 0, unassigned: 0}
         : routeBroadcastAccounts(state, phones, input.accountId, input.firstContactQuotas);
       const {accountByPhone} = routing;
       if (routing.unclear) return {ok:false, reason:"有收件人的原发送账号无法确认，请核对名单"};

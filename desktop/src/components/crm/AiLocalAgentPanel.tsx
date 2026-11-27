@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { useAppStore, flushPersist } from "@/store/appStore";
 import { Button } from "@/components/ui/primitives";
 import { normalizeChannelId } from "@/channels";
@@ -8,6 +8,7 @@ import { trackAiRequest } from "@/lib/aiUsage";
 import { parseAiLocalAgentActions, resolveAiLocalAgentActions, type AiLocalAgentAction, type ResolvedAiLocalAgentAction } from "@/lib/aiLocalAgent";
 import { isWaAccountConnected } from "@/lib/accountConnection";
 import { validateBroadcastTemplate } from "@/lib/broadcastTemplate";
+import { routeBroadcastAccounts } from "@/lib/broadcastAccountRouting";
 import { resolveAiReplyProfile } from "@/lib/aiPromptScope";
 
 type WriteAction = Exclude<AiLocalAgentAction, { type: "list_folder_contacts" | "prepare_invitation" }>;
@@ -53,6 +54,14 @@ export function AiLocalAgentPanel({ selectedChatId }: { selectedChatId: string |
   const [folderContacts, setFolderContacts] = useState<FolderContactsResult | null>(null);
   const [invitation, setInvitation] = useState<InvitationPreview | null>(null);
   const accounts = useAppStore(state => state.settings.waAccounts || []);
+  const chats = useAppStore(state => invitation ? state.chats : null);
+  const contacts = useAppStore(state => invitation ? state.contacts : null);
+  const messages = useAppStore(state => invitation ? state.messages : null);
+  const previewRecipients = invitation?.resolved.contacts;
+  const fallbackAccountId = invitation?.fallbackAccountId;
+  const invitationRouting = useMemo(() => chats && contacts && messages && previewRecipients && fallbackAccountId
+    ? routeBroadcastAccounts({ chats, contacts, messages }, previewRecipients.map(contact => contact.phone), fallbackAccountId)
+    : null, [chats, contacts, messages, previewRecipients, fallbackAccountId]);
   const formatError = (cause: unknown) => {
     const message = cause instanceof Error ? cause.message : String(cause);
     if (message.includes("CRM_AGENT_INVALID_PLAN")) return t("crmAgent.invalidPlan");
@@ -179,7 +188,7 @@ export function AiLocalAgentPanel({ selectedChatId }: { selectedChatId: string |
   };
 
   const sendInvitation = async () => {
-    if (!invitation || busy) return;
+    if (!invitation || busy || !invitationRouting || invitationRouting.unclear) return;
     setBusy("send"); setError("");
     try {
       const current = useAppStore.getState();
@@ -196,7 +205,7 @@ export function AiLocalAgentPanel({ selectedChatId }: { selectedChatId: string |
       if (!validMessage.ok) throw Error(validMessage.reason);
       if (normalizeChannelId(current.settings.sendChannel) === "android_bridge") throw Error(t("crmAgent.invitationChannelUnsupported"));
       if ((current.broadcastCampaigns || []).some(campaign => campaign.status === "running")) throw Error(t("crmAgent.invitationCampaignRunning"));
-      const targetAccountIds = [...new Set(latest.contacts.map(contact => contact.lastContactedAccountId || invitation.fallbackAccountId))];
+      const targetAccountIds = [...new Set(Object.values(invitationRouting.accountByPhone))];
       const paused = targetAccountIds.find(id => (current.settings.sendPausedAccountIds || []).includes(id));
       if (paused) throw Error(t("crmAgent.invitationAccountPaused", { account: current.settings.waAccounts.find(account => account.id === paused)?.label || paused }));
       const disconnected = targetAccountIds.find(id => !isWaAccountConnected(current.settings.waAccounts, id, current.settings.liveBaileysAccountId, current.baileysUi.connection));
@@ -204,6 +213,7 @@ export function AiLocalAgentPanel({ selectedChatId }: { selectedChatId: string |
       const created = current.createBroadcastCampaign({
         accountId: invitation.fallbackAccountId,
         contactIds: latest.contacts.map(contact => contact.contactId),
+        expectedAccountByPhone: invitationRouting.accountByPhone,
         template: invitation.message,
         extraGapSec: 20,
         extraGapMaxSec: 30,
@@ -249,10 +259,12 @@ export function AiLocalAgentPanel({ selectedChatId }: { selectedChatId: string |
       </label>
       <ul className="max-h-40 space-y-1 overflow-y-auto text-xs">
         {invitation.resolved.contacts.map(contact => {
-          const route = contact.lastContactedAccountId || invitation.fallbackAccountId;
-          return <li key={contact.phone} className="flex justify-between gap-2 rounded bg-zinc-800/60 px-2 py-1.5">
+          const route = invitationRouting?.accountByPhone[contact.phone];
+          const blocked = invitationRouting?.blockedByPhone[contact.phone];
+          return <li key={contact.phone} className={`flex flex-wrap justify-between gap-x-2 gap-y-1 rounded px-2 py-1.5 ${blocked ? "bg-amber-500/10" : "bg-zinc-800/60"}`}>
             <span className="min-w-0 truncate">{contact.name} · {contact.phone}</span>
-            <span className="shrink-0 text-zinc-500">{accounts.find(account => account.id === route)?.label || route}</span>
+            {blocked ? <span className="w-full text-[11px] text-amber-400">{t(`crmAgent.invitationBlocked.${blocked}`)}</span>
+              : <span className="shrink-0 text-zinc-500">{accounts.find(account => account.id === route)?.label || route}</span>}
           </li>;
         })}
       </ul>
@@ -265,7 +277,7 @@ export function AiLocalAgentPanel({ selectedChatId }: { selectedChatId: string |
       <p className="text-[10px] leading-4 text-amber-300">{t("crmAgent.invitationAttendanceNote")}</p>
       <p className="text-[10px] leading-4 text-zinc-500">{t("crmAgent.invitationRoutingNote")}</p>
       <div className="flex gap-2">
-        <Button size="xs" variant="primary" disabled={!!busy || !invitation.resolved.contacts.length || !!invitation.resolved.unmatchedPhones.length} onClick={() => void sendInvitation()}>{busy === "send" ? t("crmAgent.invitationSending") : t("crmAgent.invitationSend")}</Button>
+        <Button size="xs" variant="primary" disabled={!!busy || !invitationRouting || !!invitationRouting.unclear || !invitation.resolved.contacts.length || !!invitation.resolved.unmatchedPhones.length} onClick={() => void sendInvitation()}>{busy === "send" ? t("crmAgent.invitationSending") : t("crmAgent.invitationSend")}</Button>
         <Button size="xs" variant="secondary" disabled={!!busy} onClick={() => setInvitation(null)}>{t("common.cancel")}</Button>
       </div>
     </section>}

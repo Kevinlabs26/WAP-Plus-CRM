@@ -130,18 +130,24 @@ impl MuseWebContext {
         )
     }
     fn validate(&self, prompt: &str) -> Result<(), String> {
+        if self.profile.chars().count() + prompt.chars().count() > 65_000
+            || self.profile.len() + prompt.len() > 260_000 {
+            return Err("Muse 提示词与本次聊天上下文合计过长，请调整提示词或 Playbook 后重试".into());
+        }
+        if self.history.len() > 40 {
+            return Err("Muse 本次聊天历史超过 40 条，未提交请求".into());
+        }
         let mut ids = BTreeSet::new();
-        if self.profile.chars().count() > 24_000
-            || self.history.len() > 40
-            || self.history.iter().any(|item| {
-                item.id.is_empty()
-                    || item.id.len() > 512
-                    || item.id.chars().any(char::is_control)
-                    || !ids.insert(&item.id)
-            })
-            || self.full_prompt() != prompt
-        {
-            return Err("Muse 聊天上下文不一致，请刷新后重试".into());
+        if self.history.iter().any(|item| {
+            item.id.is_empty()
+                || item.id.len() > 512
+                || item.id.chars().any(char::is_control)
+                || !ids.insert(&item.id)
+        }) {
+            return Err("Muse 聊天历史存在重复或异常标识，未提交请求".into());
+        }
+        if self.full_prompt() != prompt {
+            return Err("Muse 请求正文与聊天上下文不一致，未提交请求".into());
         }
         Ok(())
     }
@@ -2119,6 +2125,16 @@ impl MuseRun<'_> {
                         submitted_prompt = with_profile;
                         submitted_profile_hash = Some(hash);
                     }
+                    if submitted_prompt.chars().count() > 65_000 || submitted_prompt.len() > 260_000 {
+                        if let Some(context) = context {
+                            let (full, hash) = context.prompt_with_profile(prompt, None, true);
+                            submitted_prompt = full;
+                            submitted_profile_hash = Some(hash);
+                        }
+                        if submitted_prompt.chars().count() > 65_000 || submitted_prompt.len() > 260_000 {
+                            return Err("Muse 本次任务说明与提示词合计过长，未提交请求".into());
+                        }
+                    }
                     let data = evaluate(window, format!("window.__wapMuse.start({id},{},{},{owner},{reference},{expect_media})",serde_json::to_string(&submitted_prompt).map_err(|e| e.to_string())?,serde_json::to_string(&target).map_err(|e| e.to_string())?)).await?;
                     if !matches!(data.get("state").and_then(|v| v.as_str()), Some("preparing"|"attaching")) { return Err(page_error(&data)); }
                     submitted=true;
@@ -2629,6 +2645,20 @@ mod tests {
             suffix: "\nCURRENT CLOCK AND REPLY TASK".into(),
         }
     }
+    #[test]
+    fn muse_context_reports_the_actual_validation_failure() {
+        let duplicate = context(&[("same", "first"), ("same", "second")]);
+        assert!(duplicate.validate(&duplicate.full_prompt()).unwrap_err().contains("重复或异常标识"));
+        let mut long = context(&[]);
+        long.profile = "a".repeat(24_001);
+        assert!(long.validate(&long.full_prompt()).is_ok());
+        long.profile = "a".repeat(65_001);
+        assert!(long.validate(&long.full_prompt()).unwrap_err().contains("合计过长"));
+        let valid = context(&[("key", "first")]);
+        assert!(valid.validate(&valid.full_prompt()).is_ok());
+        assert!(valid.validate("different prompt").unwrap_err().contains("正文与聊天上下文不一致"));
+    }
+
     #[test]
     fn continued_threads_send_only_new_messages_while_preserving_current_instructions_and_task() {
         let old = context(&[("a", "old A"), ("b", "old B"), ("c", "old C")]);
